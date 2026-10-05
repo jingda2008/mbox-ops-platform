@@ -197,7 +197,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
     expect((await app.inject({method:'POST',url:`/api/inventory/items/${item.id}/barcodes`,headers:headers(managerId,'native-barcode-0001'),payload:{code,codeType:'barcode',packageQuantity:'12'}})).statusCode).toBe(200);
     const scan=await app.inject({method:'GET',url:`/api/native/inventory/scan?code=${code}`,headers:headers(managerId,'native-scan-0001')});
     expect(scan.statusCode).toBe(200);expect(scan.json().data).toMatchObject({inventoryItemId:item.id,packageQuantity:'12.000000',currentEmployeeId:managerId});
-    expect((await app.inject({method:'POST',url:'/api/native/inventory/items',headers:headers(managerId,'unsupported-native-item'),payload:{}})).statusCode).toBe(404);
+    expect((await app.inject({method:'POST',url:'/api/native/inventory/stored-bottles',headers:headers(managerId,'unsupported-native-bottle'),payload:{}})).statusCode).toBe(404);
     const nativeBoard=await app.inject({method:'GET',url:'/api/native/inventory',headers:headers(managerId,'native-board-0001')});
     expect(nativeBoard.json().data).toMatchObject({nativeCommands:true,currentEmployeeId:managerId});
     const webBoard=await app.inject({method:'GET',url:'/api/inventory',headers:headers(managerId,'web-board-0001')});

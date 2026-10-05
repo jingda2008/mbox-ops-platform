@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -23,8 +24,8 @@ class AndroidUpdater(private val app: Application) {
         app.packageManager.getPackageInfo(app.packageName, flags())
 
     private fun flags() =
-        if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES
-        else PackageManager.GET_SIGNATURES
+        (if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES
+        else PackageManager.GET_SIGNATURES) or PackageManager.GET_META_DATA
 
     @Suppress("DEPRECATION")
     private fun version(info: PackageInfo): Long =
@@ -210,6 +211,15 @@ class AndroidUpdater(private val app: Application) {
     private fun verifyAPK(file: File, candidate: AppRelease) {
         val info =
             app.packageManager.getPackageArchiveInfo(file.path, flags()) ?: error("无法识别更新安装包")
+        val application = info.applicationInfo ?: error("无法识别更新应用配置")
+        val metadata = application.metaData
+        AppRelease.verifyPackagedConfiguration(
+            channel,
+            metadata?.getString("com.mbox.staff.UPDATE_CHANNEL"),
+            if (metadata?.containsKey("com.mbox.staff.ALLOW_LOCAL_DEMO") == true)
+                metadata.getBoolean("com.mbox.staff.ALLOW_LOCAL_DEMO") else null,
+            application.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
+        )
         AppRelease.verifyArchive(
             candidate,
             currentBuild,

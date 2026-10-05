@@ -184,8 +184,14 @@ class StaffAPI(
 
     fun clearIdentity() {
         runCatching { credentialStore?.remove() }
+            .onSuccess { persistenceNotice = "" }
             .onFailure { persistenceNotice = "安全登录记录暂未清除，请解锁后重试" }
+        clearRuntimeIdentity()
+    }
+
+    private fun clearRuntimeIdentity() {
         identity = null
+        cookieExpiry.remove("__Host-mbox_staff_session")
         cookies.cookieStore.cookies
             .toList()
             .filter { it.name == "__Host-mbox_staff_session" }
@@ -228,7 +234,13 @@ class StaffAPI(
 
     fun heartbeat(): StaffIdentity {
         val before = identity ?: throw StaffAPIError(401, "AUTH_REQUIRED", "请先登录员工账号")
-        val next = StaffIdentity.parse(data("/api/auth/heartbeat", JSONObject()))
+        val next = try {
+            StaffIdentity.parse(data("/api/auth/heartbeat", JSONObject()))
+        } catch (e: StaffAPIError) {
+            // A denial from authentication invalidates this login; a business-route 403 does not.
+            if (e.status == 403) clearIdentity()
+            throw e
+        }
         if (before.sessionId != next.sessionId || before.employeeId != next.employeeId) {
             clearIdentity()
             throw StaffAPIError(401, "IDENTITY_CHANGED", "员工身份已变化，请重新登录")
@@ -303,6 +315,7 @@ class StaffAPI(
                 }
             }
         } catch (e: Exception) {
+            clearRuntimeIdentity()
             runCatching { credentialStore?.remove() }
             throw IllegalStateException("原登录已过期或记录无效，请重新登录", e)
         }
@@ -310,7 +323,14 @@ class StaffAPI(
         deviceExpiresAt = root.textOrNull("deviceExpiresAt")
         rememberSession = true
         // Only fresh server validation returns an identity to AppModel.
-        return heartbeat()
+        return try {
+            heartbeat()
+        } catch (e: Exception) {
+            // A timeout is not revocation: keep the encrypted record for an explicit retry,
+            // but never leave the unverified cached actor or its cookie active in this client.
+            clearRuntimeIdentity()
+            throw e
+        }
     }
 
     private fun persistSession() {
@@ -412,8 +432,13 @@ class StaffAPI(
     }
 
     fun logout() {
-        if (raw("/api/auth/logout", JSONObject()).status != 204) invalidResponse()
-        clearIdentity()
+        try {
+            if (raw("/api/auth/logout", JSONObject()).status != 204) invalidResponse()
+        } finally {
+            // Leaving a shared device must lock it even when the server receipt is lost.
+            // The original exception still tells callers that remote revocation is unconfirmed.
+            clearIdentity()
+        }
     }
 
     fun execute(step: LiveStep) {

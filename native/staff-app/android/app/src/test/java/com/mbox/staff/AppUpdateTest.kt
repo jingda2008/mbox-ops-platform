@@ -42,8 +42,11 @@ class AppUpdateTest {
                 "https://mbox.shmbox.com/native-updates/staff/../app.apk",
                 "https://mbox.shmbox.com/native-updates/staff/%2e%2e/app.apk",
                 "https://mbox.shmbox.com/native-updates/staff/app.apk?url=bad",
+                "https://mbox.shmbox.com/native-updates/staff/nested/app.apk",
+                "https://mbox.shmbox.com/native-updates/staff/.hidden.apk",
             )
             .forEach { assertFalse(it, AppRelease.trustedURL(it)) }
+        assertTrue(AppRelease.trustedURL("https://mbox.shmbox.com/native-updates/staff/MBOX-0.4.0-build8.apk"))
         val raw = root()
         val r = raw.getJSONArray("releases").getJSONObject(1)
         r.put("bytes", AppRelease.maxBytes + 1)
@@ -98,5 +101,23 @@ class AppUpdateTest {
             AppRelease.endpoint("stable"),
         )
         assertThrows(IllegalArgumentException::class.java) { AppRelease.endpoint("../foreign") }
+    }
+
+    @Test
+    fun signedPackageMustAlsoBeProductionAndMatchItsFeed() {
+        AppRelease.verifyPackagedConfiguration("stable", "stable", false, false)
+        for (metadata in listOf("preview", null)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                AppRelease.verifyPackagedConfiguration("stable", metadata, false, false)
+            }
+        }
+        for (demo in listOf(true, null)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                AppRelease.verifyPackagedConfiguration("stable", "stable", demo, false)
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AppRelease.verifyPackagedConfiguration("stable", "stable", false, true)
+        }
     }
 }

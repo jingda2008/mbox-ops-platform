@@ -1,6 +1,8 @@
 # 网页 → iOS / Android 原生功能逐条开发台账
 
-基准：当前工作树网页 `29b88e329e03bfa0c7babff291587f71bc3bc606`（rc.240）。本台账覆盖员工网页；客人小程序不是员工 App 的另一个客户端。网页代码保持不变，共用既有服务器合同。
+> 2026-10-05 Android商用候选增量见 [COMMERCIAL_READINESS_ANDROID_20261005.md](COMMERCIAL_READINESS_ANDROID_20261005.md)。下述历史版本的实现、构建或模拟器记录不代表本轮真机和营业现场验收；供应商采购退货已由用户明确排除本轮范围。
+
+历史清点基准：网页 `29b88e329e03bfa0c7babff291587f71bc3bc606`（rc.240）；后续新增及发布状态以各日期增量记录为准。本台账覆盖员工网页；客人小程序不是员工 App 的另一个客户端。网页代码保持不变，共用既有服务器合同。
 
 原始入口清点：20 条员工路由、107 个网页组件/接口源文件，路径、源码哈希与接口引用见 `shared/web-reference-inventory.json`，运行 `python3 native/staff-app/scripts/inventory-web.py` 可刷新。入口和文件数量不是功能完成率；每个模块仍需按原页面子流程验收。
 

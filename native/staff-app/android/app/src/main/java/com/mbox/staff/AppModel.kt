@@ -674,6 +674,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     var stockBoard by mutableStateOf<StockBoard?>(null)
     var stockState by mutableStateOf("请读取库存与采购单")
     var stockDraft by mutableStateOf<List<StockLine>>(emptyList())
+    var stockSupplierName by mutableStateOf("")
+        private set
     var stockReceipt by mutableStateOf<JSONObject?>(null)
     private var stockEmployee: String? = null
     private var stockUpdated: java.time.Instant? = null
@@ -706,12 +708,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveStockDraft(lines: List<StockLine>) {
+    fun saveStockDraft(lines: List<StockLine>, supplier: String = stockSupplierName) {
         check(canUseStock && identity?.allows("inventory.receive") == true) { "请刷新库存并核对员工权限" }
-        val book =
-            stockBook().put(identity!!.employeeId, org.json.JSONArray(lines.map { it.json() }))
+        val name = normalizedStockSupplierName(supplier)
+        val book = stockDraftBookEntry(stockBook(), identity!!.employeeId, lines, name)
         saveStockFile(stockDraftFile, book)
         stockDraft = lines
+        stockSupplierName = name
     }
 
     private var stockQuery=""
@@ -746,9 +749,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 board.durable &&
                 board.items.map { it.getString("id") }.toSet().size == board.items.size
         )
+        val savedDrafts = stockBook()
         stockDraft =
-            stockBook().optJSONArray(actor.employeeId)?.objects()?.map(StockLine::parse)
+            savedDrafts.optJSONArray(actor.employeeId)?.objects()?.map(StockLine::parse)
                 ?: emptyList()
+        stockSupplierName = stockDraftSupplier(savedDrafts, actor.employeeId)
         stockCountDraft = countBook().optJSONArray(actor.employeeId)?.objects() ?: emptyList()
         stockBoard = board
         stockEmployee = actor.employeeId
@@ -781,6 +786,144 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 } == true
         )
         return scan
+    }
+
+    var inventorySetupBoard by mutableStateOf<InventorySetupBoard?>(null)
+        private set
+    var inventorySetupState by mutableStateOf("请读取物料与包装条码")
+        private set
+    private var inventorySetupUpdated: java.time.Instant? = null
+    val canUseInventorySetup
+        get() = memberReady && !businessRequestInFlight && identity?.allows("inventory.manage") == true &&
+            inventorySetupBoard?.enabled == true &&
+            inventorySetupBoard?.actor == identity?.employeeId && inventoryReadFresh(inventorySetupUpdated)
+
+    private fun inventoryReadFresh(updated: java.time.Instant?) = updated?.let {
+        java.time.Duration.between(it, java.time.Instant.now()).seconds in 0..59
+    } == true
+
+    fun loadInventorySetup() {
+        if (!live || businessRequestInFlight) return
+        val original = workspaceReadIdentity()
+        busy = true
+        // Keep the employee's editing form mounted while revalidating. The old
+        // board is display-only until a fresh capability response is accepted.
+        inventorySetupUpdated = null
+        inventorySetupState = "正在读取物料与包装条码"
+        viewModelScope.launch {
+            try {
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
+                fetchInventorySetup()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                inventorySetupState = if ((e as? StaffAPIError)?.status == 404)
+                    "当前服务器尚未启用原生物料设置，请使用网页库存入口。"
+                else e.message ?: "物料读取失败，请重试"
+                handleLiveError(e)
+            } finally { busy = false }
+        }
+    }
+
+    private suspend fun fetchInventorySetup() {
+        val actor = identity ?: error("请登录")
+        require(actor.allows("inventory.manage")) { "当前岗位没有物料设置权限" }
+        val expected = workspaceReadIdentity()
+        val board = readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+            withContext(Dispatchers.IO) { InventorySetupBoard(api.data("/api/native/inventory/setup")) }
+        }
+        require(board.enabled && board.actor == actor.employeeId) { "服务器尚未启用安全物料设置，或员工已变化" }
+        inventorySetupBoard = board
+        inventorySetupUpdated = java.time.Instant.now()
+        inventorySetupState = "物料与包装条码已同步；修改前请核对计量单位。"
+    }
+
+    var inventoryPublishBoard by mutableStateOf<InventoryPublishBoard?>(null)
+        private set
+    var inventoryPublishPreview by mutableStateOf<InventoryPublishPreview?>(null)
+        private set
+    var inventoryPublishState by mutableStateOf("请选择待验收采购单与商品")
+        private set
+    private var inventoryPublishUpdated: java.time.Instant? = null
+    private var inventoryPublishPreviewUpdated: java.time.Instant? = null
+    val canUseInventoryPublish
+        get() = memberReady && !businessRequestInFlight && inventoryPublishPermissions.all { identity?.allows(it) == true } &&
+            inventoryPublishBoard?.enabled == true && inventoryPublishBoard?.actor == identity?.employeeId &&
+            inventoryReadFresh(inventoryPublishUpdated)
+
+    fun loadInventoryPublish(receiptId: String) {
+        if (!live || businessRequestInFlight) return
+        val original = workspaceReadIdentity()
+        busy = true
+        inventoryPublishBoard = null
+        inventoryPublishPreview = null
+        inventoryPublishUpdated = null
+        inventoryPublishPreviewUpdated = null
+        inventoryPublishState = "正在读取采购单与可发布商品"
+        viewModelScope.launch {
+            try {
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
+                fetchInventoryPublish(receiptId)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                inventoryPublishState = if ((e as? StaffAPIError)?.status == 404)
+                    "当前服务器尚未启用原生验收发布，请使用网页库存入口。"
+                else e.message ?: "采购单读取失败，请重试"
+                handleLiveError(e)
+            } finally { busy = false }
+        }
+    }
+
+    private suspend fun fetchInventoryPublish(receiptId: String) {
+        val actor = identity ?: error("请登录")
+        require(inventoryPublishPermissions.all(actor::allows)) { "需要收货、商品管理和成本查看权限" }
+        val expected = workspaceReadIdentity()
+        val board = readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+            withContext(Dispatchers.IO) {
+                InventoryPublishBoard(api.data("/api/native/inventory/receipts/${LiveCommand.part(receiptId)}/publish-options"))
+            }
+        }
+        require(board.enabled && board.actor == actor.employeeId && board.receipt.getString("id") == receiptId) {
+            "服务器未启用安全验收发布，或采购单已变化"
+        }
+        inventoryPublishBoard = board
+        inventoryPublishUpdated = java.time.Instant.now()
+        inventoryPublishState = "请选择商品并核对本次收货后的配方成本与售价。"
+    }
+
+    fun loadInventoryPublishPreview(receiptId: String, productId: String) {
+        if (!canUseInventoryPublish) { message = "请刷新采购单并核对发布权限"; return }
+        if (inventoryPublishBoard?.receipt?.optString("id") != receiptId ||
+            inventoryPublishBoard?.products?.none { it.optString("id") == productId } != false) {
+            message = "商品或采购单已变化，请重新选择"; return
+        }
+        busy = true
+        inventoryPublishPreview = null
+        inventoryPublishPreviewUpdated = null
+        inventoryPublishState = "正在核算收货后的成本与售价"
+        val expected = workspaceReadIdentity()
+        viewModelScope.launch {
+            try {
+                val preview = readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) {
+                        InventoryPublishPreview(api.data("/api/native/inventory/receipts/${LiveCommand.part(receiptId)}/receive-and-publish-preview?productId=${LiveCommand.part(productId)}"))
+                    }
+                }
+                require(preview.enabled && preview.actor == identity?.employeeId &&
+                    preview.receiptId == receiptId && preview.productId == productId &&
+                    inventoryPublishBoard?.receipt?.optString("id") == receiptId) { "预览不属于当前采购单与商品，请重试" }
+                inventoryPublishPreview = preview
+                inventoryPublishPreviewUpdated = java.time.Instant.now()
+                inventoryPublishState = "仅为预览；确认实物、成本与售价后才会入库并发布。"
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                inventoryPublishState = e.message ?: "预览读取失败，请重试"
+                handleLiveError(e)
+            } finally { busy = false }
+        }
     }
 
     var serviceAttention by mutableStateOf(ServiceAttention())
@@ -984,6 +1127,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     var foreground by mutableStateOf(false)
     private var heartbeatBusy by mutableStateOf(false)
+    val businessRequestInFlight get() = busy || heartbeatBusy || onlinePolling
     var liveOrderPending by mutableStateOf<LiveOrderSubmission?>(null)
         private set
 
@@ -1744,9 +1888,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             try {
                 withContext(Dispatchers.IO) { api.logout() }
                 lockLiveSession()
-                message = "已退出员工账号"
+                savedLoginAvailable = withContext(Dispatchers.IO) { api.savedSessionAvailable() }
+                message = "已退出员工账号" + api.persistenceNotice.let { if (it.isBlank()) "" else "；$it" }
             } catch (e: Exception) {
-                handleLiveError(e)
+                if (api.identity == null) {
+                    lockLiveSession()
+                    savedLoginAvailable = withContext(Dispatchers.IO) { api.savedSessionAvailable() }
+                    val note = api.persistenceNotice
+                    message =
+                        if (note.isNotBlank()) "已锁定本机账号；$note。服务器退出结果未确认。"
+                        else if ((e as? StaffAPIError)?.status == 401) "登录已失效，已退出本机账号"
+                        else "已退出本机账号；服务器退出结果未确认，请勿将此提示当作服务端已注销。"
+                } else handleLiveError(e)
             } finally {
                 busy = false
             }
@@ -1816,7 +1969,8 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun handleLiveError(e: Exception) {
-        if ((e as? StaffAPIError)?.status == 401) {
+        if ((e as? StaffAPIError)?.status == 401 ||
+            (e is StaffAPIError && e.status == 403 && api.identity == null)) {
             lockLiveSession()
             deviceReady = false
         } else {
@@ -2175,6 +2329,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         }
         if (command.steps.firstOrNull()?.productManagementProof != null)
             return command.steps.size == 1 && canUseProducts
+        if (command.steps.firstOrNull()?.inventorySetupProof != null)
+            return canUseInventorySetup && inventorySetupBoard?.let { validInventorySetupSelection(command, it) } == true
+        if (command.steps.firstOrNull()?.inventoryPublishProof != null)
+            return canUseInventoryPublish && inventoryReadFresh(inventoryPublishPreviewUpdated) &&
+                inventoryPublishBoard?.let { board ->
+                    inventoryPublishPreview?.let { preview -> validInventoryPublishSelection(command, board, preview) }
+                } == true
         if (command.steps.firstOrNull()?.stockCostProof != null) return command.steps.size==1 && canUseStock && stockBoard?.source?.optBoolean("nativeCostCorrections")==true && identity?.allows("inventory.cost.correct")==true && identity?.allows("inventory.cost.view")==true
         if (command.steps.firstOrNull()?.stockAuditProof != null)
             return command.steps.size == 1 &&
@@ -2281,10 +2442,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 fulfillmentBoard?.let{validFulfillmentCommandSelection(command,it)}==true
         }
         command.steps.firstOrNull()?.afterSalesProof?.let {
-            return command.steps.size == 1 &&
-                canUseAfterSales &&
+            return canUseAfterSales &&
                 identity?.allows(command.permission) == true &&
-                it.getString("itemId") == afterSales?.id
+                afterSales?.let { board -> validAfterSalesCommandSelection(command, board) } == true
         }
         return canAct(command.permission)
     }
@@ -2337,6 +2497,25 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                         identity?.allows(current.permission) != true && !current.isStaffPermissionReceiptRecovery()
                 )
                     throw StaffAPIError(403, "ACCESS_REVOKED", "操作权限已撤销，请联系管理员核对原请求")
+                if (current.completedSteps < current.steps.size &&
+                    current.steps.any { it.inventoryPublishProof != null } &&
+                    !inventoryPublishPermissions.all { identity?.allows(it) == true })
+                    throw StaffAPIError(403, "ACCESS_REVOKED", "验收发布需要收货、商品管理和成本查看权限，请由原员工核对原请求")
+                val legacyCash = current.steps.singleOrNull()?.afterSalesProof
+                    ?.takeIf { it.optString("afterSales") == "cash-paid" && current.completedSteps == 0 }
+                if (legacyCash != null) {
+                    val itemID = legacyCash.getString("itemId")
+                    val board = withContext(Dispatchers.IO) {
+                        LiveAfterSales(api.data("/api/commerce/item-after-sales/items/${LiveCommand.part(itemID)}"))
+                            .also { it.validate(itemID) }
+                    }
+                    val recovered = recoverLegacyAfterSalesCashCommand(current, board, identity!!)
+                    if (recovered != current) {
+                        saveLive(recovered)
+                        livePending = recovered
+                        current = recovered
+                    }
+                }
                 current =
                     LiveCommandRunner.advance(
                         current,
@@ -2475,6 +2654,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                                         secret = paymentSecrets::read,
                                     )
                                 }
+                            } else if (step.inventorySetupProof != null || step.inventoryPublishProof != null) {
+                                // Recovery sends the saved version and idempotency key, even when a
+                                // successful prior submission already changed the current inventory.
+                                val text = withContext(Dispatchers.IO) {
+                                    api.raw(step.path, JSONObject(step.body), mapOf(step.keyHeader to step.key)).text
+                                }
+                                if (step.inventorySetupProof != null) validateInventorySetupReply(text, step)
+                                else validateInventoryPublishReply(text, step)
+                                val receipt = JSONObject().put("commandID", command.id)
+                                    .put("employeeID", command.employeeID).put("text", text)
+                                saveStockFile(stockReceiptFile, receipt)
+                                stockReceipt = receipt
                             } else if(step.stockCostProof != null) {
                                 withContext(Dispatchers.IO){validateStockCostReply(api.raw(step.path,JSONObject(step.body),mapOf(step.keyHeader to step.key)).text,step)}
                             } else if (step.stockProof != null || step.stockAuditProof != null) {
@@ -2558,6 +2749,38 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     if (p.getString("kind") == "benefit") fetchBenefits()
                     else if (p.getString("kind") == "visit") fetchMember(p.getString("memberNo"))
                     else fetchMemberRewards(memberRewardFilter)
+                } else if (step?.inventorySetupProof != null) {
+                    inventorySetupBoard = null
+                    inventorySetupUpdated = null
+                    stockBoard = null
+                    stockUpdated = null
+                    try {
+                        fetchInventorySetup()
+                        fetchStock()
+                        inventorySetupState = "物料设置已确认，库存与包装条码已刷新。"
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e
+                    } catch (e: Exception) {
+                        handleLiveError(e)
+                        inventorySetupBoard = null
+                        inventorySetupUpdated = null
+                        inventorySetupState = "原物料设置已确认，当前资料读取失败，请刷新查看。"
+                        stockState = inventorySetupState
+                    }
+                } else if (step?.inventoryPublishProof != null) {
+                    inventoryPublishBoard = null
+                    inventoryPublishPreview = null
+                    inventoryPublishUpdated = null
+                    inventoryPublishPreviewUpdated = null
+                    inventoryPublishState = "原采购单已入库，商品已发布；继续操作前请选择新的待验收单。"
+                    stockBoard = null
+                    stockUpdated = null
+                    try { fetchStock()
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e
+                    } catch (e: Exception) {
+                        handleLiveError(e)
+                        inventoryPublishState = "原采购单入库及商品发布已确认，库存读取失败，请刷新查看。"
+                        stockState = inventoryPublishState
+                    }
                 } else if(step?.stockCostProof != null) { fetchStock()
                 } else if (step?.stockAuditProof != null) {
                     val p = step.stockAuditProof!!
@@ -2581,11 +2804,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                     if (proof.getString("kind") == "create") {
                         val book = stockBook()
                         if (
-                            book.optJSONArray(command.employeeID)?.toString() ==
-                                proof.getString("draftFingerprint")
+                            stockDraftMatchesReceipt(book, command.employeeID, proof)
                         ) {
-                            book.put(command.employeeID, org.json.JSONArray())
-                            saveStockFile(stockDraftFile, book)
+                            saveStockFile(stockDraftFile, stockDraftBookEntry(book, command.employeeID, emptyList(), ""))
                         }
                     }
                     fetchStock()
@@ -2670,7 +2891,9 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 current.steps.firstOrNull()?.custodyProof?.textOrNull("payloadKey")?.let { paymentSecrets.remove(it); custodyReceiptSecrets.remove(it) }
                 if (step?.assignmentProof != null) assignmentReceipt = current.title + " · 已确认"
                 message =
-                    if (current.steps.firstOrNull()?.custodyProof != null) custodyReceipt?.getJSONObject("result")?.textOrNull("message") ?: "存酒操作已确认，请核对原单状态；打印或导出准备完成不代表已交付"
+                    if (step?.inventorySetupProof != null) inventorySetupState
+                    else if (step?.inventoryPublishProof != null) inventoryPublishState
+                    else if (current.steps.firstOrNull()?.custodyProof != null) custodyReceipt?.getJSONObject("result")?.textOrNull("message") ?: "存酒操作已确认，请核对原单状态；打印或导出准备完成不代表已交付"
                     else if (step?.memberGiftProof != null) when(step.memberGiftProof!!.getString("action")){"target"->"原发放任务已确认；请在发放任务中核对，排队不表示已经发券";"control"->"原任务处理已确认；重试不表示发券成功";"refund"->"券权益复核已记录，未修改退款金额或发放新券";else->"会员活动操作已确认，请核对当前状态"}
                     else if (current.steps.firstOrNull()?.voucherProof == null) "操作已确认，服务器状态已更新"
                     else "原核销事项已保存；以事项状态为准，待核对不表示核销或结算成功"
@@ -2841,8 +3064,17 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         stockEmployee = null
         stockUpdated = null
         stockDraft = emptyList()
+        stockSupplierName = ""
         stockReceipt = null
         stockState = "请读取库存与采购单"
+        inventorySetupBoard = null
+        inventorySetupUpdated = null
+        inventorySetupState = "请读取物料与包装条码"
+        inventoryPublishBoard = null
+        inventoryPublishPreview = null
+        inventoryPublishUpdated = null
+        inventoryPublishPreviewUpdated = null
+        inventoryPublishState = "请选择待验收采购单与商品"
         serviceAttention = ServiceAttention()
         benefitBoard = null
         benefitUpdated = null
@@ -2883,19 +3115,25 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         serviceState = ""
     }
 
-    fun loadService() {
+    fun loadService(automatic: Boolean = false) {
         if (!live || busy || heartbeatBusy) return
         busy = true
-        serviceBoard = null
-        serviceUpdated = null
-        serviceState = "正在读取服务任务"
+        val original = workspaceReadIdentity()
+        if (serviceBoard == null) serviceState = "正在读取服务任务"
         viewModelScope.launch {
             try {
-                identity = withContext(Dispatchers.IO) { api.heartbeat() }
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
                 fetchService()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                serviceState = e.message ?: "读取失败"
-                handleLiveError(e)
+                if (original.employee == identity?.employeeId && original.workspace == workspaceVersion) {
+                    serviceUpdated = null
+                    serviceState = if (serviceBoard != null) "同步失败 · 显示上次任务，数据已过期；请重新读取后操作" else "服务任务读取失败，请刷新重试"
+                    if (!automatic || (e as? StaffAPIError)?.status in listOf(401, 403)) handleLiveError(e)
+                }
             } finally {
                 busy = false
             }
@@ -2905,8 +3143,11 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private suspend fun fetchService() {
         val actor = identity ?: error("请重新登录")
         require(actor.canReadService()) { "当前岗位没有服务任务查看权限" }
+        val expected = workspaceReadIdentity()
         val board =
-            withContext(Dispatchers.IO) { LiveServiceBoard(api.data("/api/native-service-center")) }
+            readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                withContext(Dispatchers.IO) { LiveServiceBoard(api.data("/api/native-service-center")) }
+            }
         require(
             board.employee == actor.employeeId &&
                 board.tasks.map { it.id }.distinct().size == board.tasks.size &&
@@ -4030,49 +4271,45 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     private suspend fun fetchKitchen(station: String) {
         val auth = identity ?: invalidResponse()
         require(station in listOf("bar", "kitchen"))
+        val expected = workspaceReadIdentity()
         val board =
-            withContext(Dispatchers.IO) {
-                LiveKitchen(api.data("/api/commerce/kitchen-board?station=$station"))
+            readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                withContext(Dispatchers.IO) {
+                    LiveKitchen(api.data("/api/commerce/kitchen-board?station=$station"))
+                }
             }
         if (board.employeeID != auth.employeeId || board.station != station) invalidResponse()
         kitchenBoard = board
         kitchenUpdated = java.time.Instant.now()
-        kitchenState = if (board.sessionValid) "" else "出品会话已失效，请重新登录"
+        kitchenState = if (board.sessionValid) "制作队列已同步 · 前台每5秒自动读取" else "出品会话已失效，请重新登录"
     }
 
-    fun loadKitchen(station: String) {
+    fun loadKitchen(station: String, automatic: Boolean = false) {
         if (!live || identity?.allows("kds.prepare") != true || busy || heartbeatBusy) {
-            kitchenState = "请先登录出品岗位，或等待当前同步结束后刷新"
+            if (!automatic) kitchenState = "请先登录出品岗位，或等待当前同步结束后刷新"
             return
         }
         busy = true
-        history = null
-        historyQuery = HistoryQuery()
-        financeSummary = null
-        financeEntries = emptyList()
-        financeReviews = emptyList()
-        financeUpdated = null
-        financeActorID = null
-        assignmentsBoard = null
-        assignmentsUpdated = null
-        assignmentsActorID = null
-        assignmentReceipt = ""
-        cashier = null
-        cashierUpdated = null
-        pickupBoard = null
-        pickupUpdated = null
-        kitchenBoard = null
-        fulfillmentBoard = null
-        fulfillmentUpdated = null
-        kitchenUpdated = null
-        kitchenState = "正在读取制作队列"
+        val original = workspaceReadIdentity()
+        if (kitchenBoard?.station != station) {
+            kitchenBoard = null
+            kitchenUpdated = null
+        }
+        if (kitchenBoard == null) kitchenState = "正在读取制作队列"
         viewModelScope.launch {
             try {
-                identity = withContext(Dispatchers.IO) { api.heartbeat() }
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
                 fetchKitchen(station)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                kitchenState = "读取失败，请重新读取"
-                handleLiveError(e)
+                if (original.employee == identity?.employeeId && original.workspace == workspaceVersion) {
+                    kitchenUpdated = null
+                    kitchenState = if (kitchenBoard != null) "同步失败 · 显示上次制作队列，数据已过期；请重新读取后操作" else "制作队列读取失败，请刷新重试"
+                    if (!automatic || (e as? StaffAPIError)?.status in listOf(401, 403)) handleLiveError(e)
+                }
             } finally {
                 busy = false
             }
@@ -4136,15 +4373,18 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun fetchPickup() {
+        val expected = workspaceReadIdentity()
         val board =
-            withContext(Dispatchers.IO) { LivePickup(api.data("/api/commerce/pickup-board")) }
+            readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
+                withContext(Dispatchers.IO) { LivePickup(api.data("/api/commerce/pickup-board")) }
+            }
         if (board.scope.isBlank()) invalidResponse()
         pickupBoard = board
         pickupUpdated = java.time.Instant.now()
-        pickupState = if (board.valid) "" else "设备会话失效，请重新登录"
+        pickupState = if (board.valid) "取餐队列已同步 · 前台每5秒自动读取" else "设备会话失效，请重新登录"
     }
 
-    fun loadPickup() {
+    fun loadPickup(automatic: Boolean = false) {
         if (
             !live ||
                 identity?.let { it.allows("kds.deliver") || it.allows("staff.access.configure") } !=
@@ -4152,33 +4392,26 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                 busy ||
                 heartbeatBusy
         ) {
-            pickupState = "请先登录取餐岗位，或等待同步结束后刷新"
+            if (!automatic) pickupState = "请先登录取餐岗位，或等待同步结束后刷新"
             return
         }
         busy = true
-        history = null
-        historyQuery = HistoryQuery()
-        financeSummary = null
-        financeEntries = emptyList()
-        financeReviews = emptyList()
-        financeUpdated = null
-        financeActorID = null
-        assignmentsBoard = null
-        assignmentsUpdated = null
-        assignmentsActorID = null
-        assignmentReceipt = ""
-        cashier = null
-        cashierUpdated = null
-        pickupBoard = null
-        pickupUpdated = null
-        pickupState = "正在读取取餐台"
+        val original = workspaceReadIdentity()
+        if (pickupBoard == null) pickupState = "正在读取取餐台"
         viewModelScope.launch {
             try {
-                identity = withContext(Dispatchers.IO) { api.heartbeat() }
+                identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
+                    withContext(Dispatchers.IO) { api.heartbeat() }
+                }
                 fetchPickup()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                pickupState = "读取失败，请重新读取"
-                handleLiveError(e)
+                if (original.employee == identity?.employeeId && original.workspace == workspaceVersion) {
+                    pickupUpdated = null
+                    pickupState = if (pickupBoard != null) "同步失败 · 显示上次取餐队列，数据已过期；请重新读取后操作" else "取餐队列读取失败，请刷新重试"
+                    if (!automatic || (e as? StaffAPIError)?.status in listOf(401, 403)) handleLiveError(e)
+                }
             } finally {
                 busy = false
             }
@@ -4653,6 +4886,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         unitIDs: Set<String> = emptySet(),
         refundID: String = "",
         confirmed: Boolean = false,
+        receiptReference: String = "",
     ): LiveCommand {
         require(canUseAfterSales) { "请刷新原商品、权限与资金状态" }
         return afterSales!!.command(
@@ -4665,6 +4899,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             unitIDs,
             refundID,
             confirmed,
+            receiptReference,
         )
     }
 

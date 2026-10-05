@@ -103,10 +103,9 @@ fun LiveDevicesView(m: AppModel, close: ()->Unit) {
                 } }
                 if(section=="policies") items(board?.policies.orEmpty()) { row->Panel {
                     Text(DeviceCommands.tickets[row.getString("ticketKind")] ?: row.getString("ticketKind"),fontSize=18.sp)
-                    Text((if(row.getBoolean("enabled")) "自动打印开启" else "自动打印关闭")+" · "+(if(row.isNull("copies")) "份数跟随路由" else "${row.getInt("copies")}份"))
+                    Text((if(row.getBoolean("enabled")) "自动打印开启" else "自动打印关闭")+" · "+devicePolicyCopiesLabel(row))
                     Text("影响后续自动票据；已有任务和手动打印分别处理。",fontSize=12.sp)
-                    SecondaryAction(enabled=m.canUseDevices,onClick={edit(JSONObject().put("kind","policy-save").put("expected",row.getString("configurationFingerprint")).put("reason","")
-                        .put("policy",JSONObject().put("ticketKind",row.getString("ticketKind")).put("enabled",row.getBoolean("enabled")).put("copies",if(row.isNull("copies")) 1 else row.getInt("copies"))))}){Text("调整策略")}
+                    SecondaryAction(enabled=m.canUseDevices,onClick={edit(devicePolicyDraft(row))}){Text("调整策略")}
                 } }
                 if(section=="bridges") items(m.printBridges,key={it.getString("id")}) { row->Panel {
                     Text(row.getString("name"),fontSize=18.sp)
@@ -154,13 +153,20 @@ fun LiveDevicesView(m: AppModel, close: ()->Unit) {
                     item { OutlinedTextField(form!!.textOrNull("productCategoryCode") ?: "",{change("productCategoryCode",it.trim().ifBlank{null})},label={Text("分类编码，空为岗位全部分类")}) }
                     item { OutlinedTextField(form!!.getInt("priority").toString(),{it.toIntOrNull()?.takeIf{n->n in 0..1000}?.let{n->change("priority",n)}},label={Text("优先级 0—1000")}) }
                 }
-                if(part=="route"||part=="policy") item { DeviceChoice("份数",form!!.getInt("copies").toString(),(1..5).associate{it.toString() to "$it 份"}){change("copies",it.toInt())} }
+                if(part=="route") item { DeviceChoice("份数",form!!.getInt("copies").toString(),(1..5).associate{it.toString() to "$it 份"}){change("copies",it.toInt())} }
+                if(part=="policy") item {
+                    DeviceChoice("份数",if(form!!.isNull("copies")) "" else form.getInt("copies").toString(),
+                        linkedMapOf("" to "跟随打印路由份数") + (1..5).associate{it.toString() to "固定 $it 份"}) {
+                        change("copies",it.toIntOrNull())
+                    }
+                    Text("跟随路由会使用实际命中的打印路由份数；固定份数会覆盖该设置。")
+                }
                 if(part=="policy") item { Row { Text("自动打印",Modifier.weight(1f));Switch(form!!.getBoolean("enabled"),{change("enabled",it)}) } }
                 item { OutlinedTextField(body.getString("reason"),::changeReason,label={Text("处理说明（至少3字）")});if(error.isNotBlank())Text(error,color=MaterialTheme.colorScheme.error) }
             }
         },confirmButton={TextButton(enabled=m.canUseDevices,onClick={try{
             val normalized=JSONObject(body.toString());part?.let { p->if(p!="policy")normalized.getJSONObject(p).optString("name").takeIf{it.isNotBlank()}?.let{normalized.getJSONObject(p).put("name",it.trim())} }
-            val detail=when(part){"device"->"打印机 ${form!!.getString("name")} · ${DeviceCommands.stations[form.getString("stationCode")]}\n${DeviceCommands.statuses[form.getString("status")]}\n队列 ${form.textOrNull("windowsQueueName") ?: "未绑定"}";"route"->"路由 ${form!!.getString("name")} · ${DeviceCommands.stations[form.getString("stationCode")]} · ${form.getInt("copies")}份\n打印机：${m.deviceBoard?.devices?.find { it.getString("id")==form.getString("printerDeviceId") }?.getString("name") ?: "待核对"}\n分类：${form.textOrNull("productCategoryCode") ?: "岗位全部分类"} · ${DeviceCommands.statuses[form.getString("status")]}";"policy"->"${DeviceCommands.tickets[form!!.getString("ticketKind")]} · ${if(form.getBoolean("enabled")) "开启" else "关闭"} · ${form.getInt("copies")}份";else->editingTitle.ifBlank { body.getString("reason") }}
+            val detail=when(part){"device"->"打印机 ${form!!.getString("name")} · ${DeviceCommands.stations[form.getString("stationCode")]}\n${DeviceCommands.statuses[form.getString("status")]}\n队列 ${form.textOrNull("windowsQueueName") ?: "未绑定"}";"route"->"路由 ${form!!.getString("name")} · ${DeviceCommands.stations[form.getString("stationCode")]} · ${form.getInt("copies")}份\n打印机：${m.deviceBoard?.devices?.find { it.getString("id")==form.getString("printerDeviceId") }?.getString("name") ?: "待核对"}\n分类：${form.textOrNull("productCategoryCode") ?: "岗位全部分类"} · ${DeviceCommands.statuses[form.getString("status")]}";"policy"->"${DeviceCommands.tickets[form!!.getString("ticketKind")]} · ${if(form.getBoolean("enabled")) "开启" else "关闭"} · ${devicePolicyCopiesLabel(form)}";else->editingTitle.ifBlank { body.getString("reason") }}
             proposed=m.prepareDevice(normalized,detail);editing=null
         }catch(e:Exception){error=e.message ?: "请核对输入"}}){Text("下一步 · 核对")}},dismissButton={TextButton(onClick={editing=null}){Text("返回")}})
     }

@@ -12,6 +12,7 @@ fun staffTools(a:StaffIdentity?):List<StaffTool>{
   addIf(any("reservation.view")&&route("reservations"),"reservations","预约与排队","桌边服务","确认、到店、入座及历史")
   addIf(route("live","tasks","fulfillment"),"assignments","人员与责任桌","桌边服务","主责、备援、未来排班")
   addIf(any("song.view","song.manage")&&route("performance"),"songs","现场点歌","桌边服务","报价、原款与演唱处理")
+  addIf(any("commercial.voucher.view")&&route("payments"),"vouchers","团购券核销与记录","桌边服务","查券、核销、原事项恢复及历史")
   addIf(any("loyalty.annual-benefit.view")&&route("member-management"),"annualPolicies","年度权益配置","配置与发布","生日、节日、优先订座与每日点心规则")
   addIf(membershipRecoveryPermissions.any(a::allows)&&route("member-management"),"membershipRecovery","历史会员找回与合并","会员服务","本人核验、候选选择与独立复核")
   addIf(any("member.card.manage")&&route("member-management"),"memberNumber","会员号规则","配置与发布","位数、起始数字与字母前缀")

@@ -14,6 +14,72 @@ class StockTest {
         )
 
     @Test
+    fun supplierAndBatchTraceabilitySurviveEmployeeDraftAndOriginalRequestRecovery() {
+        val f = fixture()
+        val board = StockBoard(f.getJSONObject("board"))
+        val actor = StaffIdentity.parse(f.getJSONObject("auth"))
+        val line = StockLine.make(board.items[0], "2", "10.01", f.getJSONObject("scan"), "  LOT-20261005-A  ")
+        val secondBatch = line.copy(batchCode = "LOT-20261005-B")
+        val lines = listOf(line, secondBatch)
+        val book = stockDraftBookEntry(JSONObject(), actor.employeeId, lines, "  上海供货商  ")
+        stockDraftBookEntry(book, "other-employee", emptyList(), "其他供应商")
+        val reopened = JSONObject(book.toString())
+        val restored = reopened.getJSONArray(actor.employeeId).objects().map(StockLine::parse)
+        assertEquals(lines, restored)
+        assertEquals("上海供货商", stockDraftSupplier(reopened, actor.employeeId))
+        assertEquals("其他供应商", stockDraftSupplier(reopened, "other-employee"))
+
+        val command = stockCommand(actor, board, restored, supplierName = stockDraftSupplier(reopened, actor.employeeId))
+        val recovered = LiveCommand.parse(command.json())
+        assertEquals(command, recovered)
+        val body = JSONObject(recovered.steps.single().body)
+        assertEquals("上海供货商", body.getJSONObject("supplierSnapshot").getString("name"))
+        assertEquals(listOf("LOT-20261005-A", "LOT-20261005-B"), body.getJSONArray("lines").objects().map { it.getString("batchCode") })
+        assertTrue(body.getJSONArray("lines").objects().all { it.getString("expectedPackageQuantity") == "12" })
+        assertEquals("draft", recovered.steps.single().stockProof!!.getString("status"))
+        assertTrue(stockDraftMatchesReceipt(reopened, actor.employeeId, recovered.steps.single().stockProof!!))
+
+        stockDraftBookEntry(reopened, actor.employeeId, restored, "后来修改的供应商")
+        assertFalse(stockDraftMatchesReceipt(reopened, actor.employeeId, recovered.steps.single().stockProof!!))
+        stockDraftBookEntry(reopened, actor.employeeId, listOf(line.copy(batchCode = "新批次")), "上海供货商")
+        assertFalse(stockDraftMatchesReceipt(reopened, actor.employeeId, recovered.steps.single().stockProof!!))
+
+        val receipt = board.receipts.single()
+        receipt.put("supplier", JSONObject().put("name", "上海供货商"))
+        receipt.getJSONArray("lines").getJSONObject(0).put("batchCode", "LOT-20261005-A")
+        val receive = stockCommand(actor, board, receiptID = receipt.getString("id"))
+        val confirmation = receive.steps.single().stockProof!!.getString("confirmation")
+        assertTrue(confirmation.contains("上海供货商"))
+        assertTrue(confirmation.contains("LOT-20261005-A"))
+        assertEquals("received", receive.steps.single().stockProof!!.getString("status"))
+        assertTrue(receive.steps.single().path.endsWith("/receive"))
+    }
+
+    @Test
+    fun optionalTraceabilityKeepsLegacyDraftsReadableAndRejectsBadInputsBeforeSubmission() {
+        val f = fixture()
+        val board = StockBoard(f.getJSONObject("board"))
+        val actor = StaffIdentity.parse(f.getJSONObject("auth"))
+        val old = StockLine.make(board.items[0], "2", "10", null)
+        val legacyJson = old.json()
+        assertFalse(legacyJson.has("batchCode"))
+        assertNull(StockLine.parse(legacyJson).batchCode)
+        val book = JSONObject().put(actor.employeeId, JSONArray().put(legacyJson))
+        assertEquals("", stockDraftSupplier(book, actor.employeeId))
+        val command = stockCommand(actor, board, listOf(old))
+        assertEquals(0, JSONObject(command.steps.single().body).getJSONObject("supplierSnapshot").length())
+        assertFalse(JSONObject(command.steps.single().body).getJSONArray("lines").getJSONObject(0).has("batchCode"))
+        val oldProof = JSONObject(command.steps.single().stockProof!!.toString()).apply { remove("supplierName") }
+        assertTrue(stockDraftMatchesReceipt(book, actor.employeeId, oldProof))
+
+        assertThrows(IllegalArgumentException::class.java) { stockCommand(actor, board, listOf(old), supplierName = "供".repeat(201)) }
+        assertThrows(IllegalArgumentException::class.java) { normalizedStockSupplierName("供应商\n另一行") }
+        assertThrows(IllegalArgumentException::class.java) { StockLine.make(board.items[0], "1", "10", null, "B".repeat(129)) }
+        assertThrows(IllegalArgumentException::class.java) { stockCommand(actor, board, listOf(old.copy(batchCode = " invalid "))) }
+        assertThrows(IllegalArgumentException::class.java) { stockCommand(actor, board, listOf(old, old.copy())) }
+    }
+
+    @Test
     fun quantitiesAndDurableReceiptGuards() {
         val f = fixture()
         val b = StockBoard(f.getJSONObject("board"))

@@ -25,6 +25,8 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
     var code by remember { mutableStateOf("") }
     var quantity by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
+    var supplier by remember { mutableStateOf(m.stockSupplierName) }
+    var batch by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
     var receiptSearch by remember { mutableStateOf("") };var receiptFrom by remember { mutableStateOf("") };var receiptTo by remember { mutableStateOf("") };var receiptStatus by remember { mutableStateOf("") }
     var costItem by remember { mutableStateOf<JSONObject?>(null) };var costValue by remember { mutableStateOf("") };var costReason by remember { mutableStateOf("") }
@@ -37,11 +39,14 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
     var selectedID by remember { mutableStateOf<String?>(null) }
     var scan by remember { mutableStateOf<JSONObject?>(null) }
     var proposed by remember { mutableStateOf<LiveCommand?>(null) }
+    var setupVisible by remember { mutableStateOf(false) }
+    var publishReceiptId by remember { mutableStateOf<String?>(null) }
     val listState=rememberLazyListState()
     LaunchedEffect(selectedID){if(selectedID!=null)listState.animateScrollToItem(0)}
     val scope = rememberCoroutineScope()
     val version = remember { m.workspaceVersion }
     val originalAccess = remember { m.priorityAccessKey }
+    LaunchedEffect(m.stockSupplierName) { supplier = m.stockSupplierName }
     LaunchedEffect(m.priorityAccessKey) { if(m.priorityAccessKey != originalAccess)close() }
     var scanActor by remember { mutableStateOf<String?>(null) }
     fun lookup(value: String) {
@@ -52,6 +57,8 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                 scan = result
                 selectedID = result.getString("inventoryItemId")
                 quantity = "1"
+                amount = ""
+                batch = ""
                 error = ""
             } catch (e: Exception) {
                 error = e.message ?: "识别失败"
@@ -94,6 +101,10 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                 LivePendingView(m)
                 Text(m.stockState, fontSize = 12.sp)
                 if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+                if (m.identity?.allows("inventory.manage") == true)
+                    TextButton(onClick = { setupVisible = true }, enabled = m.canUseStock && !looking) {
+                        Text("新增物料、编辑资料与包装条码")
+                    }
                 Row {
                     FilterChip(!receipts, { receipts = false }, { Text("库存与收货") })
                     Spacer(Modifier.width(8.dp))
@@ -106,6 +117,15 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                             if (m.identity?.allows("inventory.receive") == true) {
                                 item {
                                     Panel {
+                                        OutlinedTextField(
+                                            supplier,
+                                            { supplier = it },
+                                            label = { Text("本单供应商（选填）") },
+                                            singleLine = true,
+                                            isError = supplier.trim().length > 200,
+                                            supportingText = { Text("加入清单或核对建单时保存，最多200字。") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
                                         Row {
                                             OutlinedTextField(
                                                 code,
@@ -173,6 +193,15 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                                         keyboardType = KeyboardType.Decimal
                                                     ),
                                             )
+                                            OutlinedTextField(
+                                                batch,
+                                                { batch = it },
+                                                label = { Text("此物料批次号（选填）") },
+                                                singleLine = true,
+                                                isError = batch.trim().length > 128,
+                                                supportingText = { Text("最多128字；留空由系统生成，不同批次请分行。") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            )
                                             PrimaryAction(
                                                 onClick = {
                                                     try {
@@ -182,17 +211,19 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                                                 quantity,
                                                                 amount,
                                                                 scan,
+                                                                batch,
                                                             )
                                                         require(
                                                             m.stockDraft.none { it.id == line.id }
                                                         ) {
-                                                            "清单已有此物料，请移除旧行后合并数量"
+                                                            "清单已有此物料同条码同批次，请移除旧行后合并数量"
                                                         }
-                                                        m.saveStockDraft(m.stockDraft + line)
+                                                        m.saveStockDraft(m.stockDraft + line, supplier)
                                                         selectedID = null
                                                         scan = null
                                                         quantity = ""
                                                         amount = ""
+                                                        batch = ""
                                                         error = ""
                                                     } catch (e: Exception) {
                                                         error = e.message ?: "请核对"
@@ -225,7 +256,8 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                                                 m.saveStockDraft(
                                                                     m.stockDraft.filter {
                                                                         it.id != line.id
-                                                                    }
+                                                                    },
+                                                                    supplier,
                                                                 )
                                                             } catch (e: Exception) {
                                                                 error = e.message ?: "保存失败"
@@ -240,11 +272,13 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                             PrimaryAction(
                                                 onClick = {
                                                     try {
+                                                        m.saveStockDraft(m.stockDraft, supplier)
                                                         proposed =
                                                             stockCommand(
                                                                 m.identity!!,
                                                                 board,
                                                                 m.stockDraft,
+                                                                supplierName = m.stockSupplierName,
                                                             )
                                                     } catch (e: Exception) {
                                                         error = e.message ?: "请刷新"
@@ -309,6 +343,7 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                                 scan = null
                                                 quantity = ""
                                                 amount = ""
+                                                batch = ""
                                             },
                                             enabled = m.canUseStock,
                                         ) {
@@ -323,6 +358,7 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                             items(board.receipts, key = { it.getString("id") }) { r ->
                                 Panel {
                                     Text(r.getString("publicId"), fontSize = 18.sp)
+                                    r.optJSONObject("supplier")?.textOrNull("name")?.let { Text("供应商：$it", fontSize = 12.sp) }
                                     Text(
                                         mapOf(
                                             "draft" to "待实物验收",
@@ -338,6 +374,7 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                                 line.getString("quantity") +
                                                 line.getString("baseUnit")
                                         )
+                                        line.textOrNull("batchCode")?.let { Text("批次：$it", fontSize = 12.sp) }
                                     }
                                     if (board.costs)
                                         r.textOrNull("invoiceTotalMinor")?.toLongOrNull()?.let {
@@ -364,12 +401,22 @@ fun LiveStockView(m: AppModel, close: () -> Unit) {
                                         ) {
                                             Text("已核对实物，确认入库")
                                         }
+                                    if (r.getString("status") == "draft" &&
+                                        inventoryPublishPermissions.all { m.identity?.allows(it) == true })
+                                        SecondaryAction(
+                                            onClick = { publishReceiptId = r.getString("id") },
+                                            enabled = m.canUseStock && !looking,
+                                        ) { Text("验收入库并发布商品") }
                                 }
                             }
                         }
                     }
             }
         }
+    }
+    if (setupVisible) LiveInventorySetupView(m) { setupVisible = false }
+    publishReceiptId?.let { receiptId ->
+        LiveInventoryPublishView(m, receiptId) { publishReceiptId = null }
     }
     costItem?.let { item->AlertDialog(onDismissRequest={costItem=null},title={Text("更正 ${item.getString("name")} 成本")},text={Column {Text("单位：每${item.getString("baseUnit")}，请按实际凭证核对。");CustodyField("新单位成本（元）",costValue,20){costValue=it};CustodyField("更正依据",costReason,500){costReason=it}}},confirmButton={TextButton(onClick={try{proposed=stockCostCommand(m.identity!!,m.stockBoard!!,item,costValue,costReason);costItem=null}catch(e:Exception){error=e.message?:"请核对成本"}},enabled=m.canUseStock){Text("下一步核对")}},dismissButton={TextButton(onClick={costItem=null}){Text("取消")}}) }
     proposed?.let { command ->

@@ -19,8 +19,45 @@ def require(ok, message):
 def trusted_apk_url(value):
     u = urlsplit(value)
     return (u.scheme == 'https' and u.netloc == 'mbox.shmbox.com' and not u.query and not u.fragment
-            and re.fullmatch(r'/native-updates/staff/[A-Za-z0-9_./-]+\.apk', u.path)
+            and re.fullmatch(r'/native-updates/staff/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.apk', u.path)
             and '..' not in u.path and '//' not in u.path)
+
+def verify_android_manifest(xml, channel):
+    """Read packaged metadata, not build filenames or the caller's claimed variant."""
+    # aapt's indentation is the XML hierarchy. Only application-owned metadata is
+    # available through PackageInfo.applicationInfo.metaData in AndroidUpdater.
+    stack = []
+    applications = []
+    entries = []
+    for line in xml.splitlines():
+        element = re.match(r'^(\s*)E: ([^\s(]+)(?:\s|$)', line)
+        if element:
+            depth = len(element[1])
+            while stack and stack[-1]['depth'] >= depth:
+                stack.pop()
+            parent = stack[-1] if stack else None
+            node = {'depth': depth, 'tag': element[2], 'attributes': {}}
+            if node['tag'] == 'application' and parent and parent['tag'] == 'manifest':
+                applications.append(node)
+            if node['tag'] == 'meta-data' and parent and any(parent is app for app in applications):
+                entries.append(node)
+            stack.append(node)
+            continue
+        attribute = re.match(r'^\s*A: android:(name|value)(?:\([^)]*\))?=(.*)$', line)
+        if attribute and stack:
+            require(attribute[1] not in stack[-1]['attributes'], 'APK存在重复发布属性')
+            stack[-1]['attributes'][attribute[1]] = attribute[2].strip()
+    require(len(applications) == 1, 'APK必须具有唯一application配置')
+    metadata = {}
+    for node in entries:
+        name = re.match(r'^"([^"]+)"(?:\s|$)', node['attributes'].get('name', ''))
+        value = node['attributes'].get('value')
+        if name and value is not None:
+            require(name[1] not in metadata, 'APK存在重复发布元数据')
+            metadata[name[1]] = value
+    channel_value = metadata.get('com.mbox.staff.UPDATE_CHANNEL', '')
+    require(channel_value.split(' (Raw:', 1)[0] == json.dumps(channel), 'APK实际更新渠道与清单不匹配或缺少渠道证明')
+    require(metadata.get('com.mbox.staff.ALLOW_LOCAL_DEMO') == '(type 0x12)0x0', 'APK未证明已禁用本地演练')
 
 def prepare(args):
     notes = args.notes.read_text(encoding='utf-8').strip()
@@ -31,6 +68,7 @@ def prepare(args):
     item = dict(platform=args.platform, priority=args.priority, notes=notes, url=args.url)
     if args.platform == 'android':
         require(args.apk and args.apk.is_file() and args.aapt and args.apksigner and args.certificate_sha256, 'Android必须提供APK、aapt、apksigner及固定证书SHA256')
+        require(re.fullmatch(r'[a-fA-F0-9]{64}', args.certificate_sha256), '固定签名证书SHA256必须为64位十六进制')
         require(trusted_apk_url(args.url), 'APK必须位于本站native-updates/staff HTTPS路径')
         require(args.output.resolve() != args.apk.resolve(), '不能覆盖安装包')
         # apksigner verifies all package signatures; this is not just a certificate filename check.
@@ -39,6 +77,9 @@ def prepare(args):
         signers = re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([a-fA-F0-9]+)$', signature, re.M)
         require(len(signers) == 1 and signers[0].lower() == args.certificate_sha256.lower(), '证书与指定长期签名不一致')
         badging = subprocess.run([str(args.aapt), 'dump', 'badging', str(args.apk)], check=True, capture_output=True, text=True).stdout
+        require(not re.search(r'^application-debuggable\s*$', badging, re.M), '禁止发布可调试APK；请使用release构建')
+        manifest = subprocess.run([str(args.aapt), 'dump', 'xmltree', str(args.apk), 'AndroidManifest.xml'], check=True, capture_output=True, text=True).stdout
+        verify_android_manifest(manifest, args.channel)
         package = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging, re.M)
         minimum = re.search(r"^sdkVersion:'(\d+)'", badging, re.M)
         require(package is not None and minimum is not None, '不能读取APK版本及系统要求')
@@ -63,6 +104,8 @@ def prepare(args):
     require(0 < len(item['version']) <= 40, '版本名称过长')
     previous = [r for r in raw['releases'] if r.get('platform') == args.platform]
     require(len(previous) <= 1 and (not previous or item['build'] > previous[0]['build']), '新构建号必须严格递增；不要覆盖已发布原版本')
+    if args.platform == 'android':
+        require(not previous or previous[0].get('url') != item['url'], '新APK必须使用新的不可变地址，不能覆盖旧安装包')
     raw['releases'] = [r for r in raw['releases'] if r.get('platform') != args.platform] + [item]
     content = (json.dumps(raw, ensure_ascii=False, indent=2) + '\n').encode()
     require(len(content) <= 65536, '更新清单超过64KB')

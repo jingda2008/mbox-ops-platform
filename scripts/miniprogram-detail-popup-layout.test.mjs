@@ -17,11 +17,33 @@ test('long bundle keeps full-height hero, reachable close and footer while only 
  }
  }finally{await browser.close()}
 })
-test('poster keeps its image and independent circular close visible while long captions scroll',async()=>{
- const browser=await chromium.launch({headless:true});try{const page=await browser.newPage(),style=await css(root+'/miniprogram/components/launch-popup/index.wxss')
- for(const [width,height] of sizes){await page.setViewportSize({width,height});await page.setContent(`<style>${reset}${scaled(style,width)}</style><view class="launch-popup-mask"><view class="launch-popup-shell"><view class="launch-popup-swiper"><view class="launch-popup-poster"><view class="launch-popup-hero"><image class="launch-popup-image"></image><view class="launch-popup-heading"><text class="launch-popup-title">${'长标题'.repeat(26)}</text></view></view><scroll-view class="launch-popup-caption"><view class="launch-popup-product-line"><text class="launch-popup-product-name">${'长名称'.repeat(40)}</text><text class="launch-popup-product-price">¥228.50</text></view><text class="launch-popup-copy">${'推荐内容'.repeat(250)}</text></scroll-view></view></view><view class="launch-popup-pagination"><view class="launch-popup-dot is-current"></view><view class="launch-popup-dot"></view></view><button class="launch-popup-close"><view class="launch-popup-close-ring"></view><view class="launch-popup-close-line launch-popup-close-line--first"></view><view class="launch-popup-close-line launch-popup-close-line--second"></view></button></view></view>`)
- const close=page.locator('.launch-popup-close'),hero=page.locator('.launch-popup-hero'),caption=page.locator('scroll-view'),b=await close.boundingBox(),image=await hero.boundingBox();assert.ok(b.height>=44&&b.width>=44&&b.x>=0&&b.x+b.width<=width+1&&b.y>=0&&b.y+b.height<=height+1,'close touch target reachable');assert.ok(image.y>=0&&Math.abs(image.height-height*.45)<1,'hero retains its size');assert.ok(await page.locator('.launch-popup-close-ring').evaluate(n=>parseFloat(getComputedStyle(n).borderTopLeftRadius)>=22),'close is circular');
- await caption.evaluate(n=>n.scrollTop=n.scrollHeight);assert.ok(await caption.evaluate(n=>n.scrollTop>0),'long copy can scroll');assert.deepEqual(await close.boundingBox(),b,'close stays fixed');assert.deepEqual(await hero.boundingBox(),image,'caption scrolling cannot squash image');assert.ok(await close.evaluate(n=>{const r=n.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===n}),'close is topmost');assert.ok(await page.evaluate(()=>document.body.scrollWidth<=innerWidth+1),'no horizontal overflow')
- }
- }finally{await browser.close()}
+test('posters share a stable 4:3 frame and keep close reachable across image ratios',async()=>{
+ const browser=await chromium.launch({headless:true})
+ try {
+  const page=await browser.newPage(),style=await css(root+'/miniprogram/components/launch-popup/index.wxss')
+  for(const [width,height] of [...sizes,[720,360]]) for(const ratio of [.5,.75,1,4/3]) {
+   const posterWidth=Math.min(width*620/750,480),posterHeight=posterWidth*.75
+   await page.setViewportSize({width,height})
+   await page.setContent(`<style>${reset}${scaled(style,width)}</style><scroll-view class="launch-popup-mask"><view class="launch-popup-stage"><view class="launch-popup-shell"><view class="launch-popup-swiper" style="height:${posterHeight}px"><view class="launch-popup-poster"><view class="launch-popup-hero"><image class="launch-popup-image" style="width:${ratio < .75 ? .75/ratio*100 : 100}%;height:${ratio > .75 ? ratio/.75*100 : 100}%"></image><view class="launch-popup-heading"><text class="launch-popup-title">今日推荐</text></view></view></view></view><view class="launch-popup-pagination"><view class="launch-popup-dot is-current"></view><view class="launch-popup-dot"></view></view><button class="launch-popup-close"><view class="launch-popup-close-ring"></view><view class="launch-popup-close-line launch-popup-close-line--first"></view><view class="launch-popup-close-line launch-popup-close-line--second"></view></button></view></view></scroll-view>`)
+   const hero=await page.locator('.launch-popup-hero').boundingBox()
+   assert.ok(Math.abs(hero.width-posterWidth)<1,'all poster ratios use the same width')
+   assert.ok(Math.abs(hero.height-posterHeight)<1,'frame height stays fixed across image ratios')
+   assert.ok(hero.y>=0&&hero.x>=0&&hero.x+hero.width<=width+1,'poster begins inside viewport')
+   const picture=await page.locator('.launch-popup-image').boundingBox()
+   assert.ok(Math.abs(picture.height/picture.width-ratio)<.01,'cropped images retain original proportions')
+   assert.ok(picture.x<=hero.x+1&&picture.y<=hero.y+1&&picture.x+picture.width>=hero.x+hero.width-1&&picture.y+picture.height>=hero.y+hero.height-1,'image fills the frame without gaps')
+   const close=page.locator('.launch-popup-close')
+   await close.scrollIntoViewIfNeeded()
+   const b=await close.boundingBox()
+   assert.ok(b.height>=44&&b.width>=44&&b.x>=0&&b.x+b.width<=width+1&&b.y>=0&&b.y+b.height<=height+1,'close remains reachable by scrolling tall posters')
+   assert.ok(await page.locator('.launch-popup-close-ring').evaluate(n=>parseFloat(getComputedStyle(n).borderTopLeftRadius)>=22),'close is circular')
+   assert.ok(await close.evaluate(n=>{const r=n.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===n}),'close is clickable')
+   assert.ok(await page.locator('.launch-popup-swiper').evaluate(n=>{const s=getComputedStyle(n);return s.backgroundColor==='rgba(0, 0, 0, 0)'&&parseFloat(s.borderTopWidth)===0&&parseFloat(s.borderTopLeftRadius)===0}),'no surrounding card or frame')
+   assert.ok(await page.evaluate(()=>document.body.scrollWidth<=innerWidth+1),'no horizontal overflow')
+   if(process.env.MBOX_POPUP_EVIDENCE_DIR && ratio===.75 && ((width===390&&height===844)||(width===720&&height===360))) {
+    await mkdir(process.env.MBOX_POPUP_EVIDENCE_DIR,{recursive:true})
+    await page.screenshot({path:resolve(process.env.MBOX_POPUP_EVIDENCE_DIR,`poster-layout-${width}x${height}.png`)})
+   }
+  }
+ } finally {await browser.close()}
 })

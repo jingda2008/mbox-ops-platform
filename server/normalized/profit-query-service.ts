@@ -466,7 +466,9 @@ export class ProfitQueryService {
         ORDER BY SUM(event.sales_amount_delta_minor) DESC, employee.display_name, product_name
       `, [
         scope.tenantId, scope.storeId, query.startDate, query.endDate,
-        query.employeeIds?.length ? [...query.employeeIds] : null, query.productId ?? null,
+        // An empty effective allowlist denies every employee; only an omitted
+        // scope means all employees for the separately authorized view_all role.
+        query.employeeIds === undefined ? null : [...query.employeeIds], query.productId ?? null,
       ])
       return result.rows.map(mapEmployeeSales)
     }, { isolation: 'repeatable-read', readOnly: true })

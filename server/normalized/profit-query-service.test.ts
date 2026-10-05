@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
+import Fastify from 'fastify'
+import { commercialOpsApiPlugin } from './commercial-ops-api.js'
+import type { StaffAccessRepository } from './staff-access-repository.js'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { CommercialOpsRepository } from './commercial-ops-repository.js'
 import { ProfitQueryService, profitPeriodRange } from './profit-query-service.js'
@@ -95,6 +98,57 @@ integration('ProfitQueryService PostgreSQL accounting correctness', () => {
       contributionProfitMinor: 4_500, refundReversalAmountMinor: 2_500,
       costCoverageComplete: true,
     })
+  })
+
+  it('preserves an explicitly empty employee scope instead of returning all store sales', async () => {
+    const empty = await query.listEmployeeSales({ tenantId, storeId }, {
+      startDate: '2026-08-01', endDate: '2026-08-31', employeeIds: [],
+    })
+    expect(empty).toEqual([])
+    const all = await query.listEmployeeSales({ tenantId, storeId }, {
+      startDate: '2026-08-01', endDate: '2026-08-31',
+    })
+    expect(all).toHaveLength(1)
+    const other = await query.listEmployeeSales({ tenantId, storeId }, {
+      startDate: '2026-08-01', endDate: '2026-08-31', employeeIds: [managerId],
+    })
+    expect(other).toEqual([])
+  })
+
+  it('keeps the HTTP employee-sales result empty after all included employees are excluded', async () => {
+    const runtime = new Pool({ connectionString: process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL ?? databaseUrl, max: 2 })
+    const scoped = new ScopedPostgresTransactionRunner(asPool(runtime))
+    const service = new ProfitQueryService(scoped)
+    const app = Fastify()
+    let excluded = true
+    try {
+      if (process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL) {
+        expect((await runtime.query('SELECT rolcanlogin,rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0])
+          .toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false })
+      }
+      await app.register(commercialOpsApiPlugin, {
+        prefix: '/api', transactions: scoped, queryService: service,
+        commandExecutor: { execute: async () => { throw new Error('Read-only report must not execute commands') } },
+        resolveContext: () => ({ scope: { tenantId, storeId }, employeeId: sellerId, businessDate: '2026-08-15', capabilities: ['commercial.sales.view_all'] }),
+        createStaffAccessRepository: () => ({ resolve: async () => ({
+          employeeId: sellerId, employeeCode: 'SELLER', displayName: 'Seller', roleCodes: [], roleNames: [],
+          permissions: ['commercial.sales.view'], deniedPermissions: [], approvalLimits: [], navigation: [], resolvedAt: new Date().toISOString(),
+          dataScopes: excluded ? [{ key: 'commercial.employee_ids', effect: 'include', value: [managerId] },
+            { key: 'commercial.employee_ids', effect: 'exclude', value: [sellerId, managerId] }] : [],
+        }) }) as unknown as StaffAccessRepository,
+      })
+      const path = '/api/commercial-ops/employee-sales?startDate=2026-08-01&endDate=2026-08-31'
+      const empty = await app.inject(path)
+      expect(empty.statusCode, empty.body).toBe(200)
+      expect(empty.json().data).toEqual([])
+      expect((await app.inject(path + '&employeeId=' + sellerId)).statusCode).toBe(403)
+      excluded = false
+      const own = await app.inject(path)
+      expect(own.statusCode, own.body).toBe(200)
+      expect(own.json().data).toHaveLength(1)
+      expect(own.json().data[0]).toMatchObject({ quantity: '1.500000', salesAmountMinor: 7500 })
+      expect(JSON.stringify(own.json())).not.toContain(sellerId)
+    } finally { await app.close(); await runtime.end() }
   })
 
   it('lists only display-safe cost and voucher fields', async () => {

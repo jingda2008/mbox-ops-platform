@@ -1,8 +1,8 @@
 import {randomUUID} from 'node:crypto'
-import {Pool} from 'pg'
+import {Client,Pool} from 'pg'
 import Fastify from 'fastify'
 import {afterAll,beforeAll,describe,expect,it} from 'vitest'
-import {runNormalizedMigrations} from '../migrate-normalized.js'
+import {runNormalizedMigrations,loadNormalizedMigrations,unwrapNormalizedMigrationTransaction} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
 import {NormalizedCommandExecutor,appendOutboxMessage} from './command-executor.js'
 import {PaymentCommandService} from './payment-command-service.js'
@@ -30,9 +30,30 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
 ;(url&&runtimeUrl?describe:describe.skip)('consumption due after quantity refunds and compensation',()=>{
   let pool:Pool,runtimePool:Pool,runner:ScopedPostgresTransactionRunner,money:PaymentCommandService,afterSales:ItemAfterSalesCommandService,date:string
   const scope={tenantId:randomUUID(),storeId:randomUUID()},area=randomUUID(),product=randomUUID(),requester=randomUUID(),cashier=randomUUID()
+  const database='consumption_upgrade_'+randomUUID().replaceAll('-','')
+  let admin:Client,targetUrl:string,legacyStale:Awaited<ReturnType<typeof fixture>>,legacyStaleAuthorization:string
   beforeAll(async()=>{
-    await runNormalizedMigrations(url!)
-    pool=new Pool({connectionString:url,max:8});runtimePool=new Pool({connectionString:runtimeUrl,max:8});runner=new ScopedPostgresTransactionRunner(runtimePool)
+    const target=new URL(url!),runtime=new URL(runtimeUrl!)
+    if(!['localhost','127.0.0.1','[::1]'].includes(target.hostname)||target.search||target.hash)throw new Error('Upgrade fixture requires an isolated local PostgreSQL URL')
+    target.pathname='/postgres';admin=new Client({connectionString:target.toString()});await admin.connect()
+    await admin.query(`CREATE DATABASE "${database}"`)
+    target.pathname='/'+database;runtime.pathname='/'+database;targetUrl=target.toString()
+    const migrationClient=new Client({connectionString:targetUrl});await migrationClient.connect()
+    try {
+      await migrationClient.query(`CREATE SCHEMA mbox;
+        CREATE TABLE mbox.normalized_schema_metadata(singleton boolean PRIMARY KEY DEFAULT true,schema_flavor text NOT NULL,schema_version text NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp(),updated_at timestamptz NOT NULL DEFAULT clock_timestamp());
+        CREATE TABLE mbox.normalized_schema_migrations(version text PRIMARY KEY,filename text NOT NULL UNIQUE,checksum char(64) NOT NULL,applied_at timestamptz NOT NULL DEFAULT clock_timestamp());
+        INSERT INTO mbox.normalized_schema_metadata(singleton,schema_flavor,schema_version) VALUES(true,'normalized-core-v1','000')`)
+      for(const migration of (await loadNormalizedMigrations()).filter(m=>Number(m.version)<=263)){
+        await migrationClient.query('BEGIN')
+        try {
+          await migrationClient.query(unwrapNormalizedMigrationTransaction(migration.sql))
+          await migrationClient.query('INSERT INTO mbox.normalized_schema_migrations(version,filename,checksum) VALUES($1,$2,$3)',[migration.version,migration.filename,migration.checksum])
+          await migrationClient.query('COMMIT')
+        } catch(error){await migrationClient.query('ROLLBACK');throw error}
+      }
+    } finally {await migrationClient.end()}
+    pool=new Pool({connectionString:targetUrl,max:8});runtimePool=new Pool({connectionString:runtime.toString(),max:8});runner=new ScopedPostgresTransactionRunner(runtimePool)
     expect((await runtimePool.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user')).rows[0]).toEqual({rolsuper:false,rolbypassrls:false})
     const commands=new NormalizedCommandExecutor(runner)
     money=new PaymentCommandService(commands,new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
@@ -57,8 +78,20 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
       }
       if(id===cashier)await pool.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',100000,'CNY')",[scope.tenantId,scope.storeId,role])
     }
-  },30000)
-  afterAll(async()=>{await runtimePool?.end();await pool?.end()})
+    // Preserve a genuinely pre-264 row with the historical ceiling. This
+    // fixture models persisted legacy state, not execution of pre-234 source.
+    // No 264 guard is disabled and no new causal row is reclassified as old.
+    legacyStale=await fixture(false,1600);await stop(legacyStale,1);await compensate(legacyStale,100)
+    legacyStaleAuthorization=(await authorize(legacyStale)).value.id
+    expect((await pool.query('SELECT max(version) AS version FROM mbox.normalized_schema_migrations')).rows[0].version).toBe('263')
+    expect((await pool.query("SELECT count(*)::int n FROM pg_attribute WHERE attrelid='mbox.order_recollection_authorizations'::regclass AND attname='local_financial_sequence' AND NOT attisdropped")).rows[0].n).toBe(0)
+    await pool.query('UPDATE mbox.order_recollection_authorizations SET amount_minor=2500 WHERE id=$1',[legacyStaleAuthorization])
+    await runNormalizedMigrations(targetUrl)
+  },60000)
+  afterAll(async()=>{
+    await runtimePool?.end();await pool?.end()
+    if(admin){await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);await admin.end()}
+  })
   const metadata=(employeeId=cashier)=>({scope,actor:{type:'employee' as const,employeeId},businessDate:date,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
   async function fixture(bundle=false,capturedMinor=4000,existingSession?:string){
     const table=randomUUID(),session=existingSession??randomUUID(),order=randomUUID(),item=randomUUID(),task=randomUUID(),parent=bundle?randomUUID():item
@@ -254,7 +287,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await expect(collect(f)).rejects.toThrow('not responsible')
   })
 
-  it('expired and stale authorizations cannot turn compensation into debt or be consumed',async()=>{
+  it('expired authorizations cannot turn compensation into debt or be consumed',async()=>{
     const f=await fixture(false,1600);await stop(f,1);await compensate(f,100)
     const expired=(await authorize(f)).value
     expect(expired.amountMinor).toBe(2400)
@@ -265,9 +298,15 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     expect((await guestView(f.session))[0]).toMatchObject({payableAmountMinor:0,paymentAccess:'status_review'})
     expect(await due(f.session)).toEqual([])
     await expect(collect(f)).rejects.toThrow('重新收款')
-    const stale=(await authorize(f)).value
-    // A pre-234 authorization may retain the old 25-yuan ceiling; never silently consume it.
-    await pool.query('UPDATE mbox.order_recollection_authorizations SET amount_minor=2500 WHERE id=$1',[stale.id])
+    expect((await authorize(f)).value.amountMinor).toBe(2400)
+    expect((await collect(f)).value.amountMinor).toBe(2400)
+  })
+
+  it('retains and rejects a pre-264 stale legacy ceiling after the real schema upgrade',async()=>{
+    const f=legacyStale
+    expect((await pool.query('SELECT id,amount_minor::text,local_financial_sequence,captured_refund_ids FROM mbox.order_recollection_authorizations WHERE id=$1',[legacyStaleAuthorization])).rows[0]).toEqual({
+      id:legacyStaleAuthorization,amount_minor:'2500',local_financial_sequence:null,captured_refund_ids:null,
+    })
     expect(await summary(f.order)).toMatchObject({due:2400})
     expect((await cashierView(f.order))?.recollectionAuthorization).toBeNull()
     expect((await guestView(f.session))[0]).toMatchObject({payableAmountMinor:0,paymentAccess:'status_review'})

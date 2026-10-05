@@ -1,3 +1,5 @@
+import { EmployeeSalesSummary } from './EmployeeSalesSummary'
+import { loadOperatingReports, signedMinorAmount, type EmployeeSalesView } from './employee-sales-presentation'
 import { StaffPermissionReceiptPanel } from './StaffPermissionReceiptPanel'
 import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {InventoryWastePanel,InventoryWasteReviewPanel} from './InventoryWastePanel'
@@ -297,16 +299,6 @@ interface PrintJobView {
   createdAt: string
 }
 
-interface EmployeeSalesView {
-  employeeId: string
-  employeeDisplayName: string
-  productId: string
-  productName: string
-  quantity: string
-  salesAmountMinor: number
-  contributionProfitMinor: number | null
-  currency: string
-}
 
 interface CommercePolicyView extends Record<string, unknown> {
   configured: boolean
@@ -406,13 +398,8 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
           setData(emptyData)
         }
       } else if (module === 'operations') {
-        if (auth.permissions.includes('commercial.profit.view')) {
-          const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/profit?period=day')
-          setData({ ...emptyData, profit: profitView(response.data) })
-        } else if (auth.permissions.some((permission) => ['commercial.sales.view', 'commercial.sales.view_all'].includes(permission))) {
-          const response = await api.getEndpoint<{ data: unknown }>('/api/commercial-ops/employee-sales')
-          setData({ ...emptyData, employeeSales: employeeSales(response.data) })
-        } else setData(emptyData)
+        const reports = await loadOperatingReports((path) => api.getEndpoint<{ data: unknown }>(path), auth.permissions)
+        setData({ ...emptyData, profit: profitView(reports.profit), employeeSales: reports.sales })
       } else if (module === 'experience') {
         if (auth.permissions.includes('customer.experience.view')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
@@ -1341,19 +1328,23 @@ function formatEmployeeInventoryQuantity(item: InventoryItemView): string {
   )
 }
 
-function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
+export function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
   const finance = auth.permissions.some((permission) => ['commercial.cost.view', 'commercial.cost.manage', 'commercial.payroll.view', 'commercial.payroll.manage', 'commercial.payroll.post'].includes(permission))
     ? <OwnerFinancePanel api={api} auth={auth} /> : null
+  const salesSection = auth.permissions.some((permission) => ['commercial.sales.view', 'commercial.sales.view_all'].includes(permission))
+    ? <section aria-label="员工销售归属">
+      <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>员工销售归属</strong><small>仅显示当前账号权限范围内的销售归属。</small></div></div>
+      <EmployeeSalesSummary sales={sales} />
+    </section> : null
   if (!canViewProfit) return <div className="staff-module-body">
     {finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}
-    <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>客户与销售</strong><small>仅显示当前账号权限范围内的销售归属，不展示门店利润与成本。</small></div></div>
-    {sales.length === 0 ? <EmptyState text="当前范围暂无销售归属数据" /> : <div className="staff-module-list">{sales.slice(0, 30).map((item) => <article key={`${item.employeeId}:${item.productId}`}><div><strong>{item.productName}</strong><small>{item.employeeDisplayName} · {item.quantity}件</small></div><b>¥{formatAmount(item.salesAmountMinor)}</b></article>)}</div>}
+    {salesSection}
   </div>
-  if (view === null) return <div className="staff-module-body">{finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}<EmptyState text="本营业日暂无经营数据" /></div>
+  if (view === null) return <div className="staff-module-body">{finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}<EmptyState text="本营业日暂无经营数据" />{salesSection}</div>
   return <div className="staff-module-body">
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>{view.range.startDate} 营业概览</strong><small>{view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}</small></div></div>
     <div className="staff-metric-grid">
-      <article><small>实收净额</small><strong>¥{formatAmount(view.revenue.cash.netReceiptsMinor)}</strong></article>
+      <article><small>实收净额</small><strong className={view.revenue.cash.netReceiptsMinor < 0 ? 'is-negative' : ''}>¥{signedMinorAmount(view.revenue.cash.netReceiptsMinor)}</strong></article>
       <article><small>已售商品成本</small><strong>¥{formatAmount(view.costs.goodsCostMinor)}</strong></article>
       <article><small>经营费用</small><strong>¥{formatAmount(view.costs.operatingExpenseMinor)}</strong></article>
       <article><small>库存损耗</small><strong>¥{formatAmount(view.costs.inventoryLossMinor)}</strong></article>
@@ -1363,6 +1354,7 @@ function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: Norm
     </div>
     {(view.gaps.orderItemsMissingCostCount > 0 || view.gaps.inventoryLossesMissingCostCount > 0) && <p className="staff-module-warning">有 {view.gaps.orderItemsMissingCostCount} 个已售单品和 {view.gaps.inventoryLossesMissingCostCount} 笔损耗缺少成本，当前利润只能作为暂估。</p>}
     {view.caveats.length > 0 && <p className="staff-module-footnote">{view.caveats[0]}</p>}
+    {salesSection}
     {finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}
   </div>
 }
@@ -1870,15 +1862,6 @@ function printerRoutes(value: unknown): PrinterRouteView[] {
     ? [item as unknown as PrinterRouteView] : [])
 }
 
-function employeeSales(value: unknown): EmployeeSalesView[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => isRecord(item)
-    && typeof item.employeeId === 'string' && typeof item.employeeDisplayName === 'string'
-    && typeof item.productId === 'string' && typeof item.productName === 'string'
-    && typeof item.quantity === 'string' && typeof item.salesAmountMinor === 'number'
-    && (typeof item.contributionProfitMinor === 'number' || item.contributionProfitMinor === null)
-    && typeof item.currency === 'string' ? [item as unknown as EmployeeSalesView] : [])
-}
 
 function commercePolicyView(value: unknown): CommercePolicyView | null {
   if (!isRecord(value)

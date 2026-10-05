@@ -33,12 +33,13 @@ def package(args):
         feed = root/'stable.json'
         if args.previous_feed:
             shutil.copyfile(args.previous_feed, feed)
+        diagnostics = {}
         item = publisher.prepare(argparse.Namespace(
             platform='android', channel='stable', apk=artifact, notes=args.notes, output=feed,
             priority=args.priority, aapt=args.aapt, apksigner=args.apksigner,
             certificate_sha256=args.certificate_sha256,
             url=f'https://mbox.shmbox.com/native-updates/staff/{filename}',
-        ))
+        ), diagnostics=diagnostics)
         publisher.require(item['version'] == args.version and item['build'] == args.build,
                           '实际APK与声明版本不一致；不生成交付目录')
         (root/'verification.json').write_text(json.dumps({
@@ -48,6 +49,7 @@ def package(args):
             'apkDebuggable': False,
             'allowLocalDemo': False,
             'channel': 'stable',
+            'nativeAlignment': diagnostics['nativeAlignment'],
             'previousFeedProvided': args.previous_feed is not None,
             'published': False,
             'installedOnDevice': False,

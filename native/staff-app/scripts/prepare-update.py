@@ -6,15 +6,177 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 import tempfile
 from urllib.parse import urlsplit
+import zipfile
+import zlib
 
 PREFIX = '/native-updates/staff/'
+NATIVE_PAGE_SIZE = 16 * 1024
+# Android's 16 KB execution requirement is for 64-bit devices. Retain 32-bit
+# diagnostics without requiring those libraries to be rebuilt for a 64-bit ABI.
+NATIVE_ABIS = {'arm64-v8a': (64, 183), 'x86_64': (64, 62),
+               'armeabi-v7a': (32, 40), 'armeabi': (32, 40), 'x86': (32, 3)}
 
 def require(ok, message):
     if not ok:
         raise ValueError(message)
+
+def inspect_native_elf(content):
+    """Parse real ELF program headers. No external tools or section-name heuristics."""
+    require(len(content) >= 16 and content[:4] == b'\x7fELF', 'ELF文件头缺失或损坏')
+    elf_class, encoding, ident_version = content[4:7]
+    require(elf_class in (1, 2) and encoding in (1, 2) and ident_version == 1, 'ELF类别、字节序或版本不支持')
+    order = '<' if encoding == 1 else '>'
+    header_format = order + ('HHIIIIIHHHHHH' if elf_class == 1 else 'HHIQQQIHHHHHH')
+    header_size = 16 + struct.calcsize(header_format)
+    require(len(content) >= header_size, 'ELF文件头不完整')
+    fields = struct.unpack_from(header_format, content, 16)
+    elf_type, machine, version, _, phoff, _, _, ehsize, phentsize, phnum, _, _, _ = fields
+    require(elf_type == 3 and version == 1 and ehsize == header_size, '原生库必须是有效ET_DYN共享对象')
+    program_format = order + ('IIIIIIII' if elf_class == 1 else 'IIQQQQQQ')
+    program_size = struct.calcsize(program_format)
+    require(phentsize == program_size and 0 < phnum < 0xffff and phoff >= header_size,
+            'ELF程序头大小、数量或偏移无效')
+    require(phoff + phnum * phentsize <= len(content), 'ELF程序头表超出文件范围')
+    loads, relro = [], []
+    address_limit = 1 << (32 if elf_class == 1 else 64)
+    for index in range(phnum):
+        row = struct.unpack_from(program_format, content, phoff + index * phentsize)
+        if elf_class == 1:
+            kind, offset, vaddr, _, filesz, memsz, flags, alignment = row
+        else:
+            kind, flags, offset, vaddr, _, filesz, memsz, alignment = row
+        if kind not in (1, 0x6474e552):  # PT_LOAD / PT_GNU_RELRO
+            continue
+        require(offset + filesz <= len(content) and vaddr + memsz < address_limit,
+                'ELF段地址或文件范围无效')
+        entry = {'index': index, 'offset': offset, 'virtualAddress': vaddr,
+                 'fileSize': filesz, 'memorySize': memsz, 'alignment': alignment, 'flags': flags}
+        if kind == 1:
+            require(filesz <= memsz and (alignment in (0, 1) or alignment & (alignment - 1) == 0),
+                    'ELF LOAD大小或对齐不是有效二次幂')
+            require(alignment <= 1 or offset % alignment == vaddr % alignment,
+                    'ELF LOAD文件偏移与虚拟地址不匹配')
+            entry['aligned16Kb'] = alignment >= NATIVE_PAGE_SIZE
+            loads.append(entry)
+        else:
+            entry['endAddress'] = vaddr + memsz
+            entry['simpleFormulaAligned'] = entry['endAddress'] % NATIVE_PAGE_SIZE == 0
+            relro.append(entry)
+    require(loads, 'ELF共享对象缺少LOAD段')
+    # Android's linker mprotects the page-rounded RELRO range. A non-aligned end
+    # is safe when the extra protected bytes are only an unmapped segment gap;
+    # reject when rounding covers real PF_W LOAD bytes outside declared RELRO.
+    # Do not require libraries to relink merely to pad an otherwise safe gap.
+    intended = sorted((row['virtualAddress'], row['endAddress']) for row in relro)
+    for row in relro:
+        row['protectedStart'] = row['virtualAddress'] // NATIVE_PAGE_SIZE * NATIVE_PAGE_SIZE
+        row['protectedEnd'] = (row['endAddress'] + NATIVE_PAGE_SIZE - 1) // NATIVE_PAGE_SIZE * NATIVE_PAGE_SIZE
+        overlaps = []
+        for load in loads:
+            if not load['flags'] & 2:  # PF_W
+                continue
+            start = max(row['protectedStart'], load['virtualAddress'])
+            end = min(row['protectedEnd'], load['virtualAddress'] + load['memorySize'])
+            cursor = start
+            for allowed_start, allowed_end in intended:
+                if cursor >= end:
+                    break
+                if allowed_end <= cursor:
+                    continue
+                if allowed_start > cursor:
+                    overlaps.append({'loadIndex': load['index'], 'start': cursor, 'end': min(allowed_start, end)})
+                cursor = max(cursor, allowed_end)
+            if cursor < end:
+                overlaps.append({'loadIndex': load['index'], 'start': cursor, 'end': end})
+        row['writableOverlaps'] = overlaps
+        row['protectionSafe'] = not overlaps
+        row['safePadding'] = not row['simpleFormulaAligned'] and not overlaps
+    return {'elfClass': 32 if elf_class == 1 else 64, 'machine': machine,
+            'byteOrder': 'little' if encoding == 1 else 'big',
+            'loadSegments': loads, 'relroSegments': relro,
+            'load16KbAligned': all(row['aligned16Kb'] for row in loads),
+            'simpleFormulaAligned': all(row['simpleFormulaAligned'] for row in relro),
+            'relroProtectionSafe': all(row['protectionSafe'] for row in relro)}
+
+def inspect_apk_native_alignment(apk, *, extract_native_libs=None):
+    """Inspect every packaged .so and return all ABI diagnostics, including failures.
+
+    https://developer.android.com/guide/practices/page-sizes documents 64-bit
+    LOAD alignment, uncompressed ZIP data alignment, and the RELRO end boundary.
+    This verifies layout only; it does not prove runtime or device acceptance.
+    """
+    report = {'schemaVersion': 1, 'pageSize': NATIVE_PAGE_SIZE,
+              'enforcedAbis': ['arm64-v8a', 'x86_64'], 'libraries': [], 'errors': [],
+              'extractNativeLibs': extract_native_libs,
+              'manifestPackagingVerified': extract_native_libs is not None, 'runtimeTested': False}
+    try:
+        with Path(apk).open('rb') as raw, zipfile.ZipFile(raw) as archive:
+            length = Path(apk).stat().st_size
+            entries = [entry for entry in archive.infolist() if entry.filename.endswith('.so')]
+            counts = {}
+            for entry in entries:
+                counts[entry.filename] = counts.get(entry.filename, 0) + 1
+            for entry in entries:
+                parts = entry.filename.split('/')
+                abi = parts[1] if len(parts) == 3 and parts[0] == 'lib' else None
+                item = {'path': entry.filename, 'abi': abi,
+                        'enforced16Kb': abi in ('arm64-v8a', 'x86_64'),
+                        'errors': [], 'warnings': []}
+                report['libraries'].append(item)
+                try:
+                    require(abi in NATIVE_ABIS and parts[2] not in ('.so', '..so'), '原生库ABI或路径未知，须独立核对')
+                    require(counts[entry.filename] == 1, 'APK含重复原生库路径')
+                    require(entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), '原生库ZIP压缩方式不支持')
+                    require(not entry.flag_bits & 1, 'APK原生库不得加密')
+                    # Bound decompression of a corrupted or adversarial package.
+                    require(0 < entry.file_size <= 256 * 1024 * 1024, '原生库解压大小越界')
+                    raw.seek(entry.header_offset)
+                    local = raw.read(30)
+                    require(len(local) == 30, 'ZIP本地文件头不完整')
+                    signature, _, flags, compression, _, _, _, _, _, name_length, extra_length = struct.unpack('<IHHHHHIIIHH', local)
+                    require(signature == 0x04034b50 and flags == entry.flag_bits and compression == entry.compress_type,
+                            'ZIP本地文件头与目录不一致')
+                    data_offset = entry.header_offset + 30 + name_length + extra_length
+                    require(data_offset + entry.compress_size <= length, 'ZIP原生库数据超出文件范围')
+                    stored = entry.compress_type == zipfile.ZIP_STORED
+                    item.update(compression='stored' if stored else 'deflated', dataOffset=data_offset,
+                                zip16KbAligned=data_offset % NATIVE_PAGE_SIZE == 0 if stored else None)
+                    if not stored and extract_native_libs is False:
+                        item['errors'].append('Manifest extractNativeLibs=false不能搭配压缩.so')
+                    elif not stored and extract_native_libs is None:
+                        item['warnings'].append('尚未结合实际Manifest核对原生库解压设置')
+                    # zipfile checks the local filename, overlap and actual CRC while reading.
+                    elf = inspect_native_elf(archive.read(entry))
+                    item.update(elf)
+                    require((elf['elfClass'], elf['machine']) == NATIVE_ABIS[abi] and elf['byteOrder'] == 'little',
+                            '原生库ELF类型与ABI目录不匹配')
+                    alignment_issues = []
+                    if stored and not item['zip16KbAligned']:
+                        alignment_issues.append('未压缩.so的ZIP数据偏移未按16KB对齐')
+                    if not elf['load16KbAligned']:
+                        alignment_issues.append('ELF LOAD段对齐小于16KB')
+                    if not elf['relroProtectionSafe']:
+                        alignment_issues.append('ELF GNU_RELRO的16KB页保护范围覆盖了RELRO之外的可写LOAD字节')
+                    elif not elf['simpleFormulaAligned']:
+                        item['warnings'].append('RELRO结束地址非16KB边界，但扩展保护范围未覆盖其他可写LOAD字节（safePadding）')
+                    item['errors' if item['enforced16Kb'] else 'warnings'].extend(alignment_issues)
+                except (ValueError, struct.error, zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, zlib.error) as error:
+                    item['errors'].append(str(error))
+    except (OSError, ValueError, zipfile.BadZipFile, EOFError) as error:
+        report['errors'].append(f'APK ZIP读取失败：{error}')
+    report['nativeCode'] = bool(report['libraries'])
+    report['abis'] = sorted({item['abi'] for item in report['libraries'] if item['abi'] is not None})
+    report['passed'] = not report['errors'] and not any(item['errors'] for item in report['libraries'])
+    return report
+
+def verify_apk_native_alignment(apk, *, extract_native_libs=None):
+    report = inspect_apk_native_alignment(apk, extract_native_libs=extract_native_libs)
+    require(report['passed'], 'APK原生库16KB校验失败：\n' + json.dumps(report, ensure_ascii=False, indent=2))
+    return report
 
 def trusted_apk_url(value):
     u = urlsplit(value)
@@ -43,7 +205,7 @@ def verify_android_manifest(xml, channel):
                 entries.append(node)
             stack.append(node)
             continue
-        attribute = re.match(r'^\s*A: android:(name|value)(?:\([^)]*\))?=(.*)$', line)
+        attribute = re.match(r'^\s*A: android:(name|value|extractNativeLibs)(?:\([^)]*\))?=(.*)$', line)
         if attribute and stack:
             require(attribute[1] not in stack[-1]['attributes'], 'APK存在重复发布属性')
             stack[-1]['attributes'][attribute[1]] = attribute[2].strip()
@@ -58,8 +220,14 @@ def verify_android_manifest(xml, channel):
     channel_value = metadata.get('com.mbox.staff.UPDATE_CHANNEL', '')
     require(channel_value.split(' (Raw:', 1)[0] == json.dumps(channel), 'APK实际更新渠道与清单不匹配或缺少渠道证明')
     require(metadata.get('com.mbox.staff.ALLOW_LOCAL_DEMO') == '(type 0x12)0x0', 'APK未证明已禁用本地演练')
+    extraction = applications[0]['attributes'].get('extractNativeLibs')
+    # AGP may inject the attribute during packaging. Inspect that actual value;
+    # if genuinely absent from the packaged manifest, Android's parser defaults true.
+    require(extraction in (None, '(type 0x12)0x0', '(type 0x12)0x1', '(type 0x12)0xffffffff'),
+            '不能读取APK实际extractNativeLibs布尔配置')
+    return extraction != '(type 0x12)0x0'
 
-def prepare(args):
+def prepare(args, *, diagnostics=None):
     notes = args.notes.read_text(encoding='utf-8').strip()
     require(0 < len(notes) <= 6000, '更新说明必须为1—6000字')
     require(args.output.resolve() != args.notes.resolve(), '不能覆盖更新说明源文件')
@@ -79,7 +247,7 @@ def prepare(args):
         badging = subprocess.run([str(args.aapt), 'dump', 'badging', str(args.apk)], check=True, capture_output=True, text=True).stdout
         require(not re.search(r'^application-debuggable\s*$', badging, re.M), '禁止发布可调试APK；请使用release构建')
         manifest = subprocess.run([str(args.aapt), 'dump', 'xmltree', str(args.apk), 'AndroidManifest.xml'], check=True, capture_output=True, text=True).stdout
-        verify_android_manifest(manifest, args.channel)
+        extract_native_libs = verify_android_manifest(manifest, args.channel)
         package = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging, re.M)
         minimum = re.search(r"^sdkVersion:'(\d+)'", badging, re.M)
         require(package is not None and minimum is not None, '不能读取APK版本及系统要求')
@@ -87,6 +255,9 @@ def prepare(args):
         require(app_id == 'com.mbox.staff.nativeapp', 'APK包名不匹配')
         size = args.apk.stat().st_size
         require(0 < size <= 256 * 1024 * 1024 and 0 < int(build) <= 2100000000 and 26 <= int(minimum[1]) <= 100, 'APK版本、大小或系统要求越界')
+        alignment = verify_apk_native_alignment(args.apk, extract_native_libs=extract_native_libs)
+        if diagnostics is not None:
+            diagnostics['nativeAlignment'] = alignment
         with args.apk.open('rb') as package_file:
             digest = hashlib.file_digest(package_file, 'sha256').hexdigest()
         item.update(appId=app_id, build=int(build), version=version, minimumOS=minimum[1], delivery='apk', bytes=size, sha256=digest)
@@ -133,7 +304,10 @@ def main():
     p.add_argument('--delivery', choices=['appstore', 'testflight'])
     args = p.parse_args()
     try:
-        item = prepare(args)
+        diagnostics = {}
+        item = prepare(args, diagnostics=diagnostics)
+        if diagnostics:
+            print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
         print(f"已生成本地更新清单：{args.output}；{item['platform']} {item['version']} ({item['build']})。尚未发布。")
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         p.exit(1, f'生成失败：{error}\n')

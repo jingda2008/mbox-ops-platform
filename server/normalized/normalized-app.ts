@@ -891,8 +891,9 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         await businessClock.current(merchant.scope)
       ).businessDate,
     })
-    instance.register(reservationReceptionApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveStaffContext:staffReservationContext,protectContact:value=>activityContactProtection.protect(value)})
+    instance.register(reservationReceptionApiPlugin,{prefix:'/api',reservationReceptionCreateEnabled:options.config.reservationReceptionCreateEnabled,transactions,commands:commandExecutor,resolveStaffContext:staffReservationContext,protectContact:value=>activityContactProtection.protect(value)})
     instance.register(reservationPerformanceApiPlugin, {
+      reservationReceptionCreateEnabled:options.config.reservationReceptionCreateEnabled,
       prefix: '/api',
       transactions,
       reservations: new ReservationCommandService(commandExecutor),
@@ -1083,6 +1084,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         return payload
       })
       await reservationApp.register(publicReservationApiPlugin, {
+        reservationReceptionCreateEnabled:options.config.reservationReceptionCreateEnabled,
         transactions,
         commands: commandExecutor,
         waitlists: new WaitlistCommandService(commandExecutor),

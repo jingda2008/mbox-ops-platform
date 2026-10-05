@@ -24,6 +24,7 @@ export interface RuntimePreflightReport {
   imageDigest: string | null
   modes: Record<string, string>
   externalHosts: string[]
+  reservationReception: { creationEnabled: boolean; legacyNativeTableBoundCreate: boolean }
   nativePush: { enabled:boolean; provider:'apns'|null; environment:'sandbox'|'production'|null }
   provisioning: { employeePinCount: number; dailyCredentialConfigured: boolean } | null
   databaseIdentity?: {status:'restricted';login:string}
@@ -66,6 +67,7 @@ export async function verifyNormalizedRuntimeConfig(
     imageDigest: config.releaseImageDigest,
     modes: { ...config.integrations.modes },
     externalHosts: hosts,
+    reservationReception:{creationEnabled:config.reservationReceptionCreateEnabled===true,legacyNativeTableBoundCreate:config.reservationReceptionCreateEnabled!==true},
     nativePush:{enabled:!!config.nativePush,provider:config.nativePush?'apns':null,environment:config.nativePush?.environment??null},
     provisioning: provisioning
       ? {

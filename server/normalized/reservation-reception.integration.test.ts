@@ -18,7 +18,7 @@ const integration=adminUrl&&runtimeUrl?describe:describe.skip
 integration('reservation admission and actual multi-table reception (real restricted PostgreSQL)',()=>{
   let admin:Pool,runtime:Pool,app:FastifyInstance,transactions:ScopedPostgresTransactionRunner
   let tenantId:string,storeId:string,employee:string,other:string,actor:string,customer:string,area:string,tables:string[]
-  let now:Date,legacyFixture:boolean,businessDate:string
+  let now:Date,legacyFixture:boolean,businessDate:string,creationEnabled:boolean
   let payload:Record<string,unknown>
   const scope=()=>({tenantId,storeId})
   const protect=(contact:string)=>({hash:createHash('sha256').update(contact).digest('hex'),encryptedBase64:Buffer.from(`test-encrypted:${contact}`).toString('base64'),keyId:'test',masked:'138****8000'})
@@ -26,7 +26,7 @@ integration('reservation admission and actual multi-table reception (real restri
   afterAll(async()=>{await runtime?.end();await admin?.end()})
   afterEach(async()=>{await app?.close()})
   beforeEach(async()=>{
-    tenantId=randomUUID();storeId=randomUUID();employee=randomUUID();other=randomUUID();actor=employee;customer=randomUUID();area=randomUUID();tables=[randomUUID(),randomUUID(),randomUUID()];now=new Date();businessDate=now.toISOString().slice(0,10);legacyFixture=false
+    tenantId=randomUUID();storeId=randomUUID();employee=randomUUID();other=randomUUID();actor=employee;customer=randomUUID();area=randomUUID();tables=[randomUUID(),randomUUID(),randomUUID()];now=new Date();businessDate=now.toISOString().slice(0,10);legacyFixture=false;creationEnabled=true
     await admin.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1::uuid,$1::text,'Reception test')",[tenantId])
     await admin.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'test','Test')",[storeId,tenantId])
     await admin.query('INSERT INTO mbox.public_reservation_policies(tenant_id,store_id) VALUES($1,$2)',[tenantId,storeId])
@@ -42,9 +42,9 @@ integration('reservation admission and actual multi-table reception (real restri
     const commands=new NormalizedCommandExecutor(transactions),reservations=new ReservationCommandService(commands)
     app=Fastify()
     const resolveStaffContext=()=>({scope:scope(),employeeId:actor,businessDate})
-    await app.register(reservationReceptionApiPlugin,{transactions,commands,resolveStaffContext,protectContact:protect,now:()=>now})
-    await app.register(reservationPerformanceApiPlugin,{transactions,reservations:{create:input=>reservations.create(legacyFixture?{...input,retireTableBoundCreate:false,holdExpiresAt:new Date(Date.now()+20*60000).toISOString()}:input),confirm:input=>reservations.confirm(input),arrive:input=>reservations.arrive(input),complete:input=>reservations.complete(input),cancel:input=>reservations.cancel(input)},performance:new PerformanceCommandService(commands),resolveStaffContext,resolveGuestContext:()=>({scope:scope(),customerId:customer,tableSessionId:null,businessDate,actorRef:`guest:${customer}`}),now:()=>now.toISOString()})
-    await app.register(publicReservationApiPlugin,{transactions,commands,waitlists:new WaitlistCommandService(commands),reservationSessions:{issue:async()=>{throw Error('not used')}},resolveTrustedScope:scope,resolveGuest:()=>({scope:scope(),sessionId:'test-session',customerId:customer,actorRef:`customer:${customer}`,businessDate,capabilities:['guest.reservation.read','guest.reservation.update','guest.waitlist.manage']}),resolveStaff:()=>{throw Error('not used')},protectContact:protect,currentBusinessDate:()=>businessDate,now:()=>now})
+    await app.register(reservationReceptionApiPlugin,{get reservationReceptionCreateEnabled(){return creationEnabled},transactions,commands,resolveStaffContext,protectContact:protect,now:()=>now})
+    await app.register(reservationPerformanceApiPlugin,{get reservationReceptionCreateEnabled(){return creationEnabled},transactions,reservations:{create:input=>reservations.create(legacyFixture?{...input,retireTableBoundCreate:false,holdExpiresAt:new Date(Date.now()+20*60000).toISOString()}:input),confirm:input=>reservations.confirm(input),arrive:input=>reservations.arrive(input),complete:input=>reservations.complete(input),cancel:input=>reservations.cancel(input)},performance:new PerformanceCommandService(commands),resolveStaffContext,resolveGuestContext:()=>({scope:scope(),customerId:customer,tableSessionId:null,businessDate,actorRef:`guest:${customer}`}),now:()=>now.toISOString()})
+    await app.register(publicReservationApiPlugin,{get reservationReceptionCreateEnabled(){return creationEnabled},transactions,commands,waitlists:new WaitlistCommandService(commands),reservationSessions:{issue:async()=>{throw Error('not used')}},resolveTrustedScope:scope,resolveGuest:()=>({scope:scope(),sessionId:'test-session',customerId:customer,actorRef:`customer:${customer}`,businessDate,capabilities:['guest.reservation.read','guest.reservation.update','guest.waitlist.manage']}),resolveStaff:()=>{throw Error('not used')},protectContact:protect,currentBusinessDate:()=>businessDate,now:()=>now})
     await app.ready()
     payload={protocol:1,publicId:`reception-${randomUUID()}`,customerName:'Reception customer',contact:'13800138000',guestCount:4,arrivalAt:new Date(now.getTime()+86400000).toISOString(),expectedEndAt:new Date(now.getTime()+86400000+7200000).toISOString(),source:'phone',initialStatus:'confirmed',note:null,seatPreference:'no_preference',reservationPolicyVersion:1,preferredScheduleId:null}
   })
@@ -55,6 +55,133 @@ integration('reservation admission and actual multi-table reception (real restri
   const seat=(id:string,sessions:unknown[],key=randomUUID(),version=1)=>app.inject({method:'POST',url:`/staff/reservation-receptions/${id}/seat`,headers:{'idempotency-key':key},payload:{protocol:1,reservationVersion:version,sessions,reason:'已核对本组全部实际桌位'}})
   const counts=async()=> (await query(`SELECT (SELECT count(*)::integer FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2) reservations,(SELECT count(*)::integer FROM mbox.reservation_seating_batches WHERE tenant_id=$1 AND store_id=$2) batches,(SELECT count(*)::integer FROM mbox.reservation_seating_sessions WHERE tenant_id=$1 AND store_id=$2) sessions,(SELECT count(*)::integer FROM mbox.reservation_table_locks WHERE tenant_id=$1 AND store_id=$2) locks`)).rows[0]
   async function revoke(code:string,id=employee){await query('DELETE FROM mbox.employee_permission_overrides o USING mbox.staff_permission_definitions p WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.employee_id=$3 AND p.id=o.permission_id AND p.code=$4',[id,code])}
+
+  const nativeBody=(overrides:Record<string,unknown>={})=>({publicId:`NRES-${randomUUID()}`,customerName:'Build nine customer',contactToken:'13800138000',guestCount:4,arrivalAt:payload.arrivalAt,expectedEndAt:payload.expectedEndAt,source:'phone',seatPreference:'no_preference',initialStatus:'pending',note:'Original build9 request',tableIds:[tables[0]],...overrides})
+  const nativeCreate=(body=nativeBody(),key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:'/staff/native-reservations',headers:{'idempotency-key':key},payload:body})
+  const nativeAction=(id:string,action:string,key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:`/staff/native-reservations/${id}/${action}`,headers:{'idempotency-key':key},payload:{}})
+  const publicCreate=(key=randomUUID(),overrides:Record<string,unknown>={})=>app.inject({method:'POST',url:'/public/reservations',headers:{'idempotency-key':key},payload:{mode:'direct',publicId:`public-${randomUUID()}`,customerName:'Public customer',contact:'13900139000',guestCount:4,arrivalAt:payload.arrivalAt,expectedEndAt:payload.expectedEndAt,reservationPolicyVersion:1,...overrides}})
+
+  it('runs the unchanged build9 create/confirm/arrive/complete contract without invented protocol or table sessions',async()=>{
+    creationEnabled=false
+    const caps=await app.inject('/staff/native-reservation-capabilities');expect(caps.json().data).toMatchObject({durableCreate:true,tableBoundCreate:true,admissionCreateV1:false,receptionSeatV1:true})
+    const body=nativeBody({guestCount:6,tableIds:[tables[0],tables[1]]}),key=`native-business-${randomUUID()}`
+    const created=await nativeCreate(body,key);expect(created.statusCode,created.body).toBe(201)
+    const row=created.json().data;expect(created.json().meta.replayed).toBe(false)
+    expect(row).toMatchObject({publicId:body.publicId,status:body.initialStatus,customerName:body.customerName,guestCount:body.guestCount})
+    expect(Date.parse(row.arrivalAt)).toBe(Date.parse(String(body.arrivalAt)));expect(Date.parse(row.expectedEndAt)).toBe(Date.parse(String(body.expectedEndAt)))
+    expect(row.tableLocks.map((lock:{tableId:string})=>lock.tableId).sort()).toEqual([...body.tableIds].sort())
+    expect(row.reservationSnapshot.receptionProtocol).toBeUndefined()
+    for(const [action,status] of [['confirm','confirmed'],['arrive','arrived'],['complete','completed']]){
+      const result=await nativeAction(row.id,action!);expect(result.statusCode,result.body).toBe(200);expect(result.json().data.status).toBe(status)
+    }
+    expect(await counts()).toMatchObject({reservations:1,batches:0,sessions:0,locks:2})
+    expect((await query('SELECT count(*)::int n FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2')).rows[0].n).toBe(0)
+    await query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 day' WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3",[key])
+    now=new Date(now.getTime()+86400000*4);await query("UPDATE mbox.tables SET status='paused' WHERE tenant_id=$1 AND store_id=$2")
+    const originalSnapshot=(await query('SELECT response_snapshot FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[key])).rows[0].response_snapshot
+    // Assert the fixed build9 reply contract. Its durable codec predates four
+    // optional later metadata fields; do not mistake omitted metadata for a new command.
+    const contractKeys=['id','publicId','status','customerName','guestCount','arrivalAt','expectedEndAt','tableLocks','ownerEmployeeId','reservationSnapshot']
+    const contract=(value:Record<string,unknown>)=>Object.fromEntries(contractKeys.map(field=>[field,value[field]]))
+    for(const gate of [false,true,false]){creationEnabled=gate;const replay=await nativeCreate(body,key);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true);expect(contract(replay.json().data)).toEqual(contract(created.json().data))}
+    expect((await query('SELECT response_snapshot FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[key])).rows[0].response_snapshot).toEqual(originalSnapshot)
+    expect(await counts()).toMatchObject({reservations:1,batches:0,sessions:0,locks:2})
+    expect((await query("SELECT expires_at='infinity'::timestamptz retained FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3",[key])).rows[0].retained).toBe(true)
+  })
+  it('keeps build9 original actor, payload and live permission checks on recovery',async()=>{
+    creationEnabled=false
+    const body=nativeBody({initialStatus:'confirmed'}),key=`native-business-${randomUUID()}`,first=await nativeCreate(body,key);expect(first.statusCode,first.body).toBe(201)
+    expect((await nativeCreate({...body,guestCount:3},key)).statusCode).toBe(409)
+    actor=other;expect((await nativeCreate(body,key)).statusCode).toBe(409);actor=employee
+    await revoke('reservation.manage');expect((await nativeCreate(body,key)).statusCode).toBe(403)
+    expect((await counts()).reservations).toBe(1)
+  })
+  it('rejects build9 forged authority, invalid times and excessive selected-table capacity without writes',async()=>{
+    creationEnabled=false
+    for(const extra of [{tableBoundCreateMode:'legacy-native-v1'},{retireTableBoundCreate:false},{protocol:1},{ownerEmployeeId:other},{customerId:customer},{reservationSnapshot:{receptionProtocol:1}},{allowUnassignedTable:true}]){
+      const reply=await nativeCreate(nativeBody(extra));expect(reply.statusCode,reply.body).toBe(400)
+    }
+    for(const extra of [{guestCount:5},{guestCount:201},{guestCount:0},{tableIds:[]},{tableIds:Array.from({length:21},()=>randomUUID())},{tableIds:[randomUUID()]},{arrivalAt:new Date(now.getTime()-60000).toISOString()},{arrivalAt:new Date(now.getTime()+86400000*400).toISOString(),expectedEndAt:new Date(now.getTime()+86400000*401).toISOString()},{expectedEndAt:now.toISOString()}]){
+      const reply=await nativeCreate(nativeBody(extra));expect([400,409],reply.body).toContain(reply.statusCode)
+    }
+    await query("UPDATE mbox.tables SET status='paused' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[tables[0]])
+    expect((await nativeCreate()).statusCode).toBe(409);expect(await counts()).toEqual({reservations:0,batches:0,sessions:0,locks:0})
+  })
+  it('shares the policy-locked capacity budget between public and build9 new requests',async()=>{
+    creationEnabled=false
+    const first=await publicCreate(randomUUID(),{guestCount:8});expect(first.statusCode,first.body).toBe(201)
+    const replies=await Promise.all([publicCreate(),nativeCreate(nativeBody({initialStatus:'confirmed'}))])
+    expect(replies.map(r=>r.statusCode).sort()).toEqual([201,409])
+    expect((await query("SELECT sum(guest_count)::int total FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND status IN('pending','confirmed','arrived','seated')")).rows[0].total).toBe(12)
+    const rejected=await nativeCreate(nativeBody({tableIds:[tables[2]],initialStatus:'confirmed'}));expect(rejected.statusCode,rejected.body).toBe(409)
+    expect((await counts()).reservations).toBe(2)
+  })
+  it('reclaims expired native pending capacity without waiting for a worker or discarding live unassigned claims',async()=>{
+    creationEnabled=false
+    const original=await nativeCreate(nativeBody({guestCount:12,tableIds:[...tables]}));expect(original.statusCode,original.body).toBe(201)
+    const originalId=original.json().data.id
+    await query("UPDATE mbox.reservation_table_locks SET hold_expires_at=clock_timestamp()-interval '1 minute' WHERE tenant_id=$1 AND store_id=$2 AND reservation_id=$3",[originalId])
+    const replacement=await nativeCreate(nativeBody({initialStatus:'confirmed'}));expect(replacement.statusCode,replacement.body).toBe(201)
+    expect((await query('SELECT status FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[originalId])).rows[0].status).toBe('cancelled')
+    expect((await query("SELECT count(*)::int n FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3 AND action='reservation.hold_expired'",[originalId])).rows[0].n).toBe(1)
+    creationEnabled=true
+    const pending=await create(randomUUID(),{...payload,publicId:`reception-${randomUUID()}`,guestCount:8,initialStatus:'pending'});expect(pending.statusCode,pending.body).toBe(201)
+    creationEnabled=false
+    expect((await nativeCreate(nativeBody({tableIds:[tables[1]],initialStatus:'confirmed'}))).statusCode).toBe(409)
+  })
+  it('retains physical-table exclusion for concurrent build9 commands after the shared capacity lock',async()=>{
+    creationEnabled=false
+    const replies=await Promise.all([nativeCreate(nativeBody({initialStatus:'confirmed'})),nativeCreate(nativeBody({initialStatus:'confirmed'}))])
+    expect(replies.map(r=>r.statusCode).sort()).toEqual([201,409]);expect((await counts()).locks).toBe(1)
+  })
+  it('rolls back a gate race as definitely uncommitted and preserves the same key across a later rollout',async()=>{
+    const key=randomUUID()
+    const options=await app.inject(`/staff/reservation-receptions/options?arrivalAt=${encodeURIComponent(String(payload.arrivalAt))}&expectedEndAt=${encodeURIComponent(String(payload.expectedEndAt))}`)
+    expect(options.json().data.creationEnabled).toBe(true)
+    creationEnabled=false
+    const denied=await create(key);expect(denied.statusCode,denied.body).toBe(409)
+    expect(denied.json().error).toMatchObject({code:'RESERVATION_RECEPTION_CREATE_DISABLED',commitDisposition:'not_committed'})
+    expect(await counts()).toEqual({reservations:0,batches:0,sessions:0,locks:0})
+    expect((await query('SELECT count(*)::int n FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[key])).rows[0].n).toBe(0)
+    creationEnabled=true
+    const created=await create(key);expect(created.statusCode,created.body).toBe(201)
+    creationEnabled=false
+    const replay=await create(key);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json()).toEqual({...created.json(),meta:{replayed:true}})
+    expect((await counts()).reservations).toBe(1)
+  })
+  it('turns off only new reception creation, preserving original receipts, public-id recovery, reads and actual seating',async()=>{
+    const key=randomUUID(),created=await create(key);expect(created.statusCode,created.body).toBe(201)
+    const row=created.json().data.reservation
+    creationEnabled=false
+    const options=await app.inject(`/staff/reservation-receptions/options?arrivalAt=${encodeURIComponent(String(payload.arrivalAt))}&expectedEndAt=${encodeURIComponent(String(payload.expectedEndAt))}`);expect(options.json().data.creationEnabled).toBe(false)
+    const refused=await create(randomUUID(),{...payload,publicId:`reception-${randomUUID()}`});expect(refused.statusCode,refused.body).toBe(409);expect(refused.json().error).toMatchObject({code:'RESERVATION_RECEPTION_CREATE_DISABLED',commitDisposition:'not_committed'});expect((await counts()).reservations).toBe(1)
+    expect((await create(key)).json()).toEqual({...created.json(),meta:{replayed:true}})
+    expect((await app.inject(`/staff/reservation-receptions/by-public-id/${row.publicId}?requestKey=${key}`)).statusCode).toBe(200)
+    expect((await app.inject(`/staff/reservation-receptions/${row.id}`)).statusCode).toBe(200)
+    await query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[key])
+    const recovered=await create(key);expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json().data.reservation.id).toBe(row.id)
+    actor=other;expect((await create(key)).statusCode).toBe(409);actor=employee
+    await query("UPDATE mbox.reservations SET status='arrived' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[row.id])
+    const denied=await nativeAction(row.id,'complete');expect(denied.statusCode,denied.body).toBe(409)
+    expect((await seat(row.id,[await session()])).statusCode).toBe(200)
+    expect((await nativeAction(row.id,'complete')).statusCode).toBe(200)
+    expect(await counts()).toMatchObject({reservations:1,batches:1,sessions:1})
+  })
+  it('keeps public legacy creation and original protocol snapshots stable across rollout changes',async()=>{
+    creationEnabled=false
+    const key=randomUUID(),publicId=`public-${randomUUID()}`,created=await publicCreate(key,{publicId});expect(created.statusCode,created.body).toBe(201)
+    const legacy=(await query('SELECT id,reservation_snapshot FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3',[publicId])).rows[0]
+    expect(legacy.reservation_snapshot.receptionProtocol).toBeUndefined()
+    creationEnabled=true;const replay=await publicCreate(key,{publicId});expect(replay.statusCode,replay.body).toBe(200)
+    expect((await query('SELECT reservation_snapshot FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[legacy.id])).rows[0].reservation_snapshot).toEqual(legacy.reservation_snapshot)
+    const key2=randomUUID(),id2=`public-${randomUUID()}`,modern=await publicCreate(key2,{publicId:id2});expect(modern.statusCode,modern.body).toBe(201)
+    const marked=(await query('SELECT id,reservation_snapshot FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3',[id2])).rows[0];expect(marked.reservation_snapshot.receptionProtocol).toBe(1)
+    creationEnabled=false;expect((await publicCreate(key2,{publicId:id2})).statusCode).toBe(200)
+    for(const id of [legacy.id,marked.id])expect((await nativeAction(id,'arrive')).statusCode).toBe(200)
+    expect((await nativeAction(legacy.id,'complete')).statusCode).toBe(200)
+    expect((await nativeAction(marked.id,'complete')).statusCode).toBe(409)
+    await expect(query("UPDATE mbox.reservations SET reservation_snapshot=reservation_snapshot-'receptionProtocol' WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[marked.id])).rejects.toThrow('cannot be removed')
+  })
 
   it('uses an actual restricted login, never preassigns physical tables, and retains one actor-bound original request',async()=>{
     const role=(await runtime.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];expect(role).toEqual({rolsuper:false,rolbypassrls:false})

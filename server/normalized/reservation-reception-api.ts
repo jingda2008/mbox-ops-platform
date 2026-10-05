@@ -17,6 +17,7 @@ export interface ReservationReceptionApiOptions {
   commands:Pick<NormalizedCommandExecutor,'execute'>
   resolveStaffContext(request:FastifyRequest):Promise<StaffReservationPerformanceContext>|StaffReservationPerformanceContext
   protectContact(value:string):Promise<ProtectedContact>|ProtectedContact
+  reservationReceptionCreateEnabled?:boolean
   now?:()=>Date
 }
 export class ReservationReceptionError extends Error {
@@ -52,7 +53,7 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
       const policy=await readPolicy(tx)
       validateReservationWindow(arrivalAt,expectedEndAt,now(),policy.max_advance_days)
       const capacity=await readReservationCapacity(tx,arrivalAt,expectedEndAt)
-      return {protocol:1,arrivalAt,expectedEndAt,policy:{version:policy.policy_version,maxAdvanceDays:policy.max_advance_days,defaultDurationMinutes:policy.default_duration_minutes,arrivalGraceMinutes:policy.arrival_grace_minutes},capacity:{totalGuests:Number(capacity.total_capacity),committedGuests:Number(capacity.committed_guests)},physicalTablesPreassigned:false}
+      return {protocol:1,creationEnabled:options.reservationReceptionCreateEnabled===true,arrivalAt,expectedEndAt,policy:{version:policy.policy_version,maxAdvanceDays:policy.max_advance_days,defaultDurationMinutes:policy.default_duration_minutes,arrivalGraceMinutes:policy.arrival_grace_minutes},capacity:{totalGuests:Number(capacity.total_capacity),committedGuests:Number(capacity.committed_guests)},physicalTablesPreassigned:false}
     },{readOnly:true})
     return reply.send({data})
   }))
@@ -73,6 +74,8 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
         recovered=true
         return {result:createReceipt(existing,ctx.employeeId,key,protectedContact.masked),auditEvents:[],outboxMessages:[]}
       }
+      // Existing receipts/public IDs recover before this rollout gate. Never downgrade their protocol.
+      if(options.reservationReceptionCreateEnabled!==true)fail('本轮暂未开放新接待登记，原预约和未确认操作仍可核对恢复','RESERVATION_RECEPTION_CREATE_DISABLED')
       const policy=await readPolicy(tx,true)
       if(policy.policy_version!==input.reservationPolicyVersion)fail('预约规则已变化，请重新读取名额和规则','RESERVATION_POLICY_CHANGED')
       validateReservationWindow(input.arrivalAt,input.expectedEndAt,now(),policy.max_advance_days)

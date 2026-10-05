@@ -1,4 +1,5 @@
 import { NativeCommandNotCommittedError } from './command-executor.js'
+import { capacityAccepts, readReservationCapacity } from './public-reservation-api.js'
 import {readMonthlySchedule,previewMonthlySchedule} from './monthly-schedule.js'
 import { randomUUID, createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -133,6 +134,7 @@ export interface ReservationPerformanceApiOptions {
   createScheduleRepository?(transaction: ScopedTransaction): ScheduleRepositoryPort
   createSongRequestRepository?(transaction: ScopedTransaction): SongRequestRepositoryPort
   createPublicId?: (kind: 'reservation') => string
+  reservationReceptionCreateEnabled?: boolean
   now?: () => string
   reservationHoldTtlMinutes?: number
   reservationMaxAdvanceDays?: number
@@ -355,7 +357,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
 
   app.get('/staff/native-reservation-capabilities', async (request, reply) => handleRoute(reply, async () => {
     await authorizedStaff(options, request, 'reservation.view', createAccess)
-    return reply.send({data:{durableTransitions:true,durablePriority:true,durableCreate:true,admissionCreateV1:true,receptionSeatV1:true,tableBoundCreate:false}})
+    return reply.send({data:{durableTransitions:true,durablePriority:true,durableCreate:true,admissionCreateV1:options.reservationReceptionCreateEnabled===true,receptionSeatV1:true,tableBoundCreate:options.reservationReceptionCreateEnabled!==true}})
   }))
 
   app.get('/staff/native-reservation-tables', async (request, reply) => handleRoute(reply, async () => {
@@ -372,7 +374,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
   app.post('/staff/native-reservations', async (request,reply)=>handleRoute(reply,async()=>{
     const context=await authorizedStaff(options,request,'reservation.manage',createAccess)
     const body=readObject(request.body)
-    rejectClaims(body,['actor','scope','employeeId','ownerEmployeeId','customerId','holdExpiresAt','customerCancelUntil','cancellationPolicySnapshot','reservationSnapshot','allowUnassignedTable'])
+    rejectClaims(body,['actor','scope','employeeId','ownerEmployeeId','customerId','holdExpiresAt','customerCancelUntil','cancellationPolicySnapshot','reservationSnapshot','allowUnassignedTable','tableBoundCreateMode','retireTableBoundCreate','nativeReceipt','protocol'])
     const key=readIdempotencyKey(request)
     if(!/^native-business-[a-f0-9-]{36}$/.test(key))throw new ApiRequestError('原请求编号无效')
     const input=readReservationInput(body)
@@ -382,6 +384,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     if(!['phone','employee'].includes(source))throw new ApiRequestError('请选择员工代订渠道')
     const execution=await options.reservations.create({
       ...input,publicId:input.publicId,source,initialStatus,retireTableBoundCreate:true,
+      ...(options.reservationReceptionCreateEnabled===true?{}:{tableBoundCreateMode:'legacy-native-v1' as const}),
       ownerEmployeeId:context.employeeId,
       scope:context.scope,actor:employeeActor(context.employeeId),businessDate:context.businessDate,
       idempotencyKey:key,requestFingerprint:fingerprint(request,context,{...input,source,initialStatus}),
@@ -390,6 +393,8 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       prepareNative:async tx=>{
         // Timing and current capacity apply only to a new command, never to receipt replay.
         const timing=serverReservationTiming(input.arrivalAt,now(),holdTtlMinutes,maxAdvanceDays,cancellationCutoffMinutes)
+        // ReservationCommandService holds the shared policy/capacity lock before this hook.
+        if(!capacityAccepts(await readReservationCapacity(tx,input.arrivalAt,input.expectedEndAt),input.guestCount))throw new ApiRequestError('该时间段接待名额不足，请重新选择')
         const tables=await tx.query<{id:string;capacity:number}>(`SELECT id,capacity FROM mbox.tables
           WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=ANY($3::uuid[]) AND status='available'
           ORDER BY id FOR UPDATE`,[context.scope.tenantId,context.scope.storeId,input.tableIds])

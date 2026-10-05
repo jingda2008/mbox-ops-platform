@@ -15,6 +15,14 @@ const base = {
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('keeps reception creation off until explicitly enabled and rejects malformed rollout values', () => {
+    expect(loadNormalizedRuntimeConfig(base).reservationReceptionCreateEnabled).toBe(false)
+    for (const [value, expected] of [['false', false], ['true', true]] as const) {
+      expect(loadNormalizedRuntimeConfig({...base, MBOX_RESERVATION_RECEPTION_CREATE_ENABLED:value}).reservationReceptionCreateEnabled).toBe(expected)
+    }
+    for (const value of ['typo', '1', 'yes']) expect(() => loadNormalizedRuntimeConfig({...base, MBOX_RESERVATION_RECEPTION_CREATE_ENABLED:value})).toThrow(/MBOX_RESERVATION_RECEPTION_CREATE_ENABLED/)
+  })
+
   it('keeps native updates disabled by default and accepts only an absolute public directory', () => {
     expect(loadNormalizedRuntimeConfig(base).nativeUpdatesDir).toBeNull()
     expect(loadNormalizedRuntimeConfig({ ...base, MBOX_NATIVE_UPDATES_DIR: '/run/mbox-native-updates' }).nativeUpdatesDir).toBe('/run/mbox-native-updates')

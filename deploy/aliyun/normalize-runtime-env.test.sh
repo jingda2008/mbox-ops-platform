@@ -118,7 +118,7 @@ grep -qx 'MBOX_MEITUAN_SHOP_ID=demo-shop' "${postar_env_file}"
 # Release normalization must preserve the explicit aftersales rollout decision.
 # Missing means the runtime default, and invalid values must reach the runtime
 # validator instead of being silently erased into a disabled feature.
-for feature_key in MBOX_QUANTITY_AFTER_SALES_ENABLED MBOX_KITCHEN_BATCH_BOARD_ENABLED; do
+for feature_key in MBOX_QUANTITY_AFTER_SALES_ENABLED MBOX_KITCHEN_BATCH_BOARD_ENABLED MBOX_RESERVATION_RECEPTION_CREATE_ENABLED; do
 for tier in validation production; do
   for value in missing true false typo; do
     cp "${postar_env_file}" "${env_file}"

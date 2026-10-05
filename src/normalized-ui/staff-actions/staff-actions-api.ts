@@ -1,3 +1,4 @@
+import {ReservationReception} from './reservation-reception'
 import { AssignmentRecovery, stableAssignmentIntent, validateAssignmentReceipt, type AssignmentRecoverySummary } from './assignment-recovery'
 import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenHandoffPreview} from '../../shared/kitchen-production'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
@@ -267,6 +268,7 @@ export interface StaffActionsApiPort {
   }>):Promise<void>
   redeemDailySnack?(claimCode: string): Promise<void>
   cancelDailySnack?(claimCode: string, reason: string): Promise<void>
+  readonly reservationReception?: ReservationReception
   loadReservations(options?: StaffReservationListOptions, signal?: AbortSignal): Promise<StaffReservation[]>
   loadReservationIntake?(signal?: AbortSignal): Promise<StaffReservationIntakeEntry[]>
   overrideReservationPriority?(input: Readonly<{ kind: 'reservation' | 'waitlist'; publicId: string; mode: 'promote' | 'demote' | 'clear'; reason: string }>): Promise<void>
@@ -461,6 +463,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
   private employeeId = 'current-session'
   private guardedAssignments = false
   private readonly assignmentRecovery: AssignmentRecovery
+  readonly reservationReception: ReservationReception
   private readonly staffSessionId: string | undefined
   private readonly send: typeof fetch
   private readonly timeoutMs: number
@@ -472,6 +475,14 @@ export class StaffActionsApi implements StaffActionsApiPort {
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 8_000
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID())
+    this.reservationReception = new ReservationReception(async (path, init) => {
+      const response = await this.request(path, {
+        method: init?.method ?? 'GET', body: init?.body,
+        headers: new Headers({ accept: 'application/json', ...(init?.body ? { 'content-type': 'application/json' } : {}), ...(init?.key ? { 'idempotency-key': init.key } : {}) }),
+      })
+      return readJson(response)
+    }, () => this.employeeId === 'current-session' ? null : this.employeeId,
+    this.commandStorage, globalThis.location?.origin ?? 'local', this.createIdempotencyKey)
     this.assignmentRecovery = new AssignmentRecovery(this.commandStorage,
       () => ({ employeeId: this.employeeId === 'current-session' ? null : this.employeeId, sessionId: this.staffSessionId ?? null }),
       async (path, body, key) => {

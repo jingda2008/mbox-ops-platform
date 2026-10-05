@@ -1,3 +1,5 @@
+import {canCompleteReservation} from './reservation-reception'
+import {ReservationReceptionPanel} from './ReservationReceptionPanel'
 import {KitchenProductionBoard} from './KitchenProductionBoard'
 import { MemberParticipationCard } from './MemberParticipationCard'
 import {productionEntry} from './three-screen-route'
@@ -146,6 +148,7 @@ export function StaffActionsPanel({
   const [fulfillmentLimit, setFulfillmentLimit] = useStaffViewState('fulfillment:limit', 24)
   const [fulfillmentSearch, setFulfillmentSearch] = useStaffViewState('fulfillment:search', '')
   const [giftSelections,setGiftSelections]=useState<Record<string,{productId:string;reason:string}>>({})
+  const [receptionSelected, setReceptionSelected] = useState<StaffReservation | null>(null)
   const [reservations, setReservations] = useState<StaffReservation[] | null>(null)
   const [priorityQueue, setPriorityQueue] = useState<StaffReservationIntakeEntry[] | null>(null)
   const [reservationMessage, setReservationMessage] = useState<string | null>(null)
@@ -1435,7 +1438,8 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'reservations' && (
-        <><PriorityQueue entries={priorityQueue} canManage={permissions.includes('reservation.manage')}
+        <>{api.reservationReception&&operations?.actor.id&&<ReservationReceptionPanel key={operations.actor.id} api={api.reservationReception} employeeId={operations.actor.id} permissions={permissions} selected={receptionSelected} onClose={()=>setReceptionSelected(null)} onOpenTables={()=>setTab('tables')} onChanged={loadReservations}/>}
+        <PriorityQueue entries={priorityQueue} canManage={permissions.includes('reservation.manage')}
           pendingAction={pendingAction} onOverride={(entry, mode) => void overridePriority(entry, mode)} />
         <ReservationList
           reservations={reservations}
@@ -1448,6 +1452,7 @@ export function StaffActionsPanel({
           onRangeChange={setReservationRange}
           onHistoryFromChange={setReservationHistoryFrom}
           onHistoryToChange={setReservationHistoryTo}
+          onReception={api.reservationReception ? setReceptionSelected : undefined}
           onAction={(reservation, action) => void actOnReservation(reservation, action)}
           onRefresh={() => void loadReservations()}
         /></>
@@ -1634,7 +1639,7 @@ function PriorityQueue({ entries, canManage, pendingAction, onOverride }: {
 
 function ReservationList({
   reservations, message, pendingAction, canManage, range, historyFrom, historyTo,
-  onRangeChange, onHistoryFromChange, onHistoryToChange, onAction, onRefresh,
+  onRangeChange, onHistoryFromChange, onHistoryToChange, onAction, onRefresh, onReception,
 }: {
   reservations: StaffReservation[] | null
   message: string | null
@@ -1646,6 +1651,7 @@ function ReservationList({
   onRangeChange(value: 'current' | 'carryover' | 'history'): void
   onHistoryFromChange(value: string): void
   onHistoryToChange(value: string): void
+  onReception?(reservation: StaffReservation): void
   onAction(reservation: StaffReservation, action: 'confirm' | 'arrive' | 'complete'): void
   onRefresh(): void
 }) {
@@ -1699,7 +1705,8 @@ function ReservationList({
             {pending ? '登记中…' : '客人到店'}
           </button>
         )}
-        {canManage && (reservation.status === 'arrived' || reservation.status === 'seated') && (
+        {onReception && (reservation.status === 'arrived' || reservation.status === 'seated') && <button type="button" disabled={pending} onClick={()=>onReception(reservation)}>实际接待与桌次</button>}
+        {canManage && canCompleteReservation(reservation) && (
           <button type="button" disabled={pending} onClick={() => onAction(reservation, 'complete')}>
             {pending ? '归档中…' : '完成接待'}
           </button>

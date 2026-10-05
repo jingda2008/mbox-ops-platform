@@ -1,0 +1,16 @@
+.staff-reception{display:grid;gap:14px;padding:16px;border:1px solid var(--line,#deded6);border-radius:16px;background:var(--surface,#fff);color:var(--ink,#17231d)}
+.staff-reception h2,.staff-reception h3,.staff-reception p{margin:0;overflow-wrap:anywhere}
+.staff-reception header{display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.staff-reception header div,.staff-reception form,.staff-reception fieldset,.staff-reception-detail,.staff-reception-pending,.staff-reception-receipt{display:grid;gap:12px;min-width:0}
+.staff-reception fieldset{margin:0;padding:12px;border:1px solid var(--line,#deded6);border-radius:12px}
+.staff-reception label{display:grid;gap:6px;min-width:0;font-size:14px}
+.staff-reception input,.staff-reception select,.staff-reception textarea{box-sizing:border-box;min-width:0;width:100%;padding:10px;border:1px solid #b6beb8;border-radius:8px;font:inherit;background:#fff;color:inherit}
+.staff-reception textarea{min-height:80px;resize:vertical}
+.staff-reception button{min-height:44px;padding:10px 14px;border:1px solid #748479;border-radius:8px;background:#f1f6f2;color:inherit;font:inherit;white-space:normal}
+.staff-reception button:disabled{opacity:.55;cursor:not-allowed}
+.staff-reception .staff-reception-choice{display:flex;align-items:center;gap:10px;min-height:44px}
+.staff-reception-choice input{width:22px;height:22px;flex:none}
+.staff-reception-pending{padding:12px;background:#fff4da;border-radius:10px}
+.staff-reception-receipt{padding:12px;background:#edf7ef;border-radius:10px}
+.staff-reception small{font-size:13px;line-height:1.5}
+@media(min-width:720px){.staff-reception form fieldset{grid-template-columns:repeat(2,minmax(0,1fr))}.staff-reception form fieldset>p,.staff-reception form fieldset>button{grid-column:1/-1}}

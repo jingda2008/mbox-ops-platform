@@ -1,0 +1,48 @@
+import type { StaffAuthView } from '../normalized-api'
+
+// Compare the complete wire response, including scopes, approval limits and future
+// authorization fields not yet represented by StaffAuthView. Only known lease /
+// response metadata is omitted; a newly introduced field conservatively reloads.
+function authorizationSnapshot(auth: StaffAuthView): unknown {
+  const wire = { ...auth } as Record<string, unknown>
+  delete wire.resolvedAt
+  // Compare these annotations separately when both responses supply them.
+  // Session lookup supplies them today; heartbeat does not.
+  delete wire.businessDate
+  delete wire.timezone
+  const session = { ...auth.session } as Record<string, unknown>
+  delete session.onlineLeaseUntil
+  return {
+    ...wire,
+    session,
+    employee: { ...auth.employee, roleCodes: [...auth.employee.roleCodes].sort() },
+    permissions: [...auth.permissions].sort(),
+    deniedPermissions: [...auth.deniedPermissions].sort(),
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item
+    return Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+  })
+}
+
+export function reconcileStaffAuth(previous: StaffAuthView | null, next: StaffAuthView): StaffAuthView {
+  if (previous === null) return next
+  const previousWire = previous as unknown as Record<string, unknown>
+  const nextWire = next as unknown as Record<string, unknown>
+  const sameOperatingContext = ['businessDate', 'timezone'].every(key =>
+    !Object.hasOwn(previousWire, key) || !Object.hasOwn(nextWire, key)
+    || canonicalJson(previousWire[key]) === canonicalJson(nextWire[key]))
+  const unchanged = sameOperatingContext
+    && canonicalJson(authorizationSnapshot(previous)) === canonicalJson(authorizationSnapshot(next))
+  return {
+    ...next,
+    // Module loaders depend on permissions identity. Reuse only for equivalent
+    // authorization, and invalidate even when scopes alone change. Keep fresh
+    // lease / response metadata rather than retaining the old auth object.
+    permissions: unchanged ? previous.permissions : [...next.permissions],
+    deniedPermissions: unchanged ? previous.deniedPermissions : [...next.deniedPermissions],
+  }
+}

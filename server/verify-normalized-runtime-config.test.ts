@@ -40,6 +40,12 @@ function environmentWithProvisioning(): Record<string, string> {
 }
 
 describe('verifyNormalizedRuntimeConfig', () => {
+  it('reports the effective reception creation and build9 compatibility policy for release preflight', async () => {
+    expect((await verifyNormalizedRuntimeConfig(base)).reservationReception).toEqual({creationEnabled:false,legacyNativeTableBoundCreate:true})
+    for (const enabled of [false, true]) expect((await verifyNormalizedRuntimeConfig({...base,MBOX_RESERVATION_RECEPTION_CREATE_ENABLED:String(enabled)})).reservationReception).toEqual({creationEnabled:enabled,legacyNativeTableBoundCreate:!enabled})
+    await expect(verifyNormalizedRuntimeConfig({...base,MBOX_RESERVATION_RECEPTION_CREATE_ENABLED:'invalid'})).rejects.toThrow(/MBOX_RESERVATION_RECEPTION_CREATE_ENABLED/)
+  })
+
   it('returns only redacted release identity and subsystem modes', async () => {
     const report = await verifyNormalizedRuntimeConfig(base)
     const serialized = JSON.stringify(report)

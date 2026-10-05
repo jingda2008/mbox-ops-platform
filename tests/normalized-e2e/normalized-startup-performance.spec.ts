@@ -11,6 +11,8 @@ interface Fixture {
 }
 
 interface StartupSample {
+  sample: number
+  startupApiTimings: Array<{ path: string; startMs: number; responseEndMs: number; durationMs: number }>
   readyMs: number
   responseEndMs: number
   domContentLoadedMs: number
@@ -39,7 +41,7 @@ const p95LimitMs = Number(process.env.NORMALIZED_BROWSER_STARTUP_P95_LIMIT_MS ??
 const p99LimitMs = Number(process.env.NORMALIZED_BROWSER_STARTUP_P99_LIMIT_MS ?? 1_000)
 const reportPath = resolve(process.env.NORMALIZED_BROWSER_STARTUP_REPORT ?? 'artifacts/normalized-browser/startup.json')
 
-test('normalized employee and guest pages satisfy the real-browser startup gate', async ({ browser, baseURL }) => {
+test('normalized employee and guest pages satisfy the real-browser startup gate', async ({ browser, baseURL }, testInfo) => {
   test.setTimeout(180_000)
   if (!baseURL) throw new Error('normalized browser startup requires a baseURL')
   if (!Number.isSafeInteger(sampleCount) || sampleCount < 30) throw new Error('startup gate requires at least 30 samples per mode')
@@ -69,6 +71,7 @@ test('normalized employee and guest pages satisfy the real-browser startup gate'
       evidenceEligible: true,
       sourceCommitSha: process.env.APP_COMMIT_SHA ?? 'local-uncommitted',
       generatedAt: new Date().toISOString(),
+      attempt: testInfo.retry + 1,
     },
     workload: {
       freshBrowserContextPerSample: true,
@@ -99,6 +102,19 @@ test('normalized employee and guest pages satisfy the real-browser startup gate'
   }
   report.gate.passed = report.gate.checks.every((check) => check.passed)
   await mkdir(dirname(reportPath), { recursive: true })
+  // Keep each attempt before updating the backward-compatible final report.
+  // Raw timings include only fixed API paths and numbers; never credentials,
+  // query strings, customer/table IDs, response bodies, or failure messages.
+  const attemptPath = `${reportPath}.attempt-${testInfo.retry + 1}`
+  await writeFile(`${attemptPath}.json`, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  const rawSamples = {
+    schemaVersion: 'normalized-browser-startup-samples-v1',
+    run: report.run,
+    workload: report.workload,
+    employee: { successful: employee.successful, failures: employee.failures.map(({ sample }) => ({ sample })) },
+    guest: { successful: guest.successful, failures: guest.failures.map(({ sample }) => ({ sample })) },
+  }
+  await writeFile(`${attemptPath}.samples.json`, `${JSON.stringify(rawSamples, null, 2)}\n`, 'utf8')
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 
   expect(report.gate.passed, JSON.stringify(report, null, 2)).toBe(true)
@@ -185,14 +201,26 @@ async function measure(
         const rounded = (value: number) => Math.round(value * 100) / 100
         const criticalPaths = startupMode === 'employee'
           ? new Set(['/api/auth/session', '/api/staff/workspace'])
-          : new Set(['/api/guest/session', '/api/guest/menu/products'])
-        const criticalResources = (performance.getEntriesByType('resource') as PerformanceResourceTiming[])
+          : new Set(['/api/guest/session', '/api/guest/menu/products', '/api/guest/shared-cart'])
+        const diagnosticPaths = new Set([...criticalPaths, '/api/guest/orders/table', '/api/guest/performances/today'])
+        const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
+        const startupApiTimings = resources.flatMap((entry) => {
+          try {
+            const path = new URL(entry.name).pathname
+            return diagnosticPaths.has(path) ? [{
+              path, startMs: rounded(entry.startTime), responseEndMs: rounded(entry.responseEnd),
+              durationMs: rounded(entry.duration),
+            }] : []
+          } catch { return [] }
+        })
+        const criticalResources = resources
           .filter((entry) => {
             try { return criticalPaths.has(new URL(entry.name).pathname) } catch { return false }
           })
         const criticalStart = Math.min(...criticalResources.map((entry) => entry.startTime))
         const criticalEnd = Math.max(...criticalResources.map((entry) => entry.responseEnd))
         return {
+          startupApiTimings,
           readyMs: rounded(Number((window as StartupWindow).__normalizedStartupPaintedAt ?? 0)),
           responseEndMs: rounded(navigation?.responseEnd ?? 0),
           domContentLoadedMs: rounded(navigation?.domContentLoadedEventEnd ?? 0),
@@ -200,7 +228,7 @@ async function measure(
         }
       }, mode)
       if (observation.criticalApiPathMs <= 0) throw new Error(`${mode} critical startup API timing is missing`)
-      successful.push(observation)
+      successful.push({ ...observation, sample })
     } catch (error) {
       failures.push({ sample, message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) })
     } finally {

@@ -94,6 +94,7 @@ export interface NormalizedRuntimeConfig {
   nativePush?: NativePushConfig | null
   nativeUpdatesDir?: string | null
   startWorkers: boolean
+  reservationReceptionCreateEnabled?: boolean
   kitchenBatchBoardEnabled?: boolean
   threeScreenWorkflowEnabled?: boolean
   quantityAfterSalesEnabled?: boolean
@@ -210,6 +211,7 @@ export function loadNormalizedRuntimeConfig(
   const nativeUpdatesDir = optional(environment.MBOX_NATIVE_UPDATES_DIR)
   if (nativeUpdatesDir !== null && (!isAbsolute(nativeUpdatesDir) || nativeUpdatesDir.split('/').includes('..')
     || (nodeEnv === 'production' && nativeUpdatesDir !== '/run/mbox-native-updates'))) errors.push('MBOX_NATIVE_UPDATES_DIR')
+  const reservationReceptionCreateEnabled = readBoolean(environment.MBOX_RESERVATION_RECEPTION_CREATE_ENABLED, false, 'MBOX_RESERVATION_RECEPTION_CREATE_ENABLED', errors)
   const kitchenBatchBoardEnabled = readBoolean(environment.MBOX_KITCHEN_BATCH_BOARD_ENABLED, false, 'MBOX_KITCHEN_BATCH_BOARD_ENABLED', errors)
   const threeScreenWorkflowEnabled = readBoolean(environment.MBOX_THREE_SCREEN_WORKFLOW_ENABLED, false, 'MBOX_THREE_SCREEN_WORKFLOW_ENABLED', errors)
   const quantityAfterSalesEnabled = readBoolean(
@@ -275,6 +277,7 @@ export function loadNormalizedRuntimeConfig(
     nativeUpdatesDir,
     nativePush,
     startWorkers,
+    reservationReceptionCreateEnabled,
     kitchenBatchBoardEnabled,
     threeScreenWorkflowEnabled,
     quantityAfterSalesEnabled,

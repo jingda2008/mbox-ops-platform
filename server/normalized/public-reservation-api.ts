@@ -72,6 +72,7 @@ export interface PublicReservationApiOptions {
   protectContact(value: string): Promise<ProtectedContact> | ProtectedContact
   currentBusinessDate(scope: Readonly<StoreScope>): Promise<string> | string
   createScheduleRepository?(transaction: ScopedTransaction): Pick<ScheduleRepository, 'getDailyView'>
+  reservationReceptionCreateEnabled?: boolean
   now?: () => Date
   createPublicId?: (kind: 'reservation' | 'waitlist') => string
 }
@@ -359,7 +360,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         source: 'wechat',
         note,
         reservationSnapshot: {
-          receptionProtocol: 1,
+          ...(options.reservationReceptionCreateEnabled === true ? { receptionProtocol: 1 } : {}),
           requestFingerprint,
           bookingMode: mode,
           depositRule: deposit,
@@ -1199,8 +1200,18 @@ export async function readReservationCapacity(
             OR (
               reservation.status = 'pending'
               AND (
-                reservation.source <> 'wechat'
-                OR reservation.request_hold_expires_at > clock_timestamp()
+                (reservation.source <> 'wechat' AND (
+                  -- Legacy native pending bookings lose their capacity claim when
+                  -- every physical hold expires. Keep unassigned admissions counted.
+                  NOT EXISTS (SELECT 1 FROM mbox.reservation_table_locks physical
+                    WHERE physical.tenant_id=reservation.tenant_id AND physical.store_id=reservation.store_id
+                      AND physical.reservation_id=reservation.id)
+                  OR EXISTS (SELECT 1 FROM mbox.reservation_table_locks physical
+                    WHERE physical.tenant_id=reservation.tenant_id AND physical.store_id=reservation.store_id
+                      AND physical.reservation_id=reservation.id
+                      AND (physical.status='confirmed' OR (physical.status='held' AND physical.hold_expires_at>clock_timestamp())))
+                ))
+                OR (reservation.source = 'wechat' AND reservation.request_hold_expires_at > clock_timestamp())
               )
             )
           )

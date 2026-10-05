@@ -3,6 +3,7 @@ import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-rout
 import { StaffObjectFocus } from './StaffObjectFocus'
 import { StaffViewStateProvider, StaffRouteRestoration } from './staff-view-state'
 import { StaffMemberNavigation } from './StaffMemberNavigation'
+import { reconcileStaffAuth } from './staff-auth-update'
 import { STAFF_SESSION_CHANGE_KEY } from '../shared/staff-session-binding'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
@@ -38,6 +39,9 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [navigationError, setNavigationError] = useState<string | null>(null)
   const [navigationAttempt, setNavigationAttempt] = useState(0)
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
+  const loginRequired = useCallback(() => {
+    setAuth(null); setStaffNavigation(null); setInitialBootstrap(null); setPhase('login')
+  }, [])
   const authenticatedSessionId = auth?.session.id ?? null
   const authenticatedEmployeeId = auth?.employee.id ?? null
   const rememberStaffNavigation = useCallback((bootstrap: StaffBootstrapView) => {
@@ -95,7 +99,10 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       inFlight = true
       try {
         const next = await api.heartbeatStaff()
-        if (!stopped) setAuth(next)
+        if (!stopped) {
+          setAuth(previous => reconcileStaffAuth(previous, next))
+          if (next.navigation !== undefined) setStaffNavigation(next.navigation)
+        }
       } catch (error) {
         if (!stopped && error instanceof NormalizedApiError && error.recovery === 'login') {
           setAuth(null)
@@ -158,7 +165,6 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     }} onReady={(session) => { setMessage(null); setStaffNavigation(null); setInitialBootstrap(null); setAuth(session); setPhase('ready') }} />
   }
   if (auth === null) return <StaffGateLoading />
-  const loginRequired = () => { setAuth(null); setStaffNavigation(null); setInitialBootstrap(null); setPhase('login') }
   const switchReady = (session: StaffAuthView) => {
     window.history.replaceState({}, '', '/')
     setStaffLocation('/')

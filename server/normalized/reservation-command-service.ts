@@ -27,6 +27,8 @@ export interface CreateReservationCommand extends Omit<
   idempotencyKey: string
   requestFingerprint: string
   retireTableBoundCreate?: boolean
+  // Internal route policy only; receipt protection remains independent of new-write rollout.
+  tableBoundCreateMode?: 'legacy-native-v1'
   nativeReceipt?: boolean
   authorizeNative?: (transaction: ScopedTransaction) => Promise<void>
   prepareNative?: (transaction: ScopedTransaction) => Promise<Partial<CreateReservationInput>>
@@ -67,12 +69,13 @@ export class ReservationCommandService {
       requestFingerprint: input.requestFingerprint,
       resultCodec: reservationCodec,
     }, async (transaction) => {
-      if(input.retireTableBoundCreate)throw new ReservationTablePreassignmentRetiredError()
-      const prepared = input.nativeReceipt ? await input.prepareNative?.(transaction) : undefined
+      if(input.retireTableBoundCreate && !(input.nativeReceipt && input.tableBoundCreateMode==='legacy-native-v1'))throw new ReservationTablePreassignmentRetiredError()
       const anonymous = input.anonymousCustomer === undefined
         ? null
         : await new CustomerRepository(transaction).createAnonymous(input.anonymousCustomer)
       await lockReservationPolicy(transaction)
+      // Serialize every new reservation against the same capacity budget before taking table locks.
+      const prepared = input.nativeReceipt ? await input.prepareNative?.(transaction) : undefined
       const policy = await transaction.query<{ policy_version: number; arrival_grace_minutes: number }>(`
         SELECT policy_version, arrival_grace_minutes
         FROM mbox.public_reservation_policies

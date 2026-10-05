@@ -42,12 +42,13 @@ export function ReservationReceptionPanel({api,employeeId,permissions,selected,o
     <header><div><h2>预约名额与实际接待</h2><p>先登记人数、时间和偏好；到店后开台，再一次确认本组全部实际桌位。预约不预绑物理桌位。</p></div></header>
     {capError&&<p role="alert">{capError} <button type="button" disabled={busy} onClick={()=>void loadCaps()}>重新读取接待能力</button></p>}
     {caps===null&&!capError&&<p role="status">正在读取接待能力…</p>}
-    {caps&&(!caps.create||!caps.seat)&&<p role="status">后台尚未完整支持预约名额与实际接待，请更新后台；原请求仍可核对。</p>}
+    {caps&&!caps.create&&<p role="status">新预约登记暂未开放，仍可处理原预约及核对原请求。</p>}
+    {caps&&!caps.seat&&<p role="status">实际桌次关联暂不可用，原请求仍可核对。</p>}
     {pending.map(p=><div role="alert" className="staff-reception-pending" key={p.kind}><p>{p.message}</p>{p.kind==='create'&&<p>刷新后只查询原公开号；暂未查到不代表未提交，请勿重新代订。</p>}<button type="button" disabled={busy||!p.canRecover||!canManage} onClick={()=>void run(async()=>completed(await api.recover(p.kind)))}>核对原{p.kind==='create'?'预约创建':'入座'}请求</button></div>)}
     {message&&<p role="alert">{message}</p>}
     {receipt&&canManage&&<div role="status" className="staff-reception-receipt"><strong>{receipt.operation==='create'?'预约已登记，尚未安排实际桌位':'本组实际入座已确认'}</strong><p>预约编号：{receipt.reservation.publicId}</p>{receipt.maskedContact&&<p>联系方式：{receipt.maskedContact}</p>}{receipt.seating&&<p>{receipt.seating.sessions.map(s=>s.tableCodeAtSeating).join('、')} · 实际 {receipt.seating.seatedGuestCount} 人</p>}</div>}
-    {canManage&&<button type="button" disabled={busy||pendingCreate||caps?.create!==true} onClick={()=>setCreating(!creating)}>{creating?'收起代订表单':'登记电话或员工代订'}</button>}
-    {creating&&<form onSubmit={event=>{event.preventDefault();void run(async()=>{if(!isCurrent(context)||!canManage||!options||!optionsMatch)throw Error('请先按当前时间读取名额与规则');await completed(await api.create({customerName:name.trim(),contact:contact.trim(),guestCount:Number(count),arrivalAt:options.arrivalAt,expectedEndAt:options.expectedEndAt,source,initialStatus:initial,note:note.trim()||null,seatPreference:preference,reservationPolicyVersion:options.policy.version,preferredScheduleId:null}))})}}>
+    {canManage&&caps?.create===true&&<button type="button" disabled={busy||pendingCreate} onClick={()=>setCreating(!creating)}>{creating?'收起代订表单':'登记电话或员工代订'}</button>}
+    {creating&&canManage&&caps?.create===true&&<form onSubmit={event=>{event.preventDefault();void run(async()=>{if(!isCurrent(context)||!canManage||caps?.create!==true||!options||!optionsMatch||options.creationEnabled!==true)throw Error('请先按当前时间读取名额与规则');await completed(await api.create({customerName:name.trim(),contact:contact.trim(),guestCount:Number(count),arrivalAt:options.arrivalAt,expectedEndAt:options.expectedEndAt,source,initialStatus:initial,note:note.trim()||null,seatPreference:preference,reservationPolicyVersion:options.policy.version,preferredScheduleId:null}))})}}>
       <fieldset disabled={busy||pendingCreate||!canManage||caps?.create!==true}><legend>登记接待名额</legend>
         <label>顾客称呼<input value={name} maxLength={120} required autoComplete="off" onChange={e=>setName(e.target.value)}/></label>
         <label>手机号或微信<input value={contact} minLength={3} maxLength={256} required autoComplete="off" onChange={e=>setContact(e.target.value)}/><small>仅用于本次接待；不会按手机号自动绑定旧会员。</small></label>
@@ -57,12 +58,13 @@ export function ReservationReceptionPanel({api,employeeId,permissions,selected,o
         <label>预计结束日期（上海）<input type="date" value={endDate} required onChange={e=>{setEndDate(e.target.value);setOptionsRead(null)}}/></label>
         <label>预计结束时间（上海）<input type="time" value={endTime} required onChange={e=>{setEndTime(e.target.value);setOptionsRead(null)}}/></label>
         <button type="button" disabled={!arrival||!end} onClick={()=>void run(async()=>{const value=await api.options(localTime(arrival),localTime(end));if(isCurrent(context)&&canManage)setOptionsRead({context,value})})}>读取名额与规则</button>
+        {optionsMatch&&options&&options.creationEnabled!==true&&<p role="status">新预约登记暂未开放，仍可处理原预约及核对原请求。</p>}
         {optionsMatch&&options&&<p>该时段总接待容量 {options.capacity.totalGuests} 人，已登记 {options.capacity.committedGuests} 人。提交时会再次核对名额。</p>}
         <label>预约来源<select value={source} onChange={e=>setSource(e.target.value as typeof source)}><option value="phone">电话预约</option><option value="employee">员工代订</option></select></label>
         <label>登记状态<select value={initial} onChange={e=>setInitial(e.target.value as typeof initial)}><option value="confirmed">已与顾客确认</option><option value="pending">待确认</option></select></label>
         <label>位置偏好<select value={preference} onChange={e=>setPreference(e.target.value as typeof preference)}>{preferences.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <label>接待备注（可选）<textarea value={note} maxLength={1000} onChange={e=>setNote(e.target.value)}/></label>
-        <button type="submit" disabled={!optionsMatch}>确认登记名额</button>
+        <button type="submit" disabled={!optionsMatch||options?.creationEnabled!==true}>确认登记名额</button>
       </fieldset>
     </form>}
     {selected&&<section className="staff-reception-detail" aria-label="实际接待详情"><header><h3>{detail?.reservation.customerName??'预约'} · 接待详情</h3><button type="button" onClick={onClose}>收起接待详情</button></header>

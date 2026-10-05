@@ -22,7 +22,7 @@ import SwiftUI
   @Published var lastUpdated: Date?
   @Published var liveOperations: LiveOperations?
   @Published var workspaceVersion = 0
-  let api = StaffAPI(store: KeychainStaffSessionStore())
+  let api: StaffAPI
   @Published var rememberLogin = false
   @Published var savedLoginAvailable = false
   private var restoreAttempted = false
@@ -486,7 +486,9 @@ import SwiftUI
     UserDefaults.standard.set(key, forKey: "native-device-key")
     return key
   }()
-  init() {
+  init(api: StaffAPI? = nil, loadPersistedState: Bool = true) {
+    self.api = api ?? StaffAPI(store: KeychainStaffSessionStore())
+    guard loadPersistedState else { return }
     printReceipt = try? JSONDecoder().decode(
       NativePrintReceipt.self, from: Data(contentsOf: printReceiptURL))
     financeReceipt = try? JSONDecoder().decode(
@@ -828,8 +830,20 @@ import SwiftUI
     do {
       try await api.logout()
       lockLiveSession()
+      savedLoginAvailable = api.savedSessionAvailable()
       message = "已退出员工账号"
-    } catch { handleLiveError(error) }
+        + (api.persistenceNotice.isEmpty ? "" : "；" + api.persistenceNotice)
+    } catch {
+      lockLiveSession()
+      savedLoginAvailable = api.savedSessionAvailable()
+      if !api.persistenceNotice.isEmpty {
+        message = "已锁定本机账号；" + api.persistenceNotice + "。服务器退出结果未确认。"
+      } else if (error as? StaffAPIError)?.loginRequired == true {
+        message = "登录已失效，已退出本机账号"
+      } else {
+        message = "已退出本机账号；服务器退出结果未确认，请勿将此提示当作服务端已注销。"
+      }
+    }
   }
   func lockLiveSession() {
     api.clearIdentity()
@@ -891,7 +905,9 @@ import SwiftUI
     workspaceVersion += 1
   }
   func handleLiveError(_ error: Error) {
-    if let apiError = error as? StaffAPIError, apiError.loginRequired {
+    if let apiError = error as? StaffAPIError,
+      apiError.loginRequired || (apiError.status == 403 && api.identity == nil)
+    {
       lockLiveSession()
       deviceReady = false
     } else {
@@ -1193,10 +1209,10 @@ import SwiftUI
         && identity?.allows(command.permission) == true
         && fulfillmentBoard?.workItems.contains { $0.id == proof["taskId"] as? String } == true
     }
-    if let proof = command.steps.first?.afterSalesProof {
-      return command.steps.count == 1 && canUseAfterSales
+    if command.steps.first?.afterSalesProof != nil {
+      return canUseAfterSales
         && identity?.allows(command.permission) == true
-        && proof["itemId"] as? String == afterSales?.item.id
+        && afterSales.map { validAfterSalesCommandSelection(command: command, board: $0) } == true
     }
     return canAct(command.permission)
   }
@@ -1239,6 +1255,24 @@ import SwiftUI
           || identity?.allows(current.permission) == true
       else {
         throw StaffAPIError(status: 403, code: "ACCESS_REVOKED", message: "操作权限已撤销，请联系管理员核对原请求")
+      }
+      if current.steps.count == 1, current.completedSteps == 0,
+        let proof = current.steps.first?.afterSalesProof,
+        proof["afterSales"] as? String == "cash-paid",
+        let itemID = proof["itemId"] as? String, let actor = identity
+      {
+        let board: LiveAfterSales = try await api.data(
+          "/api/commerce/item-after-sales/items/" + LiveCommand.pathPart(itemID))
+        try board.validate(itemID: itemID)
+        let recovered = try recoverLegacyAfterSalesCashCommand(
+          command: current, board: board, actor: actor)
+        if recovered != current {
+          // Persist the added begin step before sending anything. The original
+          // manual-result payload/key and its employee ownership remain intact.
+          try JSONEncoder().encode(recovered).write(to: livePendingURL, options: .atomic)
+          livePending = recovered
+          current = recovered
+        }
       }
       current = try await LiveCommandRunner.advance(
         current,
@@ -2558,14 +2592,15 @@ import SwiftUI
   func prepareAfterSales(
     action: String, caseID: String = "", quantity: Int = 0, reason: String,
     funding: [String: Int] = [:], unitIDs: Set<String> = [], refundID: String = "",
-    confirmed: Bool = false
+    confirmed: Bool = false, receiptReference: String = ""
   ) throws -> LiveCommand {
     guard canUseAfterSales, let afterSales, let identity else {
       throw CatalogError("请刷新原商品、权限与资金状态")
     }
     return try afterSales.command(
       actor: identity, action: action, caseID: caseID, quantity: quantity, reason: reason,
-      funding: funding, unitIDs: unitIDs, refundID: refundID, confirmed: confirmed)
+      funding: funding, unitIDs: unitIDs, refundID: refundID, confirmed: confirmed,
+      receiptReference: receiptReference)
   }
   func loadOnline(_ session: String) async {
     guard live, identity?.allows("payment.initiate.staff") == true, !busy, !heartbeatBusy else {

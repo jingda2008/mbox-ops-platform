@@ -331,6 +331,192 @@ import Foundation
     check(
       voucherSends == 0 && secretReads == 0,
       "durable original voucher recovers even after device secret is unreadable")
+    count += try await afterSalesManualRecovery(f)
     print("\(count) payment-completion checks passed")
   }
+}
+
+
+// Exercise the persisted command through StaffAPI's real request and response adapter.
+@MainActor private func afterSalesManualRecovery(_ fixture: [String: Any]) async throws -> Int {
+  var count = 0
+  func check(_ value: Bool, _ name: String) {
+    precondition(value, name)
+    count += 1
+    print("PASS " + name)
+  }
+  func bytes(_ value: Any) throws -> Data {
+    try JSONSerialization.data(withJSONObject: value, options: .sortedKeys)
+  }
+  func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
+    try JSONDecoder().decode(type, from: bytes(value))
+  }
+  func rejects(_ action: () throws -> Void) -> Bool {
+    do { try action(); return false } catch { return true }
+  }
+  let actor = try decode(StaffIdentity.self, fixture["auth"]!)
+  func board(_ provider: String, _ status: String = "approved", amount: Int = 8000) throws -> LiveAfterSales {
+    var value = fixture["afterSales"] as! [String: Any]
+    var cases = value["cases"] as! [[String: Any]]
+    cases[0]["refunds"] = [["id": "refund-original", "provider": provider,
+      "status": status, "amountMinor": amount, "canRetry": false]]
+    value["cases"] = cases
+    return try decode(LiveAfterSales.self, value)
+  }
+  func command(_ board: LiveAfterSales, action: String? = nil, confirmed: Bool = true,
+    receipt: String = "POS-ORIGINAL-REFUND") throws -> LiveCommand {
+    try board.command(actor: actor,
+      action: action ?? (board.cases[0].refunds[0].provider == "cash" ? "cash-paid" : "manual-paid"),
+      caseID: "case-original", reason: "原款实退核对", refundID: "refund-original",
+      confirmed: confirmed, receiptReference: receipt)
+  }
+  func response(_ step: LiveCommand.Step, replayed: Bool = false) throws -> Data {
+    let proof = step.afterSalesProof!
+    return try bytes(["meta": ["replayed": replayed], "data": [
+      "id": "refund-original", "paymentId": "original-payment", "orderId": "order-original",
+      "amountMinor": 8000, "currency": "CNY",
+      "paymentProvider": proof["paymentProvider"] as? String ?? "cash",
+      "status": proof["afterSales"] as? String == "manual-begin" ? "processing" : "succeeded",
+      "providerRefundId": step.object["receiptReference"] ?? NSNull(),
+    ]])
+  }
+  for provider in ["cash", "physical_pos", "external_manual"] {
+    let approved = try board(provider)
+    let prepared = try command(approved)
+    check(prepared.steps.count == 2 && prepared.steps[0].path.hasSuffix("/execute")
+      && prepared.steps[1].path.hasSuffix("/manual-result"), "\(provider) approved executes before final result")
+    check(prepared.steps[0].key == prepared.steps[1].key + "-begin"
+      && prepared.steps[0].object.isEmpty, "\(provider) both stage keys saved in original intent")
+    check(validAfterSalesCommandSelection(command: prepared, board: approved), "\(provider) accepts exact approved selection")
+    let processing = try board(provider, "processing")
+    let finishing = try command(processing)
+    check(finishing.steps.count == 1 && finishing.steps[0].path.hasSuffix("/manual-result"),
+      "\(provider) processing never executes again")
+    check(validAfterSalesCommandSelection(command: finishing, board: processing)
+      && !validAfterSalesCommandSelection(command: finishing, board: approved),
+      "\(provider) rejects missing approved begin phase")
+    check(rejects { _ = try command(approved, confirmed: false) }, "\(provider) requires actual payout confirmation")
+    for status in ["requested", "succeeded", "failed", "cancelled"] {
+      check(rejects { _ = try command(board(provider, status)) }, "\(provider) rejects new intent in \(status)")
+    }
+    if provider != "cash" {
+      check(rejects { _ = try command(approved, receipt: " ") }
+        && rejects { _ = try command(approved, receipt: String(repeating: "x", count: 257)) },
+        "\(provider) rejects missing or oversized original refund receipt")
+      check(rejects { _ = try command(approved, action: "cash-paid") }, "\(provider) cannot be declared cash")
+      check(finishing.steps[0].object["receiptReference"] as? String == "POS-ORIGINAL-REFUND"
+        && (finishing.steps[0].afterSalesProof?["confirmation"] as? String)?.contains("POS-ORIGINAL-REFUND") == true,
+        "\(provider) freezes original receipt in payload and confirmation")
+    }
+    // Simulate server commit followed by a lost reply at each phase. Relaunch from
+    // durable bytes then replay exactly the same key; no replacement refund is made.
+    for lostPhase in [0, 1] {
+      var persisted = try JSONEncoder().encode(prepared)
+      var receipts: [String: Data] = [:]
+      var committed: [String] = []
+      var requests: [URLRequest] = []
+      var dropped = false
+      let api = StaffAPI(transport: { request in
+        requests.append(request)
+        guard let key = request.value(forHTTPHeaderField: "idempotency-key"),
+          let index = prepared.steps.firstIndex(where: { $0.key == key }),
+          request.url?.path == prepared.steps[index].path, request.httpMethod == "POST",
+          let body = request.httpBody,
+          NSDictionary(dictionary: try JSONSerialization.jsonObject(with: body) as! [String: Any])
+            .isEqual(to: prepared.steps[index].object)
+        else { throw StaffAPIError.invalid }
+        if receipts[key] == nil {
+          guard index == committed.count else { throw StaffAPIError.invalid }
+          receipts[key] = try response(prepared.steps[index], replayed: true)
+          committed.append(key)
+        }
+        if index == lostPhase && !dropped { dropped = true; throw URLError(.timedOut) }
+        return (receipts[key]!, HTTPURLResponse(url: request.url!, statusCode: 200,
+          httpVersion: nil, headerFields: ["Content-Type": "application/json"])!)
+      })
+      do {
+        _ = try await LiveCommandRunner.advance(prepared, send: { try await api.execute($0) },
+          checkpoint: { persisted = try JSONEncoder().encode($0) })
+        preconditionFailure("lost response was incorrectly accepted")
+      } catch {}
+      let restarted = try JSONDecoder().decode(LiveCommand.self, from: persisted)
+      check(restarted.completedSteps == lostPhase && restarted.steps == prepared.steps,
+        "\(provider) lost phase \(lostPhase) retains both original keys and payloads")
+      let recovered = try await LiveCommandRunner.advance(restarted, send: { try await api.execute($0) },
+        checkpoint: { persisted = try JSONEncoder().encode($0) })
+      check(recovered.completedSteps == 2 && committed == prepared.steps.map(\.key)
+        && requests.count == 3, "\(provider) phase \(lostPhase) replays receipt without duplicate commit")
+      let sent = requests.count
+      _ = try await LiveCommandRunner.advance(recovered, send: { try await api.execute($0) },
+        checkpoint: { persisted = try JSONEncoder().encode($0) })
+      check(requests.count == sent, "\(provider) completed refresh recovery sends no refund")
+    }
+    for step in prepared.steps {
+      try validateAfterSalesReply(response(step), step: step)
+      check(true, "\(provider) accepts exact \(step.afterSalesProof!["afterSales"]!) receipt")
+      for (field, wrong): (String, Any) in [("id", "other-refund"), ("orderId", "other-order"),
+        ("amountMinor", 8001), ("currency", "USD"), ("paymentProvider", "postar"), ("status", "approved")] {
+        var root = try JSONSerialization.jsonObject(with: response(step)) as! [String: Any]
+        var data = root["data"] as! [String: Any]
+        data[field] = wrong; root["data"] = data
+        check(rejects { try validateAfterSalesReply(bytes(root), step: step) },
+          "\(provider) \(step.afterSalesProof!["afterSales"]!) rejects wrong \(field)")
+      }
+    }
+    if provider != "cash" {
+      let result = prepared.steps[1]
+      var root = try JSONSerialization.jsonObject(with: response(result)) as! [String: Any]
+      var data = root["data"] as! [String: Any]
+      data["providerRefundId"] = "other-receipt"; root["data"] = data
+      check(rejects { try validateAfterSalesReply(bytes(root), step: result) },
+        "\(provider) rejects a different original-tool receipt")
+    }
+  }
+  let cash = try board("cash")
+  let prepared = try command(cash)
+  let final = prepared.steps[1]
+  var oldProof = final.afterSalesProof!
+  oldProof.removeValue(forKey: "paymentProvider")
+  let legacyResult = LiveCommand.Step(path: final.path, body: final.body,
+    keyHeader: final.keyHeader, key: "legacy-original-cash-key", recoveryBody: try bytes(oldProof))
+  let legacy = LiveCommand(id: "legacy-command", employeeID: actor.employee.id, title: "原现金退款",
+    permission: "refund.execute", steps: [legacyResult])
+  let upgraded = try recoverLegacyAfterSalesCashCommand(command: legacy, board: cash, actor: actor)
+  check(upgraded.steps.count == 2 && upgraded.steps[1] == legacyResult && upgraded.id == legacy.id
+    && upgraded.steps[0].key == "legacy-original-cash-key-begin", "legacy approved retains original final key and body")
+  for status in ["processing", "succeeded", "failed", "cancelled"] {
+    let unchanged = try recoverLegacyAfterSalesCashCommand(command: legacy,
+      board: board("cash", status), actor: actor)
+    check(unchanged == legacy, "legacy \(status) replays original result without new execute")
+  }
+  var sentPaths: [String] = []
+  let oldAPI = StaffAPI(transport: { request in
+    sentPaths.append(request.url!.path)
+    guard request.value(forHTTPHeaderField: "idempotency-key") == legacyResult.key else { throw StaffAPIError.invalid }
+    return (try response(legacyResult, replayed: true), HTTPURLResponse(url: request.url!, statusCode: 200,
+      httpVersion: nil, headerFields: nil)!)
+  })
+  let terminalLegacy = try recoverLegacyAfterSalesCashCommand(command: legacy,
+    board: board("cash", "succeeded"), actor: actor)
+  let oldRecovered = try await LiveCommandRunner.advance(terminalLegacy,
+    send: { try await oldAPI.execute($0) }, checkpoint: { _ in })
+  check(oldRecovered.completedSteps == 1 && sentPaths == [legacyResult.path],
+    "already successful legacy cash recovers original manual-result receipt")
+  check(rejects { _ = try recoverLegacyAfterSalesCashCommand(command: legacy,
+    board: board("cash", amount: 8001), actor: actor) }, "legacy changed amount keeps old request unresolved")
+  check(rejects { _ = try recoverLegacyAfterSalesCashCommand(command: legacy,
+    board: board("physical_pos"), actor: actor) }, "legacy changed channel keeps old request unresolved")
+  var auth = fixture["auth"] as! [String: Any]
+  auth["deniedPermissions"] = ["refund.execute"]
+  let denied = try decode(StaffIdentity.self, auth)
+  check(rejects { _ = try recoverLegacyAfterSalesCashCommand(command: legacy, board: cash, actor: denied) },
+    "legacy recovery requires current execute permission")
+  var employee = auth["employee"] as! [String: Any]
+  employee["id"] = "different-employee"; auth["employee"] = employee; auth["deniedPermissions"] = []
+  let other = try decode(StaffIdentity.self, auth)
+  check(rejects { _ = try recoverLegacyAfterSalesCashCommand(command: legacy, board: cash, actor: other) },
+    "legacy recovery rejects another employee")
+  check(!validAfterSalesCommandSelection(command: prepared, board: try board("cash", amount: 8001)),
+    "new selection rejects stale original amount")
+  return count
 }

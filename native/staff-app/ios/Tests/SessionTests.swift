@@ -3,12 +3,16 @@ import Foundation
 final class MemorySessionStore: StaffSessionStore {
   var bytes: Data?
   var failWrite = false
+  var failRemove = false
   func read() throws -> Data? { bytes }
   func write(_ data: Data) throws {
     if failWrite { throw URLError(.cannotWriteToFile) }
     bytes = data
   }
-  func remove() throws { bytes = nil }
+  func remove() throws {
+    if failRemove { throw URLError(.cannotRemoveFile) }
+    bytes = nil
+  }
 }
 @main struct SessionTests {
   @MainActor static func main() async throws {
@@ -84,7 +88,34 @@ final class MemorySessionStore: StaffSessionStore {
       preconditionFailure()
     } catch {}
     check(store.bytes == original, "network timeout preserves original encrypted record for retry")
+    check(retry.identity == nil, "failed restore never retains the unverified runtime actor")
     offline = false
+    _ = try await retry.raw("/api/operations")
+    check(
+      requests.last!.value(forHTTPHeaderField: "Cookie")?.contains("__Host-mbox_staff_session=") != true
+        && requests.last!.value(forHTTPHeaderField: "x-mbox-staff-employee-id") == nil,
+      "requests after failed restore send neither cached staff cookie nor actor headers")
+    status = 503
+    do {
+      _ = try await retry.restoreSession()
+      preconditionFailure()
+    } catch {}
+    check(retry.identity == nil && store.bytes == original, "restore server failure locks runtime and preserves retry record")
+    status = 200
+    _ = try await retry.restoreSession()
+    check(retry.identity != nil, "explicit retry requires a fresh successful heartbeat")
+    status = 403
+    do {
+      _ = try await retry.raw("/api/operations")
+      preconditionFailure()
+    } catch {}
+    check(retry.identity != nil && store.bytes != nil, "business permission denial does not revoke the login")
+    do {
+      _ = try await retry.heartbeat()
+      preconditionFailure()
+    } catch {}
+    check(retry.identity == nil && store.bytes == nil, "authentication 403 revokes stored and live login")
+    store.bytes = original
     status = 401
     do {
       _ = try await retry.restoreSession()
@@ -144,6 +175,35 @@ final class MemorySessionStore: StaffSessionStore {
     status = 204
     try await retry.logout()
     check(store.bytes == nil && retry.identity == nil, "confirmed logout removes saved login")
+    for failure in ["timeout", "503", "unexpected-success"] {
+      store.bytes = original
+      status = 200
+      _ = try await retry.restoreSession()
+      offline = failure == "timeout"
+      status = failure == "503" ? 503 : 200
+      do {
+        try await retry.logout()
+        preconditionFailure()
+      } catch {}
+      check(retry.identity == nil && store.bytes == nil, "\(failure) logout still removes local and remembered login")
+      offline = false
+      status = 200
+      _ = try await retry.raw("/api/operations")
+      check(
+        requests.last!.value(forHTTPHeaderField: "Cookie")?.contains("__Host-mbox_staff_session=") != true
+          && requests.last!.value(forHTTPHeaderField: "x-mbox-staff-session-id") == nil,
+        "\(failure) logout cannot reuse staff authentication")
+    }
+    store.bytes = original
+    _ = try await retry.restoreSession()
+    store.failRemove = true
+    offline = true
+    do { try await retry.logout(); preconditionFailure() } catch {}
+    check(retry.identity == nil && !retry.persistenceNotice.isEmpty && store.bytes != nil,
+      "vault removal failure still locks runtime and preserves an explicit warning")
+    store.failRemove = false
+    retry.clearIdentity()
+    check(retry.persistenceNotice.isEmpty && store.bytes == nil, "successful cleanup clears prior storage warning")
     print("\(count) session persistence checks passed")
   }
 }

@@ -101,7 +101,13 @@ struct StaffAPIError: Error, LocalizedError {
     self.transport = transport
   }
   func clearIdentity() {
-    do { try credentialStore?.remove() } catch { persistenceNotice = error.localizedDescription }
+    do {
+      try credentialStore?.remove()
+      persistenceNotice = ""
+    } catch { persistenceNotice = error.localizedDescription }
+    clearRuntimeIdentity()
+  }
+  private func clearRuntimeIdentity() {
     identity = nil
     for cookie in session.configuration.httpCookieStorage?.cookies ?? []
     where cookie.name == "__Host-mbox_staff_session" {
@@ -144,7 +150,14 @@ struct StaffAPIError: Error, LocalizedError {
     guard let previous = identity else {
       throw StaffAPIError(status: 401, code: "AUTH_REQUIRED", message: "请先登录员工账号")
     }
-    let next: StaffIdentity = try await data("/api/auth/heartbeat", body: [:])
+    let next: StaffIdentity
+    do {
+      next = try await data("/api/auth/heartbeat", body: [:])
+    } catch {
+      // Authentication denial revokes this login; a business-route 403 does not.
+      if (error as? StaffAPIError)?.status == 403 { clearIdentity() }
+      throw error
+    }
     try next.validate()
     guard previous.session.id == next.session.id, previous.employee.id == next.employee.id else {
       clearIdentity()
@@ -172,6 +185,13 @@ struct StaffAPIError: Error, LocalizedError {
     persistenceNotice = ""
   }
   func restoreSession() async throws -> StaffIdentity? {
+    clearRuntimeIdentity()
+    var verified = false
+    defer {
+      // A timeout does not revoke the saved login, but no failed restore may
+      // leave the cached actor or a partially restored staff cookie active.
+      if !verified { clearRuntimeIdentity() }
+    }
     guard let data = try credentialStore?.read() else { return nil }
     let saved: SavedStaffSession
     do {
@@ -195,7 +215,9 @@ struct StaffAPIError: Error, LocalizedError {
     identity = saved.identity
     deviceGrant = saved.device
     rememberSession = true
-    return try await heartbeat()
+    let restored = try await heartbeat()
+    verified = true
+    return restored
   }
   private func persistSession() {
     guard let credentialStore else { return }
@@ -228,9 +250,10 @@ struct StaffAPIError: Error, LocalizedError {
     }
   }
   func logout() async throws {
+    // The shared device must lock even if remote revocation's response is lost.
+    defer { clearIdentity() }
     let (_, status) = try await raw("/api/auth/logout", body: [:])
     guard status == 204 else { throw StaffAPIError.invalid }
-    clearIdentity()
   }
   func submitOrder(_ command: LiveOrderSubmission) async throws -> LiveOrderReceipt {
     let (bytes, _) = try await raw(

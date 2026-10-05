@@ -164,6 +164,7 @@ private struct AfterSalesCaseCard: View {
   @State private var reason = ""
   @State private var count = "1"
   @State private var funding: [String: String] = [:]
+  @State private var refundReferences: [String: String] = [:]
   @State private var unitIDs = Set<String>()
   func propose(_ action: String, refundID: String = "", confirmed: Bool = false) {
     do {
@@ -177,7 +178,8 @@ private struct AfterSalesCaseCard: View {
       }
       proposed = try model.prepareAfterSales(
         action: action, caseID: row.id, quantity: Int(count) ?? 0, reason: reason, funding: shares,
-        unitIDs: unitIDs, refundID: refundID, confirmed: confirmed)
+        unitIDs: unitIDs, refundID: refundID, confirmed: confirmed,
+        receiptReference: refundReferences[refundID] ?? "")
     } catch { model.message = error.localizedDescription }
   }
   var body: some View {
@@ -305,12 +307,23 @@ private struct AfterSalesCaseCard: View {
             Primary(tone: .secondary, symbol: "arrow.clockwise")
           ).disabled(!model.canUseAfterSales)
         }
-        if board.canExecuteRefund && refund.provider == "cash"
+        if board.canExecuteRefund && ["cash", "physical_pos", "external_manual"].contains(refund.provider)
           && ["approved", "processing"].contains(refund.status)
         {
-          Button("现金\(money(refund.amountMinor))已实际退给客人") {
-            propose("cash-paid", refundID: refund.id, confirmed: true)
-          }.buttonStyle(Primary(symbol: "banknote")).disabled(!model.canUseAfterSales)
+          if refund.provider != "cash" {
+            Text("先在原线下工具完成退款，再登记凭证；此操作不会替你扣款或退钱。").font(.caption)
+            TextField("原退款凭证号（1—256字）", text: Binding(
+              get: { refundReferences[refund.id] ?? "" },
+              set: { refundReferences[refund.id] = $0 }
+            )).textFieldStyle(.roundedBorder).disabled(model.busy)
+          }
+          Button("\(cashierProvider(refund.provider))\(money(refund.amountMinor))已实际退给客人") {
+            propose(refund.provider == "cash" ? "cash-paid" : "manual-paid",
+              refundID: refund.id, confirmed: true)
+          }.buttonStyle(Primary(symbol: "banknote"))
+            .disabled(!model.canUseAfterSales || (refund.provider != "cash"
+              && !(1...256).contains((refundReferences[refund.id] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).utf16.count)))
         }
       }
     }

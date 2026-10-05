@@ -124,7 +124,7 @@ struct LiveAfterSales: Decodable {
   func command(
     actor: StaffIdentity, action: String, caseID: String = "", quantity: Int = 0, reason: String,
     funding: [String: Int] = [:], unitIDs: Set<String> = [], refundID: String = "",
-    confirmed: Bool = false
+    confirmed: Bool = false, receiptReference: String = ""
   ) throws -> LiveCommand {
     let note = reason.trimmingCharacters(in: .whitespacesAndNewlines)
     guard (2...1000).contains(note.utf16.count) else { throw CatalogError("请填写2—1000字实际原因") }
@@ -211,7 +211,7 @@ struct LiveAfterSales: Decodable {
       body["disposition"] = action
       body["unopenedReceived"] = action == "returned_unopened"
       path = prefix + "/" + LiveCommand.pathPart(caseID) + "/physical"
-    case "refund-retry", "cash-paid":
+    case "refund-retry", "cash-paid", "manual-paid":
       guard let row, let refund = row.refunds.first(where: { $0.id == refundID }), canExecuteRefund
       else { throw CatalogError("请刷新原退款及执行权限") }
       permission = "refund.execute"
@@ -220,12 +220,19 @@ struct LiveAfterSales: Decodable {
         body["refundId"] = refund.id
         title = "重试原退款 " + money(refund.amountMinor)
       } else {
-        guard refund.provider == "cash", ["approved", "processing"].contains(refund.status),
-          confirmed
-        else { throw CatalogError("须确认现金已实际退给客人") }
+        guard ["cash", "physical_pos", "external_manual"].contains(refund.provider),
+          action != "cash-paid" || refund.provider == "cash",
+          ["approved", "processing"].contains(refund.status), confirmed
+        else { throw CatalogError("仅登记已批准的原线下退款，须确认款项已实际退给客人") }
+        let reference = receiptReference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard refund.provider == "cash" || (1...256).contains(reference.utf16.count) else {
+          throw CatalogError("请填写原线下工具的真实退款凭证号（1—256字）")
+        }
         path = "/api/refunds/\(LiveCommand.pathPart(refund.id))/manual-result"
         body = ["succeeded": true]
-        title = "登记现金已退 " + money(refund.amountMinor)
+        if refund.provider != "cash" { body["receiptReference"] = reference }
+        let providerLabel = ["cash": "现金", "physical_pos": "POS机", "external_manual": "其他线下"]
+        title = "登记\(providerLabel[refund.provider]!)已退 " + money(refund.amountMinor)
       }
     default: throw CatalogError("不支持的售后操作")
     }
@@ -256,19 +263,27 @@ struct LiveAfterSales: Decodable {
       details.append(
         row.notices.map { "\($0.stationCode)：\($0.instruction)" }.joined(separator: "\n"))
     }
+    if let reference = body["receiptReference"] as? String {
+      details.append("原工具退款凭证：" + reference)
+    }
     proof["confirmation"] =
       (proof["confirmation"] as! String) + "\n" + details.joined(separator: "\n")
     if let refund = row?.refunds.first(where: { $0.id == refundID }) {
       proof["amountMinor"] = refund.amountMinor
+      if ["cash-paid", "manual-paid"].contains(action) {
+        proof["paymentProvider"] = refund.provider
+      }
     }
+    let result = LiveCommand.Step(
+      path: path, body: try JSONSerialization.data(withJSONObject: body, options: .sortedKeys),
+      keyHeader: "idempotency-key", key: "native-aftersales-" + id,
+      recoveryBody: try JSONSerialization.data(withJSONObject: proof, options: .sortedKeys))
+    let refund = row?.refunds.first { $0.id == refundID }
+    let steps = ["cash-paid", "manual-paid"].contains(action) && refund?.status == "approved"
+      ? [try afterSalesManualBeginStep(result), result] : [result]
     return LiveCommand(
       id: id, employeeID: actor.employee.id, title: title, permission: permission,
-      steps: [
-        .init(
-          path: path, body: try JSONSerialization.data(withJSONObject: body, options: .sortedKeys),
-          keyHeader: "idempotency-key", key: "native-aftersales-" + id,
-          recoveryBody: try JSONSerialization.data(withJSONObject: proof, options: .sortedKeys))
-      ])
+      steps: steps)
   }
 }
 extension LiveCommand.Step {
@@ -280,6 +295,78 @@ extension LiveCommand.Step {
     return p
   }
 }
+private func afterSalesManualBeginStep(_ result: LiveCommand.Step) throws -> LiveCommand.Step {
+  guard var proof = result.afterSalesProof, let refundID = proof["refundId"] as? String,
+    !refundID.isEmpty
+  else { throw StaffAPIError.invalid }
+  proof["afterSales"] = "manual-begin"
+  return LiveCommand.Step(
+    path: "/api/refunds/\(LiveCommand.pathPart(refundID))/execute", body: Data("{}".utf8),
+    keyHeader: result.keyHeader, key: result.key + "-begin",
+    recoveryBody: try JSONSerialization.data(withJSONObject: proof, options: .sortedKeys))
+}
+
+// Upgrade only the approved original cash refund. A processing or terminal refund must
+// replay its original final key, including when success was committed but its reply was lost.
+func recoverLegacyAfterSalesCashCommand(
+  command: LiveCommand, board: LiveAfterSales, actor: StaffIdentity
+) throws -> LiveCommand {
+  guard command.steps.count == 1, let result = command.steps.first,
+    let proof = result.afterSalesProof, proof["afterSales"] as? String == "cash-paid",
+    command.completedSteps == 0, !command.rejected
+  else { return command }
+  guard command.employeeID == actor.employee.id, actor.allows("refund.execute"),
+    command.permission == "refund.execute", board.canExecuteRefund,
+    proof["itemId"] as? String == board.item.id,
+    proof["orderId"] as? String == board.item.orderId,
+    let row = board.cases.first(where: { $0.id == proof["caseId"] as? String }),
+    let refund = row.refunds.first(where: { $0.id == proof["refundId"] as? String }),
+    refund.provider == "cash", refund.amountMinor == proof["amountMinor"] as? Int,
+    result.path == "/api/refunds/\(LiveCommand.pathPart(refund.id))/manual-result",
+    result.object["succeeded"] as? Bool == true,
+    result.keyHeader == "idempotency-key", !result.key.isEmpty
+  else { throw CatalogError("原员工、退款金额、方式或关联已变化，原请求已保留，请核对") }
+  guard refund.status == "approved" else { return command }
+  return LiveCommand(
+    id: command.id, employeeID: command.employeeID, title: command.title,
+    permission: command.permission, steps: [try afterSalesManualBeginStep(result), result],
+    completedSteps: command.completedSteps, rejected: command.rejected)
+}
+
+func validAfterSalesCommandSelection(command: LiveCommand, board: LiveAfterSales) -> Bool {
+  guard let first = command.steps.first?.afterSalesProof,
+    first["itemId"] as? String == board.item.id,
+    first["orderId"] as? String == board.item.orderId
+  else { return false }
+  guard ["cash-paid", "manual-paid", "manual-begin"].contains(first["afterSales"] as? String ?? "")
+  else { return command.steps.count == 1 }
+  guard let result = command.steps.last, let proof = result.afterSalesProof,
+    let row = board.cases.first(where: { $0.id == proof["caseId"] as? String }),
+    let refund = row.refunds.first(where: { $0.id == proof["refundId"] as? String }),
+    command.permission == "refund.execute", command.completedSteps == 0, !command.rejected,
+    board.canExecuteRefund, let action = proof["afterSales"] as? String,
+    ["cash-paid", "manual-paid"].contains(action),
+    ["cash", "physical_pos", "external_manual"].contains(refund.provider),
+    action != "cash-paid" || refund.provider == "cash",
+    proof["itemId"] as? String == board.item.id,
+    proof["orderId"] as? String == board.item.orderId,
+    proof["amountMinor"] as? Int == refund.amountMinor,
+    (proof["paymentProvider"] as? String ?? "cash") == refund.provider,
+    result.path == "/api/refunds/\(LiveCommand.pathPart(refund.id))/manual-result",
+    result.keyHeader == "idempotency-key", !result.key.isEmpty,
+    result.object["succeeded"] as? Bool == true,
+    refund.provider == "cash"
+      || (1...256).contains((result.object["receiptReference"] as? String ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines).utf16.count)
+  else { return false }
+  switch refund.status {
+  case "approved":
+    guard let begin = try? afterSalesManualBeginStep(result) else { return false }
+    return command.steps == [begin, result]
+  case "processing": return command.steps.count == 1
+  default: return false
+  }
+}
 func validateAfterSalesReply(_ bytes: Data, step: LiveCommand.Step) throws {
   guard let proof = step.afterSalesProof,
     let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
@@ -289,12 +376,28 @@ func validateAfterSalesReply(_ bytes: Data, step: LiveCommand.Step) throws {
     try validateRemediationReply(root, proof: proof)
     return
   }
-  if action == "cash-paid" {
+  if ["cash-paid", "manual-paid", "manual-begin"].contains(action) {
+    let begin = action == "manual-begin"
+    guard let refundID = proof["refundId"] as? String,
+      let amount = proof["amountMinor"] as? Int, amount > 0,
+      let orderID = proof["orderId"] as? String, !orderID.isEmpty
+    else { throw StaffAPIError.invalid }
+    let provider = proof["paymentProvider"] as? String ?? "cash"
     guard let meta = root["meta"] as? [String: Any], meta["replayed"] is Bool,
-      data["id"] as? String == proof["refundId"] as? String,
-      data["status"] as? String == "succeeded",
-      data["amountMinor"] as? Int == proof["amountMinor"] as? Int,
-      data["currency"] as? String == "CNY"
+      data["id"] as? String == refundID,
+      step.path == "/api/refunds/\(LiveCommand.pathPart(refundID))/\(begin ? "execute" : "manual-result")",
+      data["status"] as? String == (begin ? "processing" : "succeeded"),
+      data["amountMinor"] as? Int == amount, data["currency"] as? String == "CNY",
+      data["orderId"] as? String == orderID,
+      ["cash", "physical_pos", "external_manual"].contains(provider),
+      action != "cash-paid" || provider == "cash",
+      data["paymentProvider"] as? String == provider,
+      begin || step.object["succeeded"] as? Bool == true,
+      begin || provider == "cash"
+        || (1...256).contains((step.object["receiptReference"] as? String ?? "")
+          .trimmingCharacters(in: .whitespacesAndNewlines).utf16.count),
+      begin || step.object["receiptReference"] == nil
+        || data["providerRefundId"] as? String == step.object["receiptReference"] as? String
     else { throw StaffAPIError.invalid }
     return
   }

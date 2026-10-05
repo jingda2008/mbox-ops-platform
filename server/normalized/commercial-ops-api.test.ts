@@ -180,6 +180,20 @@ describe('commercialOpsApiPlugin', () => {
     expect(denied.statusCode).toBe(403)
   })
 
+  it('passes the empty effective employee allowlist unchanged and rejects an explicitly excluded employee', async () => {
+    const fixture = buildFixture({ access: effectiveAccess({ permissions: ['commercial.sales.view'], dataScopes: [
+      { key: 'commercial.employee_ids', effect: 'include', value: [scopedEmployeeId] },
+      { key: 'commercial.employee_ids', effect: 'exclude', value: [employeeId, scopedEmployeeId] },
+    ] }) })
+    fixture.listEmployeeSales.mockResolvedValue([])
+    const path = '/api/commercial-ops/employee-sales?startDate=2026-08-01&endDate=2026-08-31'
+    const response = await fixture.app.inject(path)
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toEqual([])
+    expect(fixture.listEmployeeSales).toHaveBeenCalledWith({ tenantId, storeId }, expect.objectContaining({ employeeIds: [] }))
+    expect((await fixture.app.inject(path + '&employeeId=' + employeeId)).statusCode).toBe(403)
+  })
+
   it('rejects a mutation when current database permission is denied even if token capabilities claim it', async () => {
     const fixture = buildFixture({ denyPermission: true })
     const response = await fixture.app.inject({

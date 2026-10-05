@@ -12,7 +12,7 @@
 
 ## 最新交付状态（2026-10-06 00:59 CST）
 
-现登记23组系统审计问题，含13/14/20三项已排除的iOS历史；当前范围20组中前19组已有实现修复，新增AUDIT-20261006-23已修复并通过定向回归，准确整合CI和发布待完成。Android通知导航补修另列ANDROID-NAV-20261006-01，不重复计数。
+现登记24组系统审计问题，含13/14/20三项已排除的iOS历史；当前范围21组已有实现修复，新增心跳AUDIT23及混合预约名额AUDIT24通过定向回归，准确整合CI和发布待完成。Android通知导航补修另列ANDROID-NAV-20261006-01，不重复计数。
 
 PR344已合并233ec2eb，不可变rc249标签CI37340096238与Release37340096182成功：351文件3160数据库断言，零跳过/未处理错误，HTTP通过；主浏览器实际127通过、2项首次失败后重试通过、36条件跳过，独立三屏18、会员8通过。保留原失败日志、截图、trace及startup原60样本，不改写为129项首次通过。
 
@@ -25,6 +25,16 @@ Android PR345正式557项/98类、零跳过，lint16警告/13提示/0错误，�
 当前生产仍rc247/schema261与Android9。此段共同激活计划已被顶部后端优先指令覆盖：后端须验证对线上build9的兼容，不再等待或分发build11。当前双小程序平台上传/审核/发布、实体设备、资金、纸票与整班营业验收分别开放；没有生产测试收退款/库存业务写入。
 
 [首次失败回读](../../outputs/system-audit-20261005/rc249-tag-browser-readback.md)、[原始时间线](../../outputs/system-audit-20261005/rc249-tag-browser-flaky-triage.json)、[标签资产核验](../../outputs/system-audit-20261005/rc249-release-bundle-verified.json)。下文保留分时历史。
+
+## 后端优先兼容修复（2026-10-06 01:23 CST）
+
+生产默认关闭MBOX_RESERVATION_RECEPTION_CREATE_ENABLED，只暂停新protocol1创建；native build9原桌位预约与公共预约旧语义保持，新旧原键/正文/身份恢复不重建，已有protocol1真实seat/完成守卫不降级。true仅未来新版客户端兼容后单独切换，本次不能启用。Web原247没有员工代订表单，关闭新增Panel入口保留既有列表、到店、完成与原未决。
+
+AUDIT-20261006-24：旧native仅核物理桌容量，公共预约共享总量未在该路径校验。固定247源码确认遗漏；候选只旁路新总量检查的受控反例出现双201，非完整247运行复现、非生产超售调查结论。新建现先policy锁再table锁核总量，过期native物理hold不误计占位，原成功回执不再核当下日期/容量。
+
+真实受限PG6文件94项通过；配置/app64、generator1、normalizer、类型及整合构建通过。Web36单元、10隔离浏览器通过；新建预检查后开关关闭，只有明确CREATE_DISABLED/not_committed才清未提交意图，unknown仍保留原键。完整正式CI尚待执行，不以本地通过代替。
+
+17:16:38Z生产实际runtime受限LOGIN以repeatable-read/read-only并ROLLBACK聚合核查：当前门店protocol1共0条；不读个人明细、不业务写入，不解除既有1协议的恢复测试。[只读记录](../../outputs/system-audit-20261005/backend-build9-compatibility/predeploy-protocol-count.json)、[兼容设计与边界](../../outputs/system-audit-20261005/backend-build9-compatibility/design.md)、[Web交接](../../outputs/system-audit-20261005/rc250-web-reception-gate-review/web-gate-handoff.md)、[心跳修复证据](../../outputs/system-audit-20261005/staff-heartbeat-audit/readback.md)。
 
 ## 交付历史快照（2026-10-05 23:57 CST）
 

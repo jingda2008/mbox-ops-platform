@@ -17,6 +17,11 @@ import androidx.compose.ui.window.DialogProperties
 
 @Composable
 fun LiveKitchenView(m: AppModel, close: () -> Unit) {
+    val originalAccess = remember { m.priorityAccessKey }
+    val originalWorkspace = remember { m.workspaceVersion }
+    LaunchedEffect(m.priorityAccessKey, m.workspaceVersion) {
+        if (m.priorityAccessKey != originalAccess || m.workspaceVersion != originalWorkspace) close()
+    }
     var station by remember { mutableStateOf("kitchen") }
     var showTasks by remember { mutableStateOf(false) }
     var handoff by remember { mutableStateOf<LiveKitchenHandoff?>(null) }
@@ -41,7 +46,10 @@ fun LiveKitchenView(m: AppModel, close: () -> Unit) {
             error = e.message ?: "请刷新后核对"
         }
     }
-    LaunchedEffect(station) { m.loadKitchen(station) }
+    LiveWorkspacePolling(
+        m, "kitchen-$station",
+        active = proposed == null && handoff == null && !showTasks && !historyVisible && bulkID == null,
+    ) { m.loadKitchen(station, automatic = true) }
     Dialog(
         onDismissRequest = close,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -246,6 +254,8 @@ private fun KitchenBatchCard(
     action: (String, Set<String>) -> Unit,
 ) {
     var selected by remember(batch.id) { mutableStateOf<Set<String>>(emptySet()) }
+    val selectableUnits = batch.units.filter { it.canReady }.map { it.id }.toSet()
+    LaunchedEffect(selectableUnits) { selected = selected.intersect(selectableUnits) }
     Panel {
         Text(batch.name, style = MaterialTheme.typography.titleMedium)
         Text(

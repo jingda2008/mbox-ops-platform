@@ -11,6 +11,14 @@ class DeviceBoard(val source: JSONObject) {
     val policies = source.getJSONArray("policies").objects()
     val commands = source.getJSONArray("commands").objects()
 }
+fun devicePolicyDraft(row: JSONObject): JSONObject = JSONObject()
+    .put("kind", "policy-save").put("expected", row.getString("configurationFingerprint")).put("reason", "")
+    .put("policy", JSONObject().put("ticketKind", row.getString("ticketKind"))
+        .put("enabled", row.getBoolean("enabled")).put("copies", row.get("copies")))
+
+fun devicePolicyCopiesLabel(policy: JSONObject): String =
+    if (policy.isNull("copies")) "份数跟随打印路由" else "固定 ${policy.getInt("copies")} 份"
+
 object DeviceCommands {
     val stations = linkedMapOf("bar" to "吧台", "kitchen" to "后厨", "cashier" to "收银", "service" to "服务")
     val statuses = linkedMapOf("active" to "启用", "paused" to "暂停", "retired" to "退役")
@@ -42,7 +50,8 @@ object DeviceCommands {
                 require(getInt("copies") in 1..5 && getInt("priority") in 0..1000 && getString("status") in statuses)
             }
             "policy-save" -> JSONObject(body.getJSONObject("policy").toString()).apply {
-                require(getString("ticketKind") in tickets && getInt("copies") in 1..5)
+                require(getString("ticketKind") in tickets && has("copies"))
+                require(isNull("copies") || (get("copies") is Number && getDouble("copies") == getInt("copies").toDouble() && getInt("copies") in 1..5)) { "票据份数须跟随路由或固定为1至5份" }
                 require(get("enabled") is Boolean)
             }
             "bridge-revoke" -> JSONObject().put("id",UUID.fromString(body.getString("id")).toString()).put("status","revoked")
@@ -66,5 +75,17 @@ fun validateDeviceReply(text: String, step: LiveStep) {
     for(key in listOf("kind","employeeId","reason")) require(data.getString(key)==proof.getString(key)) { "设备原回执不匹配" }
     val row=data.getJSONObject("row"); val expected=proof.getJSONObject("row")
     if(proof.getString("kind")!="policy-save") require(row.getString("id").isNotBlank())
-    for(key in expected.keys()) require(row.has(key) && row.opt(key)?.toString()==expected.opt(key)?.toString()) { "设备配置回执不匹配，请保留原请求核对" }
+    for (key in expected.keys()) {
+        require(row.has(key)) { "设备配置回执缺少字段，请保留原请求核对" }
+        val submitted = expected.get(key)
+        val actual = row.get(key)
+        val matches = when (submitted) {
+            JSONObject.NULL -> actual === JSONObject.NULL
+            is Number -> actual is Number && submitted.toString().toBigDecimal().compareTo(actual.toString().toBigDecimal()) == 0
+            is Boolean -> actual is Boolean && actual == submitted
+            is String -> actual is String && actual == submitted
+            else -> false
+        }
+        require(matches) { "设备配置回执不匹配，请保留原请求核对" }
+    }
 }

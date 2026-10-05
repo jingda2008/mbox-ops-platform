@@ -7,6 +7,30 @@ import org.json.JSONObject
 fun nativeNonnegativeMoney(text: String): Int? =
     if (Regex("^0{1,6}(\\.0{1,2})?$").matches(text)) 0 else parseMoney(text)
 
+fun normalizedStockSupplierName(raw: String): String = raw.trim().also {
+    require(it.length <= 200 && it.none { c -> c.isISOControl() }) { "供应商请填写200字以内的单行名称，或留空" }
+}
+
+fun stockBatchCode(raw: String): String? = raw.trim().also {
+    require(it.length <= 128 && it.none { c -> c.isISOControl() }) { "批次号请填写128字以内的单行文字，或留空由系统生成" }
+}.takeIf { it.isNotEmpty() }
+
+// Employee line arrays retain their v1 shape so old pending requests and drafts remain readable.
+private const val stockSupplierBookKey = "supplierNames"
+fun stockDraftSupplier(book: JSONObject, employee: String): String =
+    normalizedStockSupplierName(book.optJSONObject(stockSupplierBookKey)?.optString(employee).orEmpty())
+
+fun stockDraftBookEntry(book: JSONObject, employee: String, lines: List<StockLine>, supplier: String): JSONObject {
+    val name = normalizedStockSupplierName(supplier)
+    val suppliers = book.optJSONObject(stockSupplierBookKey) ?: JSONObject()
+    if (name.isEmpty()) suppliers.remove(employee) else suppliers.put(employee, name)
+    return book.put(employee, JSONArray(lines.map { it.json() })).put(stockSupplierBookKey, suppliers)
+}
+
+fun stockDraftMatchesReceipt(book: JSONObject, employee: String, proof: JSONObject): Boolean =
+    book.optJSONArray(employee)?.toString() == proof.getString("draftFingerprint") &&
+        stockDraftSupplier(book, employee) == proof.optString("supplierName", "")
+
 class StockBoard(val source: JSONObject) {
     val employee = source.getString("currentEmployeeId")
     val durable = source.getBoolean("nativeCommands")
@@ -36,20 +60,23 @@ data class StockLine(
     val cost: Int,
     val scanCode: String? = null,
     val packageQuantity: String? = null,
+    val batchCode: String? = null,
 ) {
     val id
-        get() = "$itemID:${scanCode ?: "manual"}"
+        get() = JSONArray(listOf(itemID, scanCode ?: JSONObject.NULL, batchCode ?: JSONObject.NULL)).toString()
 
     val summary
         get() =
             "$name · $quantity" +
                 (if (scanCode == null) unit else "包（每包${packageQuantity ?: "?"}$unit）") +
-                " · 本批金额 ${money(cost)}"
+                " · 本批金额 ${money(cost)}" +
+                (batchCode?.let { " · 批次 $it" } ?: " · 批次由系统生成")
 
     fun payload() =
         JSONObject().put("totalCostMinor", cost.toString()).also {
             if (scanCode == null) it.put("inventoryItemId", itemID).put("quantity", quantity)
             else it.put("scanCode", scanCode).put("packages", quantity).put("expectedInventoryItemId",itemID).put("expectedPackageQuantity",packageQuantity)
+            batchCode?.let { batch -> it.put("batchCode", batch) }
         }
 
     fun json() =
@@ -61,6 +88,7 @@ data class StockLine(
             .put("cost", cost)
             .put("scanCode", scanCode ?: JSONObject.NULL)
             .put("packageQuantity", packageQuantity ?: JSONObject.NULL)
+            .also { json -> batchCode?.let { json.put("batchCode", it) } }
 
     companion object {
         fun parse(j: JSONObject) =
@@ -72,9 +100,10 @@ data class StockLine(
                 j.getInt("cost"),
                 j.textOrNull("scanCode"),
                 j.textOrNull("packageQuantity"),
+                j.textOrNull("batchCode"),
             )
 
-        fun make(item: JSONObject, quantity: String, amount: String, scan: JSONObject?): StockLine {
+        fun make(item: JSONObject, quantity: String, amount: String, scan: JSONObject?, batchCode: String = ""): StockLine {
             val q = quantity.trim()
             val decimal = q.toBigDecimalOrNull()
             val cost = nativeNonnegativeMoney(amount)
@@ -105,6 +134,7 @@ data class StockLine(
                 cost,
                 scan?.getString("code"),
                 scan?.getString("packageQuantity"),
+                stockBatchCode(batchCode),
             )
         }
     }
@@ -115,6 +145,7 @@ fun stockCommand(
     board: StockBoard,
     lines: List<StockLine> = emptyList(),
     receiptID: String? = null,
+    supplierName: String = "",
 ): LiveCommand {
     require(
         board.durable && board.employee == actor.employeeId && actor.allows("inventory.receive")
@@ -140,13 +171,15 @@ fun stockCommand(
             .put("lineCount", r.getInt("lineCount"))
             .put(
                 "confirmation",
-                r.getString("publicId") +
+                    r.getString("publicId") +
+                    (r.optJSONObject("supplier")?.textOrNull("name")?.let { "\n供应商：$it" } ?: "") +
                     "\n" +
                     r.getJSONArray("lines").objects().joinToString("\n") {
                         it.getString("itemName") +
                             " ×" +
                             it.getString("quantity") +
-                            it.getString("baseUnit")
+                            it.getString("baseUnit") +
+                            (it.textOrNull("batchCode")?.let { batch -> " · 批次 $batch" } ?: "")
                     } +
                     "\n确认以上实物已验收；本操作正式入库，不自动修改商品上下架。",
             )
@@ -157,10 +190,11 @@ fun stockCommand(
                 lines.map { it.id }.toSet().size == lines.size &&
                 lines.all { line -> board.items.any { it.getString("id") == line.itemID } }
         ) {
-            "请添加1—200项有效物料，同物料同条码请合并数量"
+            "请添加1—200项有效物料，同物料同条码同批次请合并数量"
         }
         lines.forEach { line ->
             require(line.cost in 0..99999999) { "采购草稿金额无效" }
+            require(stockBatchCode(line.batchCode.orEmpty()) == line.batchCode) { "采购草稿批次号无效，请重新核对" }
             val item = board.items.first { it.getString("id") == line.itemID }
             if (line.scanCode == null) stockQuantity(line.quantity, item, false)
             else
@@ -172,12 +206,14 @@ fun stockCommand(
                 }
         }
         val total = lines.sumOf { it.cost.toLong() }
+        val supplier = normalizedStockSupplierName(supplierName)
         require(total <= 1_000_000_000) { "本批金额过大" }
         path = "/api/native/inventory/receipts"
         title = "建立采购待验收单"
         body =
             JSONObject()
                 .put("currency", "CNY")
+                .put("supplierSnapshot", JSONObject().also { if (supplier.isNotEmpty()) it.put("name", supplier) })
                 .put("invoiceTotalMinor", total.toString())
                 .put("note", "原生App采购待实物验收")
                 .put("lines", JSONArray(lines.map { it.payload() }))
@@ -185,10 +221,12 @@ fun stockCommand(
             .put("kind", "create")
             .put("status", "draft")
             .put("lineCount", lines.size)
+            .put("supplierName", supplier)
             .put("draftFingerprint", JSONArray(lines.map { it.json() }).toString())
             .put(
                 "confirmation",
-                lines.joinToString("\n") { it.summary } +
+                (if (supplier.isEmpty()) "供应商：未填写\n" else "供应商：$supplier\n") +
+                    lines.joinToString("\n") { it.summary } +
                     "\n合计 ${historyMoney(total)}\n这里只建立待验收单；核对服务器换算后的实际数量，再确认入库。",
             )
     }

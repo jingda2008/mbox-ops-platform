@@ -97,6 +97,7 @@ class LiveAfterSales(val source: JSONObject) {
         unitIDs: Set<String> = emptySet(),
         refundID: String = "",
         confirmed: Boolean = false,
+        receiptReference: String = "",
     ): LiveCommand {
         val note = reason.trim()
         require(note.length in 2..1000) { "请填写2—1000字实际原因" }
@@ -238,7 +239,8 @@ class LiveAfterSales(val source: JSONObject) {
                 path = "$prefix/${LiveCommand.part(caseID)}/physical"
             }
             "refund-retry",
-            "cash-paid" -> {
+            "cash-paid",
+            "manual-paid" -> {
                 val refund =
                     row?.let {
                         financeRows(it, "refunds").find { r -> r.getString("id") == refundID }
@@ -250,16 +252,22 @@ class LiveAfterSales(val source: JSONObject) {
                     body.put("refundId", refundID)
                     title = "重试原退款 ${historyMoney(refund.getLong("amountMinor"))}"
                 } else {
+                    val provider = refund.getString("provider")
                     require(
-                        refund.getString("provider") == "cash" &&
+                        provider in listOf("cash", "physical_pos", "external_manual") &&
+                            (action != "cash-paid" || provider == "cash") &&
                             refund.getString("status") in listOf("approved", "processing") &&
                             confirmed
                     ) {
-                        "须确认现金已实际退给客人"
+                        "仅登记已批准的原线下退款，须确认款项已实际退给客人"
+                    }
+                    require(provider == "cash" || receiptReference.trim().length in 1..256) {
+                        "请填写原线下工具的真实退款凭证号（1—256字）"
                     }
                     path = "/api/refunds/${LiveCommand.part(refundID)}/manual-result"
                     body = JSONObject().put("succeeded", true)
-                    title = "登记现金已退 ${historyMoney(refund.getLong("amountMinor"))}"
+                    if (provider != "cash") body.put("receiptReference", receiptReference.trim())
+                    title = "登记${cashierProvider(provider)}已退 ${historyMoney(refund.getLong("amountMinor"))}"
                 }
             }
             else -> error("不支持的售后操作")
@@ -279,7 +287,11 @@ class LiveAfterSales(val source: JSONObject) {
                     "${item.getString("tableCode")} · ${item.getString("orderPublicId")}\n${item.getString("name")}\n$title\n原申请金额：${row?.longOrNull("amountMinor")?.let { historyMoney(it) } ?: "由服务器按原成交事实计算"}\n原因：$note\n资金与商品/库存分别处理；未确认成功不能当作已退，撤回或拒绝不会自动恢复商品。",
                 )
         row?.let { financeRows(it, "refunds").find { r -> r.getString("id") == refundID } }
-            ?.let { proof.put("amountMinor", it.getLong("amountMinor")) }
+            ?.let {
+                proof.put("amountMinor", it.getLong("amountMinor"))
+                if (action in listOf("cash-paid", "manual-paid"))
+                    proof.put("paymentProvider", it.getString("provider"))
+            }
         val detail = buildList {
             if (unitIDs.isNotEmpty())
                 add(
@@ -304,31 +316,107 @@ class LiveAfterSales(val source: JSONObject) {
                         "${it.getString("stationCode")}：${it.getString("instruction")}"
                     }
                 )
+            if (action == "manual-paid" && body.has("receiptReference"))
+                add("原工具退款凭证：${body.getString("receiptReference")}")
         }
         proof.put(
             "confirmation",
             proof.getString("confirmation") + "\n" + detail.joinToString("\n"),
         )
+        val resultStep = LiveStep(
+            path,
+            body.toString(),
+            "idempotency-key",
+            "native-aftersales-$key",
+            proof.toString(),
+        )
+        val refund = row?.let { financeRows(it, "refunds").find { r -> r.getString("id") == refundID } }
+        val steps = if (action in listOf("cash-paid", "manual-paid") && refund?.getString("status") == "approved")
+            listOf(afterSalesManualBeginStep(resultStep), resultStep)
+        else listOf(resultStep)
         return LiveCommand(
             key,
             actor.employeeId,
             title,
             permission,
-            listOf(
-                LiveStep(
-                    path,
-                    body.toString(),
-                    "idempotency-key",
-                    "native-aftersales-$key",
-                    proof.toString(),
-                )
-            ),
+            steps,
         )
     }
 }
 
 val LiveStep.afterSalesProof: JSONObject?
     get() = recoveryBody?.let { JSONObject(it) }?.takeIf { it.opt("afterSales") is String }
+
+private fun afterSalesManualBeginStep(result: LiveStep): LiveStep {
+    val proof = JSONObject(result.afterSalesProof!!.toString()).put("afterSales", "manual-begin")
+    return result.copy(
+        path = "/api/refunds/${LiveCommand.part(proof.getString("refundId"))}/execute",
+        body = "{}",
+        key = "${result.key}-begin",
+        recoveryBody = proof.toString(),
+    )
+}
+
+/** Only the approved original refund may gain its missing begin phase after an upgrade. */
+fun recoverLegacyAfterSalesCashCommand(
+    command: LiveCommand,
+    board: LiveAfterSales,
+    actor: StaffIdentity,
+): LiveCommand {
+    val result = command.steps.singleOrNull() ?: return command
+    val proof = result.afterSalesProof ?: return command
+    if (proof.optString("afterSales") != "cash-paid" || command.completedSteps != 0 || command.rejected)
+        return command
+    require(command.employeeID == actor.employeeId && actor.allows("refund.execute")) {
+        "请由原员工恢复并核对退款执行权限，原请求已保留"
+    }
+    require(command.permission == "refund.execute" && proof.getString("itemId") == board.id &&
+        proof.getString("orderId") == board.item.getString("orderId")) { "原商品退款关联已变化，原请求已保留" }
+    val refund = board.cases.find { it.getString("caseId") == proof.getString("caseId") }
+        ?.let { financeRows(it, "refunds").find { r -> r.getString("id") == proof.getString("refundId") } }
+    require(refund != null && refund.getString("provider") == "cash" &&
+        refund.getLong("amountMinor") == proof.getLong("amountMinor") &&
+        result.path == "/api/refunds/${LiveCommand.part(refund.getString("id"))}/manual-result" &&
+        JSONObject(result.body).getBoolean("succeeded") && result.key.isNotBlank()) {
+        "原退款金额、方式或请求不一致，原请求已保留"
+    }
+    // Processing or terminal results must replay the original final key; a new begin
+    // would incorrectly block a succeeded refund whose acknowledgement was lost.
+    if (refund.getString("status") != "approved") return command
+    return command.copy(steps = listOf(afterSalesManualBeginStep(result), result))
+}
+
+fun validAfterSalesCommandSelection(command: LiveCommand, board: LiveAfterSales): Boolean =
+    runCatching {
+        val first = command.steps.firstOrNull()?.afterSalesProof ?: return@runCatching false
+        if (first.getString("itemId") != board.id || first.getString("orderId") != board.item.getString("orderId"))
+            return@runCatching false
+        if (first.getString("afterSales") !in listOf("cash-paid", "manual-paid", "manual-begin"))
+            return@runCatching command.steps.size == 1
+        val result = command.steps.last()
+        val proof = result.afterSalesProof ?: return@runCatching false
+        val refund = board.cases.find { it.getString("caseId") == proof.getString("caseId") }
+            ?.let { financeRows(it, "refunds").find { r -> r.getString("id") == proof.getString("refundId") } }
+            ?: return@runCatching false
+        val provider = refund.getString("provider")
+        val action = proof.getString("afterSales")
+        val body = JSONObject(result.body)
+        command.permission == "refund.execute" && command.completedSteps == 0 &&
+            action in listOf("cash-paid", "manual-paid") &&
+            provider in listOf("cash", "physical_pos", "external_manual") &&
+            (action != "cash-paid" || provider == "cash") &&
+            proof.getString("itemId") == board.id && proof.getString("orderId") == board.item.getString("orderId") &&
+            proof.getLong("amountMinor") == refund.getLong("amountMinor") &&
+            (proof.textOrNull("paymentProvider") ?: "cash") == provider &&
+            result.path == "/api/refunds/${LiveCommand.part(refund.getString("id"))}/manual-result" &&
+            body.getBoolean("succeeded") &&
+            (provider == "cash" || body.getString("receiptReference").trim().length in 1..256) &&
+            when (refund.getString("status")) {
+                "approved" -> command.steps == listOf(afterSalesManualBeginStep(result), result)
+                "processing" -> command.steps.size == 1
+                else -> false
+            }
+    }.getOrDefault(false)
 
 fun validateAfterSalesReply(text: String, step: LiveStep) {
     val p = step.afterSalesProof ?: invalidResponse()
@@ -339,13 +427,20 @@ fun validateAfterSalesReply(text: String, step: LiveStep) {
         validateRemediationReply(root, p)
         return
     }
-    if (action == "cash-paid") {
+    if (action in listOf("cash-paid", "manual-paid", "manual-begin")) {
+        val begin = action == "manual-begin"
+        val body = JSONObject(step.body)
         if (
             root.getJSONObject("meta").get("replayed") !is Boolean ||
                 data.getString("id") != p.getString("refundId") ||
-                data.getString("status") != "succeeded" ||
+                step.path != "/api/refunds/${LiveCommand.part(p.getString("refundId"))}/${if (begin) "execute" else "manual-result"}" ||
+                data.getString("status") != (if (begin) "processing" else "succeeded") ||
                 data.getLong("amountMinor") != p.getLong("amountMinor") ||
-                data.getString("currency") != "CNY"
+                data.getString("currency") != "CNY" ||
+                data.getString("orderId") != p.getString("orderId") ||
+                data.getString("paymentProvider") != (p.textOrNull("paymentProvider") ?: "cash") ||
+                (!begin && body.has("receiptReference") &&
+                    data.getString("providerRefundId") != body.getString("receiptReference"))
         )
             invalidResponse()
         return

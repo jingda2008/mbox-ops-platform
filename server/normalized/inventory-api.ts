@@ -149,18 +149,69 @@ export const inventoryApiPlugin: FastifyPluginAsync<
   }
   if (options.nativeProtocol) {
     // Only explicitly delivered native workflows opt into the durable protocol.
-    // Bottle, material maintenance and other web routes keep their
+    // Bottle and other undelivered web routes keep their
     // original contract; registering this plugin must not expose aliases for them.
-    const reads=new Set(['/inventory/products/:productId/recipe','/inventory/products/:productId/recipe-cost','/inventory','/inventory/scan','/inventory/stock-counts','/inventory/waste-requests']);
-    const writes=new Set(['/inventory/products/:productId/recipe','/inventory/items/:itemId/cost-corrections','/inventory/receipts','/inventory/receipts/:receiptId/receive',
+    const reads=new Set(['/inventory/setup','/inventory/receipts/:receiptId/publish-options','/inventory/receipts/:receiptId/receive-and-publish-preview','/inventory/products/:productId/recipe','/inventory/products/:productId/recipe-cost','/inventory','/inventory/scan','/inventory/stock-counts','/inventory/waste-requests']);
+    const writes=new Set(['/inventory/items','/inventory/items/:itemId','/inventory/items/:itemId/barcodes','/inventory/products/:productId/recipe','/inventory/items/:itemId/cost-corrections','/inventory/receipts','/inventory/receipts/:receiptId/receive',
       '/inventory/stock-count-submissions','/inventory/stock-counts/:countId/approve',
       '/inventory/stock-counts/:countId/reject','/inventory/items/:itemId/waste',
-      '/inventory/waste-requests/:requestId/approve','/inventory/waste-requests/:requestId/reject']);
+      '/inventory/waste-requests/:requestId/approve','/inventory/waste-requests/:requestId/reject','/inventory/receipts/:receiptId/receive-and-publish']);
     app.addHook('preHandler',async(request,reply)=>{
       const route=request.routeOptions.url?.split('/native').pop() ?? '';
       const supported=(request.method==='GET'||request.method==='HEAD')?reads.has(route):request.method==='POST'&&writes.has(route);
       if(!supported)return reply.code(404).send({error:{code:'NATIVE_INVENTORY_UNSUPPORTED',message:'此库存功能尚未提供原生接口'}});
     });
+    app.get('/inventory/setup', async (request, reply) => handleRoute(reply, async () => {
+      const context = await options.resolveContext(request);
+      const data = await options.transactions.run(context.scope, async tx => {
+        await (options.createStaffAccessRepository?.(tx) ?? new StaffAccessRepository(tx))
+          .assertPermission(context.employeeId, 'inventory.manage');
+        const items = await tx.query(`SELECT item.id,item.sku,item.name,
+          item.item_type AS "itemType",item.base_unit AS "baseUnit",item.category_code AS "categoryCode",
+          item.low_stock_threshold::text AS "lowStockThreshold",item.whole_unit_count AS "wholeUnitCount",
+          item.reasonable_waste_quantity::text AS "reasonableWasteQuantity",item.package_volume_ml::text AS "packageVolumeMl",
+          item.status,item.updated_at::text AS "updatedAt",
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('id',barcode.id,'code',barcode.code,
+            'codeType',barcode.code_type,'packageQuantity',barcode.package_quantity::text) ORDER BY barcode.code)
+            FROM mbox.inventory_barcodes barcode WHERE barcode.tenant_id=item.tenant_id
+              AND barcode.store_id=item.store_id AND barcode.inventory_item_id=item.id),'[]'::jsonb) AS barcodes
+          FROM mbox.inventory_items item WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.status='active'
+          ORDER BY item.category_code,item.name,item.id`, [context.scope.tenantId,context.scope.storeId]);
+        return {nativeInventorySetupProtocol:1,currentEmployeeId:context.employeeId,items:items.rows};
+      }, {readOnly:true,isolation:'repeatable-read'});
+      return reply.send({data});
+    }));
+    app.get<{Params:{receiptId:string}}>('/inventory/receipts/:receiptId/publish-options', async (request,reply) => handleRoute(reply,async()=>{
+      const context=await options.resolveContext(request),receiptId=readUuid(request.params.receiptId,'receiptId');
+      const data=await options.transactions.run(context.scope,async tx=>{
+        await assertNativePublishAccess(options,tx,context.employeeId);
+        const receipt=(await tx.query(`SELECT id,public_id AS "publicId",status,currency FROM mbox.purchase_receipts
+          WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[context.scope.tenantId,context.scope.storeId,receiptId])).rows[0];
+        if(!receipt)throw new InventoryNotFoundError('purchase receipt',receiptId);
+        if(!['draft','received'].includes(String(receipt.status))||receipt.currency!=='CNY')throw new InventoryConflictError('只能对待收货或已收货的人民币采购单核对发布');
+        const products=await tx.query(`SELECT DISTINCT product.id,product.name FROM mbox.products product
+          JOIN mbox.recipes recipe ON recipe.tenant_id=product.tenant_id AND recipe.store_id=product.store_id
+            AND recipe.product_id=product.id AND recipe.status='active' AND recipe.effective_at<=clock_timestamp()
+          JOIN mbox.recipe_items component ON component.tenant_id=recipe.tenant_id AND component.store_id=recipe.store_id AND component.recipe_id=recipe.id
+          JOIN mbox.purchase_receipt_lines line ON line.tenant_id=component.tenant_id AND line.store_id=component.store_id
+            AND line.inventory_item_id=component.inventory_item_id AND line.receipt_id=$3
+          WHERE product.tenant_id=$1 AND product.store_id=$2 AND product.product_kind='single'
+            AND product.inventory_control_mode='tracked' ORDER BY product.name,product.id`,[context.scope.tenantId,context.scope.storeId,receiptId]);
+        const snapshot=await nativePublishReceiptSnapshot(tx,receiptId);
+        return {nativeInventoryPublishProtocol:1,currentEmployeeId:context.employeeId,receipt:{...receipt,lines:snapshot.receiptLines},products:products.rows};
+      },{readOnly:true,isolation:'repeatable-read'});
+      return reply.send({data});
+    }));
+    app.get<{Params:{receiptId:string};Querystring:{productId:string}}>('/inventory/receipts/:receiptId/receive-and-publish-preview',async(request,reply)=>handleRoute(reply,async()=>{
+      const context=await options.resolveContext(request),receiptId=readUuid(request.params.receiptId,'receiptId'),productId=readUuid(request.query.productId,'productId');
+      const data=await options.transactions.run(context.scope,async tx=>{
+        await assertNativePublishAccess(options,tx,context.employeeId);
+        const preview=await previewReceiveAndPublishProduct(tx,options.createInventoryRepository?.(tx)??new InventoryRepository(tx),receiptId,productId);
+        const receiptSnapshot=await nativePublishReceiptSnapshot(tx,receiptId);
+        return {...preview,...receiptSnapshot,nativeInventoryPublishProtocol:1,currentEmployeeId:context.employeeId,expectedVersion:nativePublishVersion(preview,receiptSnapshot)};
+      },{readOnly:true,isolation:'repeatable-read'});
+      return reply.send({data});
+    }));
     app.get<{Querystring:{code?: string}}>('/inventory/scan', async (request, reply) => handleRoute(reply, async () => {
       const context = await options.resolveContext(request);
       const code = readString(request.query.code, 'code', 128);
@@ -230,6 +281,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
     handleRoute(reply, async () => {
       const context = await options.resolveContext(request);
       const body = readObject(request.body);
+      if (options.nativeProtocol) assertNativeSetupFields(body, ['sku','name','itemType','baseUnit','categoryCode','lowStockThreshold','wholeUnitCount','reasonableWasteQuantity','packageVolumeMl']);
       const input = readInventoryItem(body);
       assertInventoryItemUnitPolicy(input);
       const execution = await execute(
@@ -247,13 +299,16 @@ export const inventoryApiPlugin: FastifyPluginAsync<
     }),
   );
 
-  app.patch<{ Params: { itemId: string } }>(
+  app[options.nativeProtocol ? 'post' : 'patch']<{ Params: { itemId: string } }>(
     "/inventory/items/:itemId",
     async (request, reply) =>
       handleRoute(reply, async () => {
         const context = await options.resolveContext(request);
         const itemId = readUuid(request.params.itemId, "itemId");
-        const input = readInventoryItemUpdate(readObject(request.body));
+        const body = readObject(request.body);
+        if (options.nativeProtocol) assertNativeSetupFields(body, ['name','categoryCode','lowStockThreshold','packageVolumeMl','expectedUpdatedAt']);
+        const expectedUpdatedAt = options.nativeProtocol ? readString(body.expectedUpdatedAt, 'expectedUpdatedAt', 100) : null;
+        const input = readInventoryItemUpdate(body);
         const execution = await execute(
           options,
           context,
@@ -261,7 +316,10 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           "inventory.item.update",
           "inventory.manage",
           inventoryItemCodec,
-          async (transaction) => createInventory(transaction).updateItem(itemId, input),
+          async (transaction) => {
+            if (expectedUpdatedAt !== null) await lockNativeInventoryItem(transaction,itemId,expectedUpdatedAt);
+            return createInventory(transaction).updateItem(itemId, input);
+          },
         );
         return reply.send(response(execution));
       }),
@@ -274,7 +332,12 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         const context = await options.resolveContext(request);
         const itemId = readUuid(request.params.itemId, "itemId");
         const body = readObject(request.body);
-        const resultCodec = codec<{ id: string; replayed: boolean }>();
+        if (options.nativeProtocol) assertNativeSetupFields(body, ['code','codeType','packageQuantity','expectedUpdatedAt']);
+        const expectedUpdatedAt = options.nativeProtocol ? readString(body.expectedUpdatedAt, 'expectedUpdatedAt', 100) : null;
+        const code = readString(body.code, 'code', 128);
+        const codeType = readEnum(body.codeType ?? 'barcode', 'codeType', ['barcode','qr','internal']);
+        const packageQuantity = readDecimal(body.packageQuantity ?? '1', 'packageQuantity', false);
+        const resultCodec = codec<{ id: string; replayed: boolean; inventoryItemId?:string; code?:string; codeType?:string; packageQuantity?:string }>();
         const execution = await execute(
           options,
           context,
@@ -282,22 +345,15 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           "inventory.barcode.bind",
           "inventory.manage",
           resultCodec,
-          async (transaction) =>
-            createInventory(transaction).bindBarcode({
+          async (transaction) => {
+            if (expectedUpdatedAt !== null) await lockNativeInventoryItem(transaction,itemId,expectedUpdatedAt);
+            const result = await createInventory(transaction).bindBarcode({
               inventoryItemId: itemId,
-              code: readString(body.code, "code", 128),
-              codeType: readEnum(body.codeType ?? "barcode", "codeType", [
-                "barcode",
-                "qr",
-                "internal",
-              ]),
-              packageQuantity: readDecimal(
-                body.packageQuantity ?? "1",
-                "packageQuantity",
-                false,
-              ),
+              code, codeType, packageQuantity,
               employeeId: context.employeeId,
-            }),
+            });
+            return options.nativeProtocol ? {...result,inventoryItemId:itemId,code,codeType,packageQuantity} : result;
+          },
         );
         return reply.send(response(execution));
       }),
@@ -609,6 +665,7 @@ export const inventoryApiPlugin: FastifyPluginAsync<
         const receiptId = readUuid(request.params.receiptId, "receiptId");
         const body = readObject(request.body);
         const productId = readUuid(body.productId, "productId");
+        const expectedVersion=options.nativeProtocol?z.object({productId:z.uuid(),expectedVersion:z.string().regex(/^[a-f0-9]{64}$/)}).strict().parse(body).expectedVersion:null;
         const execution = await execute(
           options,
           context,
@@ -619,13 +676,24 @@ export const inventoryApiPlugin: FastifyPluginAsync<
           async (transaction, permissions) => {
             assertInventoryPermission(permissions, "catalog.product.manage");
             assertInventoryPermission(permissions, "inventory.cost.view");
-            return receiveAndPublishProduct(
+            const result = await receiveAndPublishProduct(
               transaction,
               createInventory(transaction),
               receiptId,
               productId,
               context.employeeId,
             );
+            if(expectedVersion!==null){
+              // The existing domain transaction has now locked the receipt,
+              // recipe, balances and product. Compare the projected post-receipt
+              // quote while those locks are held; any mismatch rolls back BOTH
+              // the receipt and publication, never leaving a partial operation.
+              const finalPreview=await previewReceiveAndPublishProduct(transaction,createInventory(transaction),receiptId,productId);
+              const receiptSnapshot=await nativePublishReceiptSnapshot(transaction,receiptId);
+              if(nativePublishVersion(finalPreview,receiptSnapshot)!==expectedVersion||result.costAmountMinor!==finalPreview.costAmountMinor||result.standardPriceMinor!==finalPreview.standardPriceMinor)
+                throw new InventoryConflictError('售价、成本、配方或可售库存已变化，本次未收货或发布；请重新预览后确认');
+            }
+            return result;
           },
         );
         return reply.send(response(execution));
@@ -1136,6 +1204,10 @@ async function execute<Result>(
     if(current.employeeId!==context.employeeId||current.scope.storeId!==context.scope.storeId||current.scope.tenantId!==context.scope.tenantId)throw new StaffAccessDeniedError('账号已变化');
     currentPermissions = (await (options.createStaffAccessRepository?.(tx) ?? new StaffAccessRepository(tx)).assertPermission(context.employeeId, permission)).permissions;
     if(operationScope==='inventory.cost.correct')assertInventoryPermission(currentPermissions,'inventory.cost.view');
+    if(operationScope==='inventory.receipt.receive-and-publish'){
+      assertInventoryPermission(currentPermissions,'catalog.product.manage');
+      assertInventoryPermission(currentPermissions,'inventory.cost.view');
+    }
   }) : options.commands;
   const execution = await commands.execute(
     {
@@ -1174,6 +1246,9 @@ async function execute<Result>(
       let result: Result;
       try {result = await handler(transaction, access.permissions)} catch(error) {
         if(options.nativeProtocol && error instanceof InventoryConflictError) throw new NativePhysicalNotCommittedError(error.message);
+        if(options.nativeProtocol && ['inventory.item.create','inventory.item.update','inventory.barcode.bind'].includes(operationScope)
+          && typeof error==='object' && error!==null && 'code' in error && ['23505','23514','22003'].includes(String(error.code)))
+          throw new NativePhysicalNotCommittedError('物料编号、包装条码或数量设置冲突，本次未保存；请核对现有资料');
         throw error;
       }
       const json = resultCodec.encode(result);
@@ -1318,6 +1393,43 @@ async function executeBottleMutation(
       return repository.voidStoredBottle(bottleId, context.employeeId, reason);
     },
   );
+}
+
+async function assertNativePublishAccess(options:InventoryApiOptions,tx:ScopedTransaction,employeeId:string) {
+  const access=await (options.createStaffAccessRepository?.(tx)??new StaffAccessRepository(tx)).assertPermission(employeeId,'inventory.receive');
+  assertInventoryPermission(access.permissions,'catalog.product.manage');
+  assertInventoryPermission(access.permissions,'inventory.cost.view');
+}
+
+async function nativePublishReceiptSnapshot(tx:ScopedTransaction,receiptId:string) {
+  const receipt=(await tx.query(`SELECT public_id AS "receiptPublicId",currency FROM mbox.purchase_receipts
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[tx.scope.tenantId,tx.scope.storeId,receiptId])).rows[0];
+  if(!receipt||receipt.currency!=='CNY')throw new InventoryConflictError('原人民币采购单不存在');
+  const lines=(await tx.query(`SELECT line.id,line.inventory_item_id AS "inventoryItemId",item.name AS "itemName",
+    item.base_unit AS "baseUnit",line.quantity::text AS quantity,line.unit_cost_minor::text AS "unitCostMinor",line.batch_code AS "batchCode"
+    FROM mbox.purchase_receipt_lines line JOIN mbox.inventory_items item
+      ON item.tenant_id=line.tenant_id AND item.store_id=line.store_id AND item.id=line.inventory_item_id
+    WHERE line.tenant_id=$1 AND line.store_id=$2 AND line.receipt_id=$3 ORDER BY line.inventory_item_id,line.id`,[tx.scope.tenantId,tx.scope.storeId,receiptId])).rows;
+  return {...receipt,receiptLines:lines};
+}
+
+function nativePublishVersion(preview:ReceiveAndPublishPreviewResult,receiptSnapshot:Awaited<ReturnType<typeof nativePublishReceiptSnapshot>>):string {
+  // Incoming quantity becomes zero after receive; all decision-critical
+  // projected balances, deductions, costs and prices must remain identical.
+  const projected={...preview,...receiptSnapshot,allowedChannels:[...preview.allowedChannels].sort(),
+    components:preview.components.map(({incomingQuantity:_incoming,...component})=>component)};
+  return createHash('sha256').update(JSON.stringify(projected)).digest('hex');
+}
+
+function assertNativeSetupFields(body:JsonObject,fields:readonly string[]) {
+  if(Object.keys(body).some(field=>!fields.includes(field)))throw new InventoryRequestError('原生物料请求包含不支持修改的字段');
+}
+
+async function lockNativeInventoryItem(tx:ScopedTransaction,itemId:string,expectedUpdatedAt:string) {
+  const row=(await tx.query(`SELECT id,updated_at::text AS version,status FROM mbox.inventory_items
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[tx.scope.tenantId,tx.scope.storeId,itemId])).rows[0];
+  if(!row||row.status!=='active'||row.version!==expectedUpdatedAt)
+    throw new InventoryConflictError('原物料资料已变化或停用，本次未保存；请重新读取后核对');
 }
 
 function readInventoryItem(body: JsonObject): CreateInventoryItemInput {

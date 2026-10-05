@@ -2,7 +2,7 @@
 
 ## 本批状态
 
-当前Android候选为 **0.4.0-rc.1（build 6）**，同包名升级；0.2.0/build2为最初实现更新功能的历史版本。本轮没有发布线上安装包或更新清单。开发构建渠道是 `preview`，正式构建渠道是 `stable`，正式分发确定前不伪造 App Store、TestFlight 链接或正式证书。
+当前Android候选为 **0.4.0-rc.3（build 8）**，使用固定正式证书，生产登录且禁用演练。0.2.0/build2与0.4.0-rc.1/build6是历史版本。开发构建渠道是 `preview`，正式构建渠道是 `stable`。2026-10-05只读检查线上两个清单均为404，正式包生成与线上启用分开留证，详见 `COMMERCIAL_READINESS_ANDROID_20261005.md`。
 
 - 启动／回到前台自动检查，每次运行最多每6小时一次；更多 → 版本与更新可立即手动检查。不要求员工登录，不携带员工会话。
 - 有新版本时顶部小条提示，不占用大面积桌台业务空间；显示版本、更新说明、系统要求。不存在已发布版本、404、网络失败不显示“已是最新版”。
@@ -17,9 +17,9 @@
 
 安装失败／取消保留当前程序和业务文件；下载失败可重试，未实现断点续传，重新下载会重新校验。进程重启不信任上次“已验证”的内存状态，重新下载／校验。调用系统安装器不等于安装成功，重新启动后的真实版本号才是依据。
 
-长期签名是连续更新的必要条件。已核实先前0.3.0内部预览APK使用Android Debug证书；本轮预览候选保持相同证书用于兼容验证，正式签名仍未提供。当前模拟器仍使用开发签名，**不能当作正式门店分发包**；发布工具拒绝调试签名。首个正式版本需要选定并安全备份签名密钥，后续不能随意更换包名／签名。暂不支持签名轮换；这比接受未经确认的新证书更保守。
+长期签名是连续更新的必要条件。历史build7安装包使用Android Debug证书；本轮build8正式证书的SHA256为 `05362998aab4266397f069cbcb37049176aa29eb7ab778cc7d55cfb5caa4ccc0`。私钥保存在Git外的受限本机配置目录，尚需持有人另做离线备份。**新正式包不能覆盖旧调试证书的包；不得为迁移而直接卸载有未决业务的旧包**。应先完成原请求核对、草稿和账户安排。此后同正式签名、递增构建号可以覆盖升级。暂不支持签名轮换。发布器同时拒绝调试证书、可调试APK、错误渠道和启用演练的正式包。
 
-正式构建可配置环境变量 `MBOX_ANDROID_KEYSTORE`、`MBOX_ANDROID_KEYSTORE_PASSWORD`、`MBOX_ANDROID_KEY_ALIAS`、`MBOX_ANDROID_KEY_PASSWORD`；源码不保存密码或密钥。可用 `-PnativeVersionCode=3 -PnativeVersionName=0.3.0` 指定新版本，运行 `assembleRelease`。签名未配置时产物不能通过发布检查。
+正式构建可配置环境变量 `MBOX_ANDROID_KEYSTORE`、`MBOX_ANDROID_KEYSTORE_PASSWORD`、`MBOX_ANDROID_KEY_ALIAS`、`MBOX_ANDROID_KEY_PASSWORD`；源码不保存密码或密钥。可用 `-PnativeVersionCode=8 -PnativeVersionName=0.4.0-rc.3` 指定本候选，运行 `assembleRelease`。签名未配置时构建直接失败。`scripts/package-android-release.py`从真实APK产生不可变文件名、清单与验证回执；不能把调试APK更名后当作正式包。
 
 本构建用于门店内部 APK 分发。若改用 Google Play，需单独改为 Play In-App Updates 并移除直接安装权限／入口，不把内部 APK 下载机制直接提交到 Play。
 
@@ -46,4 +46,4 @@
 
 ## 尚需验收
 
-线上HTTPS清单／正式签名／Apple分发渠道尚未启用；两端真机实际下载与安装、来源权限拒绝／取消、弱网／磁盘满、更新中杀进程、跨版本业务数据迁移尚未验收。Android本地合同验证不替代系统安装器验收。详见 `FEATURE_PARITY.md` 与商业风险 NATIVE-20260927-05。
+正式Android签名已建立；线上HTTPS清单和Apple分发渠道尚未启用；两端真机实际下载与安装、来源权限拒绝／取消、弱网／磁盘满、更新中杀进程、跨版本业务数据迁移尚未验收。Android本地合同验证不替代系统安装器验收。详见 `FEATURE_PARITY.md` 与商业风险 NATIVE-20260927-05。

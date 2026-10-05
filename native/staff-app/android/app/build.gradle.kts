@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id(
 android {
  namespace = "com.mbox.staff"
  compileSdk = 36
- defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("7").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.2").get() }
+ defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("8").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.3").get() }
  sourceSets.getByName("test").resources.srcDir("../../shared/fixtures")
  val releaseCredentials = listOf("MBOX_ANDROID_KEYSTORE", "MBOX_ANDROID_KEYSTORE_PASSWORD", "MBOX_ANDROID_KEY_ALIAS", "MBOX_ANDROID_KEY_PASSWORD").map { providers.environmentVariable(it).orNull }
  if (releaseCredentials.any { it != null }) {
@@ -17,11 +17,28 @@ android {
  }
  buildTypes.getByName("debug").buildConfigField("String", "UPDATE_CHANNEL", "\"preview\"")
  buildTypes.getByName("release").buildConfigField("String", "UPDATE_CHANNEL", "\"stable\"")
- defaultConfig { buildConfigField("boolean", "ALLOW_LOCAL_DEMO", "false") }
+ defaultConfig {
+  buildConfigField("boolean", "ALLOW_LOCAL_DEMO", "false")
+  manifestPlaceholders["allowLocalDemo"] = "false"
+ }
+ buildTypes.getByName("debug").manifestPlaceholders["updateChannel"] = "preview"
+ buildTypes.getByName("release").manifestPlaceholders["updateChannel"] = "stable"
  testOptions { unitTests.isIncludeAndroidResources = true }
  buildFeatures { compose = true; buildConfig = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 
+}
+val verifyStaffReleaseSigning = tasks.register("verifyStaffReleaseSigning") {
+ doLast {
+  val required = listOf("MBOX_ANDROID_KEYSTORE", "MBOX_ANDROID_KEYSTORE_PASSWORD", "MBOX_ANDROID_KEY_ALIAS", "MBOX_ANDROID_KEY_PASSWORD")
+  check(required.all { !providers.environmentVariable(it).orNull.isNullOrBlank() }) {
+   "正式打包需要完整的长期签名配置；不会生成可误发的未签名安装包。"
+  }
+  check(file(providers.environmentVariable("MBOX_ANDROID_KEYSTORE").get()).isFile) { "正式签名文件不存在" }
+ }
+}
+tasks.matching { it.name in setOf("validateSigningRelease", "packageRelease", "packageReleaseBundle") }.configureEach {
+ dependsOn(verifyStaffReleaseSigning)
 }
 dependencies {
  implementation("androidx.exifinterface:exifinterface:1.4.2")
@@ -37,7 +54,9 @@ dependencies {
  testImplementation("junit:junit:4.13.2")
  testImplementation("org.robolectric:robolectric:4.14.1")
  testImplementation("org.json:json:20260814")
+ testImplementation("androidx.compose.ui:ui-test-junit4")
  debugImplementation("androidx.compose.ui:ui-tooling")
+ debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

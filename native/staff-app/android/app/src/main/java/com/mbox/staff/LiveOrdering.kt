@@ -281,6 +281,7 @@ data class LiveOrderSubmission(
             val e = error as? StaffAPIError ?: return null
             return e.code.takeIf {
                 e.status in listOf(400, 409) &&
+                    (!it.startsWith("FULFILLMENT_CAPACITY_") || e.status == 409) &&
                     it in
                         setOf(
                             "ORDER_ITEMS_INVALID",
@@ -294,6 +295,12 @@ data class LiveOrderSubmission(
                             "GIFT_REASON_REQUIRED",
                             "SETTLEMENT_MODE_INVALID",
                             "BUNDLE_SELECTION_INVALID",
+                            // Capacity reservation fails inside the order transaction.
+                            // Only a direct initial rejection may return to the retained draft;
+                            // recovery after an unknown response must keep the original key.
+                            "FULFILLMENT_CAPACITY_EXCEEDED",
+                            "FULFILLMENT_CAPACITY_CONFIGURATION_INCOMPLETE",
+                            "FULFILLMENT_CAPACITY_STATE_CONFLICT",
                         )
             }
         }

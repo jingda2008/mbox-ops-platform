@@ -62,6 +62,7 @@ export interface StaffAuthView {
   employee: { id: string; code: string; displayName: string; roleCodes: string[] }
   permissions: string[]
   deniedPermissions: string[]
+  navigation?: StaffBootstrapView['navigation']
 }
 
 export class NormalizedApiClient {

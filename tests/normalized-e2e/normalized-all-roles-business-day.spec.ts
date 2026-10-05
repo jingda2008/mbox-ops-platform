@@ -572,11 +572,16 @@ test('盘点复核让有权限同事通过或退回，提交人能查结果，�
   await expect(mine).toContainText(first.publicId)
   await expect(mine.getByRole('button',{name:'审核通过',exact:true})).toHaveCount(0)
   await reviewer.page.setViewportSize({width:375,height:812})
-  await reviewer.page.route('**/api/inventory/stock-counts?**',route=>route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}}),{times:1})
+  // Keep the outage active until the explicit manual-retry phase, including background reads.
+  let reviewUnavailable = true
+  await reviewer.page.route('**/api/inventory/stock-counts?**',route=>reviewUnavailable
+    ? route.fulfill({status:503,json:{error:{code:'unavailable',message:'盘点服务暂时不可用'}}})
+    : route.continue())
   await reviewer.page.goto('/staff/inventory')
   const reviews=reviewer.page.getByRole('region',{name:'盘点复核'})
   await expect(reviews.getByRole('alert')).toContainText('读取失败，请刷新重试')
   await expect(reviews.getByText('当前没有待复核盘点',{exact:true})).toHaveCount(0)
+  reviewUnavailable = false
   await reviews.getByRole('button',{name:'刷新盘点',exact:true}).click()
   const row=reviews.getByRole('article',{name:`盘点 ${first.publicId}`,exact:true})
   await expect(row).toContainText('实盘 500 毫升')

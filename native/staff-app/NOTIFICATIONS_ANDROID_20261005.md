@@ -61,7 +61,7 @@ Android厂商或聚合推送平台尚未选定并接入，未提供可验证的�
 - 已消费 deliveryId 在当前绑定内安全去重（最多256条，达到容量拒绝新自动打开并保留用户提示）；原始关闭不等于消费。OPEN 安全记录兼容 v1，v2 额外保存跨来源抑制标记，跟本地 pending/consumed 同次原子写；推送库取消失败也不让旧 A 在重启后压过已打开的本地 B。标记只能抑制旧导航，不能授予权限。
 - StaffAPI 增加显式 PUT，并保留默认 GET/POST 和认证头；APIRequest 诊断输出脱敏。客户端只有显式安装合约适配器才允许注册，生产没有该适配器；既有 Android 能力读取仍严格要求 provider=null、configured=false。
 
-验证结果：本地全量 Android 单元/Robolectric **544/544 通过（98个测试类，较本分支基线新增86项）**；原请求/回调/实际AppModel采用 StaffAPI 注入传输，未向生产写入测试令牌或业务。更新发布保护16项、商业化清单及历史完整性校验通过。`lintDebug`（0错误、10警告、13提示）与 `assembleDebug` 通过，最终结果见 `outputs/android-push-lifecycle-20261005/full-final2.log`，PR CI以最终head另证；不据此宣称正式发布或实体送达。
+验证结果：本地全量 Android 单元/Robolectric **544/544 通过（98个测试类，较本分支基线新增86项）**；原请求/回调/实际AppModel采用 StaffAPI 注入传输，未向生产写入测试令牌或业务。更新发布保护16项、商业化清单及历史完整性校验通过。`lintDebug`（0错误、12警告、13提示）与 `assembleDebug` 通过，最终结果见 `outputs/android-push-lifecycle-20261005/full-final2.log`，PR CI以最终head另证；不据此宣称正式发布或实体送达。
 
 ### 仍开放的软件与验收
 

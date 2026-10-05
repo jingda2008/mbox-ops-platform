@@ -794,7 +794,7 @@
 }
 
 .normalized-mobile-nav button {
-  color: #6f776f;
+  color: var(--mbox-ink-soft, #5f675f);
 }
 
 .normalized-mobile-nav button.is-active {

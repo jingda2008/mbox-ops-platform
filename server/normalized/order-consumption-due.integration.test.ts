@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 import {Client,Pool} from 'pg'
+import {dropDisconnectedLocalFixtureDatabase} from '../../scripts/test-support/postgres-fixture-cleanup.js'
 import Fastify from 'fastify'
 import {afterAll,beforeAll,describe,expect,it} from 'vitest'
 import {runNormalizedMigrations,loadNormalizedMigrations,unwrapNormalizedMigrationTransaction} from '../migrate-normalized.js'
@@ -89,8 +90,11 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await runNormalizedMigrations(targetUrl)
   },60000)
   afterAll(async()=>{
-    await runtimePool?.end();await pool?.end()
-    if(admin){await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);await admin.end()}
+    try {
+      const ended=await Promise.allSettled([runtimePool?.end(),pool?.end()])
+      for(const result of ended)if(result.status==='rejected')throw result.reason
+      if(admin)await dropDisconnectedLocalFixtureDatabase(admin,database)
+    } finally {await admin?.end()}
   })
   const metadata=(employeeId=cashier)=>({scope,actor:{type:'employee' as const,employeeId},businessDate:date,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
   async function fixture(bundle=false,capturedMinor=4000,existingSession?:string){

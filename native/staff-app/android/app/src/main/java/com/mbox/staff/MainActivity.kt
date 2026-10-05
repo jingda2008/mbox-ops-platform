@@ -1,6 +1,7 @@
 package com.mbox.staff
 
 import android.Manifest
+import android.content.Intent
 import android.os.Bundle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -43,10 +44,13 @@ class MainActivity : ComponentActivity() {
         model.foreground = true
         ServiceReminders.foreground = true
         ServiceReminders.clearNotice(this)
+        model.resumeNotificationOpen()
+        model.resumeNativePushRecovery()
     }
 
     override fun onStop() {
         model.foreground = false
+        model.suspendNotificationOpen()
         ServiceReminders.foreground = false
         super.onStop()
     }
@@ -54,6 +58,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[AppModel::class.java]
+        receiveNotificationIntent(intent)
         setContent {
             MaterialTheme(
                 colorScheme =
@@ -82,6 +87,26 @@ class MainActivity : ComponentActivity() {
                 StaffApp(model)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        receiveNotificationIntent(intent)
+    }
+
+    private fun receiveNotificationIntent(incoming: Intent?) {
+        val consumed = when (val result = NotificationIntents.parse(incoming)) {
+            is NotificationIntentResult.Target -> model.receiveNotificationTarget(result.target)
+            NotificationIntentResult.Invalid -> {
+                model.dismissNotificationOpen()
+                model.message = "提醒内容无法验证，请从服务工作台查看当前任务"
+                true
+            }
+            NotificationIntentResult.Ignored -> false
+        }
+        // Only discard the launch reference after durable storage or an explicit rejection.
+        if (consumed) setIntent(Intent(this, MainActivity::class.java))
     }
 }
 
@@ -203,6 +228,11 @@ fun StaffApp(m: AppModel) {
         confirm = null
         serviceTarget = null
     }
+        LaunchedEffect(m.notificationOpenTarget, m.foreground, m.businessRequestInFlight) {
+        if (m.notificationOpenTarget != null && m.foreground) {
+            m.consumeNotificationNavigation { serviceTarget = it }
+        }
+    }
     if (m.live && m.identity == null) {
         StaffLoginScreen(m)
         StaffMessage(m)
@@ -251,6 +281,16 @@ fun StaffApp(m: AppModel) {
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().background(Paper)) {
+            if (m.notificationOpenStatus.isNotBlank()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 17.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(m.notificationOpenStatus, Modifier.weight(1f), fontSize = 12.sp)
+                    if (m.hasPendingNotification) TextButton(
+                        onClick = { m.resumeNotificationOpen() }, enabled = !m.busy,
+                    ) { Text("重新核对") }
+                    TextButton(onClick = { m.dismissNotificationOpen() }, enabled = !m.busy) { Text("关闭") }
+                }
+            }
             if (m.live)
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 17.dp),

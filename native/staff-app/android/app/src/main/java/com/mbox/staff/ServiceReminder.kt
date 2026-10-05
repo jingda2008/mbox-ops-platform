@@ -9,7 +9,14 @@ class ReadOnlySessionSnapshot(private val value: String) : StaffSessionStore {
     override fun write(value: String) {}
     override fun remove() {}
 }
-data class ReminderSnapshot(val employee: String, val session: String, val count: Int, val fingerprint: String)
+data class ReminderSnapshot(
+    val employee: String,
+    val session: String,
+    val count: Int,
+    val fingerprint: String,
+    val firstTaskId: String? = null,
+    val firstTableSessionId: String? = null,
+)
 fun readServiceReminder(api: StaffAPI, employee: String, session: String): ReminderSnapshot {
     val actor=api.restoreSession() ?: error("没有保存的员工登录")
     require(actor.employeeId==employee && actor.sessionId==session) { "原员工登录已变化" }
@@ -19,7 +26,11 @@ fun readServiceReminder(api: StaffAPI, employee: String, session: String): Remin
     val tasks=data.getJSONArray("tasks").objects().filter { it.getString("status") in listOf("pending","acknowledged","in_progress") }
     val ids=tasks.map { it.getString("id")+":"+it.getString("tableSessionId")+":"+it.getString("priority") }.distinct().sorted()
     val digest=MessageDigest.getInstance("SHA-256").digest(ids.joinToString("\n").toByteArray()).joinToString(""){"%02x".format(it)}
-    return ReminderSnapshot(employee,session,ids.size,digest)
+    // The server already returns authorized tasks in priority order. Keep the original
+    // task and table session; a tap must never resolve a reused table number instead.
+    val first = tasks.firstOrNull()
+    return ReminderSnapshot(employee, session, ids.size, digest,
+        first?.getString("id"), first?.getString("tableSessionId"))
 }
 fun reminderSessionMatches(value: String?, employee: String, session: String): Boolean = runCatching {
     val original=JSONObject(value ?: return false).getJSONObject("identity").getJSONObject("session")

@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id(
 android {
  namespace = "com.mbox.staff"
  compileSdk = 36
- defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("8").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.3").get() }
+ defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("9").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.4").get() }
  sourceSets.getByName("test").resources.srcDir("../../shared/fixtures")
  val releaseCredentials = listOf("MBOX_ANDROID_KEYSTORE", "MBOX_ANDROID_KEYSTORE_PASSWORD", "MBOX_ANDROID_KEY_ALIAS", "MBOX_ANDROID_KEY_PASSWORD").map { providers.environmentVariable(it).orNull }
  if (releaseCredentials.any { it != null }) {

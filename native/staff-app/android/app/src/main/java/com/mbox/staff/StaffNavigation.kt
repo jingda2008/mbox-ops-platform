@@ -5,6 +5,8 @@ fun StaffIdentity.hasRoute(route: String): Boolean = navigationRoutes?.contains(
 
 fun StaffIdentity.canReadService()=listOf("service.view","service.execute","service.manage","complaint.handle").any(::allows)
 
+fun StaffIdentity.canOpenServiceTasks() = canReadService() && hasRoute("/staff/tasks")
+
 fun staffTabs(actor: StaffIdentity?): List<Int> {
     if (actor == null) return listOf(3)
     val choices = buildList {
@@ -13,7 +15,7 @@ fun staffTabs(actor: StaffIdentity?): List<Int> {
         if (LiveCashier.permissions.any(actor::allows) && actor.hasRoute("/staff/payments")) add(2)
         if (actor.allows("kds.prepare") && actor.hasRoute("/staff/fulfillment")) add(4)
         if (actor.allows("kds.deliver") && actor.hasRoute("/staff/fulfillment")) add(5)
-        if (actor.canReadService() && actor.hasRoute("/staff/tasks")) add(6)
+        if (actor.canOpenServiceTasks()) add(6)
     }
     return choices.take(3) + 3
 }

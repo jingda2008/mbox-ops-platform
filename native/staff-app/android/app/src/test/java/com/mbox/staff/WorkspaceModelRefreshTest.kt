@@ -201,4 +201,106 @@ class WorkspaceModelRefreshTest {
             assertNotNull(model.kitchenBoard)
         }
     }
+
+    @Test fun closedServiceRoutePreventsManualAndAutomaticReadsDespiteRetainedPermissions() {
+        auth.put("navigation", JSONArray())
+        setState("Identity", actor.copy(navigationRoutes = emptyList()))
+        assertTrue(model.identity!!.allows("service.execute"))
+        assertTrue(model.identity!!.allows("service.manage"))
+        val before = requests.get()
+        model.loadService()
+        awaitIdle()
+        model.loadService(automatic = true)
+        awaitIdle()
+        assertEquals("A closed service entry must not begin even a heartbeat/read chain", before, requests.get())
+        assertNull(model.serviceBoard)
+        assertFalse(model.canUseService)
+        assertNull(model.livePending)
+    }
+
+    @Test fun preparedRealServiceCommandCannotExecuteAfterOnlyItsNavigationRouteIsWithdrawn() {
+        auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+        setState("Identity", actor.copy(navigationRoutes = listOf("/staff/tasks")))
+        model.loadService()
+        awaitIdle()
+        assertTrue(model.canUseService)
+        val prepared = model.prepareService("task-1", "complete", "已核对并处理客人反馈", "", "normal")
+        assertTrue(model.canExecuteLive(prepared))
+        assertNotNull(prepared.steps.single().serviceProof)
+        val current = model.identity!!
+        val before = requests.get()
+        auth.put("navigation", JSONArray())
+        setState("Identity", current.copy(navigationRoutes = emptyList()))
+        assertEquals(current.employeeId, model.identity!!.employeeId)
+        assertEquals(current.sessionId, model.identity!!.sessionId)
+        assertEquals(current.permissions, model.identity!!.permissions)
+        assertEquals(current.denied, model.identity!!.denied)
+        assertFalse(model.canUseService)
+        assertThrows(IllegalStateException::class.java) {
+            model.prepareService("task-1", "complete", "已核对并处理客人反馈", "", "normal")
+        }
+        assertFalse(model.canExecuteLive(prepared))
+        model.executeLive(prepared)
+        awaitIdle()
+        assertEquals("The previously prepared command must not start a request under the narrowed route", before, requests.get())
+        assertNull(model.livePending)
+    }
+
+    @Test fun heartbeatRouteWithdrawalPreservesOriginalServiceRequestUntilSameKeyRecovery() {
+        val openNavigation = JSONArray().put(JSONObject().put("route", "/staff/tasks"))
+        auth.put("navigation", openNavigation)
+        setState("Identity", actor.copy(navigationRoutes = listOf("/staff/tasks")))
+        model.loadService()
+        awaitIdle()
+        val prepared = model.prepareService("task-1", "complete", "已核对并处理客人反馈", "", "normal")
+        val originalStep = prepared.steps.single()
+        assertTrue(model.canExecuteLive(prepared))
+
+        val writes = mutableListOf<APIRequest>()
+        val originalReply = reply
+        reply = { request ->
+            when {
+                request.path == originalStep.path -> {
+                    writes += request
+                    val completed = JSONObject(fixture("live-service.json").getJSONObject("board")
+                        .getJSONArray("tasks").getJSONObject(0).toString()).put("status", "completed")
+                    APIResponse(200, JSONObject().put("data", completed)
+                        .put("meta", JSONObject().put("replayed", false)).toString())
+                }
+                request.path == "/api/native-service-center" && writes.isNotEmpty() ->
+                    response(fixture("live-service.json").getJSONObject("board").put("tasks", JSONArray()))
+                else -> originalReply(request)
+            }
+        }
+
+        // Only the next server heartbeat changes. The locally prepared command still passes
+        // executeLive's initial guard, so this exercises the final check before a business write.
+        auth.put("navigation", JSONArray())
+        assertTrue(model.canExecuteLive(prepared))
+        val before = requests.get()
+        model.executeLive(prepared)
+        awaitIdle()
+        assertTrue("Execution must have reached the server heartbeat", requests.get() > before)
+        assertTrue(model.identity!!.navigationRoutes!!.isEmpty())
+        assertTrue(model.identity!!.allows(prepared.permission))
+        assertTrue("A route withdrawn by heartbeat must prevent the business POST", writes.isEmpty())
+        val retained = model.livePending!!
+        assertEquals(prepared.id, retained.id)
+        assertEquals(prepared.employeeID, retained.employeeID)
+        assertEquals(0, retained.completedSteps)
+        assertFalse(retained.rejected)
+        assertEquals(originalStep, retained.steps.single())
+
+        // Restore only the server route and recover the durable request, without preparing a
+        // replacement command or changing the local identity to bypass the recovery heartbeat.
+        auth.put("navigation", openNavigation)
+        model.recoverLive()
+        awaitIdle()
+        val sent = writes.single()
+        assertEquals("POST", sent.method)
+        assertEquals(originalStep.path, sent.path)
+        assertEquals(originalStep.key, sent.headers[originalStep.keyHeader])
+        assertEquals(originalStep.body, sent.body!!.toString())
+        assertNull("A verified original receipt should finish the saved request", model.livePending)
+    }
 }

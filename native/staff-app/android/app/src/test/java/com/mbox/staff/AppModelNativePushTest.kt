@@ -166,6 +166,147 @@ class AppModelNativePushTest {
     }
     private fun idle(model: AppModel) = await("Native push recovery did not finish") { !model.businessRequestInFlight }
 
+    @Test fun explicitClosedTaskRoutePreservesRemoteClickUntilSameSessionRouteReturns() {
+        for (restoredRoute in listOf("explicit", "legacy-omitted")) {
+            val f = Seed(opened = false)
+            f.wire.auth.put("navigation", JSONArray())
+            val m = f.model()
+            assertTrue(m.identity!!.allows("service.view"))
+            assertEquals(emptyList<String>(), m.identity!!.navigationRoutes)
+            assertEquals(NativePushCallbackOutcome.STAGED, m.receiveNativePushPayload(f.context, payload(), opened = true))
+            idle(m)
+            val original = f.saved().pendingRemoteOpen!!
+            assertEquals(0, f.wire.targetReads())
+            assertEquals(0, f.wire.taskReads())
+            assertNull(m.notificationOpenTarget)
+            var opened = 0
+            m.consumeNotificationNavigation { opened++ }
+            assertEquals(0, opened)
+            assertEquals(original, f.saved().pendingRemoteOpen)
+            assertEquals(f.context.generation, f.saved().generation)
+
+            if (restoredRoute == "explicit") f.wire.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+            else f.wire.auth.remove("navigation")
+            identity(m, f.wire.api.heartbeat())
+            assertEquals(owner.employeeId, m.identity!!.employeeId)
+            assertEquals(owner.staffSessionId, m.identity!!.sessionId)
+            m.resumeNativePushOpen()
+            idle(m)
+            assertEquals(1, f.wire.targetReads())
+            assertEquals(1, f.wire.taskReads())
+            assertEquals(task, m.notificationOpenTarget?.id)
+            assertEquals(original, f.saved().pendingRemoteOpen)
+            m.consumeNotificationNavigation { opened++ }
+            idle(m)
+            assertEquals(1, opened)
+            assertNull(f.saved().pendingRemoteOpen)
+            m.viewModelScope.cancel()
+        }
+    }
+
+    @Test fun heartbeatRemovingTaskRouteStopsRemoteTargetAndTaskReadsWithoutConsumingPending() {
+        val f = Seed()
+        f.wire.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+        val m = f.model()
+        val original = f.saved().pendingRemoteOpen!!
+        f.wire.auth.put("navigation", JSONArray())
+        m.resumeNativePushOpen()
+        idle(m)
+        assertEquals(emptyList<String>(), m.identity!!.navigationRoutes)
+        assertTrue(m.identity!!.allows("service.view"))
+        assertEquals(0, f.wire.targetReads())
+        assertEquals(0, f.wire.taskReads())
+        assertNull(m.notificationOpenTarget)
+        assertEquals(original, f.saved().pendingRemoteOpen)
+        assertEquals(f.context.generation, f.saved().generation)
+        var opened = false
+        m.consumeNotificationNavigation { opened = true }
+        assertFalse(opened)
+        assertEquals(original, f.saved().pendingRemoteOpen)
+    }
+
+    @Test fun remoteUiClaimCannotOpenAfterTaskRouteClosesAndMustReadAgainWhenRestored() {
+        val f = Seed()
+        val m = f.model()
+        assertNull(m.identity!!.navigationRoutes) // Permission-only legacy auth remains compatible.
+        val original = f.saved().pendingRemoteOpen!!
+        m.resumeNativePushOpen()
+        idle(m)
+        assertNotNull(m.notificationOpenTarget)
+        val actor = m.identity!!
+        identity(m, actor.copy(navigationRoutes = emptyList()))
+        var opened = 0
+        m.consumeNotificationNavigation { opened++ }
+        idle(m)
+        assertEquals(0, opened)
+        assertEquals(original, f.saved().pendingRemoteOpen)
+        assertEquals(f.context.generation, f.saved().generation)
+        val targets = f.wire.targetReads()
+        val tasks = f.wire.taskReads()
+        identity(m, actor)
+        m.resumeNativePushOpen()
+        idle(m)
+        assertEquals(targets + 1, f.wire.targetReads())
+        assertEquals(tasks + 1, f.wire.taskReads())
+        m.consumeNotificationNavigation { opened++ }
+        idle(m)
+        assertEquals(1, opened)
+        assertNull(f.saved().pendingRemoteOpen)
+    }
+
+    @Test fun taskRouteClosingDuringRemoteTargetOrBoardReadKeepsBindingAndRequiresFreshResolution() {
+        for (phase in listOf("target", "board")) {
+            val f = Seed()
+            f.wire.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+            val m = f.model()
+            val original = f.saved().pendingRemoteOpen!!
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            if (phase == "target") f.wire.target = { request ->
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                response(f.wire.targetData(request.path.split('/')[5]))
+            } else f.wire.service = {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                response(board())
+            }
+            try {
+                m.resumeNativePushOpen()
+                await("Remote $phase read was not entered") { entered.count == 0L }
+                f.wire.auth.put("navigation", JSONArray())
+                identity(m, m.identity!!.copy(navigationRoutes = emptyList()))
+                release.countDown()
+                idle(m)
+                assertNull(phase, m.notificationOpenTarget)
+                assertNull(phase, m.serviceBoard)
+                assertEquals(phase, original, f.saved().pendingRemoteOpen)
+                assertEquals(phase, f.installation.binding, f.saved().currentBinding)
+                assertEquals(phase, f.context.generation, f.saved().generation)
+                assertEquals(phase, 1, f.wire.targetReads())
+                assertEquals(phase, if (phase == "target") 0 else 1, f.wire.taskReads())
+                var opened = 0
+                m.consumeNotificationNavigation { opened++ }
+                assertEquals(phase, 0, opened)
+                val targets = f.wire.targetReads()
+                val tasks = f.wire.taskReads()
+
+                f.wire.auth.put("navigation", JSONArray().put(JSONObject().put("route", "/staff/tasks")))
+                identity(m, f.wire.api.heartbeat())
+                m.resumeNativePushOpen()
+                idle(m)
+                assertEquals(phase, targets + 1, f.wire.targetReads())
+                assertEquals(phase, tasks + 1, f.wire.taskReads())
+                assertEquals(phase, task, m.notificationOpenTarget?.id)
+                assertEquals(phase, original, f.saved().pendingRemoteOpen)
+                m.consumeNotificationNavigation { opened++ }
+                idle(m)
+                assertEquals(phase, 1, opened)
+                assertNull(phase, f.saved().pendingRemoteOpen)
+            } finally { release.countDown(); m.viewModelScope.cancel() }
+        }
+    }
+
     @Test fun coldPendingOpenWaitsForOriginalLoginThenRevalidatesDeliveryAndTaskBeforeUiAck() {
         val f = Seed()
         val original = f.saved().pendingRemoteOpen!!

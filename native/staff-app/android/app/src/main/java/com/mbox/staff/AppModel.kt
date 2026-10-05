@@ -58,6 +58,16 @@ class AppModel @JvmOverloads constructor(
         nextPushOpenAttempt = now + minOf(maxOf(60L, seconds), (Long.MAX_VALUE - now) / 1000) * 1000
     }
 
+    /** A hidden entry is not a rejected notification: keep its original durable reference. */
+    private fun notificationServiceEntryUnavailable(): Boolean {
+        val actor = identity ?: return false
+        if (actor.canOpenServiceTasks()) return false
+        nativePushNavigation = null
+        notificationOpenTarget = null
+        notificationOpenStatus = "当前岗位未开放服务任务入口，原提醒已保留；入口恢复后可重新核对"
+        return true
+    }
+
     /** SDK adapters pass their original locally captured context, never payload-supplied identity. */
     fun receiveNativePushPayload(context: NativePushCallbackContext, mbox: JSONObject,
         opened: Boolean): NativePushCallbackOutcome {
@@ -118,9 +128,11 @@ class AppModel @JvmOverloads constructor(
             runCatching { pushLifecycle.blockRemoteOpen(pending.open.owner, pending.open.binding, pending.generation) }
             return
         }
+        if (notificationServiceEntryUnavailable()) return
         val original = workspaceReadIdentity()
         val intentVersion = notificationIntentVersion
         val foregroundVersion = notificationForegroundVersion
+        val routeVersion = serviceRouteVersion
         busy = true
         viewModelScope.launch {
             try {
@@ -128,10 +140,15 @@ class AppModel @JvmOverloads constructor(
                     withContext(Dispatchers.IO) { api.heartbeat() }
                 }
                 if (!foreground || foregroundVersion != notificationForegroundVersion || intentVersion != notificationIntentVersion) return@launch
+                if (notificationServiceEntryUnavailable() || routeVersion != serviceRouteVersion) return@launch
                 val actor = notificationIdentity()?.takeIf { it.canReadTasks } ?: return@launch
                 val owner = NativePushOwner(actor.employeeId, actor.staffSessionId)
-                val result = withContext(Dispatchers.IO) { pushDeliveryRecovery.resolvePendingOpen { owner } }
+                val result = withContext(Dispatchers.IO) { pushDeliveryRecovery.resolvePendingOpen {
+                    owner.takeIf { routeVersion == serviceRouteVersion && identity?.canOpenServiceTasks() == true &&
+                        notificationIdentity() == actor && intentVersion == notificationIntentVersion }
+                } }
                 if (!foreground || foregroundVersion != notificationForegroundVersion || intentVersion != notificationIntentVersion) return@launch
+                if (notificationServiceEntryUnavailable() || routeVersion != serviceRouteVersion) return@launch
                 val verified = result.verified
                 if (verified == null) {
                     if (result.outcome == NativePushOpenOutcome.RATE_LIMITED) deferPushOpen(result.retryAfterSeconds ?: 900L)
@@ -150,6 +167,7 @@ class AppModel @JvmOverloads constructor(
                 }
                 if (!foreground || foregroundVersion != notificationForegroundVersion || intentVersion != notificationIntentVersion ||
                     notificationIdentity() != actor || !pushLifecycle.isCurrentOpen(verified.open, verified.generation)) return@launch
+                if (notificationServiceEntryUnavailable() || routeVersion != serviceRouteVersion) return@launch
                 require(board.employee == actor.employeeId) { "服务任务员工身份不一致" }
                 val task = board.tasks.singleOrNull { it.id == verified.target.taskId && it.session == verified.target.tableSessionId }
                 if (task == null || task.status !in setOf("pending", "acknowledged", "in_progress")) {
@@ -383,6 +401,7 @@ class AppModel @JvmOverloads constructor(
             if (retry.decision == NotificationTaskDecision.Idle) return
             saveNotificationTransition(retry)
             if (retry.decision !is NotificationTaskDecision.RefreshRequired) return
+            if (notificationServiceEntryUnavailable()) return
         } catch (_: Exception) {
             notificationOpenStatus = "提醒安全记录暂不可读取，原记录已保留，请解锁后重试"
             return
@@ -391,12 +410,14 @@ class AppModel @JvmOverloads constructor(
         val original = workspaceReadIdentity()
         val intendedVersion = notificationIntentVersion
         val foregroundVersion = notificationForegroundVersion
+        val routeVersion = serviceRouteVersion
         viewModelScope.launch {
             try {
                 identity = readCurrentWorkspace(original, { workspaceReadIdentity() }) {
                     withContext(Dispatchers.IO) { api.heartbeat() }
                 }
                 if (!foreground || foregroundVersion != notificationForegroundVersion || intendedVersion != notificationIntentVersion) return@launch
+                if (notificationServiceEntryUnavailable() || routeVersion != serviceRouteVersion) return@launch
                 // A heartbeat may remove access. Recheck before reading and before focus.
                 val retry = notificationState().retry(notificationIdentity(), java.time.Instant.now())
                 saveNotificationTransition(retry)
@@ -413,6 +434,7 @@ class AppModel @JvmOverloads constructor(
                     saveNotificationTransition(notificationState().defer(notificationIdentity(), finished))
                     return@launch
                 }
+                if (notificationServiceEntryUnavailable() || routeVersion != serviceRouteVersion) return@launch
                 val snapshot = AuthorizedNotificationTaskSnapshot(reader, started, finished,
                     board.tasks.map { NotificationTaskFact(it.id, it.session, it.status, true) }, complete = true)
                 val resolved = notificationState().resolve(notificationIdentity(), snapshot, finished)
@@ -455,6 +477,7 @@ class AppModel @JvmOverloads constructor(
     fun consumeNotificationNavigation(open: (ServiceAttention.Entry) -> Unit) {
         if (!foreground || busy || heartbeatBusy) return
         val target = notificationOpenTarget ?: return
+        if (notificationServiceEntryUnavailable()) return
         nativePushNavigation?.let { claim ->
             try {
                 val age = java.time.Duration.between(claim.checkedAt, java.time.Instant.now())
@@ -524,6 +547,7 @@ class AppModel @JvmOverloads constructor(
         private set
 
     private var receptionAuthorityEpoch = 0L
+    private var serviceRouteVersion = 0L
     private fun receptionAuthority(actor: StaffIdentity?) = actor?.let {
         listOf(it.employeeId, it.sessionId, it.permissions.sorted(), it.denied.sorted(), it.roles.sorted(), it.navigationRoutes?.sorted())
     }
@@ -532,7 +556,17 @@ class AppModel @JvmOverloads constructor(
         get() = currentIdentity
         private set(value) {
             val changed = receptionAuthority(currentIdentity) != receptionAuthority(value)
+            val serviceEntryChanged = currentIdentity?.canOpenServiceTasks() != value?.canOpenServiceTasks()
             currentIdentity = value
+            if (serviceEntryChanged) {
+                serviceRouteVersion++
+                // Reopening the route must earn a fresh read, including an allow/deny/allow race.
+                nativePushNavigation = null
+                notificationOpenTarget = null
+                serviceUpdated = null
+                if (value != null && !value.canOpenServiceTasks() && hasPendingNotification)
+                    notificationServiceEntryUnavailable()
+            }
             if (changed) {
                 receptionAuthorityEpoch++
                 invalidateReceptionRead()
@@ -1447,6 +1481,7 @@ class AppModel @JvmOverloads constructor(
                 liveOrderPending == null &&
                 serviceBoard?.enabled == true &&
                 serviceBoard?.employee == identity?.employeeId &&
+                identity?.canOpenServiceTasks() == true &&
                 identity?.allows("service.execute") == true &&
                 serviceUpdated?.let {
                     java.time.Duration.between(it, java.time.Instant.now()).seconds in 0..59
@@ -3115,6 +3150,8 @@ class AppModel @JvmOverloads constructor(
                         identity?.allows(current.permission) != true && !current.isStaffPermissionReceiptRecovery()
                 )
                     throw StaffAPIError(403, "ACCESS_REVOKED", "操作权限已撤销，请联系管理员核对原请求")
+                if (current.completedSteps < current.steps.size && current.steps.any { it.serviceProof != null })
+                    require(identity?.canOpenServiceTasks() == true) { "服务任务入口已关闭，原请求已保留；入口恢复后可重新核对" }
                 if (current.completedSteps < current.steps.size &&
                     current.steps.any { it.inventoryPublishProof != null } &&
                     !inventoryPublishPermissions.all { identity?.allows(it) == true })
@@ -3752,6 +3789,11 @@ class AppModel @JvmOverloads constructor(
 
     fun loadService(automatic: Boolean = false) {
         if (!live || busy || heartbeatBusy) return
+        if (identity?.canOpenServiceTasks() != true) {
+            serviceUpdated = null
+            serviceState = "当前岗位未开放服务任务入口"
+            return
+        }
         busy = true
         val original = workspaceReadIdentity()
         if (serviceBoard == null) serviceState = "正在读取服务任务"
@@ -3777,12 +3819,16 @@ class AppModel @JvmOverloads constructor(
 
     private suspend fun fetchService() {
         val actor = identity ?: error("请重新登录")
-        require(actor.canReadService()) { "当前岗位没有服务任务查看权限" }
+        require(actor.canOpenServiceTasks()) { "当前岗位未开放服务任务入口" }
+        val routeVersion = serviceRouteVersion
         val expected = workspaceReadIdentity()
         val board =
             readCurrentWorkspace(expected, { workspaceReadIdentity() }) {
                 withContext(Dispatchers.IO) { LiveServiceBoard(api.data("/api/native-service-center")) }
             }
+        require(identity?.canOpenServiceTasks() == true && routeVersion == serviceRouteVersion) {
+            "服务任务入口已变化，请重新读取"
+        }
         require(
             board.employee == actor.employeeId &&
                 board.tasks.map { it.id }.distinct().size == board.tasks.size &&

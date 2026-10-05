@@ -16,6 +16,8 @@
 
 当前生产仍rc247/schema261与Android build9；统一rc248候选等待准确提交CI、标签Release、标准部署和build10公网回读。小程序当前版本平台交付、Android厂商SDK/服务商选择、真机送达及门店验收仍分别开放；iOS按直接用户指令排除，不再作为交付阻断。[最终PG结果](../../outputs/system-audit-20261005/release-rc248-root-full-postgres-final-result.json)、[Web文字放大报告](../../outputs/system-audit-20261005/web-text-200-audit/report.md)。
 
+PR343首轮CI补记（2026-10-05 22:01 CST）：正式数据库3157通过、0失败、0跳过，HTTP验收及质量/性能通过；浏览器唯一失败为旧测试要求按钮nowrap，与200%文字可换行修复冲突。保留失败记录，改为实际标签完整、触控、不重叠和无横溢验证；320/390×100%/200%、经理/收银权限与Axe定向2/2通过、0重试、无退款POST，等待修订head的全CI。
+
 ## 单笔付款回调/查单锁顺序（AUDIT-20261005-21，P2）
 
 独立隔离PostgreSQL受限LOGIN与真实PaymentRepository复现：单笔分支先持订单锁再取桌次锁，与退款/关桌使用的桌次→订单前缀相反；callback和query两场景均形成真实反向等待并出现40P01死锁回滚。受害事务在此次探针中为并发方，不能说每次一定是回调失败，更不能据此声称重复扣款。

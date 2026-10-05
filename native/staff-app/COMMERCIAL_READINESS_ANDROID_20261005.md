@@ -1,10 +1,10 @@
 # Android 员工 App 商用检查与交付
 
-更新时间：2026-10-05 11:11 CST。代码基于当前已合并主线 `5372ecb3`，隔离工作树 `mbox-android-commercial-20261005`。本轮目标为日常营业可交付候选；界面存在、自动测试、正式签名和现场验收分别记录。
+更新时间：2026-10-05 13:04 CST。Android PR #326与系统PR #327已合并，后端固定提交`6e4a76a2359413f6d7e78eb1c7a37e923087f523`、标签`v1.0.0-rc.246`、schema260于12:35:48 CST标准部署成功，四个workflow全部成功。正式build8已于12:41发布stable并经独立HTTPS读回；实体手机安装和现场验收仍开放。身份、镜像／文件摘要和回执见[rc.246发布记录](../../docs/release-1.0.0-rc.246.md)。原Android隔离开发基线`5372ecb3`保留为历史来源；后续PR #328小程序／CI补修已于12:56:56合并至91f84ff59df0fff9007991d639edaad5c296828b，PR CI首次成功；只在后续主线，不在冻结6e4标签，不改写本次后端和Android交付身份。
 
 ## 范围
 
-保留现有桌台、完整菜单与加菜、原请求下单恢复、收款/退款、按份售后、出品与取送、服务任务、会员与预约、团购、存酒、库存收货/盘点/报损、打印、经营查询及岗位配置。用户确认多品牌安卓设备，未限定型号。**供应商采购退货不包含在本轮**，没有用报损或负收货替代它。iOS和微信小程序不在本次变更范围。
+保留现有桌台、完整菜单与加菜、原请求下单恢复、收款/退款、按份售后、出品与取送、服务任务、会员与预约、团购、存酒、库存收货/盘点/报损、打印、经营查询及岗位配置。用户确认多品牌安卓设备，未限定型号。**供应商采购退货不包含在本轮**，没有用报损或负收货替代它。本表仅记录Android；iOS及双小程序有各自交付边界，不由Android状态推定完成。
 
 ## 实证修复台账
 
@@ -20,35 +20,36 @@
 | AC-08 | 采购原生页面缺供应商与每行批次 | 与原收货API一致，按员工持久保存供应商，批次参与草稿/请求指纹，成功只清原草稿 | 已修，整合测试通过 |
 | AC-09 | 网页已有物料建档/编辑/包装码，原生未开放完整合同；收货发布缺入口 | 新增独立原生能力、版本与永久回执保护；收货发布预览和原子事务 | 已实现，Android专项11项和库存DB/API40项通过，覆盖多批次逐行加权预览与实际一致 |
 | AC-10 | 安装更新阻断未包含草稿损坏与全部业务请求状态 | 校验文件前与启动安装器前均重新判断；保留损坏原文件 | 已修，真实AppModel存储损坏回归通过 |
-
-| AC-11 | 打印策略继承份数进入编辑时变成固定1份 | 显示/保存显式null继承与固定1—5份，原请求跨重启保留，错误或缺失回执拒绝成功 | Android已修并专项通过；配套后台null支持由系统集成分支交付 |
-| AC-12 | 既有CI没有安卓单测、静态检查及构建 | 独立Android PR/main路径触发CI，保留测试与lint报告，不含正式密钥 | 工作流已配置并静态检查；云端首次执行待PR |
+| AC-11 | 打印策略继承份数进入编辑时变成固定1份 | 显示/保存显式null继承与固定1—5份，原请求跨重启保留，错误或缺失回执拒绝成功 | Android及后台已合并，API/schema259已部署，正式APK已分发；实体手机和纸票另验 |
+| AC-12 | 既有CI没有安卓单测、静态检查及构建 | 独立Android PR/main路径触发CI，保留测试与lint报告，不含正式密钥 | PR检查已通过；固定提交Android main CI成功，310项、lint及debug构建通过；正式签名包有独立本地证据 |
 
 ## 测试与交付证据
 
 证据目录：`/Users/jingda/mbox/outputs/` 下 `android-commercial-20261005-*.log`。
 
 - 最终Android 310项单测通过、0失败/0跳过，lint及debug构建通过（release-final.log）；包含物料/条码/收货发布11项、真实AppModel队列5项及打印继承回归。早期293项记录保留为历史，集合有重叠，不累加场景数。
+- [Android main CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/37261576176)已在上述固定提交成功；[系统PR检查快照](../../../outputs/system-audit-20261005/pr327-final-checks.json)记录适用检查通过及规则跳过。CI的debug构建不替代固定正式证书release包验证，也不代表实体机安装。
 - 真实Compose控件的离线布局测试覆盖Android API26和35、320dp小屏、200%文字和320dp剩余可视高度，验证登录控件/更新入口可滚动到达、未验证设备不能进入营业、无演练入口。这不模拟某品牌全部系统行为，也不替代真机软键盘测试。
-- 新增库存API后，网页兼容326项通过、15项环境跳过，后端/网页类型及网页构建再次通过（web-compat-final.log）；库存独立PostgreSQL/API40项通过（inventory-db-final.log）。本轮不修改网页代码，原生库存新增接口需要后端配套部署。
-- Python发布器7项通过；未提供正式签名配置时构建按预期拒绝，不产生可误发的未签名正式包。
+- Android独立增量新增库存API后，网页兼容326项通过、15项环境跳过，后端/网页类型及网页构建再次通过（web-compat-final.log）；库存独立PostgreSQL/API40项通过（inventory-db-final.log）。该Android增量未改网页，后续统一系统审计另含网页修复；原生库存新增接口已随rc.246配套部署。此处数字为Android独立增量验证，不代替现场联调。
+- 原生APK本地准备工具Python7项通过；系统新增实际分发工具`deploy/aliyun/publish-native-update.py`的18项另有验证，不合并计为独立业务场景。未提供正式签名配置时构建按预期拒绝，不产生可误发的未签名正式包。
 - 当前桌面界面控制接口不识别Qt安卓模拟器窗口（Invalid app），因此没有声称完成模拟器逐页点击。干净API36模拟器通过Android包管理器安装正式APK成功，读取versionCode=8、versionName=0.4.0-rc.3且无DEBUGGABLE标记；这是安装证据，不是逐页UI或品牌真机验收。
 - 正式签名公钥SHA256：`05362998aab4266397f069cbcb37049176aa29eb7ab778cc7d55cfb5caa4ccc0`。私钥和密码仅保存在受限本机配置目录，不进入Git、安装包或交付文件。应由持有人另做离线安全备份；本机保存不等于异地备份。
 
-## 正式候选文件
+## 正式分发文件与本地来源
 
 目录：`/Users/jingda/mbox/outputs/android-commercial-20261005-build8/`。
 
-- APK：`MBOX-Staff-0.4.0-rc.3-build8-6c07f67441f3.apk`
+- APK：[MBOX-Staff-0.4.0-rc.3-build8-6c07f67441f3.apk](https://mbox.shmbox.com/native-updates/staff/MBOX-Staff-0.4.0-rc.3-build8-6c07f67441f3.apk)
 - SHA256：`6c07f67441f39736b48ca7a8fe6de98cdbb834764af4c7da04d42d959d8e7c98`
 - `stable.json`、`verification.json`由实际APK生成；`emulator-installation.json`记录干净模拟器安装，源提交与提交时逐文件核对记录在交接文件。
-- 最终完整日志`android-commercial-20261005-release-final.log`：310项、lint、debug和固定证书release构建通过。文件仅在本机，未在本线程上传或切换生产。
+- 最终完整日志`android-commercial-20261005-release-final.log`：310项、lint、debug和固定证书release构建通过。APK为15,493,467字节；本地文件、269个原生源文件与候选清单已独立核对。正式分发另有[发布回执](../../../outputs/system-audit-20261005/native-update-publish-build8.json)及[独立HTTPS回读](../../../outputs/system-audit-20261005/native-update-public-ehoiy6w5/result.json)，均通过，非从CI推定上线。
+- stable清单SHA256：`d7711af5bc16f3f5863bb3aea3c49c302c1197275486017a0174dfed417d12e0`，200／no-store；APK200、正确MIME、immutable。preview未发布404、缺失文件真404。经进程proxy进行HTTPS并保留TLS验证，不代表所有员工网络。
 
 ## 安装与后续升级
 
-正式候选0.4.0-rc.3/build8使用固定正式证书，包名`com.mbox.staff.nativeapp`，最低Android8/API26。新设备可首次安装。历史build7是Android Debug签名，无法覆盖为不同证书的正式包；**先核对并完成未决业务、保存草稿及账户安排，再确定旧设备迁移，不要直接卸载**。同正式签名的后续递增版本可以覆盖升级。
+正式分发0.4.0-rc.3/build8使用固定正式证书，包名`com.mbox.staff.nativeapp`，最低Android8/API26。新设备可首次安装，仍须实际设备验证。历史build7是Android Debug签名，无法覆盖为不同证书的正式包；**先核对并完成未决业务、保存草稿及账户安排，再确定旧设备迁移，不要直接卸载**。同正式签名的后续递增版本可以覆盖升级。
 
-发布工具`native/staff-app/scripts/package-android-release.py`从实际APK产生摘要、验证回执、不可变APK和stable清单。当前只读线上stable/preview清单均HTTP404，因此不能称线上更新已启用。现有更新页面会明确显示检查失败，不冒称最新版。启用更新需先发布不可变APK、HTTPS摘要读回，再原子更新清单并验证路由不影响网页。
+本地工具`native/staff-app/scripts/package-android-release.py`从实际APK产生摘要、验证回执、不可变APK和stable清单；本次由仓库根目录`deploy/aliyun/publish-native-update.py publish`完成实际分发。既有Caddy继续转发，应用通过精确只读路由读取专用持久目录；先发布不可变APK、HTTPS下载重验，再原子提交清单。较早两清单404是历史查询，当前stable已启用、preview仍未发布。初次公网探针因重复nosniff的单值假设误判，修正解析并验证缺失／混杂拒绝后通过，未改服务器；原记录及方法说明见发布记录。分发仍不替代实体手机及旧debug证书迁移，步骤见[在线更新](UPDATES.md)。
 
 ## 上岗前必须取得的现场证据
 
@@ -59,8 +60,8 @@
 | 资金及异常 | 现金/POS/线上原款、退款批准/执行/查询、丢回执只核对原请求，真实小额试验独立留证 | 收银与财务；代码测试不证明实际扣退到账 |
 | 打印 | 指定打印机实际纸票、失败重试/补打理由、原订单金额相符 | 打印设备负责人；queued不代表已出纸 |
 | 锁屏提醒 | 检查通知和省电设置、真实送达 | 后台15分钟定期检查有系统延迟，不能替代紧急实时呼叫；营业工作台需前台值守 |
-| 正式分发 | 已发布HTTPS清单、实际下载摘要与同证书覆盖升级 | 发布负责人；本地候选尚未上线 |
+| 正式分发 | HTTPS清单／APK实际读回；实体机同证书覆盖升级另留证据 | 发布负责人；stable分发及独立读回已通过，实体机升级仍待验收 |
 
-后端依赖：本分支新增原生物料/包装码/收货发布接口；打印策略null继承依赖系统审计分支对应API/schema支持，必须随统一后台版本先行发布。没有能力的旧后台显示不可用或失败，不显示假成功。
+后端依赖：原生物料／包装码／收货发布接口及打印策略null继承API/schema支持已随rc.246先行部署并完成只读身份核验。旧后台的能力门槛仍保留；后续回退不得把接口不可用描述为操作成功。
 
 当前不能据此宣布“全部商用验收通过”。代码缺陷会持续修复，未获实际设备/资金/纸票证据的项保持开放。

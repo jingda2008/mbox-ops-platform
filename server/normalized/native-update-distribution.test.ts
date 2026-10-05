@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -72,6 +72,9 @@ describe('native update public distribution', () => {
     expect((await app.inject('/native-updates/staff/stable.json')).statusCode).toBe(404)
     await writeFile(join(root, 'stable.json'), ' '.repeat(65_537))
     expect((await app.inject('/native-updates/staff/stable.json')).statusCode).toBe(404)
+    await rm(join(root, filename))
+    await mkdir(join(root, filename))
+    expect((await app.inject(`/native-updates/staff/${filename}`)).statusCode).toBe(404)
   })
 
   it('cannot write or change the directory through its public routes', async () => {

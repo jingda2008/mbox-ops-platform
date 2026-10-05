@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fault tests use actual temp files; no SSH, production HTTP or Android signing."""
+import ast
 import importlib.util
 import io
 import json
@@ -137,6 +138,7 @@ class PublisherTests(unittest.TestCase):
             m.fetch_public(self.item['url'], self.root/'download.apk', '192.0.2.1')
         argv = run.call_args.args[0]
         self.assertIn('--resolve', argv)
+        self.assertEqual(argv[argv.index('--noproxy')+1], '*')
         self.assertIn('mbox.shmbox.com:443:192.0.2.1', argv)
         self.assertNotIn('--insecure', argv)
         self.assertNotIn('--location', argv)
@@ -148,9 +150,23 @@ class PublisherTests(unittest.TestCase):
         args=SimpleNamespace(ssh_host='root@example.test', release_dir='/opt/mbox/releases/rc246', expected_live_sha='a'*40, channel='stable')
         command=m.ssh_command(args,'inspect')
         self.assertIn('StrictHostKeyChecking=yes',command)
-        for field,value in [('ssh_host','root@host; echo secret'),('release_dir','/tmp/evil'),('expected_live_sha','$(id)')]:
+        self.assertEqual(command[command.index('-p')+1],'6122')
+        self.assertIn('IdentitiesOnly=yes',command)
+        selected=m.ssh_command(SimpleNamespace(**{**vars(args),'remote_python':'/root/.pyenv/versions/3.7.17/bin/python3.7'}),'inspect')
+        self.assertTrue(selected[-1].startswith('/root/.pyenv/versions/3.7.17/bin/python3.7 '))
+        for field,value in [('ssh_host','root@host; echo secret'),('release_dir','/tmp/evil'),('expected_live_sha','$(id)'),('remote_python','python3'),('remote_python','/tmp/python;id'),('ssh_port',0)]:
             with self.assertRaises(ValueError):
                 m.ssh_command(SimpleNamespace(**{**vars(args),field:value}),'inspect')
+
+    def test_remote_script_uses_python37_syntax_and_library_surface(self):
+        source=Path(m.__file__).read_text()
+        # The host compiler also catches newer grammar such as assignment expressions.
+        try:
+            ast.parse(source,feature_version=(3,7))
+        except TypeError:  # Python 3.7 itself needs no feature-version override.
+            ast.parse(source)
+        for unsupported in ['hashlib.file_digest','shlex.join(','.removeprefix(','.removesuffix(','missing_ok=']:
+            self.assertNotIn(unsupported,source)
 
     def test_local_validation_failure_never_contacts_remote(self):
         feed=self.root/'candidate.json';feed.write_bytes(m.encode(dict(schemaVersion=1,channel='stable',releases=[self.item])))

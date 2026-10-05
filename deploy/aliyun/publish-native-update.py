@@ -36,6 +36,13 @@ def require(ok, message):
         raise ValueError(message)
 
 
+def unlink_if_present(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -54,13 +61,13 @@ def encode(value):
 
 def apk_name(item):
     url = urlsplit(item.get('url', ''))
-    name = url.path.removeprefix(PREFIX)
+    name = url.path[len(PREFIX):] if url.path.startswith(PREFIX) else ''
     require(url.scheme == 'https' and url.netloc == 'mbox.shmbox.com'
             and not url.query and not url.fragment and url.path == PREFIX + name
             and re.fullmatch(r'MBOX-Staff-[A-Za-z0-9][A-Za-z0-9._-]{0,39}-build[1-9][0-9]{0,9}-[a-f0-9]{12,64}\.apk', name)
             and '..' not in name, 'APK URL must be a single immutable filename on the fixed HTTPS origin')
     require(SHA256.fullmatch(item.get('sha256', '')) is not None, 'APK SHA256 is invalid')
-    hash_part = name.rsplit('-', 1)[-1].removesuffix('.apk')
+    hash_part = name.rsplit('-', 1)[-1][:-4]
     require(item['sha256'].startswith(hash_part) and name == f"MBOX-Staff-{item['version']}-build{item['build']}-{hash_part}.apk", 'APK filename must match the build, version and content hash')
     return name
 
@@ -90,7 +97,8 @@ def read_feed(root, channel):
     require(not path.is_symlink(), 'Channel feed must not be a symlink')
     if not path.exists():
         return {'schemaVersion': 1, 'channel': channel, 'releases': []}, 'absent'
-    require(path.is_file() and path.stat().st_size <= MAX_FEED_BYTES, 'Existing feed is not a bounded regular file')
+    require(path.is_file() and path.stat().st_size <= MAX_FEED_BYTES
+            and path.stat().st_uid == os.geteuid() and not path.stat().st_mode & 0o022, 'Existing feed is not a bounded operator-owned file')
     data = path.read_bytes()
     return validate_feed(json.loads(data), channel), digest(data)
 
@@ -187,7 +195,8 @@ def stage_apk(root, item, source):
     require(not target.is_symlink(), 'APK target must not be a symlink')
     replayed = target.exists()
     if replayed:
-        require(target.is_file() and target.stat().st_size == item['bytes'] and file_digest(target) == item['sha256'], 'Immutable APK filename already contains different bytes')
+        require(target.is_file() and target.stat().st_uid == os.geteuid() and not target.stat().st_mode & 0o022
+                and target.stat().st_size == item['bytes'] and file_digest(target) == item['sha256'], 'Immutable APK filename already contains different bytes')
     fd, temporary = tempfile.mkstemp(prefix='.apk-stage-', dir=root)
     try:
         total = 0
@@ -210,7 +219,7 @@ def stage_apk(root, item, source):
             os.link(temporary, target)
             sync_directory(root)
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        unlink_if_present(Path(temporary))
     return {'staged': True, 'replayed': replayed, 'sha256': item['sha256']}
 
 
@@ -220,7 +229,8 @@ def commit_feed(root, channel, expected_digest, item, verification, certificate)
                 'channel': channel, 'url': item['url'], 'apkDebuggable': False, 'allowLocalDemo': False, 'source': 'public_https_reverified'}
     require(SHA256.fullmatch(certificate.lower()) and verification == expected, 'Missing matching public HTTPS APK verification')
     target = root / name
-    require(target.is_file() and not target.is_symlink() and target.stat().st_size == item['bytes']
+    require(target.is_file() and not target.is_symlink() and target.stat().st_uid == os.geteuid()
+            and not target.stat().st_mode & 0o022 and target.stat().st_size == item['bytes']
             and file_digest(target) == item['sha256'], 'Staged APK does not match the publicly verified bytes')
     feed, current_digest = read_feed(root, channel)
     previous = next((row for row in feed['releases'] if row['platform'] == 'android'), None)
@@ -242,7 +252,7 @@ def commit_feed(root, channel, expected_digest, item, verification, certificate)
         os.replace(temporary, root / f'{channel}.json')
         sync_directory(root)
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        unlink_if_present(Path(temporary))
     return {'published': True, 'replayed': False, 'feedSha256': digest(data)}
 
 
@@ -250,9 +260,16 @@ def ssh_command(args, phase):
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,252}', args.ssh_host), 'SSH host is invalid')
     require(re.fullmatch(r'/opt/mbox/releases/[A-Za-z0-9_.-]+', args.release_dir), 'Remote release directory is invalid')
     require(re.fullmatch(r'[a-f0-9]{40}', args.expected_live_sha), 'Expected live SHA is invalid')
-    command = ['python3', args.release_dir + '/publish-native-update.py', phase, '--release-dir', args.release_dir,
+    remote_python = getattr(args, 'remote_python', '/usr/bin/python3')
+    require(isinstance(remote_python, str) and re.fullmatch(r'/[A-Za-z0-9_./-]+', remote_python)
+            and '..' not in remote_python.split('/'), 'Remote Python must be an explicit absolute executable path')
+    port = getattr(args, 'ssh_port', 6122)
+    require(type(port) is int and 1 <= port <= 65535, 'SSH port is invalid')
+    identity = Path(getattr(args, 'identity_file', Path.home() / '.ssh/mbox_aliyun_ed25519')).expanduser()
+    require(identity.is_absolute(), 'SSH identity path must be absolute')
+    command = [remote_python, args.release_dir + '/publish-native-update.py', phase, '--release-dir', args.release_dir,
                '--expected-live-sha', args.expected_live_sha, '--channel', args.channel]
-    return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', args.ssh_host, shlex.join(command)]
+    return ['ssh', '-p', str(port), '-i', str(identity), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', args.ssh_host, ' '.join(shlex.quote(part) for part in command)]
 
 
 def remote_json(args, phase, payload=None):
@@ -267,7 +284,7 @@ def fetch_public(url, target, origin_ip=None):
     if origin_ip:
         address = ipaddress.ip_address(origin_ip)
         resolved = f'[{address}]' if address.version == 6 else str(address)
-        command += ['--resolve', f'mbox.shmbox.com:443:{resolved}']
+        command += ['--noproxy', '*', '--resolve', f'mbox.shmbox.com:443:{resolved}']
     subprocess.run(command + ['--output', str(target), url], check=True, timeout=190)
 
 
@@ -284,7 +301,10 @@ def publish(args):
     with tempfile.TemporaryFile() as upload:
         upload.write(json.dumps(item).encode() + b'\n')
         with args.apk.open('rb') as package:
-            while chunk := package.read(1024 * 1024):
+            while True:
+                chunk = package.read(1024 * 1024)
+                if not chunk:
+                    break
                 upload.write(chunk)
         upload.seek(0)
         staged = subprocess.run(ssh_command(args, 'stage'), stdin=upload, check=True,
@@ -313,6 +333,9 @@ def main():
     parser.add_argument('--release-dir')
     parser.add_argument('--expected-live-sha')
     parser.add_argument('--ssh-host')
+    parser.add_argument('--ssh-port', type=int, default=6122)
+    parser.add_argument('--identity-file', type=Path, default=Path.home() / '.ssh/mbox_aliyun_ed25519')
+    parser.add_argument('--remote-python', default='/usr/bin/python3', help='Absolute Python 3.7+ executable; never uses a pyenv shim')
     parser.add_argument('--origin-ip')
     parser.add_argument('--apk', type=Path)
     parser.add_argument('--feed', type=Path)

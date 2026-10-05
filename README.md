@@ -2,49 +2,33 @@
 
 > **公开测试系统声明**：本仓库用于功能验证、技术演示与门店影子运行；功能、数据、流程与安全边界均可能持续调整，**不得用于商业经营、真实资金处理或生产门店运营**。任何试用均应在隔离环境中完成，并自行承担验证责任。
 
-当前工程版本：`1.0.0-rc.178`。这是用于预发布和门店影子运行的商业V1候选版，不代表支付、微信、云环境、真实硬件和门店验收已经完成。
+工程版本以 [package.json](package.json) 为准；生产版本以 `/api/ready` 返回的完整提交SHA、schema和镜像摘要及对应发布记录为准。工程发布不代表小程序平台、员工设备、真实资金、硬件和门店验收均已完成。当前审计与逐项修复见 [2026-10-05系统审计](docs/system-audit-20261005.md)。
 
 当前可运行纵向闭环包括：顾客按桌呼叫、待点单主动服务、动态责任人分派、AI动作卡、员工执行与客户确认、SLA升级、门店主数据、人员排班、预约订金、库存存酒、商品与经营权限、订单桌账、KDS、支付意图、物理POS报送、按商品退款，以及会员权益发放、审批、召回、锁定核销和赠品出品。
 
 ## 启动
 
+当前入口是 `server/normalized-server.ts`，只使用规范化 PostgreSQL 运行时；旧 JSON 适配器和旧配置变量不能用于本入口。先使用本地隔离数据库完成规范化迁移与门店初始化，再通过进程环境提供配置。服务不会自动加载 `.env` 文件。
+
 ```bash
-npm install
+npm ci
+# DATABASE_URL 必须指向本地隔离开发库；先运行迁移，再按脚本参数初始化门店。
+npm run db:migrate:normalized
+# 门店初始化须使用经过审核的本地门店配置：
+npm run db:provision:normalized -- --config=/absolute/path/to/local-store.json
+# 需要 DATABASE_URL、MBOX_TENANT_ID、MBOX_STORE_ID、MBOX_NORMALIZED_SECRET。
+# 标识必须对应已初始化门店，密钥至少32字节；不使用本文示例标识作为生产值。
 npm run dev
 ```
 
-- 管理端：`http://localhost:5173/`
-- 顾客端样例：`http://localhost:5173/guest?table=L01`
-- 会员端样例：`http://localhost:5173/member?member=member-amy`
-- API健康检查：`http://localhost:8787/api/health`
+- 员工网页：`http://localhost:5173/`
+- 顾客入口：使用本地已初始化桌台的有效桌码；仅 `?table=L01` 不代表已取得会话授权。
+- API就绪检查：`http://localhost:8787/api/ready`。规范化入口没有 `/api/health` 路由。
+- 开发环境变量合同与校验以 [normalized-runtime-config.ts](server/normalized/normalized-runtime-config.ts) 为准；支付、身份和通知未配置时不能视为真实渠道已可用。
 
-门店同一Wi-Fi验证时，启动系统后执行：
+生产与验证模板由 `npm run release:config:generate` 从同一配置schema生成，见 [production.env.template](deploy/aliyun/config/production.env.template) 和 [validation.env.template](deploy/aliyun/config/validation.env.template)。生产使用受限数据库登录，禁止把管理员/备份凭据注入应用。旧的 `MBOX_STORE_UUID`、`MBOX_SESSION_SECRET` 不替代规范化入口要求的 `MBOX_STORE_ID`、`MBOX_NORMALIZED_SECRET`。
 
-```bash
-npm run pilot:access
-```
-
-命令会显示平板和手机可访问的局域网地址。验证顺序、指标和停止条件见`docs/pilot-validation-plan.md`，每晚使用`templates/pilot-night-record.md`记录结果。
-
-本地Web会自动携带样例门店与员工上下文。`staging`和`production`只接受服务端签发的HMAC员工会话，并强制关闭`/api/dev/*`：
-
-```bash
-MBOX_RUNTIME_MODE=production \
-MBOX_REPOSITORY=postgres \
-DATABASE_URL='postgresql://mbox:***@db.example.com/mbox?sslmode=verify-full' \
-MBOX_TENANT_ID='11111111-1111-4111-8111-111111111111' \
-MBOX_STORE_UUID='22222222-2222-4222-8222-222222222222' \
-MBOX_SESSION_SECRET='由密钥管理服务注入的至少32字符密钥' \
-MBOX_QR_SECRET='由密钥管理服务注入的至少32字符密钥' \
-MBOX_METRICS_TOKEN='由密钥管理服务注入的至少32字符令牌' \
-MBOX_CORS_ORIGINS='https://ops.example.com' \
-MBOX_PUBLIC_BASE_URL='https://api.example.com' \
-npm run start
-```
-
-`staging`和`production`未指定`MBOX_REPOSITORY`时默认使用PostgreSQL；显式配置`json`会在运行配置加载和仓储工厂两层拒绝启动。两种环境都必须提供`DATABASE_URL`、`MBOX_TENANT_ID`和`MBOX_STORE_UUID`，JSON文件仓储只允许`local/test`。
-
-生产员工会话由受信任身份入口签发，前端仅保存短期令牌；员工ID、门店ID和过期时间均在签名载荷内，不能用请求Header冒用。微信小程序身份已具备防重放会话、身份映射和加密存储边界，真实启用仍需AppID、AppSecret、合法域名和微信审核。
+构建后的启动命令是 `npm run start`；正式部署统一通过 [部署说明](deploy/aliyun/README.md) 中的 `./deploy/aliyun/deploy-release.sh`，固定已合并SHA、镜像和配置，完成备份回读及候选验证后切流。不要把一组最小开发变量直接用于生产发布。
 
 ## 验证
 
@@ -64,7 +48,7 @@ npm run check
 - 快捷点单、不可变商品价格快照、桌账流水、KDS制作/取餐/送达状态机。
 - 订单商品级支付分摊、线上联调模拟器、物理POS人工报送待对账、商品级退款审批。
 - 服务员/店长分级权益发放、越权审批、会员账户到账、老客分群活动预估与批量发放。
-- 商品赠品权益锁定、取消释放、确认核销、零实付赠送订单和KDS出品；金额券在支付分摊与退款回退接通前明确阻止核销。
+- 商品赠品权益锁定、取消释放、确认核销、零实付赠送订单和KDS出品；金额券使用当前结账报价、锁定与退款恢复合同，具体范围见逐项测试和交付清单。
 - 服务号/企业微信通知Outbox、适配器接口、失败退避、人工重试和送达证据字段；未配置真实渠道时保持待发送。
 - 配置历史、发布审计和安全回滚；回滚生成新版本，不覆盖历史快照。
 - 演出场次、歌手排班、分歌手曲库/价格、桌台点歌、收款凭证、履约状态和拒绝退款闭环。
@@ -81,14 +65,14 @@ npm run check
 ## 运行边界
 
 - `server/`是模块化单体API和确定性业务内核；金额、权限、状态和SLA不交给大模型决定。
-- `.runtime/state.json`是仅供本地闭环验证的文件适配器；`staging/production`强制使用PostgreSQL仓储。
+- `.runtime/state.json`属于历史文件适配器；当前规范化生产与开发入口均依赖PostgreSQL，不加载该文件。
 - 共享平板的IndexedDB快照和待同步动作绑定当前员工；退出或换人会先停止身份切换期间的新离线写入，等待旧会话正在执行的同步结束，再清空快照和队列。清理失败时保留旧会话并阻止换人，旧员工动作不会由新员工会话重放。
 - `wechat_mock`以及`dev-approve-complete`只用于接口联调，不发生真实资金扣款或渠道退款。
-- 物理POS人工报送只进入待对账，不能替代银行/收单机构正式对账。
+- 物理POS/现金等现场收款登记会写入系统收款与对账流水；人工凭证不替代银行/收单机构正式对账。
 - 正式服务号/企业微信消息、微信/聚合支付、POS对账、耳机和视觉能力通过适配器接入；未取得真实渠道回执时，Outbox待发送不代表微信已送达。
 - 第四阶段设备模拟器只验证命令、权限、故障和降级流程；模拟抽帧的`verified=false`，不能作为现场视觉证据。真实摄像头、耳机、打印机、扫码器和边缘节点必须取得设备回执后另行验收。
 - 候补“通知并锁桌”当前完成内部状态与审计；真实微信/企微通知必须在渠道适配器返回消息ID后才能视为送达。
 - 当前点歌收款支持登记支付或物理POS流水证据；正式上线必须由支付成功事件自动确认，不能只依赖人工输入的流水号。
-- `local/test`允许开发员工Header；`staging/production`要求签名员工会话并校验在职状态、门店归属和请求操作者一致性。
+- 当前员工访问由规范化会话与门店设备授权控制；开发fixture和生产身份分开，生产校验在职状态、门店归属和请求操作者一致性。
 - 工程发布证据见`docs/release-evidence.md`；真实营业上线仍需生产密钥管理、云数据库TLS/PITR、监控平台告警、支付真资金PoC、微信审核、外部安全测试和门店验收签字。
 - 正式桌号、人员、班次、商品、权限、SLA和服务剧本应从主数据导入，不使用样例种子营业。

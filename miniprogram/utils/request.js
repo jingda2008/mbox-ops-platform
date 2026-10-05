@@ -195,6 +195,19 @@ function rememberCookies(headers, responseCookies, options) {
   })
 }
 
+function attachErrorDetails(error, detail) {
+  const details = detail && detail.details
+  if (error.code !== 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED'
+    || !details || typeof details !== 'object' || Array.isArray(details)) return
+  const id = details.conflictingOrderId
+  if (typeof id !== 'string' || id.length < 8 || id.length > 128 || /[\s\x00-\x1f]/.test(id)) return
+  error.details = { conflictingOrderId: id }
+  if (typeof details.conflictingOrderCreatedAt === 'string'
+    && details.conflictingOrderCreatedAt.length <= 64 && Number.isFinite(Date.parse(details.conflictingOrderCreatedAt))) {
+    error.details.conflictingOrderCreatedAt = details.conflictingOrderCreatedAt
+  }
+}
+
 function request(path, options) {
   const config = getRuntimeConfig()
   const session = getTableSession()
@@ -230,6 +243,7 @@ function request(path, options) {
         const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
         error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
         error.statusCode = response.statusCode
+        attachErrorDetails(error, detail)
         if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
         // A rejected guest call is the first reliable evidence that this
         // device's table credential has ended. Do not leave a stale local

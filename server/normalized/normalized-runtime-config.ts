@@ -90,6 +90,7 @@ export interface NormalizedRuntimeConfig {
   workerPoolMax: number
   trustProxyHops: number
   staticDir: string | null
+  nativeUpdatesDir?: string | null
   startWorkers: boolean
   kitchenBatchBoardEnabled?: boolean
   threeScreenWorkflowEnabled?: boolean
@@ -204,6 +205,9 @@ export function loadNormalizedRuntimeConfig(
   const commitSha = readCommitSha(environment.APP_COMMIT_SHA ?? environment.GITHUB_SHA)
   const releaseImageDigest = readImageDigest(environment.MBOX_RELEASE_IMAGE_DIGEST, errors)
   const staticDir = optional(environment.MBOX_STATIC_DIR)
+  const nativeUpdatesDir = optional(environment.MBOX_NATIVE_UPDATES_DIR)
+  if (nativeUpdatesDir !== null && (!isAbsolute(nativeUpdatesDir) || nativeUpdatesDir.split('/').includes('..')
+    || (nodeEnv === 'production' && nativeUpdatesDir !== '/run/mbox-native-updates'))) errors.push('MBOX_NATIVE_UPDATES_DIR')
   const kitchenBatchBoardEnabled = readBoolean(environment.MBOX_KITCHEN_BATCH_BOARD_ENABLED, false, 'MBOX_KITCHEN_BATCH_BOARD_ENABLED', errors)
   const threeScreenWorkflowEnabled = readBoolean(environment.MBOX_THREE_SCREEN_WORKFLOW_ENABLED, false, 'MBOX_THREE_SCREEN_WORKFLOW_ENABLED', errors)
   const quantityAfterSalesEnabled = readBoolean(
@@ -264,6 +268,7 @@ export function loadNormalizedRuntimeConfig(
     workerPoolMax,
     trustProxyHops,
     staticDir,
+    nativeUpdatesDir,
     startWorkers,
     kitchenBatchBoardEnabled,
     threeScreenWorkflowEnabled,

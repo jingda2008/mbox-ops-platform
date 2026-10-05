@@ -75,7 +75,7 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${manifest}")
-  test "${count}" = 15
+  test "${count}" = 16
 }
 verify_deployment_scripts
 command -v flock >/dev/null
@@ -672,6 +672,17 @@ prepare_worker_adapter_mount() {
 
 prepare_worker_adapter_mount
 
+# Public APKs survive application cutover and rollback. The application can only
+# read this mount; publication is performed by the separately verified script.
+native_update_directory="${install_root}/native-updates/staff"
+for directory in "${install_root}/native-updates" "${native_update_directory}"; do
+  test ! -L "${directory}"
+  install -d -m 0755 "${directory}"
+done
+native_update_mount_args=(
+  --mount "type=bind,src=${native_update_directory},dst=/run/mbox-native-updates,readonly"
+)
+
 assert_backup_targets_application_database() {
   local application_database_identity backup_database_identity running
   local candidate_login backup_login admin_login
@@ -1117,6 +1128,16 @@ rollback_on_error() {
     rollback_ok=0
   fi
 
+  # The candidate can already have served policy edits before a cutover error.
+  # Stop it before checking, and never start old workers on an unverified cutoff.
+  if ! release_assert_print_rollback_safe "${release_dir}" "${expected_platform_image_digest}" \
+    "${previous_manifest_schema_version}" "${candidate}" "${active_container}"; then
+    emit_release_audit rollback_failed error print-policy-compatibility-blocked
+    write_release_failure "${exit_code}" print-policy-compatibility-blocked-writers-stopped
+    echo "automatic rollback blocked; writers stopped; use a compatible forward release; evidence=${release_dir}/print-policy-rollback-guard.json" >&2
+    exit "${exit_code}"
+  fi
+
   if ! docker inspect "${active_container}" >/dev/null 2>&1; then
     if [ -n "${rollback_container}" ] \
       && [ "$(docker inspect "${rollback_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${previous_release_sha}" ] \
@@ -1198,6 +1219,7 @@ if [ "${#worker_adapter_mount_args[@]}" -gt 0 ]; then
   candidate_docker_args+=("${worker_adapter_mount_args[@]}")
 fi
 candidate_docker_args+=(
+  "${native_update_mount_args[@]}"
   --network "${network}"
   --volume "${candidate_volume}:/data"
   "${image_tag}"
@@ -1266,6 +1288,7 @@ if [ "${contract_migration}" = 1 ]; then
     full_candidate_docker_args+=("${worker_adapter_mount_args[@]}")
   fi
   full_candidate_docker_args+=(
+    "${native_update_mount_args[@]}"
     --network "${network}"
     --volume "${candidate_volume}:/data"
     "${image_tag}"

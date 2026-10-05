@@ -2,6 +2,15 @@
 import importlib.util, tempfile, pathlib, json, unittest, os, subprocess
 spec=importlib.util.spec_from_file_location('bootstrap',pathlib.Path(__file__).with_name('maintenance-bootstrap.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class PersistentTests(unittest.TestCase):
+ def test_only_fixed_read_only_native_artifacts_can_accompany_the_original_data_mount(self):
+  data={'type':'volume','source':'existing-data','target':'/data','readOnly':False}
+  native={'type':'bind','source':'/opt/mbox/native-updates/staff','target':'/run/mbox-native-updates','readOnly':True}
+  self.assertEqual(m.runtime_data_mount([data,native]),data)
+  self.assertEqual(m.runtime_data_mount([data]),data)
+  self.assertIsNone(m.runtime_data_mount([native]))
+  for invalid in [{**native,'readOnly':False},{**native,'source':'/opt/mbox/secrets'},{**native,'target':'/app'},data]:
+   with self.assertRaises(m.Blocked):m.runtime_data_mount([data,invalid])
+
  def migration_manifest(self,count):
   files=[{'filename':'%03d_change.sql'%index,'sha256':m.hashlib.sha256(str(index).encode()).hexdigest()} for index in range(1,count+1)]
   digest=m.hashlib.sha256(''.join(row['filename']+'\0'+row['sha256']+'\n' for row in files).encode()).hexdigest()

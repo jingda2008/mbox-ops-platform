@@ -1,3 +1,4 @@
+import {InventoryReturnCostProjectionBusyError} from './inventory-return-cost-projection.js'
 import {isNativePhysicalKey,NativePhysicalNotCommittedError} from './native-physical-command.js'
 import type {CommerceKdsRequestContext} from './commerce-kds-api.js'
 import {QuantityRemakeHandoverQuery,QuantityRemakeHandoverCommand} from './quantity-remake-handover.js'
@@ -155,6 +156,7 @@ function uuid(value:unknown){if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]
 function quantity(value:unknown){if(typeof value!=='number'||!Number.isSafeInteger(value)||value<1||value>999)throw new TypeError('请选择1至999份实际数量');return value}
 async function handle(reply:FastifyReply,run:()=>Promise<unknown>){
   try{return await run()}catch(error){
+    if(error instanceof InventoryReturnCostProjectionBusyError)return reply.code(503).send({error:{code:error.code,message:error.message,retryable:true}})
     if(error instanceof NativePhysicalNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_PHYSICAL_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed'}})
     const [status,code,message]=error instanceof NormalizedAuthenticationRequiredError||error instanceof StaffSessionNotFoundError?[401,'STAFF_SESSION_REQUIRED','请恢复员工登录后继续原操作']
       :error instanceof StaffAccessDeniedError||error instanceof EmployeeTableAccessDeniedError?[403,'STAFF_ACCESS_FORBIDDEN',error.message]

@@ -135,7 +135,7 @@ deployment_script_rows=$(node -e "
   const fs=require('node:fs');
   const manifest=JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
   const scripts=manifest.deploymentScripts;
-  if (!scripts || Object.keys(scripts).length !== 15) throw new Error('deployment script manifest is incomplete');
+  if (!scripts || Object.keys(scripts).length !== 16) throw new Error('deployment script manifest is incomplete');
   for (const entry of Object.values(scripts)) {
     if (!entry || !/^[a-z0-9-]+\\.(sh|py|mjs)$/.test(entry.file) || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
       throw new Error('deployment script identity is invalid');
@@ -349,7 +349,7 @@ if [ "${maintenance_mode}" = 1 ]; then
 fi
 
 ssh "${ssh_options[@]}" "${ssh_target}" \
-  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 15 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
+  "cd '${remote_release_dir}' && test \"\$(jq -r '.deploymentScripts | length' release-manifest.json)\" = 16 && jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' release-manifest.json | while IFS=\$'\\t' read -r file sha; do test \"\$(sha256sum \"\$file\" | awk '{print \$1}')\" = \"\$sha\" || exit 1; done && chmod 0700 ./*.sh"
 
 # Only the two manifest-bound public JSON files are readable by the image's
 # node group. Plans, credentials and release evidence retain their 0600 mode.

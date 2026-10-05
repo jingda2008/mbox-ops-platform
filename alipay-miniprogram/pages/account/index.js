@@ -261,6 +261,13 @@ Page({
       if(scope!==tableSessionCacheScope())return
       // A received action completes this request. A later deliberate payment uses a new attempt.
       runtime.removeStorageSync(storageKey)
+      if(action && action.status==='resolved'){
+        this.setData({selectedPublicIds:[],selectedTotalText:money(0),success:'已恢复原付款结果，请核对最新桌账。'})
+        try { await this.loadData(true) } catch (_error) {
+          if(scope===tableSessionCacheScope())this.setData({error:'原付款结果已找到，最新桌账暂未读到，请刷新核对。'})
+        }
+        return
+      }
       if(!isPresentableAlipayTradeAction(action)){
         this.setData({error:action&&action.status==='failed'?'本次支付未能打开，请重试或联系员工收款':'本次支付结果尚未确认，可联系员工继续收款；后台会核对实际到账。'})
         return

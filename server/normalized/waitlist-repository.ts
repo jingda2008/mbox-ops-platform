@@ -292,6 +292,7 @@ export interface WaitlistCommandInput {
   businessDate: string
   idempotencyKey: string
   requestFingerprint: string
+  beforeClaim?: (transaction: ScopedTransaction) => Promise<void>
 }
 
 export class WaitlistCommandService {
@@ -307,7 +308,7 @@ export class WaitlistCommandService {
     }, async (transaction) => {
       const entry = await new WaitlistRepository(transaction).create(input)
       return commandOutcome(input, entry, 'waitlist.created')
-    })
+    }, input.beforeClaim)
   }
 
   transition(input: Readonly<WaitlistCommandInput & {

@@ -11,6 +11,18 @@ class Blocked(RuntimeError): pass
 def require(value, message):
     if not value: raise Blocked(message)
 
+def runtime_data_mount(mounts):
+    """Only the reviewed read-only public artifact mount may accompany /data."""
+    require(len({x['target'] for x in mounts})==len(mounts),'duplicate persistent mount target')
+    for mount in mounts:
+        if mount['target']=='/run/mbox-native-updates':
+            require(mount=={'type':'bind','source':'/opt/mbox/native-updates/staff','target':'/run/mbox-native-updates','readOnly':True},'native update mount must use the fixed read-only public directory')
+        else:
+            require(mount['target']=='/data' and mount['type'] in ('volume','bind'),'unrecognized legacy persistent mount requires an explicit reviewed adapter')
+    data=[x for x in mounts if x['target']=='/data']
+    require(len(data)<=1,'ambiguous data mounts')
+    return data[0] if data else None
+
 def canonical(value): return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 def sha(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def systemd_inventory_sha256(output):
@@ -530,9 +542,7 @@ class Host:
         require(hashlib.sha256(canonical(sorted(source['Config']['Env']))).hexdigest()==expected['environmentSha256'],'sourceLive environment mismatch')
         mounts=[{'type':x['Type'],'source':x.get('Name') if x['Type']=='volume' else x['Source'],'target':x['Destination'],'readOnly':not x['RW']} for x in source['Mounts'] if x['Destination']!='/app/worker-adapters']
         require(sorted(mounts,key=lambda x:x['target'])==sorted(self.plan['persistentMounts'],key=lambda x:x['target']),'source persistent mount binding changed')
-        require(all(x['target']=='/data' and x['type'] in ('volume','bind') for x in mounts),'unrecognized legacy persistent mount requires an explicit reviewed adapter')
-        require(len(mounts)<=1,'ambiguous data mounts')
-        self.data_mount=mounts[0] if mounts else None
+        self.data_mount=runtime_data_mount(mounts)
         oldenv=dict(value.split('=',1) for value in source['Config']['Env'] if '=' in value)
         for key in ('POSTAR_PUBLIC_KEY','POSTAR_AGENCY_ID','POSTAR_MERCHANT_ID','POSTAR_CALLBACK_URL','MBOX_PAYMENT_PROVIDER','MBOX_TENANT_ID','MBOX_STORE_ID'):
             require(oldenv.get(key,'').replace('\\n','\n')==values.get(key,'').replace('\\n','\n'),'provider binding changed during maintenance: '+key)
@@ -932,6 +942,12 @@ ROLLBACK;""",env=self.pg_env))
         if existing:
             self.run(['docker','update','--restart=no',self.candidate]); self.run(['docker','stop','-t','60',self.candidate]); self.run(['docker','rm',self.candidate])
         arguments=['docker','run','-d','--name',self.candidate,'--restart=no','--env-file',str(self.release/'app.env'),*self.args,*self.adapter,'--mount','type=bind,src='+str(self.store)+',dst=/run/mbox-config/store.json,readonly','--mount','type=bind,src='+str(self.catalog)+',dst=/run/mbox-config/catalog.json,readonly']
+        native_directory=self.root/'native-updates/staff'
+        for path in (self.root/'native-updates',native_directory):
+            require(not path.is_symlink(),'native update directory cannot be symlinked')
+            path.mkdir(mode=0o755,parents=True,exist_ok=True)
+            path.chmod(0o755)
+        arguments+=['--mount','type=bind,src='+str(native_directory)+',dst=/run/mbox-native-updates,readonly']
         if self.data_mount:
             mount=self.data_mount
             arguments+=['--mount','type='+mount['type']+',src='+mount['source']+',dst=/data'+(',readonly' if readonly or mount['readOnly'] else '')]

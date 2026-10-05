@@ -1,3 +1,4 @@
+import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedCommandExecutor } from './command-executor.js'
@@ -15,6 +16,15 @@ const apps: ReturnType<typeof Fastify>[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('hardware API role cropping', () => {
+  it('exposes cost-lock contention as retryable 503 without the definite stock refusal code', async () => {
+    const commands=commandExecutor()
+    vi.mocked(commands.execute).mockRejectedValueOnce(new InventoryReturnCostProjectionBusyError())
+    const app=await build(['inventory.receive'],repository(),commands)
+    const response=await app.inject({method:'POST',url:`/operations/order-items/${deviceId}/stock-return`,
+      payload:{quantity:1,disposition:'returned_unopened',reason:'完整商品实际退回',unopenedConfirmed:true},headers:{'idempotency-key':'return-cost-conflict-0001'}})
+    expect(response.statusCode).toBe(503)
+    expect(response.json()).toMatchObject({error:{code:'INVENTORY_RETURN_COST_RETRY',retryable:true}})
+  })
   it.each(['2026-09-01','2026-09-31','2028-09-13'])('rejects reversed, invalid or excessive report end dates (%s)',async endDate=>{
     const app=await build(['order.bill.print','reconciliation.view'])
     expect((await app.inject({method:'POST',url:'/hardware/business-days/2026-09-13/report',
@@ -50,11 +60,13 @@ describe('hardware API role cropping', () => {
     expect(rows).toContainEqual({ticketKind:'cashier_settlement',enabled:true,copies:null})
     const send=(body:object)=>manager.inject({method:'POST',url:'/hardware/print-ticket-policies',
       headers:{'idempotency-key':'print-policy-validation-0001'},payload:body})
-    for(const patch of [{ticketKind:'unknown'},{enabled:'false'},{copies:0},{copies:6},{copies:1.5},{reason:''}]) {
+    for(const patch of [{ticketKind:'unknown'},{enabled:'false'},{copies:0},{copies:6},{copies:1.5},{copies:''},{copies:undefined},{reason:''}]) {
       expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印',...patch})).statusCode).toBe(400)
     }
     expect((await send({ticketKind:'delivery',enabled:false,copies:2,reason:'调整配送打印'})).json().data)
       .toEqual({ticketKind:'delivery',enabled:false,copies:2})
+    for(const enabled of [false,true]) expect((await send({ticketKind:'delivery',enabled,copies:null,reason:'恢复路由份数'})).json().data)
+      .toEqual({ticketKind:'delivery',enabled,copies:null})
   })
   it('returns 401 instead of an internal error when the staff session is missing', async () => {
     const app = Fastify()
@@ -252,14 +264,14 @@ describe('hardware API role cropping', () => {
   })
 })
 
-async function build(capabilities: string[], fake = repository()) {
+async function build(capabilities: string[], fake = repository(), commands = commandExecutor()) {
   const app = Fastify()
   apps.push(app)
   await app.register(hardwareApiPlugin, {
     transactions: {
       run: async (_scope, operation) => operation(transaction()),
     },
-    commands: commandExecutor(),
+    commands,
     resolveContext: () => ({
       scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-11', capabilities,
     }),

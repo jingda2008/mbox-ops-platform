@@ -698,8 +698,9 @@ export class InventoryRepository {
 
   async synchronizeTrackedProductRecipeCost(
     productId: string,
-    employeeId: string,
+    employeeId: string | null,
     reason: string,
+    sourceInventoryMovementId?: string,
   ): Promise<AppliedRecipeCost | null> {
     const preview = await this.recipeCostSnapshot(productId, true);
     if (preview.costAmountMinor === null) {
@@ -714,7 +715,7 @@ export class InventoryRepository {
       if (product.rowCount !== 1) throw new InventoryNotFoundError('tracked product', productId);
       return null;
     }
-    return this.persistRecipeCost(preview, employeeId, reason);
+    return this.persistRecipeCost(preview, employeeId, reason, sourceInventoryMovementId);
   }
 
   async synchronizeTrackedRecipeCostsForInventoryItems(
@@ -767,23 +768,36 @@ export class InventoryRepository {
         FROM mbox.product_bundle_components AS component
         WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
           AND component.component_product_id=ANY($3::uuid[])
+        UNION
+        SELECT choice_group.bundle_product_id
+        FROM mbox.product_bundle_choice_options choice_option
+        JOIN mbox.product_bundle_choice_groups choice_group
+          ON choice_group.tenant_id=choice_option.tenant_id AND choice_group.store_id=choice_option.store_id
+         AND choice_group.id=choice_option.choice_group_id
+        WHERE choice_option.tenant_id=$1::uuid AND choice_option.store_id=$2::uuid
+          AND choice_option.component_product_id=ANY($3::uuid[])
       ), calculated AS (
-        SELECT component.bundle_product_id,
+        SELECT affected.bundle_product_id,
           CASE
-            WHEN bool_and(component_product.cost_amount_minor IS NOT NULL)
+            -- A required choice is costed from the selected products on an
+            -- order; a catalog bundle cannot claim only its fixed-part cost.
+            WHEN NOT EXISTS (SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+              WHERE choice_group.tenant_id=$1::uuid AND choice_group.store_id=$2::uuid
+                AND choice_group.bundle_product_id=affected.bundle_product_id)
+              AND count(component.id)>0 AND bool_and(component_product.cost_amount_minor IS NOT NULL)
               AND sum(component_product.cost_amount_minor::numeric * component.quantity::numeric) <= 9007199254740991
             THEN sum(component_product.cost_amount_minor::numeric * component.quantity::numeric)::bigint
             ELSE NULL
           END AS cost_amount_minor
-        FROM mbox.product_bundle_components AS component
-        JOIN affected_bundle AS affected
-          ON affected.bundle_product_id=component.bundle_product_id
-        JOIN mbox.products AS component_product
+        FROM affected_bundle AS affected
+        LEFT JOIN mbox.product_bundle_components AS component
+          ON component.tenant_id=$1::uuid AND component.store_id=$2::uuid
+         AND affected.bundle_product_id=component.bundle_product_id
+        LEFT JOIN mbox.products AS component_product
           ON component_product.tenant_id=component.tenant_id
          AND component_product.store_id=component.store_id
          AND component_product.id=component.component_product_id
-        WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid
-        GROUP BY component.bundle_product_id
+        GROUP BY affected.bundle_product_id
       )
       UPDATE mbox.products AS bundle
       SET cost_amount_minor=calculated.cost_amount_minor,
@@ -857,18 +871,19 @@ export class InventoryRepository {
 
   private async persistRecipeCost(
     preview: RecipeCostPreview,
-    employeeId: string,
+    employeeId: string | null,
     reason: string,
+    sourceInventoryMovementId?: string,
   ): Promise<AppliedRecipeCost> {
     const inserted = requireOne(await this.transaction.query<{ id: string; calculated_at: string }>(`
       INSERT INTO mbox.recipe_cost_versions(
         tenant_id,store_id,product_id,recipe_id,recipe_version,cost_amount_minor,currency,
-        calculated_by_employee_id,calculation_reason
-      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::bigint,$7,$8::uuid,$9)
+        calculated_by_employee_id,calculation_reason,source_inventory_movement_id
+      ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::bigint,$7,$8::uuid,$9,$10::uuid)
       RETURNING id,calculated_at::text
     `, [
       this.transaction.scope.tenantId,this.transaction.scope.storeId,preview.productId,preview.recipeId,
-      preview.recipeVersion,preview.costAmountMinor,preview.currency,employeeId,reason.trim(),
+      preview.recipeVersion,preview.costAmountMinor,preview.currency,employeeId,reason.trim(),sourceInventoryMovementId ?? null,
     ]), 'recipe cost version insert');
     for (const component of preview.components) {
       if (component.sourceUnitCostMinor === null || component.componentCostMinor === null)

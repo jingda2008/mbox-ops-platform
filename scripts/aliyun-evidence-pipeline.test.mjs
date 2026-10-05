@@ -448,6 +448,7 @@ test('external rollback starts and verifies the previous SHA before candidate-IP
   'maintenance-bootstrap.sh',
   'maintenance-bootstrap.py',
   'maintenance-ingress.mjs',
+  'publish-native-update.py',
   ]
   await Promise.all([
     mkdir(failedRelease, { recursive: true }),
@@ -474,7 +475,7 @@ printf '%s\n' "$*" >> "$MBOX_PUBLIC_VERIFY_LOG"
 exit 0
 `, { mode: 0o700 })
   for (const scriptName of deploymentScriptNames.filter((name) => name !== 'verify-public-app.sh')) {
-    await writeFile(join(failedRelease, scriptName), `#!/bin/sh\nprintf '${scriptName}\\n'\n`, { mode: 0o700 })
+    await writeFile(join(failedRelease, scriptName), scriptName === 'release-state.sh' ? await read('../deploy/aliyun/release-state.sh') : `#!/bin/sh\nprintf '${scriptName}\\n'\n`, { mode: 0o700 })
   }
   const deploymentScripts = Object.fromEntries(await Promise.all(deploymentScriptNames.map(async (scriptName) => [
     scriptName.replace(/\.sh$/, '').replaceAll('-', '_'),

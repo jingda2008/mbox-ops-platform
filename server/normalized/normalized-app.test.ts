@@ -1,7 +1,7 @@
 import {createHash,createCipheriv,generateKeyPairSync} from 'node:crypto'
 import {SocialAccountRepository} from './social-account-repository.js'
 import type {RuntimeDatabaseIdentity} from './runtime-database-identity.js'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
@@ -626,11 +626,14 @@ describe('createNormalizedApp', () => {
 
   it('serves direct SPA routes from the normalized image without hiding unknown APIs', async () => {
     const staticDir = await mkdtemp(resolve(tmpdir(), 'mbox-normalized-static-'))
+    const nativeUpdatesDir = await realpath(await mkdtemp(resolve(tmpdir(), 'mbox-normalized-native-')))
+    const nativeFeed = { schemaVersion: 1, channel: 'stable', releases: [] }
+    await writeFile(resolve(nativeUpdatesDir, 'stable.json'), JSON.stringify(nativeFeed))
     await writeFile(resolve(staticDir, 'index.html'), '<!doctype html><title>normalized shell</title>')
     await mkdir(resolve(staticDir, 'menu', 'items'), { recursive: true })
     await writeFile(resolve(staticDir, 'menu', 'items', 'public.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
     const runtime = await createNormalizedApp({
-      config: { ...config, staticDir },
+      config: { ...config, staticDir, nativeUpdatesDir },
       pool: fakePool(),
       logger: false,
     })
@@ -650,6 +653,17 @@ describe('createNormalizedApp', () => {
       expect(api.json()).toEqual({
         error: { code: 'ROUTE_NOT_FOUND', message: '请求的页面或接口不存在' },
       })
+
+      const nativeManifest = await runtime.app.inject('/native-updates/staff/stable.json')
+      expect(nativeManifest.statusCode).toBe(200)
+      expect(nativeManifest.json()).toEqual(nativeFeed)
+      expect(nativeManifest.headers['cache-control']).toBe('no-store')
+      const missingNativeManifest = await runtime.app.inject({
+        url: '/native-updates/staff/preview.json', headers: { accept: 'text/html' },
+      })
+      expect(missingNativeManifest.statusCode).toBe(404)
+      expect(missingNativeManifest.json().error.code).toBe('NATIVE_UPDATE_NOT_FOUND')
+      expect(missingNativeManifest.body).not.toContain('normalized shell')
 
       const menuImage = await runtime.app.inject({
         method: 'GET', url: '/menu/items/public.jpg?revision=1',
@@ -671,6 +685,7 @@ describe('createNormalizedApp', () => {
     } finally {
       await runtime.app.close()
       await rm(staticDir, { recursive: true, force: true })
+      await rm(nativeUpdatesDir, { recursive: true, force: true })
     }
   })
 })

@@ -26,6 +26,7 @@ test('release manifest binds the exact store and catalog configuration digests',
   'maintenance-bootstrap.sh',
   'maintenance-bootstrap.py',
   'maintenance-ingress.mjs',
+  'publish-native-update.py',
   ]) writeFileSync(join(scripts, name), `#!/bin/sh\nprintf '${name}\\n'\n`)
   writeFileSync(archive, 'image')
   writeFileSync(migration, JSON.stringify({ count: 40, digest: 'a'.repeat(64) }))
@@ -67,7 +68,7 @@ test('release manifest binds the exact store and catalog configuration digests',
   assert.equal(manifest.configuration.catalog.file, 'catalog.json')
   assert.match(manifest.configuration.catalog.sha256, /^[0-9a-f]{64}$/)
   assert.notEqual(manifest.configuration.store.sha256, manifest.configuration.catalog.sha256)
-  assert.equal(Object.keys(manifest.deploymentScripts).length, 15)
+  assert.equal(Object.keys(manifest.deploymentScripts).length, 16)
   assert.equal(manifest.deploymentScripts.activate_release.file, 'activate-release.sh')
   assert.match(manifest.deploymentScripts.activate_release.sha256, /^[0-9a-f]{64}$/)
 })

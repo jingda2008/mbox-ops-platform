@@ -80,3 +80,52 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(new Set(h.calls.map(c => c.key)).size, 3)
   })
 }
+
+// Keep the transport adapter in this contract: page-only mocks used to hide
+// missing error.details between the server response and duplicate confirmation.
+import { liveMiniHarness } from './miniprogram-live-contract-harness.mjs'
+for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+  test(`${platform}: actual request and checkout API preserve reviewed conflict through page confirmation`, async () => {
+    const h = liveMiniHarness(platform, call => {
+      if (!call.data.confirmedDuplicateOrderId) return { status: 409, data: { error: {
+        code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED', message: '重复点单',
+        details: { conflictingOrderId: 'original-order-123', conflictingOrderCreatedAt: '2026-10-05T01:00:00Z', unexpected: 'never expose' },
+      } } }
+      return { status: 201, data: { data: { order: { publicId: 'continued-order' }, payment: { publicId: 'payment' }, sharedCart: {} } } }
+    })
+    const p = h.page('order', ['submitOrder', 'confirmDuplicateCheckout'], {
+      alipayOnlinePaymentEnabled: () => true, checkoutRecommendationAttribution: () => null,
+      CHECKOUT_ATTEMPT_KEY: 'checkout-attempt', PENDING_PAYMENT_KEY: 'pending-payment', CHECKOUT_REJECTED_BEFORE_ORDER: new Set(),
+    })
+    const request = { scope: 'table-one' }
+    Object.assign(p, { currentTableRequest: () => request, isCurrentTableRequest: () => true, recordOrderTiming() {}, updateCart() {}, async handlePaymentAction() {} })
+    p.data = { paymentStateReady: true, cartVersion: 1, cartGeneration: 2, busy: false }
+    await p.submitOrder(null, false, null, request)
+    assert.equal(h.modals.length, 1); assert.match(h.modals[0].content, /er-123/)
+    assert.equal(h.calls.length, 2); assert.equal(h.calls[1].data.confirmedDuplicateOrderId, 'original-order-123')
+    assert.notEqual(h.calls[0].headers['idempotency-key'], h.calls[1].headers['idempotency-key'])
+    assert.equal(p.data.pendingPayment.orderPublicId, 'continued-order')
+    assert.equal(h.storage.has('checkout-attempt'), false)
+  })
+  test(`${platform}: malformed conflict details never authorize continuing an unreviewed order`, async () => {
+    for (const details of [null, [], { conflictingOrderId: 'short' }, { conflictingOrderId: 'bad order number' }]) {
+      const h = liveMiniHarness(platform, () => ({ status: 409, data: { error: { code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED', message: '重复点单', details } } }))
+      await assert.rejects(h.api.checkoutSharedCart({ expectedGeneration: 2, expectedVersion: 1 }, 'checkout-malformed'), e => e.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED' && !e.details)
+      assert.equal(h.modals.length, 0)
+    }
+  })
+  test(`${platform}: details whitelist excludes unrelated server fields`, async () => {
+    const h = liveMiniHarness(platform, () => ({ status: 409, data: { error: { code: 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED', message: '重复点单', details: { conflictingOrderId: 'original-order-123', conflictingOrderCreatedAt: 'bad-time', secret: 'omit' } } } }))
+    await assert.rejects(h.api.checkoutSharedCart({ expectedGeneration: 2, expectedVersion: 1 }, 'checkout-whitelist'), e => JSON.stringify(e.details) === JSON.stringify({ conflictingOrderId: 'original-order-123' }))
+  })
+  test(`${platform}: account restores resolved batch payment without presenting platform payment`, async () => {
+    const h = liveMiniHarness(platform, () => ({ data: { data: { status: 'resolved', paymentId: 'payment', paymentPublicId: 'payment-public', terminalPaymentStatus: 'succeeded', presentation: 'jsapi', payload: null } } }))
+    const p = h.page('account', ['paySelectedOrders']); p.data = { payingBatch: false, selectedPublicIds: ['order-a'], orders: [] }
+    let refreshes = 0; p.loadData = async () => { refreshes++ }
+    h.storage.set('mbox.table-batch-attempt:table-one', { ids: ['order-a'], key: 'original-batch-key' })
+    await p.paySelectedOrders()
+    assert.equal(refreshes, 1); assert.equal(h.nativePayments.length, 0); assert.equal(h.calls[0].headers['idempotency-key'], 'original-batch-key')
+    assert.equal(h.storage.has('mbox.table-batch-attempt:table-one'), false)
+    assert.equal(p.data.selectedPublicIds.length, 0); assert.match(p.data.success, /已恢复原付款结果/); assert.equal(p.data.error, '')
+  })
+}

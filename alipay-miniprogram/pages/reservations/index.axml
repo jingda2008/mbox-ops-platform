@@ -4,8 +4,18 @@
   <block a:else>
     <view a:if="{{error}}" class="error-banner">{{error}}</view><view a:if="{{success}}" class="success-banner">{{success}}</view>
 
+    <view a:if="{{!reservationRecoveryReady}}" class="section reservation-recovery">
+      <text>请先核对本机是否有待确认的原预约，再填写新预约。</text>
+      <button class="primary-button" onTap="retryImpacts">重新读取本人预约</button>
+    </view>
+    <view a:elif="{{pendingReservation}}" class="section reservation-recovery">
+      <text class="flow-title">上次预约需要确认</text>
+      <text>原预约内容已经保留。查询原预约不会另建一条，也不会重复占用名额。</text>
+      <button class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" onTap="recoverReservation">查询并恢复原预约</button>
+    </view>
+
     <view a:if="{{reservations.length}}" class="section reservation-history">
-      <view class="section-title"><text>我的预约</text><button a:if="{{!showForm}}" onTap="startNewReservation">＋ 新预约</button></view>
+      <view class="section-title"><text>我的预约</text><button a:if="{{!showForm && reservationRecoveryReady && !pendingReservation}}" onTap="startNewReservation">＋ 新预约</button></view>
       <view a:if="{{impactsError}}" class="impact-load-error"><text>{{impactsError}}</text><button onTap="retryImpacts">重试</button></view>
       <view a:if="{{impactNotice}}" class="impact-global-notice" role="status">{{impactNotice}}</view>
       <view a:if="{{notificationNotice}}" class="impact-global-notice" role="status">{{notificationNotice}}</view>
@@ -32,7 +42,7 @@
       </view></view>
     </view>
 
-    <view a:if="{{showForm}}" class="booking-flow">
+    <view a:if="{{showForm && reservationRecoveryReady && !pendingReservation}}" class="booking-flow">
       <view class="step-head"><view class="step-progress"><view class="{{step >= 1 ? 'is-active' : ''}}"><text>1</text><text>时间人数</text></view><view class="step-line {{step >= 2 ? 'is-active' : ''}}"></view><view class="{{step >= 2 ? 'is-active' : ''}}"><text>2</text><text>演出位置</text></view><view class="step-line {{step >= 3 ? 'is-active' : ''}}"></view><view class="{{step >= 3 ? 'is-active' : ''}}"><text>3</text><text>确认提交</text></view></view></view>
 
       <view a:if="{{step === 1}}" class="flow-panel">

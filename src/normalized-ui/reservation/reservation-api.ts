@@ -50,6 +50,8 @@ export interface PublicReservationApiOptions {
   fetch?: typeof fetch
   timeoutMs?: number
   createIdempotencyKey?: () => string
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+  now?: () => number
 }
 
 export interface ReservationMutationInput {
@@ -61,6 +63,29 @@ export interface ReservationMutationInput {
   seatPreference?: SeatPreference
   reservationPolicyVersion: number
   preferredScheduleId?: string | null
+}
+
+export interface PendingReservationSubmission {
+  publicId: string
+  arrivalAt: string
+  guestCount: number
+}
+
+type ReservationCreatePayload = ReservationMutationInput & { mode: BookingMode; contact: string; publicId: string }
+interface ReservationSubmission {
+  version: 1
+  scope: string
+  key: string
+  createdAt: number
+  payload: ReservationCreatePayload
+}
+const SUBMISSION_PREFIX = 'mbox.web.reservation.submission.v1:'
+const DEFINITE_REJECTIONS = new Set([
+  'PUBLIC_RESERVATION_REQUEST_INVALID', 'RESERVATION_POLICY_CHANGED',
+  'RESERVATION_CAPACITY_FULL', 'TABLE_ALREADY_RESERVED', 'RESERVATION_HOLD_EXPIRED',
+])
+function submissionFailure(code: string, message: string): PublicReservationApiError {
+  return new PublicReservationApiError(message, code, null)
 }
 
 export async function withReservationSessionRecovery<Value>(
@@ -81,21 +106,37 @@ export class PublicReservationApi {
   private readonly timeoutMs: number
   private readonly createKey: () => string
   private deviceFingerprint: string | null = null
+  private recoveryScope: string | null = null
+  private identityVersion = 0
+  private readonly suppliedStorage: PublicReservationApiOptions['storage']
+  private readonly now: () => number
+  private inFlight: { scope: string; fingerprint: string; promise: Promise<PublicReservation> } | null = null
 
   constructor(options: Readonly<PublicReservationApiOptions> = {}) {
+    this.suppliedStorage = options.storage
+    this.now = options.now ?? Date.now
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = validTimeout(options.timeoutMs ?? 8_000)
     this.createKey = options.createIdempotencyKey ?? (() => globalThis.crypto.randomUUID())
   }
 
   async issueSession(identity: Readonly<ReservationIdentity>, signal?: AbortSignal): Promise<void> {
+    const identityVersion = ++this.identityVersion
+    this.recoveryScope = null
     this.deviceFingerprint = identity.deviceFingerprint
-    await this.request('/api/public/reservation/session', {
+    const body = await this.request('/api/public/reservation/session', {
       method: 'POST',
       body: identity,
       idempotent: true,
       signal,
     })
+    if (signal?.aborted || identityVersion !== this.identityVersion) return
+    const data = object(dataOf(body), '预约身份')
+    // Older servers can still serve existing reservations, but cannot safely
+    // bind a new durable submission to its customer and store.
+    if (typeof data.recoveryScope === 'string' && /^[a-f0-9]{64}$/.test(data.recoveryScope)) {
+      this.recoveryScope = JSON.stringify([globalThis.location?.origin ?? 'local', data.recoveryScope])
+    }
   }
 
   async availability(arrivalAt: string, guestCount: number, signal?: AbortSignal): Promise<ReservationAvailability> {
@@ -110,18 +151,134 @@ export class PublicReservationApi {
     return parseDailyPerformance(dataOf(body))
   }
 
-  async createReservation(
+  createReservation(
     mode: BookingMode,
     input: ReservationMutationInput & { contact: string },
     signal?: AbortSignal,
   ): Promise<PublicReservation> {
-    const body = await this.request('/api/public/reservations', {
-      method: 'POST',
-      body: { mode, ...input },
-      idempotent: true,
-      signal,
+    const scope = this.currentScope()
+    const fingerprint = JSON.stringify({ mode, ...input })
+    if (this.inFlight?.scope === scope) {
+      if (this.inFlight.fingerprint === fingerprint) return this.inFlight.promise
+      return Promise.reject(submissionFailure('RESERVATION_SUBMISSION_PENDING', '原预约正在提交，请先确认原预约。'))
+    }
+    let attempt = this.readSubmission(scope)
+    const recovery = attempt !== null
+    if (attempt !== null) {
+      const { publicId: _publicId, ...original } = attempt.payload
+      if (JSON.stringify(original) !== fingerprint) {
+        return Promise.reject(submissionFailure('RESERVATION_SUBMISSION_PENDING', '上次预约结果尚未确认，请先查询并恢复原预约。'))
+      }
+    } else {
+      attempt = {
+        version: 1, scope, key: this.createKey(), createdAt: this.now(),
+        payload: { mode, ...input, publicId: `reservation-${globalThis.crypto.randomUUID()}` },
+      }
+      const storage = this.storage()
+      try {
+        storage.setItem(SUBMISSION_PREFIX + scope, JSON.stringify(attempt))
+        if (JSON.stringify(this.readSubmission(scope)) !== JSON.stringify(attempt)) throw new Error('storage mismatch')
+      } catch {
+        throw submissionFailure('RESERVATION_SUBMISSION_STORAGE_FAILED', '本机未能保存预约恢复记录，本次没有提交，请检查存储后重试。')
+      }
+    }
+    const promise = this.executeSubmission(attempt, recovery, signal).finally(() => {
+      if (this.inFlight?.promise === promise) this.inFlight = null
     })
-    return parseReservation(dataOf(body))
+    this.inFlight = { scope, fingerprint, promise }
+    return promise
+  }
+
+  getPendingReservation(): PendingReservationSubmission | null {
+    const attempt = this.readSubmission(this.currentScope())
+    return attempt === null ? null : {
+      publicId: attempt.payload.publicId, arrivalAt: attempt.payload.arrivalAt, guestCount: attempt.payload.guestCount,
+    }
+  }
+
+  async recoverReservation(signal?: AbortSignal): Promise<PublicReservation | null> {
+    const scope = this.currentScope()
+    if (this.inFlight?.scope === scope) return this.inFlight.promise
+    const attempt = this.readSubmission(scope)
+    if (attempt === null) return null
+    const { publicId: _publicId, ...original } = attempt.payload
+    return this.createReservation(original.mode, (() => {
+      const { mode: _mode, ...input } = original
+      return input
+    })(), signal)
+  }
+
+  private currentScope(): string {
+    if (this.recoveryScope === null) throw submissionFailure('RESERVATION_RECOVERY_UNAVAILABLE', '预约恢复信息尚未读取，请重新连接后继续。')
+    return this.recoveryScope
+  }
+
+  private assertScope(scope: string): void {
+    if (this.recoveryScope !== scope) throw submissionFailure('RESERVATION_SUBMISSION_SCOPE_CHANGED', '预约身份或门店已变化，请重新连接后读取本人预约。')
+  }
+
+  private storage(): NonNullable<PublicReservationApiOptions['storage']> {
+    try {
+      const storage = this.suppliedStorage ?? globalThis.localStorage
+      if (storage) return storage
+    } catch { /* Fail closed: do not submit without durable recovery. */ }
+    throw submissionFailure('RESERVATION_SUBMISSION_STORAGE_FAILED', '本机无法保存预约恢复记录，请检查浏览器存储后重试。')
+  }
+
+  private readSubmission(scope: string): ReservationSubmission | null {
+    try {
+      const raw = this.storage().getItem(SUBMISSION_PREFIX + scope)
+      if (raw === null) return null
+      const value = JSON.parse(raw) as ReservationSubmission
+      const p = value?.payload
+      if (value.version !== 1 || value.scope !== scope || typeof value.key !== 'string' || value.key.length < 8
+        || !Number.isFinite(value.createdAt) || !p || typeof p.publicId !== 'string' || !/^reservation-[a-f0-9-]{36}$/.test(p.publicId)
+        || p.mode !== 'direct' || typeof p.customerName !== 'string' || typeof p.contact !== 'string'
+        || typeof p.arrivalAt !== 'string' || !Number.isFinite(Date.parse(p.arrivalAt))
+        || !Number.isSafeInteger(p.guestCount) || p.guestCount < 1 || !Number.isSafeInteger(p.reservationPolicyVersion)) throw new Error('invalid recovery record')
+      return value
+    } catch (error) {
+      if (error instanceof PublicReservationApiError) throw error
+      throw submissionFailure('RESERVATION_SUBMISSION_STORAGE_FAILED', '原预约恢复记录暂时无法读取，请联系门店核对，避免重复预约。')
+    }
+  }
+
+  private finishSubmission(attempt: ReservationSubmission, saved: PublicReservation): PublicReservation {
+    this.assertScope(attempt.scope)
+    if (saved.publicId !== attempt.payload.publicId) throw submissionFailure('RESERVATION_SUBMISSION_MISMATCH', '预约回执不匹配，请查询并恢复原预约。')
+    const current = this.readSubmission(attempt.scope)
+    if (current?.key === attempt.key) this.storage().removeItem(SUBMISSION_PREFIX + attempt.scope)
+    return saved
+  }
+
+  private async executeSubmission(attempt: ReservationSubmission, recovery: boolean, signal?: AbortSignal): Promise<PublicReservation> {
+    this.assertScope(attempt.scope)
+    if (recovery) {
+      try {
+        return this.finishSubmission(attempt, await this.getReservation(attempt.payload.publicId, signal))
+      } catch (error) {
+        this.assertScope(attempt.scope)
+        if (!(error instanceof PublicReservationApiError) || error.status !== 404 || error.code !== 'RESERVATION_NOT_FOUND') throw error
+      }
+      const age = this.now() - attempt.createdAt
+      if (age < 0 || age > 23 * 60 * 60_000) {
+        throw submissionFailure('RESERVATION_SUBMISSION_EXPIRED', '原预约仍未查到，恢复期限已过，请联系门店核对后再预约。')
+      }
+    }
+    this.assertScope(attempt.scope)
+    try {
+      const body = await this.request('/api/public/reservations', {
+        method: 'POST', body: attempt.payload, idempotencyKey: attempt.key, signal,
+      })
+      return this.finishSubmission(attempt, parseReservation(dataOf(body)))
+    } catch (error) {
+      this.assertScope(attempt.scope)
+      if (error instanceof PublicReservationApiError && DEFINITE_REJECTIONS.has(error.code)) {
+        const current = this.readSubmission(attempt.scope)
+        if (current?.key === attempt.key) this.storage().removeItem(SUBMISSION_PREFIX + attempt.scope)
+      }
+      throw error
+    }
   }
 
   async getReservation(publicId: string, signal?: AbortSignal): Promise<PublicReservation> {
@@ -169,6 +326,7 @@ export class PublicReservationApi {
       method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
       body?: unknown
       idempotent?: boolean
+      idempotencyKey?: string
       signal?: AbortSignal
     }>,
   ): Promise<unknown> {
@@ -184,7 +342,8 @@ export class PublicReservationApi {
     const headers = new Headers({ accept: 'application/json' })
     if (this.deviceFingerprint !== null) headers.set('x-mbox-guest-device', this.deviceFingerprint)
     if (options.body !== undefined) headers.set('content-type', 'application/json')
-    if (options.idempotent === true) headers.set('idempotency-key', this.createKey())
+    if (options.idempotencyKey !== undefined) headers.set('idempotency-key', options.idempotencyKey)
+    else if (options.idempotent === true) headers.set('idempotency-key', this.createKey())
 
     try {
       const response = await this.send(url, {

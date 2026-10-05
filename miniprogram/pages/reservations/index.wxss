@@ -28,3 +28,5 @@
   line-height: 62rpx;
 }
 .reservation-cancel::after { border: 0; }
+
+.reservation-recovery{display:grid;gap:20rpx}.reservation-recovery>text{display:block;line-height:1.6}.reservation-recovery .flow-title{margin:0}.reservation-recovery>button{width:100%;margin:0;white-space:normal}

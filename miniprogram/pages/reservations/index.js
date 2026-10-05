@@ -3,6 +3,8 @@ const {
   getReservationAvailability,
   getReservationPerformances,
   createCustomerReservation,
+  getPendingCustomerReservation,
+  recoverCustomerReservation,
   cancelCustomerReservation,
   getReservationPerformanceImpacts,
   acknowledgeReservationPerformanceImpact,
@@ -83,6 +85,7 @@ Page({
     loading: true, checking: false, submitting: false, loadingShows: false,
     error: '', success: '', isDevelopment: false,
     reservations: [], showForm: true, step: 1, cancelBusyId: '',
+    reservationRecoveryReady: false, pendingReservation: null,
     performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
     notificationBusyId: '', notificationNotice: '',
@@ -114,16 +117,20 @@ Page({
   onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
   async loadData() {
-    this.setData({ loading: true, error: '' })
+    this.setData({ loading: true, error: '', reservationRecoveryReady: false, pendingReservation: null })
     try {
-      const [reservationResult, impactResult, notificationResult, preloadResult] = await Promise.allSettled([
+      const [reservationResult, impactResult, notificationResult, preloadResult, pendingResult] = await Promise.allSettled([
         getReservations(), getReservationPerformanceImpacts(),
         getReservationPerformanceNotificationAuthorizations(),
         this.preloadWechatSubscriptionPresentationOptions(),
+        getPendingCustomerReservation(),
       ])
       if (preloadResult.status === 'fulfilled' && preloadResult.value.length) {
         this.setData({ wechatSubscriptionPresentationOptions: preloadResult.value })
       }
+      if (pendingResult.status === 'rejected') throw pendingResult.reason
+      const pendingReservation = pendingResult.value
+      this.setData({ reservationRecoveryReady: true, pendingReservation })
       if (reservationResult.status === 'rejected') throw reservationResult.reason
       const data = reservationResult.value
       const performanceImpacts = impactResult.status === 'fulfilled'
@@ -169,7 +176,7 @@ Page({
       this.setData({
         loading: false, reservations, performanceImpacts,
         impactsError: impactResult.status === 'rejected' ? '演出调整状态暂时无法读取，请重试' : '',
-        showForm: reservations.length === 0,
+        showForm: !pendingReservation && reservations.length === 0,
       })
       await Promise.all([this.checkAvailability(), this.loadPerformances()])
     } catch (error) { this.setData({ loading: false, error: customerErrorMessage(error, '预约信息载入失败') }) }
@@ -296,6 +303,7 @@ Page({
   },
 
   startNewReservation() {
+    if (!this.data.reservationRecoveryReady || this.data.pendingReservation || this.data.submitting) return
     this.setData({ showForm: true, step: 1, error: '', success: '' }, () => {
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
     })
@@ -413,6 +421,8 @@ Page({
   },
 
   submitReservation() {
+    if (this.data.pendingReservation) return this.recoverReservation()
+    if (!this.data.reservationRecoveryReady) return
     if (this.data.submitting || this._reservationSubmitPending) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()
@@ -436,8 +446,36 @@ Page({
     })
   },
 
+  reservationSubmissionFailed(error) {
+    if (error && error.pendingReservation) {
+      this.setData({ pendingReservation: error.pendingReservation, showForm: false,
+        error: error.code === 'RESERVATION_SUBMISSION_EXPIRED'
+          ? customerErrorMessage(error, '请联系门店核对原预约。')
+          : '预约提交结果暂未确认，请查询并恢复原预约；原填写内容已经保留。' })
+    } else if (error && error.code === 'RESERVATION_SUBMISSION_SCOPE_CHANGED') {
+      this.setData({ reservationRecoveryReady: false, pendingReservation: null, showForm: false,
+        error: customerErrorMessage(error, '预约身份已变化，请重新读取本人预约。') })
+    } else {
+      this.setData({ error: customerErrorMessage(error, '预约提交失败') })
+    }
+  },
+
+  async recoverReservation() {
+    if (this.data.submitting || !this.data.reservationRecoveryReady) return
+    this.setData({ submitting: true, error: '', success: '' })
+    try {
+      const original = await recoverCustomerReservation()
+      this.setData({ pendingReservation: null, showForm: false,
+        success: original ? '已找回原预约，请核对下方最新预约状态。' : '' })
+      await this.loadData()
+    } catch (error) { this.reservationSubmissionFailed(error) }
+    finally { this.setData({ submitting: false }) }
+  },
+
   async completeReservationSubmit() {
     if (this.data.submitting) return
+    if (this.data.pendingReservation) return this.recoverReservation()
+    if (!this.data.reservationRecoveryReady) return
     const customerName = this.data.customerName.trim()
     const contact = this.data.contact.trim()
     if (!customerName || contact.length < 3) {
@@ -463,7 +501,7 @@ Page({
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
       this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
-    } catch (error) { this.setData({ error: customerErrorMessage(error, '预约提交失败') }) }
+    } catch (error) { this.reservationSubmissionFailed(error) }
     finally { this.setData({ submitting: false }) }
   },
 })

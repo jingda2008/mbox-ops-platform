@@ -1,3 +1,4 @@
+import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import { randomUUID } from 'node:crypto'
 import type { PaymentCommandService } from './payment-command-service.js'
 import { sanitizeProviderSnapshot } from './payment-security-policy.js'
@@ -223,7 +224,8 @@ export class StaleGuestImmediatePaymentWorker {
               scope,refundId,'terminal',observed.status,
             )
           } catch (error) {
-            if (error instanceof OnlineRefundStatusUnknownError
+            if (error instanceof InventoryReturnCostProjectionBusyError
+              || error instanceof OnlineRefundStatusUnknownError
               || error instanceof OnlinePaymentUnavailableError) deferredRefundIds.push(refundId)
             else failedRefundIds.push(refundId)
             await this.deps.onlinePayments.recordAutomaticRefundQueryOutcome?.(

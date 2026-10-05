@@ -74,6 +74,13 @@ const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.en
     board=await read()
     expect(board.policies.find((p:{ticketKind:string})=>p.ticketKind==='cashier_payment')).toMatchObject({enabled:false,copies:2})
     expect(board.policies.find((p:{ticketKind:string})=>p.ticketKind==='cashier_refund')).toMatchObject({enabled:true,copies:null})
+    for(const enabled of [false,true]) {
+      const current=(await read()).policies.find((p:{ticketKind:string})=>p.ticketKind==='cashier_payment')
+      const inherited=await send({kind:'policy-save',expected:current.configurationFingerprint,
+        policy:{ticketKind:'cashier_payment',enabled,copies:null},reason:'恢复路由份数'})
+      expect(inherited.statusCode,inherited.body).toBe(200)
+      expect((await read()).policies.find((p:{ticketKind:string})=>p.ticketKind==='cashier_payment')).toMatchObject({enabled,copies:null})
+    }
     const printer=board.devices[0],key=`native-business-${randomUUID()}`
     const command={kind:'device-test',id:printer.id,expected:printer.configurationFingerprint,command:'ping',reason:'核对打印机连接'}
     const queued=await send(command,key);expect(queued.statusCode,queued.body).toBe(200)

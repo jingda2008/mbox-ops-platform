@@ -188,6 +188,7 @@ integration('public reservation API with PostgreSQL', () => {
       data: {
         status: 'active',
         sessionToken: 'reservation-test-session-token'.padEnd(48, 's'),
+        recoveryScope: createHash('sha256').update(JSON.stringify({ tenantId, storeId, customerId })).digest('hex'),
       },
     })
   })

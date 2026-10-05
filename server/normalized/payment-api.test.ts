@@ -1,4 +1,5 @@
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
+import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import { createHash, generateKeyPairSync, constants, privateEncrypt } from 'node:crypto'
 import { PostarRsaPaymentProviderVerifier, canonicalPostarSignString } from './postar-provider-verifier.js'
 import type { JsonObject } from './command-executor.js'
@@ -1188,6 +1189,22 @@ describe('paymentApiPlugin', () => {
       rawBody: Buffer.from('{"any" : "untrusted-provider-body"}'),
       headers: expect.objectContaining({ authorization: 'provider-secret-header' }),
     }))
+  })
+
+  it('keeps the original refund receipt retryable when cost projection is busy', async () => {
+    const value = fixture()
+    value.commands.recordManualRefundResult.mockRejectedValueOnce(new InventoryReturnCostProjectionBusyError())
+    const request = { method: 'POST' as const, url: `/api/refunds/${refundId}/manual-result`,
+      headers: { 'idempotency-key': 'refund-cost-busy-original' },
+      payload: { succeeded: true, receiptReference: 'CASH-ALREADY-RETURNED' } }
+    const busy = await value.app.inject(request)
+    expect(busy.statusCode).toBe(503)
+    expect(busy.json()).toMatchObject({ error: { code: 'INVENTORY_RETURN_COST_RETRY', retryable: true } })
+    const recovered = await value.app.inject(request)
+    expect(recovered.statusCode).toBe(200)
+    const calls = value.commands.recordManualRefundResult.mock.calls
+    expect(calls[0]![0].idempotencyKey).toBe(calls[1]![0].idempotencyKey)
+    expect(calls[0]![0].requestFingerprint).toBe(calls[1]![0].requestFingerprint)
   })
 
   it('keeps refund request, human decision and execution as separate HTTP commands', async () => {

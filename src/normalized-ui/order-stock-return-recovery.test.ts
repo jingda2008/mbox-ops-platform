@@ -52,6 +52,14 @@ describe('actual stock return and remaining-quantity recovery',()=>{
   await expect(recovery.submit({...body,quantity:2})).rejects.toThrow('恢复原退库')
   await recovery.recover();expect(post.mock.calls[1][2].idempotencyKey).toBe(post.mock.calls[0][2].idempotencyKey)
  })
+ it('retains the original payload and key for a retryable cost projection conflict',async()=>{
+  const {post,api,employee,item,store}=fixture();post.mockRejectedValueOnce({status:503,code:'INVENTORY_RETURN_COST_RETRY',retryable:true}).mockResolvedValueOnce({id:'retry-committed'})
+  const first=new OrderStockReturnRecovery(api,employee,item,store)
+  await expect(first.submit(body)).rejects.toMatchObject({code:'INVENTORY_RETURN_COST_RETRY'})
+  const reopened=new OrderStockReturnRecovery(api,employee,item,store)
+  expect(await reopened.recover()).toBe('retry-committed')
+  expect(post.mock.calls[1]).toEqual(post.mock.calls[0])
+ })
  it('does not treat a malformed success response as a confirmed stock change',async()=>{
   const {post,api,employee,item,store}=fixture();post.mockResolvedValueOnce({unexpected:true}).mockResolvedValueOnce({id:'recovered'})
   const recovery=new OrderStockReturnRecovery(api,employee,item,store)

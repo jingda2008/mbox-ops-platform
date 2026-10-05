@@ -34,6 +34,7 @@ ENV
 chmod 0600 "${env_file}"
 "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation
 grep -qx 'MBOX_RUNTIME_CONFIG_VERSION=normalized-runtime-config/v1' "${env_file}"
+grep -qx 'MBOX_NATIVE_UPDATES_DIR=/run/mbox-native-updates' "${env_file}"
 grep -qx 'MBOX_TRUST_PROXY_HOPS=1' "${env_file}"
 grep -qx 'MBOX_PAYMENT_MODE=disabled' "${env_file}"
 grep -qx 'MBOX_AI_MODE=disabled' "${env_file}"

@@ -402,8 +402,41 @@ set_env MBOX_EXPECTED_RELEASE_SHA "${release_sha}"
 set_env MBOX_EXPECTED_IMAGE_DIGEST "${expected_digest}"
 "${env_normalizer}" "${release_env}" "${deployment_tier}"
 
+# BEGIN NATIVE PUSH SECRET GUARD (also executed by the isolated shell contract tests)
+prepare_native_push_mount() {
+  native_push_mount_args=()
+  local enabled configured source ancestor mode owner group runtime_identity runtime_uid runtime_gid size
+  enabled=$(sed -n 's/^MBOX_NATIVE_PUSH_ENABLED=//p' "${release_env}")
+  case "${enabled}" in ''|false) return 0 ;; true) ;; *) echo "native push enabled flag is invalid" >&2; return 1 ;; esac
+  configured=$(sed -n 's/^MBOX_APNS_PRIVATE_KEY_FILE=//p' "${release_env}")
+  test "${configured}" = /run/mbox-native-push/apns.p8 || { echo "native push secret path is invalid" >&2; return 1; }
+  source=${install_root}/secrets/native-push/apns.p8
+  test -f "${source}" && test ! -L "${source}" || { echo "native push secret file is missing or unsafe" >&2; return 1; }
+  ancestor=$(dirname "${source}")
+  while :; do
+    test -d "${ancestor}" && test ! -L "${ancestor}" || return 1
+    owner=$(stat -c '%u' "${ancestor}")
+    mode=$(stat -c '%a' "${ancestor}")
+    test "${owner}" = 0 && (( (8#${mode} & 8#022) == 0 )) || { echo "native push secret parent is not protected" >&2; return 1; }
+    [ "${ancestor}" != / ] || break
+    ancestor=$(dirname "${ancestor}")
+  done
+  # Query the verified image's configured USER without secrets or network access.
+  runtime_identity=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "${image_tag}" node -e 'process.stdout.write(`${process.getuid()}:${process.getgid()}`)') || return 1
+  [[ "${runtime_identity}" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  runtime_uid=${runtime_identity%%:*}; runtime_gid=${runtime_identity##*:}
+  test "${runtime_uid}" -gt 0 && test "${runtime_gid}" -gt 0 || { echo "native push requires the non-root runtime USER" >&2; return 1; }
+  owner=$(stat -c '%u' "${source}"); group=$(stat -c '%g' "${source}"); mode=$(stat -c '%a' "${source}"); size=$(stat -c '%s' "${source}")
+  # Host parent is root-only; the container USER gets group read through this single RO bind.
+  test "${owner}" = 0 && test "${group}" = "${runtime_gid}" && test "${mode}" = 440 && test "${size}" -gt 0 && test "${size}" -le 16384 || { echo "native push secret owner, group, mode or size is invalid" >&2; return 1; }
+  native_push_mount_args=(--mount "type=bind,src=${source},dst=/run/mbox-native-push/apns.p8,readonly")
+}
+# END NATIVE PUSH SECRET GUARD
+prepare_native_push_mount
+
 docker run --rm \
   --env-file "${release_env}" \
+  "${native_push_mount_args[@]}" \
   --network "${network}" \
   --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
   --read-only \
@@ -417,6 +450,7 @@ release_state_transition "${state_file}" artifact_verified config_preflight_pass
 
 docker run --rm \
   --env-file "${release_env}" \
+  "${native_push_mount_args[@]}" \
   --network "${network}" \
   --mount "type=bind,src=${store_config},dst=/run/mbox-config/store.json,readonly" \
   --read-only \
@@ -583,6 +617,7 @@ run_database_maintenance_container() {
   fi
   docker run --rm --user 0:0 \
     --env-file "${release_env}" \
+  "${native_push_mount_args[@]}" \
     --env "PGSERVICEFILE=${database_pgservice_file}" \
     --env "PGPASSFILE=${database_pgpass_file}" \
     --env "APP_COMMIT_SHA=${release_sha}" \
@@ -1220,6 +1255,7 @@ if [ "${#worker_adapter_mount_args[@]}" -gt 0 ]; then
 fi
 candidate_docker_args+=(
   "${native_update_mount_args[@]}"
+  "${native_push_mount_args[@]}"
   --network "${network}"
   --volume "${candidate_volume}:/data"
   "${image_tag}"
@@ -1289,6 +1325,7 @@ if [ "${contract_migration}" = 1 ]; then
   fi
   full_candidate_docker_args+=(
     "${native_update_mount_args[@]}"
+  "${native_push_mount_args[@]}"
     --network "${network}"
     --volume "${candidate_volume}:/data"
     "${image_tag}"

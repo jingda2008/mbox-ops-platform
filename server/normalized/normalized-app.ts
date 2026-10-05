@@ -1,3 +1,5 @@
+import { nativePushApiPlugin } from './native-push-api.js'
+import { NativePushRepository } from './native-push-repository.js'
 import { registerNativeUpdateDistribution } from './native-update-distribution.js'
 import {nativeAnnualPolicyApiPlugin} from './native-annual-policy-api.js'
 import {nativeMembershipRecoveryApiPlugin} from './native-membership-recovery-api.js'
@@ -217,6 +219,12 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'req.headers.cookie',
   'headers.authorization',
   'headers.cookie',
+  'body.token',
+  'body.revocationSecret',
+  'req.body.token',
+  'req.body.revocationSecret',
+  'nativePush.privateKey',
+  'nativePush.tokenKey',
   'body.pin',
   'body.credential',
   'body.tableQrToken',
@@ -581,6 +589,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       return { scope: context.scope, employeeId: context.employeeId, businessDate: context.businessDate }
     }
 
+    instance.register(nativePushApiPlugin, { prefix:'/api/native/push', scope, resolveContext:commerceContext, repository:new NativePushRepository(transactions,options.config.nativePush ?? null,options.config.secret) })
     instance.register(staffAuthApiPlugin, {
       prefix: '/api/auth',
       auth: staffAuth,

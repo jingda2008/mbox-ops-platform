@@ -24,6 +24,7 @@ export interface RuntimePreflightReport {
   imageDigest: string | null
   modes: Record<string, string>
   externalHosts: string[]
+  nativePush: { enabled:boolean; provider:'apns'|null; environment:'sandbox'|'production'|null }
   provisioning: { employeePinCount: number; dailyCredentialConfigured: boolean } | null
   databaseIdentity?: {status:'restricted';login:string}
 }
@@ -45,6 +46,7 @@ export async function verifyNormalizedRuntimeConfig(
     config.integrations.ai?.endpoint,
     config.integrations.printingEndpoint,
     config.integrations.headsetEndpoint,
+    config.nativePush ? (config.nativePush.environment==='sandbox'?'https://api.sandbox.push.apple.com':'https://api.push.apple.com') : null,
   ].filter((value): value is string => Boolean(value?.trim()))
   const hosts = [...new Set(externalUrls.map((value) => new URL(value).hostname))].toSorted()
   if (checkExternal) {
@@ -64,6 +66,7 @@ export async function verifyNormalizedRuntimeConfig(
     imageDigest: config.releaseImageDigest,
     modes: { ...config.integrations.modes },
     externalHosts: hosts,
+    nativePush:{enabled:!!config.nativePush,provider:config.nativePush?'apns':null,environment:config.nativePush?.environment??null},
     provisioning: provisioning
       ? {
           employeePinCount: provisioning.employeePins.size,

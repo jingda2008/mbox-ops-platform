@@ -416,6 +416,7 @@ async function readTasks(
   roleCodes: readonly string[],
   includeAllTables: boolean,
   canManageService: boolean,
+  target?: { taskId: string; tableSessionId: string },
 ): Promise<OperationsTaskView[]> {
   const result = await transaction.query<TaskRow>(`
     SELECT task.id, task.public_id, session.table_id, venue_table.code AS table_code,
@@ -450,6 +451,7 @@ async function readTasks(
     WHERE task.tenant_id = $1::uuid
       AND task.store_id = $2::uuid
       AND task.status IN ('pending', 'acknowledged', 'in_progress')
+      AND ($7::uuid IS NULL OR (task.id=$7::uuid AND task.table_session_id=$8::uuid AND session.status IN ('open','closing')))
       AND (task.task_type <> 'guest.complaint' OR $6::boolean)
       AND (
         $5::boolean
@@ -480,6 +482,8 @@ async function readTasks(
     [...roleCodes],
     includeAllTables,
     canManageService,
+    target?.taskId ?? null,
+    target?.tableSessionId ?? null,
   ])
   return result.rows.map((row) => ({
     id: row.id,
@@ -546,4 +550,12 @@ function mapTable(row: TableRow): OperationsTableView {
 function safeMinor(value: string | number | null): number {
   const amount=Number(value??0)
   return Number.isSafeInteger(amount)&&amount>=0?amount:0
+}
+
+/** Push uses the same current task visibility as the workbench, with an exact original table session. */
+export async function readNativePushTaskTarget(transaction: ScopedTransaction, employeeId: string, taskId: string, tableSessionId: string) {
+  const actor = await readStaffAccess(transaction, employeeId)
+  if (!actor || !['service.view','service.execute','service.manage','complaint.handle'].some(p => actor.capabilities.includes(p))) return null
+  const tasks = await readTasks(transaction, employeeId, actor.roleCodes, actor.capabilities.includes('table.view_all'), actor.capabilities.includes('service.manage'), { taskId, tableSessionId })
+  return tasks[0] ?? null
 }

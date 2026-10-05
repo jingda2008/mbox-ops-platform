@@ -151,3 +151,28 @@ for tier in validation production; do
     grep -qx "${key}=preserved-test-value" "${env_file}"
   done
 done
+
+# Native push remains disabled without any key file; enabled mode retains the exact
+# operator values and canonicalizes only the immutable in-container file path.
+cp "${postar_env_file}" "${env_file}"
+"${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation
+grep -qx 'MBOX_NATIVE_PUSH_ENABLED=false' "${env_file}"
+! grep -q '^MBOX_APNS_PRIVATE_KEY_FILE=' "${env_file}"
+for tier in validation production; do
+  cp "${postar_env_file}" "${env_file}"
+  printf '%s\n' 'MBOX_NATIVE_PUSH_ENABLED=true' 'MBOX_APNS_PRIVATE_KEY_FILE=/untrusted/operator/path.p8' >> "${env_file}"
+  for key in MBOX_APNS_ENVIRONMENT MBOX_APNS_TOPIC MBOX_APNS_TEAM_ID MBOX_APNS_KEY_ID MBOX_NATIVE_PUSH_TOKEN_KEY_BASE64 MBOX_NATIVE_PUSH_TOKEN_KEY_ID MBOX_NATIVE_PUSH_EVENT_TTL_SECONDS; do
+    printf '%s=preserved-push-value\n' "${key}" >> "${env_file}"
+  done
+  "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+  grep -qx 'MBOX_NATIVE_PUSH_ENABLED=true' "${env_file}"
+  grep -qx 'MBOX_APNS_PRIVATE_KEY_FILE=/run/mbox-native-push/apns.p8' "${env_file}"
+  for key in MBOX_APNS_ENVIRONMENT MBOX_APNS_TOPIC MBOX_APNS_TEAM_ID MBOX_APNS_KEY_ID MBOX_NATIVE_PUSH_TOKEN_KEY_BASE64 MBOX_NATIVE_PUSH_TOKEN_KEY_ID MBOX_NATIVE_PUSH_EVENT_TTL_SECONDS; do
+    grep -qx "${key}=preserved-push-value" "${env_file}"
+  done
+done
+cp "${postar_env_file}" "${env_file}"
+printf '%s\n' 'MBOX_NATIVE_PUSH_ENABLED=yes' >> "${env_file}"
+if "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation >/dev/null 2>&1; then
+  echo 'invalid native push flag unexpectedly accepted' >&2; exit 1
+fi

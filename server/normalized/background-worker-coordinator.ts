@@ -1,3 +1,4 @@
+import type { NativePushBatch } from './native-push-worker.js'
 import type { IdempotencyCleanupResult } from './idempotency-cleanup-worker.js'
 import type { BusinessDayRolloverResult } from './business-day-worker.js'
 import type { AutomaticTableTurnoverBatch } from './automatic-table-turnover-worker.js'
@@ -149,6 +150,7 @@ export interface NormalizedWorkerCoordinatorOptions {
 }
 
 export type NormalizedWorkerName =
+  | 'native-push'
   | 'print-source'
   | 'service-sla'
   | 'reservation-expiry'
@@ -222,6 +224,7 @@ export interface NormalizedWorkerCycleResult {
     memberGiftDelivery: MemberGiftDeliveryBatch | null
     marketingDelivery: MarketingDeliveryBatch | null
     checkoutCouponRecovery:CheckoutCouponRecoveryBatch|null
+    nativePush?: NativePushBatch|null
     printSource?: PrintSourceBatch|null
   }
   /** Failures remain active across skipped ticks until that worker actually succeeds. */
@@ -272,6 +275,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       memberGiftDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MemberGiftDeliveryBatch>}
       marketingDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MarketingDeliveryBatch>}
       checkoutCouponRecovery?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<CheckoutCouponRecoveryBatch>}
+      nativePush?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<NativePushBatch>}
       printSource?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<PrintSourceBatch>}
     }>,
     private readonly delivery: Readonly<{
@@ -348,6 +352,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'marketing-delivery',
       'checkout-coupon-recovery',
       'print-source',
+      'native-push',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -486,6 +491,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.workers.marketingDelivery===undefined ? Promise.resolve(null) : this.runWhenDue('marketing-delivery',()=>this.workers.marketingDelivery!.runBatch(this.scope,`${this.options.workerId}:marketing-delivery`)),
       this.workers.checkoutCouponRecovery===undefined?Promise.resolve(null):this.runWhenDue('checkout-coupon-recovery',()=>this.workers.checkoutCouponRecovery!.runBatch(this.scope,`${this.options.workerId}:coupon-recovery`)),
       this.workers.printSource===undefined?Promise.resolve(null):this.runWhenDue('print-source',()=>this.workers.printSource!.runBatch(this.scope,`${this.options.workerId}:print-source`)),
+      this.workers.nativePush===undefined?Promise.resolve(null):this.runWhenDue('native-push',()=>this.workers.nativePush!.runBatch(this.scope,`${this.options.workerId}:native-push`)),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -532,6 +538,12 @@ export class NormalizedBackgroundWorkerCoordinator {
     const marketingDelivery=fulfilledValue(executions[30])
     const checkoutCouponRecovery=fulfilledValue(executions[31])
     const printSource=fulfilledValue(executions[32])
+    const nativePush=fulfilledValue(executions[33])
+    if(nativePush && nativePush.configurationRejected>0){
+      // APNs credentials are an optional channel: persisted rejection remains visible, business stays available.
+      try { this.options.onError?.('native-push',new Error('NATIVE_PUSH_PROVIDER_CONFIGURATION_REJECTED')) }
+      catch { /* A diagnostics sink cannot break cashier availability. */ }
+    }
     if(printSource!==null&&(printSource.dead>0||printSource.retrying>0)){
       // A local printing warning must not make business readiness fail.
       // Detailed counts remain visible in the print panel and cycle snapshot.
@@ -598,6 +610,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         marketingDelivery,
         checkoutCouponRecovery,
         printSource,
+        nativePush,
       },
       failures: names.filter(worker => this.unresolvedFailures.has(worker)),
     }
@@ -667,6 +680,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'marketing-delivery': 30_000,
   'checkout-coupon-recovery': 60_000,
   'print-source': 1_000,
+  'native-push': 2_000,
 })
 
 function workerCadences(

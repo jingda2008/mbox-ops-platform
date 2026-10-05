@@ -1,3 +1,6 @@
+import { NativePushWorker } from './native-push-worker.js'
+import { OfficialApnsAdapter } from './native-push-apns.js'
+import type { NativePushConfig } from './native-push-config.js'
 import { pathToFileURL } from 'node:url'
 import type { AiScheduledExecutionPort } from './ai-capability-center.js'
 import {
@@ -81,6 +84,7 @@ export interface NormalizedWorkerRuntimeOptions {
   hashSecret: string
   transactions: ScopedPostgresTransactionRunner
   aiExecutions: AiScheduledExecutionPort
+  nativePush?: NativePushConfig | null
   adapters?: Readonly<NormalizedWorkerAdapters> | null
   wechatLoyaltyNotification?: Readonly<{
     recipients: WechatMiniProgramNotificationRecipientResolver
@@ -135,6 +139,7 @@ export function createNormalizedWorkerRuntime(
   if (adapters !== null) assertAdapters(adapters)
   const transactions = options.transactions
   const coordinator = new NormalizedBackgroundWorkerCoordinator(options.scope, {
+    ...(options.nativePush ? {nativePush:new NativePushWorker(transactions,options.nativePush,options.hashSecret,new OfficialApnsAdapter(options.nativePush))} : {}),
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
@@ -217,15 +222,19 @@ export interface NormalizedWorkerHealthSnapshot {
   failures: readonly NormalizedWorkerName[]
   integrationWorkersEnabled: boolean
   adapterCapabilities: readonly NormalizedWorkerAdapterCapability[]
+  nativePush?: {status:'idle'|'healthy'|'degraded';lastConfigurationFailureAt:string|null;lastProviderAcceptedAt:string|null;lastErrorCode:string|null}
 }
 
 export class NormalizedWorkerHealthTracker {
   private lastCycle: Readonly<NormalizedWorkerCycleResult> | null = null
+  private pushConfigurationFailureAt:string|null=null
+  private pushAcceptedAt:string|null=null
 
   constructor(
     private readonly intervalMs: number,
     private readonly integrationWorkersEnabled: boolean,
     private readonly adapterCapabilities: readonly NormalizedWorkerAdapterCapability[] = [],
+    private readonly nativePushEnabled=false,
   ) {
     if (!Number.isSafeInteger(intervalMs) || intervalMs < 250 || intervalMs > 60_000) {
       throw new TypeError('intervalMs must be an integer between 250 and 60000')
@@ -234,6 +243,10 @@ export class NormalizedWorkerHealthTracker {
 
   report(result: Readonly<NormalizedWorkerCycleResult>): void {
     this.lastCycle = result
+    const push=result.workers.nativePush
+    if(push?.configurationRejected) this.pushConfigurationFailureAt=result.completedAt
+    else if(push && push.accepted>0) this.pushConfigurationFailureAt=null
+    if(push && push.accepted>0) this.pushAcceptedAt=result.completedAt
   }
 
   snapshot(nowMs = Date.now()): NormalizedWorkerHealthSnapshot {
@@ -242,6 +255,7 @@ export class NormalizedWorkerHealthTracker {
         status: 'starting', lastCompletedAt: null, failures: [],
         integrationWorkersEnabled: this.integrationWorkersEnabled,
         adapterCapabilities: [...this.adapterCapabilities],
+        ...this.pushSnapshot(),
       }
     }
     const completedAtMs = Date.parse(this.lastCycle.completedAt)
@@ -254,8 +268,15 @@ export class NormalizedWorkerHealthTracker {
       failures,
       integrationWorkersEnabled: this.integrationWorkersEnabled,
       adapterCapabilities: [...this.adapterCapabilities],
+      ...this.pushSnapshot(),
     }
   }
+  private pushSnapshot():Pick<NormalizedWorkerHealthSnapshot,'nativePush'> {
+    if(!this.nativePushEnabled)return {}
+    const failed=this.lastCycle?.failures.includes('native-push')
+    return {nativePush:{status:failed||this.pushConfigurationFailureAt?'degraded':this.pushAcceptedAt?'healthy':'idle',lastConfigurationFailureAt:this.pushConfigurationFailureAt,lastProviderAcceptedAt:this.pushAcceptedAt,lastErrorCode:failed?'NATIVE_PUSH_WORKER_FAILED':this.pushConfigurationFailureAt?'APNS_CONFIGURATION_REJECTED':null}}
+  }
+
 }
 
 export async function loadNormalizedWorkerAdapters(

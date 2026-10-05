@@ -31,6 +31,7 @@ fun validateLoyaltyRefundReply(text:String,step:LiveStep){
  val r=data.getJSONObject("result");UUID.fromString(r.getString("requestId"));require(r.getString("refundId")==proof.getString("refundId"))
  require(r.getString("status")==if(action=="request")"requested" else if(body.getString("decision")=="approve")"approved" else "rejected")
  if(action=="decision")require(r.getString("requestId")==body.getString("requestId"))
- require(r.get("pointsDelta") is Number&&r.get("growthDelta") is Number)
- if(action=="request"||body.optString("decision")=="reject")require(r.getLong("pointsDelta")==0L&&r.getLong("growthDelta")==0L)
+ val points=loyaltyReceiptInteger(r,"pointsDelta");val growth=loyaltyReceiptInteger(r,"growthDelta")
+ if(action=="request"||body.optString("decision")=="reject")require(points==0L&&growth==0L)
+ else require(points<=0L&&growth<=0L)
 }

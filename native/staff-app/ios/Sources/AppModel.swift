@@ -16,13 +16,26 @@ import SwiftUI
     guard let identity else{return "signed-out"}
     return identity.employee.id + ":" + identity.permissions.sorted().joined(separator:",") + ":" + identity.deniedPermissions.sorted().joined(separator:",")
   }
-  @Published var identity: StaffIdentity?
+  @Published var identity: StaffIdentity? {
+    didSet {
+      if let oldValue, let identity,
+        Set(oldValue.permissions) != Set(identity.permissions)
+          || Set(oldValue.deniedPermissions) != Set(identity.deniedPermissions)
+          || oldValue.navigation != identity.navigation
+      {
+        resetDailyBusinessViews()
+        workspaceVersion += 1
+      }
+    }
+  }
   @Published var deviceReady = false
   @Published var connection = "本机演练"
   @Published var lastUpdated: Date?
   @Published var liveOperations: LiveOperations?
   @Published var workspaceVersion = 0
   let api: StaffAPI
+  let trainingAllowed: Bool
+  private let nativeManagementPersistence: NativeManagementPersistence
   @Published var rememberLogin = false
   @Published var savedLoginAvailable = false
   private var restoreAttempted = false
@@ -63,7 +76,966 @@ import SwiftUI
       handleLiveError(error)
     }
   }
+  private let nativeMediaReadPermissions = ["community.activity.view", "community.activity.manage", "community.activity.publish", "customer.experience.feature.manage", "media.asset.menu.manage"]
+  func readNativeManagementMedia(purpose: String, cursor: String) async throws -> Data {
+    guard nativeMediaPurposes.contains(purpose), cursor.isEmpty || nativeMediaID(cursor) else { throw StaffAPIError.invalid }
+    return try await readNativeMedia("/api/staff/media-assets?limit=12&purpose=" + purpose + (cursor.isEmpty ? "" : "&before=" + cursor))
+  }
+  func readNativeManagementThumbnail(publicId: String) async throws -> Data {
+    guard nativeMediaID(publicId) else { throw StaffAPIError.invalid }
+    return try await readNativeMedia("/api/staff/media-assets/" + publicId + "?size=thumbnail")
+  }
+  private func readNativeMedia(_ path: String) async throws -> Data {
+    guard live, !busy, !heartbeatBusy else { throw CatalogError("请等待当前图片读取完成") }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, nativeMediaReadPermissions.contains(where: actor.allows) else { throw CatalogError("当前岗位没有图片库查看权限") }
+      let generation = workspaceVersion
+      let (bytes, _) = try await api.raw(path)
+      guard workspaceVersion == generation, identity?.employee.id == actor.employee.id,
+        identity?.session.id == actor.session.id, identity?.permissions == actor.permissions,
+        identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return bytes
+    } catch { handleLiveError(error); throw error }
+  }
+  func uploadNativeManagementMedia(_ upload: NativeMediaUpload) async throws -> NativeMediaAsset {
+    guard memberReady, let previous = identity, upload.employeeID == previous.employee.id else { throw CatalogError("请由选择原图片的员工恢复上传") }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      let permissions = upload.purpose == "support_contact" ? ["community.activity.manage", "customer.experience.feature.manage"] : upload.purpose == "menu" ? ["media.asset.menu.manage"] : ["community.activity.manage"]
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        actor.staffNavigationKey == previous.staffNavigationKey, permissions.contains(where: actor.allows) else { throw CatalogError("原员工、会话或图片上传权限已变化") }
+      let generation = workspaceVersion
+      let (bytes, _) = try await api.raw("/api/staff/media-assets", body: upload.body, headers: ["idempotency-key": upload.key])
+      let result = try NativeMediaAsset.validateUploadReply(bytes, upload: upload)
+      guard workspaceVersion == generation, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.staffNavigationKey == actor.staffNavigationKey else { throw StaffAPIError.invalid }
+      return result
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var showReceipt: ShowReceipt?
+  func readShow(_ path: String, body: [String: Any]? = nil) async throws -> Data {
+    guard live, !busy, !heartbeatBusy, let url = URLComponents(string: path), url.scheme == nil,
+      url.host == nil, url.fragment == nil, !url.path.split(separator: "/").contains(".."),
+      path.rangeOfCharacter(from: .controlCharacters) == nil else { throw CatalogError("请等待当前读取完成并核对演出查询") }
+    let value = url.path
+    let allowed: Bool
+    if body != nil { allowed = value == showRoot + "/preview" && url.query == nil }
+    else {
+      allowed = value == showRoot || value == "/api/staff/native-song-capabilities" || value == "/api/staff/song-requests"
+        || value.range(of: "^/api/staff/native-performances/performers/[A-Fa-f0-9-]{36}/songs$", options: .regularExpression) != nil
+        || value.range(of: "^/api/staff/native-performances/revisions/[A-Za-z0-9_-]{1,128}/impacts$", options: .regularExpression) != nil
+        || value.range(of: "^/api/staff/native-song-requests/[A-Fa-f0-9-]{36}/payment-evidence$", options: .regularExpression) != nil
+    }
+    guard allowed else { throw StaffAPIError.invalid }
+    let permissions: [String]
+    if body != nil { permissions = ["song.manage"] }
+    else if value.hasSuffix("/payment-evidence") { permissions = ["song.payment.record"] }
+    else if value.hasSuffix("/impacts") { permissions = ["reservation.view"] }
+    else if value.hasSuffix("/songs") || value == "/api/staff/song-requests" { permissions = ["song.view", "song.manage"] }
+    else if value == "/api/staff/native-song-capabilities" { permissions = ["song.view", "song.manage", "song.payment.record"] }
+    else { permissions = showReadPermissions }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, permissions.contains(where: actor.allows) else { throw CatalogError("当前岗位没有对应演出或点歌范围权限") }
+      let generation = workspaceVersion
+      let (bytes, _) = try await api.raw(path, body: body)
+      guard workspaceVersion == generation, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return bytes
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var nativeManagementBoard: NativeManagementBoard?
+  @Published var nativeManagementState = "请读取门店配置"
+  private var nativeManagementUpdated: Date?
+  private var nativeManagementModule: NativeManagementModule = .devices
+  private var nativeManagementSearch = "", nativeManagementCursor = "", nativeManagementCode = "DEFAULT"
+  @Published var bridgePairing: NativeBridgePairing?
+  private var bridgePairingGeneration = 0
+  var canUseNativeManagement: Bool {
+    memberReady && nativeManagementBoard?.enabled == true
+      && nativeManagementBoard?.employeeID == identity?.employee.id
+      && nativeManagementBoard?.module == nativeManagementModule
+      && identity.map { nativeManagementModule.available(to: $0) && nativeManagementModule.permissions.contains(where: $0.allows) } == true
+      && nativeManagementUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadNativeManagement(_ module: NativeManagementModule, search: String = "", cursor: String = "", code: String = "DEFAULT") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    nativeManagementBoard = nil; nativeManagementUpdated = nil; clearBridgePairing()
+    nativeManagementState = "正在读取" + module.title
+    do {
+      identity = try await api.heartbeat()
+      _ = try nativeManagementReadPath(module: module, search: search, cursor: cursor, code: code)
+      nativeManagementModule = module; nativeManagementSearch = search; nativeManagementCursor = cursor; nativeManagementCode = code
+      try await fetchNativeManagement(module)
+    } catch {
+      nativeManagementState = error.localizedDescription
+      handleLiveError(error)
+    }
+  }
+  private func fetchNativeManagement(_ module: NativeManagementModule) async throws {
+    guard let actor = identity, module.available(to: actor), module.permissions.contains(where: actor.allows) else {
+      throw CatalogError("当前岗位没有此门店配置权限")
+    }
+    let generation = workspaceVersion
+    let (data, _) = try await api.raw(nativeManagementReadPath(module: module, search: nativeManagementSearch, cursor: nativeManagementCursor, code: nativeManagementCode))
+    var bridges: Data?; var capabilities: Data?
+    if module == .devices {
+      bridges = try await api.raw("/api/hardware/print-bridges").0
+      do { capabilities = try await api.raw("/api/hardware/native-print-bridges/capabilities").0 }
+      catch let failure as StaffAPIError where failure.status == 404 { capabilities = nil }
+    }
+    let board = try NativeManagementBoard(module: module, data: data, bridges: bridges,
+      capabilities: capabilities, actor: actor)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else {
+      throw StaffAPIError.invalid
+    }
+    nativeManagementModule = module; nativeManagementBoard = board; nativeManagementUpdated = Date()
+    nativeManagementState = "已读取" + module.title + "，提交前请核对原配置与影响。"
+  }
+  func readNativeManagementOptions(module: NativeManagementModule, search: String = "", cursor: String = "") async throws -> Data {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    let path = try nativeManagementOptionsPath(module: module, search: search, cursor: cursor)
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        module.available(to: actor), actor.allows("community.activity.manage") else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(path)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return data
+    } catch { handleLiveError(error); throw error }
+  }
+  func prepareNativeManagement(operation: String, fields: [String: String], rowID: String? = nil)
+    throws -> LiveCommand {
+    guard canUseNativeManagement, let board = nativeManagementBoard, let actor = identity else {
+      throw CatalogError("请刷新配置并核对当前员工权限")
+    }
+    return try board.command(actor: actor, operation: operation, fields: fields, rowID: rowID)
+  }
+  func clearBridgePairing() { bridgePairing = nil; bridgePairingGeneration += 1 }
+  func createBridgePairing(reason: String) async {
+    guard canUseNativeManagement, nativeManagementModule == .devices, let previous = identity else { return }
+    let note = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard (3...500).contains(note.utf16.count) else { message = "请填写3—500字配对说明"; return }
+    clearBridgePairing()
+    let generation = bridgePairingGeneration, access = previous.staffNavigationKey
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard identity?.staffNavigationKey == access,
+        NativeManagementModule.devices.permissions.contains(where: { identity?.allows($0) == true }) else {
+        throw StaffAPIError.invalid
+      }
+      let (data, _) = try await api.raw("/api/hardware/print-bridges/pairing-code",
+        body: ["reason": note, "ttlSeconds": 600])
+      let pairing = try NativeBridgePairing(data: data)
+      if bridgePairingGeneration == generation, identity?.staffNavigationKey == access {
+        bridgePairing = pairing
+      }
+    } catch {
+      handleLiveError(error)
+      message = "配对码未能显示，不会自动重试；之前可能已生成的码10分钟后失效。" + error.localizedDescription
+    }
+  }
+  @Published var bottleStorageReceipt: BottleStorageReceipt?
+  func readBottleStorage(_ suffix: String) async throws -> Data {
+    guard live, !busy, !heartbeatBusy,
+      suffix.isEmpty || suffix.hasPrefix("/") || suffix.hasPrefix("?"),
+      !suffix.contains("#"), let decoded = suffix.removingPercentEncoding,
+      !decoded.split(separator: "/").contains(".."),
+      decoded.rangeOfCharacter(from: .controlCharacters) == nil else {
+      throw CatalogError("请等待当前读取完成并核对存酒查询")
+    }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("bottle.manage.all") else {
+        throw CatalogError("当前岗位没有对应存酒范围权限")
+      }
+      bottleStorageReceipt = try BottleStorageSecrets.receipt(employeeID: actor.employee.id)
+      let generation = workspaceVersion
+      let (data, _) = try await api.raw(bottleStorageRoot + suffix)
+      guard workspaceVersion == generation, identity?.employee.id == actor.employee.id,
+        identity?.session.id == actor.session.id, identity?.permissions == actor.permissions,
+        identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return data
+    } catch {
+      handleLiveError(error)
+      throw error
+    }
+  }
+  @Published var experiencePlanReceipt: ExperiencePlanReceipt?
+  @Published var remakeHandoverReceipt: RemakeHandoverReceipt?
+  private func readScopedNativeBusiness(_ path: String, permissions: [String]) async throws -> Data {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        permissions.allSatisfy(actor.allows) else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(path)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return data
+    } catch { handleLiveError(error); throw error }
+  }
+  func readNativeTableScanTargets() async throws -> [StaffTable] {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        actor.canReadTables, actor.hasStaffRoute("/staff/live"), generation == workspaceVersion else { throw StaffAPIError.invalid }
+      try await loadOperations()
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+        identity?.navigation == actor.navigation, let result = liveOperations, result.actor.id == actor.employee.id else { throw StaffAPIError.invalid }
+      return result.displayTables()
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id { handleLiveError(error) }
+      throw error
+    }
+  }
+  func readFulfillmentHistory(query: FulfillmentHistoryQuery, page: Int) async throws -> FulfillmentHistoryBoard {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    let path = try query.path(page: page)
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        canReadFulfillmentHistory(actor) else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(path)
+      let board = try FulfillmentHistoryBoard(data, query: query, page: page)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return board
+    } catch { handleLiveError(error); throw error }
+  }
+  func readExperiencePlans(_ suffix: String) async throws -> Data {
+    guard let parts = URLComponents(string: experiencePlansRoot + suffix), parts.scheme == nil, parts.host == nil, parts.fragment == nil,
+      parts.path == experiencePlansRoot, !suffix.contains("#"), suffix.isEmpty || suffix.hasPrefix("?"),
+      (parts.queryItems ?? []).allSatisfy({ ["history", "from", "to", "beforeDate", "beforeId"].contains($0.name) }),
+      Set((parts.queryItems ?? []).map(\.name)).count == (parts.queryItems ?? []).count else { throw StaffAPIError.invalid }
+    return try await readScopedNativeBusiness(experiencePlansRoot + suffix, permissions: ["customer.experience.manage", "service.execute"])
+  }
+  func readRemakeHandover(_ path: String) async throws -> Data {
+    guard let parts = URLComponents(string: path), parts.scheme == nil, parts.host == nil, parts.fragment == nil,
+      parts.path == remakeHandoverRoot + "/native-remake-handover" else { throw StaffAPIError.invalid }
+    let query = parts.queryItems ?? []
+    if !query.isEmpty {
+      guard query.count == 2, let id = query.first(where: { $0.name == "cursorId" })?.value,
+        let at = query.first(where: { $0.name == "createdAt" })?.value,
+        try RemakeHandoverBoard.path(cursor: ["id": id, "createdAt": at]) == path else { throw StaffAPIError.invalid }
+    } else { guard try RemakeHandoverBoard.path() == path else { throw StaffAPIError.invalid } }
+    return try await readScopedNativeBusiness(path, permissions: ["refund.request"])
+  }
+  func resolveServicePending(command: LiveCommand, login: String, pin: String, reason: String) async {
+    guard live, !busy, !heartbeatBusy, !liveStorageDamaged, liveOrderPending == nil, livePending == command else { return }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    var supervisor: StaffAPI?
+    do {
+      let body = try serviceRecoveryRequest(command, reason: reason)
+      let client = try api.supervisorClient(); supervisor = client
+      let actor = try await client.login(code: login, pin: pin, switching: false)
+      guard actor.employee.id != command.employeeID, actor.allows("service.manage"), actor.allows("service.execute"),
+        StaffIdentity.date(actor.session.onlineLeaseUntil).map({ $0 > Date() }) == true,
+        generation == workspaceVersion, livePending == command else { throw CatalogError("须由另一位有效主管核对原请求") }
+      let (data, _) = try await client.raw("/api/native-service-recovery", body: body)
+      let result = try validateServiceRecoveryReply(data, command: command, supervisorID: actor.employee.id)
+      guard generation == workspaceVersion, livePending == command else { throw CatalogError("当前工作区已变化，已保留原请求供核对") }
+      try FileManager.default.removeItem(at: livePendingURL)
+      livePending = nil; resetDailyBusinessViews(); workspaceVersion += 1; message = result
+    } catch { message = error.localizedDescription }
+    if let supervisor {
+      try? await supervisor.logout()
+      supervisor.clearTemporarySession()
+    }
+  }
+  func readBusinessReport(_ query: NativeBusinessReportQuery) async throws -> NativeBusinessReport {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    let path = try query.path()
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor
+      guard query.available(to: actor) else { throw CatalogError("当前岗位已无权读取此报表，请重新选择工作台") }
+      func current() -> Bool {
+        generation == workspaceVersion && identity?.employee.id == actor.employee.id
+          && identity?.session.id == actor.session.id && identity?.permissions == actor.permissions
+          && identity?.deniedPermissions == actor.deniedPermissions && identity?.navigation == actor.navigation
+      }
+      let (data, _) = try await api.raw(path)
+      guard current() else { throw StaffAPIError.invalid }
+      var evidence: Data?
+      if query.kind == .experience && actor.allows("observation.view.raw") {
+        evidence = try await api.raw(query.path(evidence: true)).0
+        guard current() else { throw StaffAPIError.invalid }
+      }
+      return try NativeBusinessReport(data: data, evidence: evidence, query: query, actor: actor)
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id { handleLiveError(error) }
+      throw error
+    }
+  }
+  @Published var contactGovernanceBoard: ContactGovernanceBoard?
+  @Published var contactGovernanceState = "请读取联系方式保留治理"
+  private var contactGovernanceUpdated: Date?
+  private var contactGovernanceArea = "policies"
+  private var contactGovernanceSearch = ""
+  private var contactGovernanceCursor = ""
+  var canUseContactGovernance: Bool {
+    memberReady && contactGovernanceBoard?.enabled == true && contactGovernanceBoard?.employeeID == identity?.employee.id
+      && identity?.canOpen(.contactGovernance) == true
+      && (contactGovernanceBoard?.area != "resources" || identity?.allows("privacy.contact.legal_hold") == true)
+      && contactGovernanceUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadContactGovernance(area: String = "policies", search: String = "", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { return }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    contactGovernanceBoard = nil; contactGovernanceUpdated = nil; contactGovernanceState = "正在读取联系方式保留治理"
+    do {
+      _ = try ContactGovernanceBoard.query(area: area, search: search, cursor: cursor)
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor; contactGovernanceArea = area; contactGovernanceSearch = search; contactGovernanceCursor = cursor
+      try await fetchContactGovernance()
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id {
+        contactGovernanceState = error.localizedDescription; handleLiveError(error)
+      }
+    }
+  }
+  private func fetchContactGovernance() async throws {
+    let area = contactGovernanceArea, search = contactGovernanceSearch, cursor = contactGovernanceCursor, generation = workspaceVersion
+    guard let actor = identity, actor.canOpen(.contactGovernance),
+      area != "resources" || actor.allows("privacy.contact.legal_hold") else { throw StaffAPIError.invalid }
+    let (data, _) = try await api.raw(ContactGovernanceBoard.query(area: area, search: search, cursor: cursor))
+    let board = try ContactGovernanceBoard(data: data, actor: actor, area: area, search: search, cursor: cursor)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+      identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+    contactGovernanceBoard = board; contactGovernanceUpdated = Date(); contactGovernanceState = "已读取原保留记录；草稿、独立审批、发布与法定保留分别执行。"
+  }
+  @Published var annualPolicyBoard: AnnualPolicyBoard?
+  @Published var annualPolicyState = "请读取年度礼遇政策"
+  private var annualPolicyUpdated: Date?
+  private var annualPolicyCode = ""
+  private var annualPolicyCursor = ""
+  var canUseAnnualPolicies: Bool {
+    memberReady && annualPolicyBoard?.enabled == true && annualPolicyBoard?.employeeID == identity?.employee.id
+      && identity?.canOpen(.annualPolicies) == true
+      && annualPolicyUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadAnnualPolicies(code: String = "", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { return }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    annualPolicyBoard = nil; annualPolicyUpdated = nil; annualPolicyState = "正在读取年度礼遇政策"
+    do {
+      _ = try AnnualPolicyBoard.query(code: code, cursor: cursor)
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor; annualPolicyCode = code; annualPolicyCursor = cursor
+      try await fetchAnnualPolicies()
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id {
+        annualPolicyState = error.localizedDescription; handleLiveError(error)
+      }
+    }
+  }
+  private func fetchAnnualPolicies() async throws {
+    let code = annualPolicyCode, cursor = annualPolicyCursor, generation = workspaceVersion
+    guard let actor = identity, actor.canOpen(.annualPolicies) else { throw StaffAPIError.invalid }
+    let (data, _) = try await api.raw(AnnualPolicyBoard.query(code: code, cursor: cursor))
+    let board = try AnnualPolicyBoard(data: data, actor: actor, code: code, cursor: cursor)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+      identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+    annualPolicyBoard = board; annualPolicyUpdated = Date(); annualPolicyState = "已读取原政策；创建、复核、发布及日期确认分别执行。"
+  }
+  func readAnnualPolicyOptions(kind: String, search: String = "", cursor: String = "") async throws -> AnnualPolicyPage {
+    try await readAnnualPolicyPage(path: AnnualPolicyPage.optionsQuery(kind: kind, search: search, cursor: cursor), kind: kind)
+  }
+  func readAnnualOccurrences(ruleId: String, cursor: String = "") async throws -> AnnualPolicyPage {
+    try await readAnnualPolicyPage(path: AnnualPolicyPage.occurrencesQuery(ruleId: ruleId, cursor: cursor), kind: "occurrences", ruleId: ruleId)
+  }
+  private func readAnnualPolicyPage(path: String, kind: String, ruleId: String = "") async throws -> AnnualPolicyPage {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor
+      guard actor.canOpen(.annualPolicies) else { throw CatalogError("当前岗位没有年度礼遇读取权限") }
+      let (data, _) = try await api.raw(path)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+        identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+      return try AnnualPolicyPage(data: data, actor: actor, kind: kind, ruleId: ruleId)
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id { handleLiveError(error) }
+      throw error
+    }
+  }
+  @Published var loyaltyRefundBoard: LoyaltyRefundBoard?
+  @Published var loyaltyRefundState = "请读取已成功退款的原商品归属记录"
+  private var loyaltyRefundUpdated: Date?
+  private var loyaltyRefundPage = 0
+  var canUseLoyaltyRefunds: Bool {
+    memberReady && loyaltyRefundBoard?.enabled == true && loyaltyRefundBoard?.employeeID == identity?.employee.id
+      && identity.map(canReadLoyaltyRefunds) == true
+      && loyaltyRefundUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadLoyaltyRefunds(page: Int = 0) async {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { return }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    loyaltyRefundBoard = nil; loyaltyRefundUpdated = nil; loyaltyRefundState = "正在读取原退款归属"
+    do {
+      _ = try LoyaltyRefundBoard.query(page: page)
+      let actor = try await api.heartbeat()
+      guard generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id, actor.employee.id == previous.employee.id,
+        actor.session.id == previous.session.id else { throw StaffAPIError.invalid }
+      identity = actor; loyaltyRefundPage = page
+      try await fetchLoyaltyRefunds()
+    } catch {
+      if generation == workspaceVersion, identity?.employee.id == previous.employee.id,
+        identity?.session.id == previous.session.id {
+        loyaltyRefundState = error.localizedDescription; handleLiveError(error)
+      }
+    }
+  }
+  private func fetchLoyaltyRefunds() async throws {
+    let page = loyaltyRefundPage, generation = workspaceVersion
+    guard let actor = identity, canReadLoyaltyRefunds(actor) else { throw StaffAPIError.invalid }
+    let (data, _) = try await api.raw(LoyaltyRefundBoard.query(page: page))
+    let board = try LoyaltyRefundBoard(data: data, actor: actor, page: page)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+      identity?.navigation == actor.navigation else { throw StaffAPIError.invalid }
+    loyaltyRefundBoard = board; loyaltyRefundUpdated = Date(); loyaltyRefundState = "已读取原退款；本页核对商品归属和积分，不会再次退款。"
+  }
+  @Published var loyaltyOperationsBoard: LoyaltyOperationsBoard?
+  @Published var loyaltyOperationsState = "请读取原礼遇异常或积分核对记录"
+  private var loyaltyOperationsUpdated: Date?
+  private var loyaltyOperationsKind: LoyaltyOperationKind = .benefit
+  private var loyaltyOperationsSection = "reconciliation"
+  private var loyaltyOperationsPage = 0
+  var canUseLoyaltyOperations: Bool {
+    memberReady && loyaltyOperationsBoard?.enabled == true && loyaltyOperationsBoard?.employeeID == identity?.employee.id
+      && identity?.allows(loyaltyOperationsKind.readPermission) == true
+      && loyaltyOperationsUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadLoyaltyOperations(kind: LoyaltyOperationKind, section: String = "reconciliation", page: Int = 0) async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true; defer { busy = false }
+    loyaltyOperationsBoard = nil; loyaltyOperationsUpdated = nil; loyaltyOperationsState = "正在读取原业务核对记录"
+    do {
+      _ = try LoyaltyOperationsBoard.query(kind: kind, section: section, page: page)
+      identity = try await api.heartbeat(); loyaltyOperationsKind = kind; loyaltyOperationsSection = section; loyaltyOperationsPage = page
+      try await fetchLoyaltyOperations()
+    } catch { loyaltyOperationsState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchLoyaltyOperations() async throws {
+    let kind = loyaltyOperationsKind, section = loyaltyOperationsSection, page = loyaltyOperationsPage, generation = workspaceVersion
+    guard let actor = identity, actor.allows(kind.readPermission) else { throw StaffAPIError.invalid }
+    let (data, _) = try await api.raw(LoyaltyOperationsBoard.query(kind: kind, section: section, page: page))
+    let board = try LoyaltyOperationsBoard(kind: kind, data: data, actor: actor, section: section, page: page)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    loyaltyOperationsBoard = board; loyaltyOperationsUpdated = Date(); loyaltyOperationsState = "已读取原记录；积分核算、履约补偿和资金收退款分别核对。"
+  }
+  @Published var couponPolicyBoard: CouponPolicyBoard?
+  @Published var couponPolicyState = "请读取券日历或优惠叠加规则"
+  private var couponPolicyUpdated: Date?
+  private var couponPolicyKind: CouponPolicyKind = .calendar
+  private var couponPolicySearch = "", couponPolicyCursor = ""
+  var canUseCouponPolicy: Bool {
+    memberReady && couponPolicyBoard?.enabled == true && couponPolicyBoard?.employeeID == identity?.employee.id
+      && identity?.allows("loyalty.configuration.view") == true
+      && couponPolicyUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadCouponPolicies(kind: CouponPolicyKind, search: String = "", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true; defer { busy = false }
+    couponPolicyBoard = nil; couponPolicyUpdated = nil; couponPolicyState = "正在读取原规则"
+    do {
+      _ = try CouponPolicyBoard.query(kind: kind, search: search, cursor: cursor)
+      identity = try await api.heartbeat(); couponPolicyKind = kind; couponPolicySearch = search; couponPolicyCursor = cursor
+      try await fetchCouponPolicies()
+    } catch { couponPolicyState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchCouponPolicies() async throws {
+    guard let actor = identity, actor.allows("loyalty.configuration.view") else { throw StaffAPIError.invalid }
+    let generation = workspaceVersion, kind = couponPolicyKind, search = couponPolicySearch
+    let (data, _) = try await api.raw(CouponPolicyBoard.query(kind: kind, search: search, cursor: couponPolicyCursor))
+    let board = try CouponPolicyBoard(kind: kind, data: data, actor: actor, search: search)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    couponPolicyBoard = board; couponPolicyUpdated = Date(); couponPolicyState = "已读取原规则；审批、发布与价格试算分别核对。"
+  }
+  func readCouponPolicyPreview(kind: CouponPolicyKind, body: [String: Any]) async throws -> Data {
+    guard live, !busy, !heartbeatBusy, let previous = identity else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        actor.allows(kind.previewPermission) else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(kind.root + "/preview", body: body)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return data
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var membershipRecoveryBoard: MembershipRecoveryBoard?
+  @Published var membershipRecoveryState = "请读取历史会员找回申请"
+  private var membershipRecoveryUpdated: Date?
+  private var membershipRecoveryHistory = false
+  private var membershipRecoveryCursor = ""
+  var canUseMembershipRecovery: Bool {
+    memberReady && membershipRecoveryBoard?.enabled == true && membershipRecoveryBoard?.employeeID == identity?.employee.id
+      && identity.map { membershipRecoveryPermissions.contains(where: $0.allows) } == true
+      && membershipRecoveryUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadMembershipRecovery(history: Bool = false, cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true; defer { busy = false }
+    membershipRecoveryBoard = nil; membershipRecoveryUpdated = nil; membershipRecoveryState = "正在读取原会员找回申请"
+    do {
+      _ = try MembershipRecoveryBoard.query(history: history, cursor: cursor)
+      identity = try await api.heartbeat(); membershipRecoveryHistory = history; membershipRecoveryCursor = cursor
+      try await fetchMembershipRecovery()
+    } catch { membershipRecoveryState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchMembershipRecovery() async throws {
+    guard let actor = identity, membershipRecoveryPermissions.contains(where: actor.allows) else { throw StaffAPIError.invalid }
+    let generation = workspaceVersion, history = membershipRecoveryHistory
+    let (bytes, _) = try await api.raw(MembershipRecoveryBoard.query(history: history, cursor: membershipRecoveryCursor))
+    let board = try MembershipRecoveryBoard(data: bytes, actor: actor, history: history)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    membershipRecoveryBoard = board; membershipRecoveryUpdated = Date(); membershipRecoveryState = "已读取原申请；核验与合并复核须由不同员工完成。"
+  }
+  func membershipRecoveryCandidates(row: RecoveryRecord, cursor: String = "") async throws -> MembershipRecoveryCandidates {
+    guard live, !busy, !heartbeatBusy, let previous = identity, membershipRecoveryBoard?.rows.contains(row) == true else { throw StaffAPIError.invalid }
+    busy = true; defer { busy = false }
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == previous.employee.id, actor.session.id == previous.session.id,
+        actor.allows(membershipRecoveryPermissions[0]), membershipRecoveryBoard?.rows.contains(row) == true else { throw StaffAPIError.invalid }
+      let (bytes, _) = try await api.raw(MembershipRecoveryCandidates.query(row: row, cursor: cursor))
+      let result = try MembershipRecoveryCandidates(data: bytes, actor: actor, row: row)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return result
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var memberNumberBoard: MemberNumberBoard?
+  @Published var memberNumberState = "请读取会员号规则"
+  private var memberNumberUpdated: Date?
+  var canUseMemberNumber: Bool {
+    memberReady && memberNumberBoard?.enabled == true && memberNumberBoard?.employeeID == identity?.employee.id
+      && identity?.allows("member.card.manage") == true
+      && memberNumberUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadMemberNumber() async {
+    guard live, !busy, !heartbeatBusy else { return }; busy = true
+    defer { busy = false }
+    memberNumberBoard = nil; memberNumberUpdated = nil; memberNumberState = "正在读取会员号规则"
+    do { identity = try await api.heartbeat(); try await fetchMemberNumber() }
+    catch { memberNumberState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchMemberNumber() async throws {
+    guard let actor = identity, actor.allows("member.card.manage") else { throw CatalogError("当前岗位没有会员号管理权限") }
+    let generation = workspaceVersion
+    let (bytes, _) = try await api.raw(memberNumberRoot)
+    let board = try MemberNumberBoard(data: bytes, actor: actor)
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    memberNumberBoard = board; memberNumberUpdated = Date(); memberNumberState = "已读取原会员号规则；只影响之后发号，已发会员号不变。"
+  }
+  func readMembershipOverview() async throws -> MembershipOverview {
+    guard live, !busy, !heartbeatBusy else { throw CatalogError("请等待当前读取完成") }; busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("loyalty.policy.view") else { throw CatalogError("当前岗位没有会员规则查看权限") }
+      let generation = workspaceVersion
+      let points = try await api.raw("/api/staff/loyalty/policies").0
+      let tiers = try await api.raw("/api/staff/loyalty/tier-policies").0
+      let benefits = try await api.raw("/api/staff/loyalty/tier-benefits").0
+      let catalog = try await api.raw("/api/staff/loyalty/redemption-configuration").0
+      let result = try MembershipOverview(points: points, tiers: tiers, benefits: benefits, catalog: catalog, actor: actor)
+      guard workspaceVersion == generation, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return result
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var memberGiftsBoard: MemberGiftsBoard?
+  @Published var memberGiftsState = "请读取赠礼活动与发放任务"
+  private var memberGiftsUpdated: Date?
+  private var memberGiftsSection = "campaigns"
+  private var memberGiftsCursor = ""
+  var canUseMemberGifts: Bool {
+    memberReady && memberGiftsBoard?.enabled == true
+      && memberGiftsBoard?.employeeID == identity?.employee.id
+      && memberGiftsBoard?.section == memberGiftsSection
+      && identity?.allows("loyalty.configuration.view") == true
+      && memberGiftsUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadMemberGifts(section: String = "campaigns", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    memberGiftsBoard = nil; memberGiftsUpdated = nil; memberGiftsState = "正在读取原赠礼记录"
+    do {
+      _ = try MemberGiftsBoard.query(section: section, cursor: cursor)
+      identity = try await api.heartbeat()
+      memberGiftsSection = section; memberGiftsCursor = cursor
+      try await fetchMemberGifts()
+    } catch { memberGiftsState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchMemberGifts() async throws {
+    guard let actor = identity, actor.allows("loyalty.configuration.view") else { throw CatalogError("当前岗位没有赠礼配置查看权限") }
+    let section = memberGiftsSection
+    let (bytes, _) = try await api.raw(MemberGiftsBoard.query(section: section, cursor: memberGiftsCursor))
+    let board = try MemberGiftsBoard(data: bytes, actor: actor, section: section)
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    memberGiftsBoard = board; memberGiftsUpdated = Date(); memberGiftsState = "已读取原赠礼记录；发放结果以原任务与会员权益状态为准。"
+  }
+  func memberGiftOptions(kind: String, search: String, cursor: String = "") async throws -> MemberGiftOptions {
+    try await readMemberGiftOptions(MemberGiftOptions.query(kind: kind, search: search, cursor: cursor), refund: false)
+  }
+  func memberGiftRefundOptions(refundID: String, reservationID: String, cursor: String = "") async throws -> MemberGiftOptions {
+    try await readMemberGiftOptions(MemberGiftOptions.refundQuery(refundID: refundID, reservationID: reservationID, cursor: cursor), refund: true)
+  }
+  private func readMemberGiftOptions(_ path: String, refund: Bool) async throws -> MemberGiftOptions {
+    guard live, !busy, !heartbeatBusy else { throw CatalogError("请等待当前读取完成") }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("loyalty.configuration.view"), !refund || actor.allows("loyalty.policy.publish") else { throw CatalogError("当前岗位没有对应赠礼或退款复核权限") }
+      let (bytes, _) = try await api.raw(path)
+      let result = try MemberGiftOptions(data: bytes, actor: actor, refund: refund)
+      guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return result
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var membershipConfigBoard: MembershipConfigBoard?
+  @Published var membershipConfigDetail: MembershipConfigDetail?
+  @Published var membershipConfigState = "请读取会员规则与运行控制"
+  private var membershipConfigUpdated: Date?
+  private var membershipConfigSection = "rules"
+  private var membershipConfigTarget: String?
+  var canUseMembershipConfig: Bool {
+    memberReady && membershipConfigBoard?.enabled == true
+      && membershipConfigBoard?.employeeID == identity?.employee.id
+      && membershipConfigBoard?.section == membershipConfigSection
+      && identity?.allows(membershipConfigSection == "rules" ? "loyalty.configuration.view" : "loyalty.operations.view") == true
+      && membershipConfigUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func clearMembershipConfigDetail() { membershipConfigDetail = nil; membershipConfigTarget = nil }
+  func loadMembershipConfig(section: String = "rules", target: String? = nil) async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    membershipConfigBoard = nil; membershipConfigDetail = nil; membershipConfigUpdated = nil
+    membershipConfigState = "正在读取会员规则与运行控制"
+    do {
+      guard ["rules", "controls"].contains(section), target == nil || section == "rules" else { throw StaffAPIError.invalid }
+      if let target { _ = try MembershipConfigDetail.target(target) }
+      identity = try await api.heartbeat()
+      membershipConfigSection = section; membershipConfigTarget = target
+      try await fetchMembershipConfig()
+    } catch {
+      membershipConfigState = error.localizedDescription
+      handleLiveError(error)
+    }
+  }
+  private func fetchMembershipConfig() async throws {
+    let section = membershipConfigSection, target = membershipConfigTarget
+    guard let actor = identity,
+      actor.allows(section == "rules" ? "loyalty.configuration.view" : "loyalty.operations.view") else {
+      throw CatalogError("当前岗位没有此会员规则范围的权限")
+    }
+    let (data, _) = try await api.raw(membershipConfigRoot + "?section=" + section)
+    let board = try MembershipConfigBoard(data: data, actor: actor, section: section)
+    var detail: MembershipConfigDetail?
+    if let target {
+      let value = try MembershipConfigDetail.target(target)
+      let (bytes, _) = try await api.raw(MembershipConfigDetail.path(target: target))
+      detail = try MembershipConfigDetail(data: bytes, actor: actor, domain: value.domain, configurationID: value.id)
+    }
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else {
+      throw StaffAPIError.invalid
+    }
+    membershipConfigBoard = board; membershipConfigDetail = detail; membershipConfigUpdated = Date()
+    membershipConfigState = "已读取服务器规则；草稿、审批、发布与运行开关分别核对。"
+  }
+  @Published var memberCardsBoard: MemberCardsBoard?
+  @Published var memberCardsState = "请读取会员卡项目"
+  private var memberCardsUpdated: Date?
+  private var memberCardsSection = "projects"
+  private var memberCardsCursor = ""
+  var canUseMemberCards: Bool {
+    memberReady && memberCardsBoard?.enabled == true
+      && memberCardsBoard?.employeeID == identity?.employee.id
+      && identity.map { memberCardSections($0).contains(memberCardsSection) } == true
+      && memberCardsUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadMemberCards(section: String = "projects", cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    memberCardsBoard = nil; memberCardsUpdated = nil
+    memberCardsState = "正在读取会员卡项目"
+    do {
+      _ = try MemberCardsBoard.query(section: section, cursor: cursor)
+      identity = try await api.heartbeat()
+      memberCardsSection = section; memberCardsCursor = cursor
+      try await fetchMemberCards()
+    } catch {
+      memberCardsState = error.localizedDescription
+      handleLiveError(error)
+    }
+  }
+  private func fetchMemberCards() async throws {
+    guard let actor = identity, memberCardSections(actor).contains(memberCardsSection) else {
+      throw CatalogError("当前岗位没有此会员卡范围的权限")
+    }
+    let section = memberCardsSection
+    let path = memberCardsRoot + (try MemberCardsBoard.query(section: section, cursor: memberCardsCursor))
+    let (data, _) = try await api.raw(path)
+    let board = try MemberCardsBoard(data: data, actor: actor, section: section)
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else {
+      throw StaffAPIError.invalid
+    }
+    memberCardsBoard = board; memberCardsUpdated = Date()
+    memberCardsState = "已读取服务器会员卡记录；办理前核对原项目和会员状态。"
+  }
+  func readMemberCardConfig(projectID: String) async throws -> MemberCardConfig {
+    guard live, !busy, !heartbeatBusy, UUID(uuidString: projectID) != nil else {
+      throw CatalogError("请等待读取完成并选择原卡项目")
+    }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("member.card.manage") else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(memberCardsRoot + "/projects/" + projectID + "/config")
+      let config = try MemberCardConfig(data: data, actor: actor, projectID: projectID)
+      guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.allows("member.card.manage") == true else { throw StaffAPIError.invalid }
+      return config
+    } catch {
+      handleLiveError(error)
+      throw error
+    }
+  }
+  func memberCardProducts(search: String, offset: Int) async throws -> MemberCardProducts {
+    guard live, !busy, !heartbeatBusy else { throw CatalogError("请等待当前读取完成") }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("member.card.manage") else { throw StaffAPIError.invalid }
+      let path = memberCardsRoot + "/products" + (try MemberCardProducts.query(search: search, offset: offset))
+      let (data, _) = try await api.raw(path)
+      let products = try MemberCardProducts(data: data, actor: actor)
+      guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.allows("member.card.manage") == true else { throw StaffAPIError.invalid }
+      return products
+    } catch {
+      handleLiveError(error)
+      throw error
+    }
+  }
+  @Published var benefitWalletBoard: BenefitWalletBoard?
+  @Published var benefitWalletState = "请查询会员权益"
+  private var benefitWalletUpdated: Date?
+  private var benefitWalletCode = ""
+  private var benefitWalletCursor = ""
+  var canUseBenefitWallet: Bool {
+    memberReady && benefitWalletBoard?.enabled == true
+      && benefitWalletBoard?.employeeID == identity?.employee.id
+      && identity?.allows("loyalty.account.view") == true
+      && benefitWalletUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadBenefitWallet(_ code: String, cursor: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    benefitWalletBoard = nil; benefitWalletUpdated = nil
+    benefitWalletState = "正在查询会员权益"
+    do {
+      let member = try MemberCommands.code(code)
+      guard cursor.isEmpty || (1...120).contains(cursor.utf16.count) else { throw StaffAPIError.invalid }
+      identity = try await api.heartbeat()
+      benefitWalletCode = member; benefitWalletCursor = cursor
+      try await fetchBenefitWallet()
+    } catch {
+      benefitWalletState = error.localizedDescription
+      handleLiveError(error)
+    }
+  }
+  private func fetchBenefitWallet() async throws {
+    guard let actor = identity, actor.allows("loyalty.account.view") else {
+      throw CatalogError("当前岗位没有会员权益查看权限")
+    }
+    guard !benefitWalletCode.isEmpty else {
+      benefitWalletBoard = nil; benefitWalletUpdated = nil
+      benefitWalletState = "原请求已核对，请重新查询会员权益"
+      return
+    }
+    var body: [String: Any] = ["code": benefitWalletCode]
+    if !benefitWalletCursor.isEmpty { body["cursor"] = benefitWalletCursor }
+    let (data, _) = try await api.raw(benefitWalletRoot + "/lookup", body: body)
+    let board = try BenefitWalletBoard(data: data, actor: actor)
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else {
+      throw StaffAPIError.invalid
+    }
+    benefitWalletBoard = board; benefitWalletUpdated = Date()
+    benefitWalletState = "已读取服务器权益；办理前请核对会员、桌次和实际份数。"
+  }
+  func walletProducts(search: String, offset: Int) async throws -> BenefitWalletProducts {
+    guard live, !busy, !heartbeatBusy else { throw CatalogError("请等待当前读取完成") }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("benefit.issue"), actor.allows("loyalty.account.view") else {
+        throw CatalogError("当前岗位没有权益发放权限")
+      }
+      let (data, _) = try await api.raw(benefitWalletRoot + "/products" + BenefitWalletProducts.query(search: search, offset: offset))
+      let result = try BenefitWalletProducts(data: data, actor: actor)
+      guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.allows("benefit.issue") == true else { throw StaffAPIError.invalid }
+      return result
+    } catch {
+      handleLiveError(error)
+      throw error
+    }
+  }
+  @Published var ownerFinanceBoard: OwnerFinanceBoard?
+  @Published var ownerFinanceState = "请读取费用与工资"
+  private var ownerFinanceUpdated: Date?
+  private var ownerFinanceQuery = ""
+  var canUseOwnerFinance: Bool {
+    memberReady && ownerFinanceBoard?.enabled == true
+      && ownerFinanceBoard?.employeeID == identity?.employee.id
+      && ownerFinanceUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadOwnerFinance(start: String = "", end: String = "") async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    ownerFinanceBoard = nil; ownerFinanceUpdated = nil
+    ownerFinanceState = "正在读取费用与工资"
+    do {
+      ownerFinanceQuery = try OwnerFinanceBoard.query(start: start, end: end)
+      identity = try await api.heartbeat()
+      try await fetchOwnerFinance()
+    } catch {
+      ownerFinanceState = (error as? StaffAPIError)?.status == 404
+        ? "配套后台尚未启用原生费用与工资" : error.localizedDescription
+      handleLiveError(error)
+    }
+  }
+  private func fetchOwnerFinance() async throws {
+    guard let actor = identity, ownerFinancePermissions.contains(where: actor.allows) else {
+      throw CatalogError("当前岗位没有费用或工资权限")
+    }
+    let bytes = try await api.raw(ownerFinanceRoot + "/owner-finance" + ownerFinanceQuery).0
+    let capability = try await api.raw(ownerFinanceRoot + "/native-capabilities").0
+    let board = try OwnerFinanceBoard(data: bytes, capability: capability, actor: actor)
+    guard actor.employee.id == identity?.employee.id, actor.session.id == api.identity?.session.id,
+      actor.permissions == identity?.permissions, actor.deniedPermissions == identity?.deniedPermissions
+    else { throw StaffAPIError.invalid }
+    ownerFinanceBoard = board; ownerFinanceUpdated = Date()
+    ownerFinanceState = "已读取服务器费用与工资；入账不表示银行已发薪"
+  }
+  func prepareOwnerFinance(operation: String, fields: [String: String],
+    row: OwnerFinanceRow? = nil, line: OwnerFinanceRow? = nil,
+    removeEmployeeID: String? = nil) throws -> LiveCommand {
+    guard canUseOwnerFinance, let board = ownerFinanceBoard, let actor = identity else {
+      throw CatalogError("资料、登录或权限已变化，请刷新费用与工资")
+    }
+    return try board.command(actor: actor, operation: operation, fields: fields,
+      row: row, line: line, removeEmployeeID: removeEmployeeID)
+  }
+  @Published var productPhasesBoard: ProductPhasesBoard?
+  @Published var productPhasesState = "请读取原商品演出阶段"
+  private var productPhasesUpdated: Date?
+  var canUseProductPhases: Bool {
+    memberReady && productPhasesBoard?.enabled == true
+      && productPhasesBoard?.employeeID == identity?.employee.id
+      && identity?.allows("recommendation.phase.configure") == true
+      && productPhasesUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadProductPhases(productID: String) async {
+    guard live, !busy, !heartbeatBusy else { return }
+    busy = true
+    defer { busy = false }
+    productPhasesBoard = nil; productPhasesUpdated = nil
+    productPhasesState = "正在读取原商品演出阶段"
+    do { identity = try await api.heartbeat(); try await fetchProductPhases(productID: productID) }
+    catch { productPhasesState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchProductPhases(productID: String) async throws {
+    guard let actor = identity, actor.allows("recommendation.phase.configure"), UUID(uuidString: productID) != nil else {
+      throw CatalogError("请核对商品和阶段配置权限")
+    }
+    let (data, _) = try await api.raw(productPhasesRoot + "/" + productID)
+    let board = try ProductPhasesBoard(data: data, actor: actor, productID: productID)
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id else { throw StaffAPIError.invalid }
+    productPhasesBoard = board; productPhasesUpdated = Date(); productPhasesState = "已读取服务器原版本"
+  }
   @Published var productBoard: ProductManagementBoard?
+  @Published var catalogConfigurationBoard: CatalogConfigurationBoard?
   @Published var productState = "请读取商品"
   private var productUpdated: Date?
   private var productQuery = ""
@@ -79,6 +1051,7 @@ import SwiftUI
     busy = true
     defer { busy = false }
     productBoard = nil
+    catalogConfigurationBoard = nil
     productUpdated = nil
     productQuery = query
     productOffset = offset
@@ -97,15 +1070,137 @@ import SwiftUI
     guard let actor = identity, actor.allows("catalog.product.manage"),
       let encoded = productQuery.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
     else { throw StaffAPIError.invalid }
-    let board: ProductManagementBoard = try await api.data(
+    guard productQuery.utf16.count <= 80, (0...10000).contains(productOffset) else { throw CatalogError("商品查询条件无效") }
+    let (bytes, _) = try await api.raw(
       "/api/native/catalog/products?status=all&limit=40&offset=\(productOffset)&search=" + encoded)
+    guard let envelope = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+      let data = envelope["data"] as? [String: Any] else { throw StaffAPIError.invalid }
+    let board = try JSONDecoder().decode(ProductManagementBoard.self, from: catalogConfigData(data))
+    let configuration = data["configurationProtocol"] == nil ? nil : try CatalogConfigurationBoard(data: bytes, actor: actor)
     guard board.durableProducts, board.currentEmployeeId == actor.employee.id,
-      identity?.employee.id == actor.employee.id,
+      identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions,
+      (1...100).contains(board.limit), (0...10000).contains(board.offset),
       Set(board.products.map(\.id)).count == board.products.count
     else { throw StaffAPIError.invalid }
     productBoard = board
+    catalogConfigurationBoard = configuration
     productUpdated = Date()
     productState = "已同步商品；共显示\(board.products.count)项，按页查询全部状态。"
+  }
+  func queryCatalogConfigurationChoices(query: String, offset: Int) async throws -> CatalogConfigurationBoard {
+    guard live, !busy, !heartbeatBusy, query.utf16.count <= 80, (0...10000).contains(offset),
+      let encoded = query.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else {
+      throw CatalogError("请等待当前操作完成并核对商品查询条件")
+    }
+    busy = true
+    defer { busy = false }
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.allows("catalog.product.manage") else { throw StaffAPIError.invalid }
+      let (bytes, _) = try await api.raw("/api/native/catalog/products?status=all&limit=50&offset=\(offset)&search=" + encoded)
+      let board = try CatalogConfigurationBoard(data: bytes, actor: actor)
+      guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      return board
+    } catch { handleLiveError(error); throw error }
+  }
+  @Published var inventoryPublishBoard: InventoryPublishBoard?
+  @Published var inventoryPublishPreview: InventoryPublishPreview?
+  @Published var inventoryPublishState = "请读取原采购单"
+  private var inventoryPublishUpdated: Date?
+  var canUseInventoryPublish: Bool {
+    memberReady && inventoryPublishBoard?.employeeID == identity?.employee.id && inventoryPublishPreview?.employeeID == identity?.employee.id
+      && inventoryPublishPreview?.ready == true && identity.map { inventoryPublishPermissions.allSatisfy($0.allows) } == true
+      && inventoryPublishUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadInventoryPublish(receiptID: String) async {
+    guard live, !busy, !heartbeatBusy, UUID(uuidString: receiptID) != nil else { return }
+    busy = true; defer { busy = false }
+    inventoryPublishBoard = nil; inventoryPublishPreview = nil; inventoryPublishUpdated = nil
+    inventoryPublishState = "正在读取原采购单与关联商品"
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, inventoryPublishPermissions.allSatisfy(actor.allows) else { throw StaffAPIError.invalid }
+      let generation = workspaceVersion
+      let (data, _) = try await api.raw(inventorySetupRoot + "/receipts/" + receiptID + "/publish-options")
+      let board = try InventoryPublishBoard(data: data, actor: actor, receiptID: receiptID)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      inventoryPublishBoard = board; inventoryPublishState = "请选择关联商品，读取包含全部采购行的发布预览。"
+    } catch { inventoryPublishState = error.localizedDescription; handleLiveError(error) }
+  }
+  func loadInventoryPublishPreview(productID: String) async {
+    guard live, !busy, !heartbeatBusy, let original = inventoryPublishBoard, original.products.contains(where: { $0.id == productID }) else { return }
+    busy = true; defer { busy = false }
+    inventoryPublishPreview = nil; inventoryPublishUpdated = nil; inventoryPublishState = "正在核对整单采购、配方、库存与售价"
+    let generation = workspaceVersion
+    do {
+      identity = try await api.heartbeat()
+      guard let actor = identity, actor.employee.id == original.employeeID, inventoryPublishPermissions.allSatisfy(actor.allows),
+        inventoryPublishBoard?.receipt.data == original.receipt.data else { throw StaffAPIError.invalid }
+      let (data, _) = try await api.raw(inventorySetupRoot + "/receipts/" + original.receipt.id + "/receive-and-publish-preview?productId=" + productID)
+      let preview = try InventoryPublishPreview(data: data, actor: actor, board: original, productID: productID)
+      guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+        identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+      inventoryPublishPreview = preview; inventoryPublishUpdated = Date(); inventoryPublishState = "请按预览逐项验收整张采购单；只核实一个商品不足以确认整单收货。"
+    } catch { inventoryPublishState = error.localizedDescription; handleLiveError(error) }
+  }
+  @Published var recipeConfigurationBoard: RecipeConfigurationBoard?
+  @Published var recipeConfigurationState = "请读取原商品配方"
+  @Published var recipeCostPreview: RecipeCostViewData?
+  private var recipeConfigurationUpdated: Date?
+  private var recipeConfigurationProductID = ""
+  var canUseRecipeConfiguration: Bool {
+    memberReady && recipeConfigurationBoard?.employeeID == identity?.employee.id && identity?.allows("inventory.manage") == true
+      && recipeConfigurationBoard?.product.text("product_kind") == "single"
+      && recipeConfigurationUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadRecipeConfiguration(productID: String) async {
+    guard live, !busy, !heartbeatBusy, UUID(uuidString: productID) != nil else { return }
+    busy = true; defer { busy = false }
+    recipeConfigurationBoard = nil; recipeConfigurationUpdated = nil; recipeCostPreview = nil
+    recipeConfigurationState = "正在读取原配方与成本"
+    do { identity = try await api.heartbeat(); recipeConfigurationProductID = productID; try await fetchRecipeConfiguration() }
+    catch { recipeConfigurationState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchRecipeConfiguration() async throws {
+    guard let actor = identity, actor.allows("inventory.manage"), UUID(uuidString: recipeConfigurationProductID) != nil else { throw StaffAPIError.invalid }
+    let generation = workspaceVersion, productID = recipeConfigurationProductID
+    let (bytes, _) = try await api.raw(inventorySetupRoot + "/products/" + productID + "/recipe")
+    let board = try RecipeConfigurationBoard(data: bytes, actor: actor, productID: productID)
+    var cost: RecipeCostViewData?
+    if actor.allows("inventory.cost.view"), board.recipe != nil {
+      let (data, _) = try await api.raw(inventorySetupRoot + "/products/" + productID + "/recipe-cost")
+      cost = try RecipeCostViewData(data: data, board: board)
+    }
+    guard generation == workspaceVersion, identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    recipeConfigurationBoard = board; recipeCostPreview = cost; recipeConfigurationUpdated = Date()
+    recipeConfigurationState = "已读取原配方；修改草稿后须核对保存。成本展示属于已保存配方。"
+  }
+  @Published var inventorySetupBoard: InventorySetupBoard?
+  @Published var inventorySetupState = "请读取物料与包装条码"
+  private var inventorySetupUpdated: Date?
+  var canUseInventorySetup: Bool {
+    memberReady && inventorySetupBoard?.enabled == true && inventorySetupBoard?.employeeID == identity?.employee.id
+      && identity?.allows("inventory.manage") == true
+      && inventorySetupUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
+  }
+  func loadInventorySetup() async {
+    guard live, !busy, !heartbeatBusy else { return }; busy = true
+    defer { busy = false }
+    inventorySetupBoard = nil; inventorySetupUpdated = nil; inventorySetupState = "正在读取物料资料"
+    do { identity = try await api.heartbeat(); try await fetchInventorySetup() }
+    catch { inventorySetupState = error.localizedDescription; handleLiveError(error) }
+  }
+  private func fetchInventorySetup() async throws {
+    guard let actor = identity, actor.allows("inventory.manage") else { throw CatalogError("当前岗位没有物料管理权限") }
+    let (bytes, _) = try await api.raw(inventorySetupRoot + "/setup")
+    let board = try InventorySetupBoard(data: bytes, actor: actor)
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      identity?.permissions == actor.permissions, identity?.deniedPermissions == actor.deniedPermissions else { throw StaffAPIError.invalid }
+    inventorySetupBoard = board; inventorySetupUpdated = Date(); inventorySetupState = "已读取服务器有效物料；基础单位和扫码包装量须分别核对。"
   }
   @Published var stockCounts: StockCountPage?
   @Published var stockWaste: StockWastePage?
@@ -137,6 +1232,7 @@ import SwiftUI
     guard live, !busy, !heartbeatBusy else { return }
     busy = true
     defer { busy = false }
+    inventorySetupBoard = nil; inventorySetupUpdated = nil; inventorySetupState = "请读取物料与包装条码"
     stockCounts = nil
     stockWaste = nil
     stockAuditUpdated = nil
@@ -177,7 +1273,9 @@ import SwiftUI
   }
   @Published var stockBoard: StockBoard?
   @Published var stockState = "请读取库存与采购单"
+  @Published var stockReceiptQuery = StockReceiptQuery()
   @Published var stockDraft: [StockLine] = []
+  @Published var stockSupplier = ""
   @Published var stockReceipt: StockSavedReceipt?
   private var stockEmployee: String?
   private var stockUpdated: Date?
@@ -187,15 +1285,18 @@ import SwiftUI
     memberReady && stockBoard?.nativeCommands == true && stockEmployee == identity?.employee.id
       && stockUpdated.map { (0..<60).contains(Date().timeIntervalSince($0)) } == true
   }
-  func loadStock() async {
+  func loadStock(query: StockReceiptQuery? = nil) async {
     guard live, !busy, !heartbeatBusy else { return }
+    let requested = query ?? stockReceiptQuery
     busy = true
     defer { busy = false }
     stockBoard = nil
     stockUpdated = nil
     stockState = "正在读取库存与采购单"
     do {
+      _ = try requested.path()
       identity = try await api.heartbeat()
+      stockReceiptQuery = requested
       try await fetchStock()
     } catch {
       stockState =
@@ -204,32 +1305,39 @@ import SwiftUI
       handleLiveError(error)
     }
   }
-  private func stockBook() throws -> [String: [StockLine]] {
-    guard FileManager.default.fileExists(atPath: stockDraftURL.path) else { return [:] }
-    return try JSONDecoder().decode(
-      [String: [StockLine]].self, from: Data(contentsOf: stockDraftURL))
+  private func stockBook() throws -> StockDraftBook {
+    guard FileManager.default.fileExists(atPath: stockDraftURL.path) else { return StockDraftBook() }
+    return try StockDraftBook.read(Data(contentsOf: stockDraftURL))
   }
-  func saveStockDraft(_ lines: [StockLine]) throws {
+  func saveStockDraft(_ lines: [StockLine], supplier: String? = nil) throws {
     guard canUseStock, let actor = identity, actor.allows("inventory.receive") else {
       throw CatalogError("请刷新库存并核对员工权限")
     }
     var book = try stockBook()
     book[actor.employee.id] = lines
+    book.suppliersByEmployee[actor.employee.id] = try stockSupplierName(supplier ?? stockSupplier)
     try JSONEncoder().encode(book).write(to: stockDraftURL, options: .atomic)
     stockDraft = lines
+    stockSupplier = book.suppliersByEmployee[actor.employee.id] ?? ""
   }
   private func fetchStock() async throws {
     guard let actor = identity, StockBoard.permissions.contains(where: actor.allows) else {
       throw CatalogError("当前岗位没有库存权限")
     }
-    let board: StockBoard = try await api.data("/api/native/inventory")
-    guard board.currentEmployeeId == actor.employee.id, board.nativeCommands,
+    let requested = stockReceiptQuery
+    let board: StockBoard = try await api.data(requested.path())
+    guard identity?.employee.id == actor.employee.id, identity?.session.id == actor.session.id,
+      board.currentEmployeeId == actor.employee.id, board.nativeCommands,
+      board.receiptsPage == nil ? requested.page == 0 : board.receiptsPage?.page == requested.page,
+      (!board.visibility.costs || actor.allows("inventory.cost.view")),
       Set(board.items.map(\.id)).count == board.items.count
     else { throw StaffAPIError.invalid }
-    let draft = try stockBook()[actor.employee.id] ?? []
+    let book = try stockBook()
+    let draft = book[actor.employee.id] ?? []
     stockBoard = board
     stockEmployee = actor.employee.id
     stockDraft = draft
+    stockSupplier = book.suppliersByEmployee[actor.employee.id] ?? ""
     stockCountDraft = try countBook()[actor.employee.id] ?? []
     stockUpdated = Date()
     if let data = try? Data(contentsOf: stockReceiptURL),
@@ -347,6 +1455,8 @@ import SwiftUI
         == true
   }
   @Published var assignmentsBoard: LiveAssignments?
+  @Published private(set) var assignmentScheduleMode = "future"
+  @Published private(set) var assignmentSchedulePage = 0
   @Published var assignmentsUpdated: Date?
   @Published var assignmentsState = ""
   @Published var assignmentReceipt = ""
@@ -478,16 +1588,27 @@ import SwiftUI
   @Published private var liveDraftBook = LiveDraftBook()
   @Published var draftStorageDamaged = false
   private let liveDraftURL = URL.documentsDirectory.appending(path: "mbox-live-drafts-v1.json")
-  private let livePendingURL = URL.documentsDirectory.appending(path: "mbox-live-pending-v1.json")
-  @Published private var heartbeatBusy = false
+  private let livePendingURL: URL
+  @Published private(set) var heartbeatBusy = false
   private let deviceKey: String = {
     if let saved = UserDefaults.standard.string(forKey: "native-device-key") { return saved }
     let key = "ios-" + UUID().uuidString
     UserDefaults.standard.set(key, forKey: "native-device-key")
     return key
   }()
-  init(api: StaffAPI? = nil, loadPersistedState: Bool = true) {
+  init(api: StaffAPI? = nil, loadPersistedState: Bool = true,
+    trainingAllowed: Bool = NativeBuildPolicy.allowsTraining, livePendingURL: URL? = nil,
+    nativeManagementPersistence: NativeManagementPersistence = .device) {
     self.api = api ?? StaffAPI(store: KeychainStaffSessionStore())
+    self.trainingAllowed = trainingAllowed
+    self.nativeManagementPersistence = nativeManagementPersistence
+    self.livePendingURL = livePendingURL ?? URL.documentsDirectory.appending(path: "mbox-live-pending-v1.json")
+    if !trainingAllowed {
+      world = World(tables: [], products: [])
+      live = true
+      connection = "请验证设备并登录"
+      staffName = "未登录"
+    }
     guard loadPersistedState else { return }
     printReceipt = try? JSONDecoder().decode(
       NativePrintReceipt.self, from: Data(contentsOf: printReceiptURL))
@@ -514,6 +1635,7 @@ import SwiftUI
           LiveDraftBook.self, from: Data(contentsOf: liveDraftURL))
       } catch { draftStorageDamaged = true }
     }
+    guard trainingAllowed else { return }
     if let data = try? Data(contentsOf: stateURL),
       let saved = try? JSONDecoder().decode(World.self, from: data)
     {
@@ -630,7 +1752,7 @@ import SwiftUI
     }
   }
   func train() {
-    guard !busy, !heartbeatBusy, identity == nil, livePending == nil && liveOrderPending == nil,
+    guard trainingAllowed, !busy, !heartbeatBusy, identity == nil, livePending == nil && liveOrderPending == nil,
       !liveStorageDamaged
     else {
       return
@@ -673,7 +1795,7 @@ import SwiftUI
   func requestCamera() {
     Task {
       let granted = await AVCaptureDevice.requestAccess(for: .video)
-      message = granted ? "相机权限已开启；扫码识别尚未接入，请手动输入桌号。" : "相机未授权，可手动输入桌号；也可前往系统设置开启。"
+      message = granted ? "相机权限已开启；在桌台页扫码可定位已授权桌台，付款、库存和会员请使用各自入口。" : "相机未授权，可手动输入桌号；也可前往系统设置开启。"
     }
   }
   func requestVoice() {
@@ -684,12 +1806,12 @@ import SwiftUI
           return
         }
         let granted = await AVAudioApplication.requestRecordPermission()
-        self.message = granted ? "麦克风与语音识别权限已开启；录音识别尚未接入，请使用键盘。" : "麦克风未授权，可使用键盘输入"
+        self.message = granted ? "麦克风与语音识别权限已开启；在本桌现场观察中点击语音输入，核对文字后再提交。" : "麦克风未授权，可使用键盘输入"
       }
     }
   }
   func grantDevice(_ credential: String) async {
-    guard !busy, identity == nil, pending == nil else { return }
+    guard !busy, identity == nil else { return }
     busy = true
     defer { busy = false }
     do {
@@ -708,7 +1830,7 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   func restoreRememberedSession(retry: Bool = false) async {
-    guard !restoreAttempted || retry, identity == nil, !busy, !heartbeatBusy, pending == nil else {
+    guard !restoreAttempted || retry, identity == nil, !busy, !heartbeatBusy else {
       return
     }
     restoreAttempted = true
@@ -746,8 +1868,9 @@ import SwiftUI
       if identity != nil { handleLiveError(error) }
     }
   }
+  var willEndStaffSession: (() -> Void)?
   func login(code: String, pin: String) async {
-    guard !busy, !heartbeatBusy, pending == nil,
+    guard !busy, !heartbeatBusy,
       identity == nil || (livePending == nil && liveOrderPending == nil)
     else {
       return
@@ -755,8 +1878,14 @@ import SwiftUI
     busy = true
     defer { busy = false }
     do {
+      if identity != nil { willEndStaffSession?() }
       api.rememberSession = rememberLogin
       let auth = try await api.login(code: code, pin: pin, switching: identity != nil)
+      guard (livePending == nil || livePending?.employeeID == auth.employee.id),
+        (liveOrderPending == nil || liveOrderPending?.employeeID == auth.employee.id) else {
+        api.clearIdentity()
+        throw CatalogError("有原员工的未决请求，请由该员工重新登录后恢复")
+      }
       savedLoginAvailable = api.savedSessionAvailable()
       if !api.persistenceNotice.isEmpty { message = api.persistenceNotice }
       identity = auth
@@ -827,6 +1956,7 @@ import SwiftUI
     else { return }
     busy = true
     defer { busy = false }
+    willEndStaffSession?()
     do {
       try await api.logout()
       lockLiveSession()
@@ -846,6 +1976,7 @@ import SwiftUI
     }
   }
   func lockLiveSession() {
+    willEndStaffSession?()
     api.clearIdentity()
     identity = nil
     cashHandover = nil
@@ -904,6 +2035,25 @@ import SwiftUI
     resetDailyBusinessViews()
     workspaceVersion += 1
   }
+  func revalidateNativePushSession() async throws -> StaffIdentity {
+    guard !busy, !heartbeatBusy, live, let actor = identity else {
+      throw CatalogError("请完成当前操作并登录，再打开服务提醒")
+    }
+    heartbeatBusy = true
+    defer { heartbeatBusy = false }
+    do {
+      let refreshed = try await api.heartbeat()
+      guard refreshed.employee.id == actor.employee.id,
+        refreshed.session.id == actor.session.id,
+        identity?.session.id == actor.session.id
+      else { throw StaffAPIError.invalid }
+      identity = refreshed
+      return refreshed
+    } catch {
+      handleLiveError(error)
+      throw error
+    }
+  }
   func handleLiveError(_ error: Error) {
     if let apiError = error as? StaffAPIError,
       apiError.loginRequired || (apiError.status == 403 && api.identity == nil)
@@ -945,6 +2095,7 @@ import SwiftUI
   }
   func loadOperations() async throws {
     guard let identity else { return }
+    let generation = workspaceVersion
     if !identity.allows("order.create") {
       liveProducts = []
       catalogUpdated = nil
@@ -953,12 +2104,15 @@ import SwiftUI
       serviceAttention = ServiceAttention()
       liveOperations = nil
       world = World(tables: [], products: [])
-      connection = "当前岗位无桌台权限"
+      connection = "岗位工作台已就绪"
       return
     }
     let result: LiveOperations = try await api.data("/api/operations")
-    guard result.actor.id == identity.employee.id else {
-      throw StaffAPIError(status: 401, code: "IDENTITY_CHANGED", message: "员工身份已变化，请重新登录")
+    guard result.actor.id == identity.employee.id, generation == workspaceVersion,
+      self.identity?.employee.id == identity.employee.id, self.identity?.session.id == identity.session.id,
+      self.identity?.permissions == identity.permissions, self.identity?.deniedPermissions == identity.deniedPermissions,
+      self.identity?.navigation == identity.navigation else {
+      throw StaffAPIError(status: 409, code: "CLIENT_SESSION_CHANGED", message: "工作区已变化，请重新读取当前员工的数据")
     }
     serviceAttention.refresh(
       actor: identity.employee.id, permitted: identity.allows("service.execute"),
@@ -1122,6 +2276,10 @@ import SwiftUI
   }
   func canExecuteLive(_ command: LiveCommand) -> Bool {
     guard command.employeeID == identity?.employee.id else { return false }
+    if command.steps.first?.ownerFinanceProof != nil {
+      return command.steps.count == 1 && canUseOwnerFinance
+        && identity?.allows(command.permission) == true
+    }
     if let step = command.steps.first, let proof = step.cashierProof,
       proof["action"] as? String == "historical-collection"
     {
@@ -1167,7 +2325,13 @@ import SwiftUI
           ? reservationCapabilities?.durableCreate == true
           : proof["kind"] as? String == "transition"
             ? reservations.contains { $0.id == proof["id"] as? String }
-            : reservationCapabilities?.durablePriority == true
+            : proof["kind"] as? String == "waitlist"
+              ? reservationCapabilities?.durableWaitlist == true
+                && reservationIntake.contains {
+                  $0.kind == "waitlist" && $0.publicId == proof["publicId"] as? String
+                    && $0.status == proof["previousStatus"] as? String
+                }
+              : reservationCapabilities?.durablePriority == true
               && reservationIntake.contains {
                 $0.publicId == proof["publicId"] as? String
                   && $0.kind == proof["targetKind"] as? String
@@ -1184,12 +2348,123 @@ import SwiftUI
       return command.steps.count == 1 && canUseVouchers
         && identity?.allows(command.permission) == true
     }
+    if let proof = command.steps.first?.productPhasesProof {
+      return command.steps.count == 1 && canUseProductPhases
+        && command.permission == "recommendation.phase.configure"
+        && proof["productId"] as? String == productPhasesBoard?.productID
+    }
+    if let proof = command.steps.first?.catalogConfigurationProof {
+      guard command.steps.count == 1, canUseProducts, let board = catalogConfigurationBoard,
+        board.enabled, board.employeeID == identity?.employee.id, proof["employeeId"] as? String == identity?.employee.id else { return false }
+      if proof["creating"] as? Bool == true { return true }
+      if proof["kind"] as? String == "category" {
+        return board.categories.contains { $0.text("code") == proof["code"] as? String && $0.text("updatedAt") == command.steps[0].object["expectedUpdatedAt"] as? String }
+      }
+      return board.products.contains { $0.id == proof["id"] as? String && $0.text("nativeVersion") == command.steps[0].object["expectedVersion"] as? String }
+    }
     if command.steps.first?.productManagementProof != nil {
       return command.steps.count == 1 && canUseProducts
+    }
+    if command.steps.first?.nativeManagementProof != nil {
+      guard canUseNativeManagement, let board = nativeManagementBoard, let actor = identity else { return false }
+      return validNativeManagementSelection(command: command, board: board, actor: actor)
+    }
+    if let proof = command.steps.first?.showProof {
+      return command.steps.count == 1 && memberReady && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+    }
+    if let proof = command.steps.first?.bottleStorageProof {
+      return command.steps.count == 1 && memberReady
+        && identity?.allows("bottle.manage.all") == true
+        && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+    }
+    if let proof = command.steps.first?.experiencePlanProof {
+      return command.steps.count == 1 && memberReady && proof["employeeId"] as? String == identity?.employee.id
+        && experiencePlanPermissions.allSatisfy { identity?.allows($0) == true }
+    }
+    if let proof = command.steps.first?.remakeHandoverProof {
+      return command.steps.count == 1 && memberReady && proof["employeeId"] as? String == identity?.employee.id
+        && identity?.allows("refund.request") == true && identity?.allows(command.permission) == true
+    }
+    if command.steps.first?.contactGovernanceProof != nil {
+      guard canUseContactGovernance, let board = contactGovernanceBoard, let actor = identity else { return false }
+      return validContactGovernanceSelection(command: command, board: board, actor: actor)
+    }
+    if command.steps.first?.annualPolicyProof != nil {
+      guard canUseAnnualPolicies, let board = annualPolicyBoard, let actor = identity else { return false }
+      return validAnnualPolicySelection(command: command, board: board, actor: actor)
+    }
+    if command.steps.first?.loyaltyRefundProof != nil {
+      guard canUseLoyaltyRefunds, let board = loyaltyRefundBoard, let actor = identity else { return false }
+      return validLoyaltyRefundSelection(command: command, board: board, actor: actor)
+    }
+    if command.steps.first?.loyaltyOperationProof != nil {
+      guard canUseLoyaltyOperations, let board = loyaltyOperationsBoard, let actor = identity else { return false }
+      return validLoyaltyOperationSelection(command: command, board: board, actor: actor)
+    }
+    if command.steps.first?.couponPolicyProof != nil {
+      guard canUseCouponPolicy, let board = couponPolicyBoard, let actor = identity else { return false }
+      return validCouponPolicySelection(command: command, board: board, actor: actor)
+    }
+    if let proof = command.steps.first?.membershipRecoveryProof {
+      guard command.steps.count == 1, canUseMembershipRecovery, identity?.allows(command.permission) == true,
+        proof["employeeId"] as? String == identity?.employee.id else { return false }
+      if proof["action"] as? String == "contact" { return true }
+      guard let before = proof["before"] as? [String: Any], let board = membershipRecoveryBoard else { return false }
+      return board.rows.contains { $0.id == before["casePublicId"] as? String && $0.text("nativeVersion") == before["nativeVersion"] as? String }
+    }
+    if let proof = command.steps.first?.memberNumberProof {
+      return command.steps.count == 1 && canUseMemberNumber && command.permission == "member.card.manage"
+        && proof["employeeId"] as? String == identity?.employee.id
+        && command.steps[0].object["version"] as? Int == memberNumberBoard?.version
+    }
+    if let proof = command.steps.first?.memberGiftProof {
+      return command.steps.count == 1 && canUseMemberGifts
+        && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+        && proof["section"] as? String == memberGiftsSection
+    }
+    if let proof = command.steps.first?.membershipConfigProof {
+      return command.steps.count == 1 && canUseMembershipConfig
+        && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+        && (proof["action"] as? String == "control" ? membershipConfigSection == "controls" : membershipConfigSection == "rules")
+    }
+    if let step = command.steps.first, let proof = step.memberCardProof {
+      return command.steps.count == 1 && canUseMemberCards
+        && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+    }
+    if let step = command.steps.first, step.benefitWalletProof != nil {
+      return command.steps.count == 1 && canUseBenefitWallet
+        && identity?.allows(command.permission) == true
+        && step.object["customerId"] as? String == benefitWalletBoard?.customerID
+    }
+    if command.steps.first?.inventoryPublishProof != nil {
+      guard canUseInventoryPublish, let board = inventoryPublishBoard, let preview = inventoryPublishPreview else { return false }
+      return validInventoryPublishSelection(command, board: board, preview: preview)
+    }
+    if let proof = command.steps.first?.recipeConfigurationProof {
+      guard command.steps.count == 1, canUseRecipeConfiguration, let board = recipeConfigurationBoard else { return false }
+      return command.permission == "inventory.manage" && command.employeeID == board.employeeID
+        && proof["productId"] as? String == board.product.id && command.steps[0].object["expectedVersion"] as? String == board.version
+        && command.steps[0].path == inventorySetupRoot + "/products/" + board.product.id + "/recipe"
+    }
+    if command.steps.first?.inventorySetupProof != nil {
+      guard canUseInventorySetup, let board = inventorySetupBoard else { return false }
+      return validInventorySetupSelection(command, board: board)
     }
     if command.steps.first?.stockAuditProof != nil {
       return command.steps.count == 1 && canUseStockAudit
         && identity?.allows(command.permission) == true
+    }
+    if let proof = command.steps.first?.stockCostProof {
+      return command.steps.count == 1 && canUseStock && stockBoard?.nativeCostCorrections == true
+        && stockBoard?.visibility.costs == true && identity?.allows("inventory.cost.view") == true
+        && command.permission == "inventory.cost.correct" && identity?.allows(command.permission) == true
+        && proof["employeeId"] as? String == identity?.employee.id
+        && stockBoard?.items.contains { $0.id == proof["inventoryItemId"] as? String } == true
     }
     if command.steps.first?.stockProof != nil {
       return command.steps.count == 1 && canUseStock && identity?.allows(command.permission) == true
@@ -1228,8 +2503,15 @@ import SwiftUI
         paymentUpdated = nil
         paymentState = "请核对原收款结果后刷新账单"
       }
-      let secured = try secureVoucherCommand(
-        secureOnlineCommand(command, store: PaymentSecrets.store), store: PaymentSecrets.store)
+      let online = try secureOnlineCommand(command, store: PaymentSecrets.store)
+      let voucher = try secureVoucherCommand(online, store: PaymentSecrets.store)
+      let finance = try secureOwnerFinanceCommand(voucher, store: OwnerFinanceSecrets.store)
+      let bottle = try secureBottleStorageCommand(finance, store: BottleStorageSecrets.store)
+      let show = try secureShowCommand(bottle, store: ShowSecrets.store)
+      let experience = try secureExperiencePlanCommand(show, store: ExperiencePlanSecrets.store)
+      let handover = try secureRemakeHandoverCommand(experience, store: RemakeHandoverSecrets.store)
+      let recovery = try secureMembershipRecoveryCommand(handover, store: MembershipRecoverySecrets.store)
+      let secured = try secureNativeManagementCommand(recovery, store: nativeManagementPersistence.storePayload)
       try JSONEncoder().encode(secured).write(to: livePendingURL, options: .atomic)
       livePending = secured
       await recoverLive()
@@ -1237,6 +2519,15 @@ import SwiftUI
   }
   func recoverLive() async {
     guard let command = livePending, !busy, !heartbeatBusy, !liveStorageDamaged else { return }
+    // A signed-in role may revoke its own session or permissions. A separately
+    // secured, fully bound server receipt permits only local completion, without
+    // sending a request or trusting the ordinary completedSteps checkpoint.
+    do {
+      if try finishAcknowledgedManagement(command) { return }
+    } catch {
+      message = error.localizedDescription
+      return
+    }
     guard command.employeeID == identity?.employee.id else {
       message = "请由发起操作的员工登录后核对"
       return
@@ -1253,6 +2544,7 @@ import SwiftUI
       guard
         current.completedSteps == current.steps.count
           || identity?.allows(current.permission) == true
+          || isNativeStaffPermissionReceiptRecovery(current)
       else {
         throw StaffAPIError(status: 403, code: "ACCESS_REVOKED", message: "操作权限已撤销，请联系管理员核对原请求")
       }
@@ -1295,12 +2587,110 @@ import SwiftUI
               self.onlineStatuses[receipt.paymentID] = "pending"
             }
 
+          } else if step.catalogConfigurationProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateCatalogConfigurationReply(reply, step: step)
+          } else if step.productPhasesProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object,
+              headers: [step.keyHeader: step.key])
+            try validateProductPhasesReply(reply, step: step)
+          } else if step.nativeManagementProof != nil {
+            guard let actor = self.identity else { throw StaffAPIError.invalid }
+            let body = try nativeManagementRequestBody(current, step: step, actor: actor,
+              read: nativeManagementPersistence.readPayload)
+            let (reply, _) = try await self.api.raw(step.path, body: body,
+              headers: [step.keyHeader: step.key])
+            try recordNativeManagementAcknowledgement(reply, command: current, step: step, actor: actor,
+              readPayload: nativeManagementPersistence.readPayload, readReceipt: nativeManagementPersistence.readReceipt,
+              storeReceipt: nativeManagementPersistence.storeReceipt)
+          } else if step.showProof != nil {
+            let payload = try showRequestPayload(current, step: step, read: ShowSecrets.read)
+            let (reply, _) = try await self.api.raw(step.path, body: payload.body, headers: [step.keyHeader: step.key])
+            self.showReceipt = try validateShowReceipt(reply, step: step, body: payload.body, expectation: payload.expectation)
+          } else if step.bottleStorageProof != nil {
+            let body = try bottleStorageRequestBody(current, step: step, read: BottleStorageSecrets.read)
+            let (reply, _) = try await self.api.raw(step.path, body: body,
+              headers: bottleStorageHeaders(step))
+            let receipt = try validateBottleStorageReceipt(reply, step: step, body: body)
+            try BottleStorageSecrets.saveReceipt(receipt)
+            self.bottleStorageReceipt = receipt
+          } else if step.experiencePlanProof != nil {
+            guard experiencePlanPermissions.allSatisfy({ identity?.allows($0) == true }) else { throw StaffAPIError.invalid }
+            let body = try experiencePlanRequestBody(current, step: step, read: ExperiencePlanSecrets.read)
+            let (reply, _) = try await api.raw(step.path, body: body, headers: [step.keyHeader: step.key])
+            experiencePlanReceipt = try validateExperiencePlanReply(reply, step: step)
+          } else if step.remakeHandoverProof != nil {
+            guard identity?.allows("refund.request") == true, identity?.allows(current.permission) == true else { throw StaffAPIError.invalid }
+            let body = try remakeHandoverRequestBody(current, step: step, read: RemakeHandoverSecrets.read)
+            let (reply, _) = try await api.raw(step.path, body: body, headers: [step.keyHeader: step.key])
+            remakeHandoverReceipt = try validateRemakeHandoverReply(reply, step: step)
+          } else if step.contactGovernanceProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateContactGovernanceReply(reply, step: step)
+          } else if step.annualPolicyProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateAnnualPolicyReply(reply, step: step)
+          } else if let proof = step.loyaltyRefundProof {
+            guard let actor = identity, let action = proof["action"] as? String,
+              canWriteLoyaltyRefunds(actor, action: action) else { throw CatalogError("当前员工缺少财务及积分复核权限") }
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateLoyaltyRefundReply(reply, step: step)
+          } else if step.loyaltyOperationProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateLoyaltyOperationReply(reply, step: step)
+          } else if step.couponPolicyProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateCouponPolicyReply(reply, step: step)
+          } else if step.membershipRecoveryProof != nil {
+            let body = try membershipRecoveryRequestBody(current, step: step, read: MembershipRecoverySecrets.read)
+            let (reply, _) = try await api.raw(step.path, body: body, headers: [step.keyHeader: step.key])
+            try validateMembershipRecoveryReply(reply, step: step, body: body)
+          } else if step.memberNumberProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateMemberNumberReply(reply, step: step)
+          } else if step.memberGiftProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateMemberGiftReply(reply, step: step)
+          } else if step.membershipConfigProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object,
+              headers: [step.keyHeader: step.key])
+            try validateMembershipConfigReply(reply, step: step)
+          } else if step.memberCardProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object,
+              headers: [step.keyHeader: step.key])
+            try validateMemberCardReply(reply, step: step)
+          } else if step.benefitWalletProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object,
+              headers: [step.keyHeader: step.key])
+            try validateBenefitWalletReply(reply, step: step)
+          } else if step.ownerFinanceProof != nil {
+            let body = try ownerFinanceRequestBody(current, step: step, read: OwnerFinanceSecrets.read)
+            let (reply, _) = try await self.api.raw(step.path, body: body,
+              headers: ownerFinanceHeaders(step))
+            try validateOwnerFinanceReply(reply, step: step, body: body)
           } else if step.voucherProof != nil {
             try await performVoucherStep(
               step, read: { path in try await self.api.raw(path).0 },
               send: { body in
                 try await self.api.raw(step.path, body: body, headers: [step.keyHeader: step.key]).0
               }, secret: PaymentSecrets.read)
+          } else if step.inventoryPublishProof != nil {
+            guard inventoryPublishPermissions.allSatisfy({ identity?.allows($0) == true }) else { throw StaffAPIError.invalid }
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateInventoryPublishReply(reply, step: step)
+          } else if step.recipeConfigurationProof != nil {
+            let (reply, _) = try await api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateRecipeConfigurationReply(reply, step: step)
+          } else if step.inventorySetupProof != nil {
+            let (reply, _) = try await self.api.raw(step.path, body: step.object, headers: [step.keyHeader: step.key])
+            try validateInventorySetupReply(reply, step: step)
+          } else if step.stockCostProof != nil {
+            guard self.identity?.allows("inventory.cost.view") == true else {
+              throw CatalogError("当前岗位没有成本查看权限，请由原员工恢复")
+            }
+            let (bytes, _) = try await self.api.raw(step.path, body: step.object,
+              headers: [step.keyHeader: step.key])
+            try validateStockCostReply(bytes, step: step)
           } else if step.stockProof != nil || step.stockAuditProof != nil {
             let (bytes, _) = try await self.api.raw(
               step.path, body: step.object, headers: [step.keyHeader: step.key])
@@ -1338,6 +2728,7 @@ import SwiftUI
           try JSONEncoder().encode(next).write(to: self.livePendingURL, options: .atomic)
           self.livePending = next
         })
+      if try finishAcknowledgedManagement(current) { return }
       // Refresh is part of closure. A failed refresh keeps completed steps for read-only recovery.
       if let step = current.steps.first, step.path == "/api/commerce/kitchen-board/commands",
         let station = step.object["stationCode"] as? String
@@ -1378,17 +2769,28 @@ import SwiftUI
         }
         try await fetchStock()
         try await fetchStockAudit()
-      } else if current.steps.first?.productManagementProof != nil {
+      } else if let proof = current.steps.first?.productPhasesProof,
+        let id = proof["productId"] as? String {
+        try await fetchProductPhases(productID: id)
+      } else if current.steps.first?.inventoryPublishProof != nil {
+        inventoryPublishBoard = nil; inventoryPublishPreview = nil; inventoryPublishUpdated = nil
+        inventoryPublishState = "原整单收货与发布已确认，请重新读取采购和商品状态。"
+        try await fetchStock()
+      } else if let proof = current.steps.first?.recipeConfigurationProof {
+        recipeConfigurationProductID = proof["productId"] as? String ?? ""
+        try await fetchRecipeConfiguration()
+      } else if current.steps.first?.inventorySetupProof != nil {
+        try await fetchInventorySetup()
+      } else if current.steps.first?.stockCostProof != nil {
+        try await fetchStock()
+      } else if current.steps.first?.productManagementProof != nil || current.steps.first?.catalogConfigurationProof != nil {
         try await fetchProducts()
       } else if let proof = current.steps.first?.stockProof {
-        if proof["kind"] as? String == "create", let original = proof["draftFingerprint"] as? String
-        {
+        if proof["kind"] as? String == "create" {
           var book = try stockBook()
-          if let data = Data(base64Encoded: original),
-            let lines = try? JSONDecoder().decode([StockLine].self, from: data),
-            book[current.employeeID] == lines
-          {
+          if try book.matches(employee: current.employeeID, proof: proof) {
             book[current.employeeID] = []
+            book.suppliersByEmployee[current.employeeID] = nil
             try JSONEncoder().encode(book).write(to: stockDraftURL, options: .atomic)
           }
         }
@@ -1403,6 +2805,60 @@ import SwiftUI
         try await fetchVouchers()
       } else if current.steps.first?.printProof != nil {
         try await fetchPrinting()
+      } else if let proof = current.steps.first?.nativeManagementProof,
+        let name = proof["module"] as? String, let module = NativeManagementModule(rawValue: name) {
+        try await fetchNativeManagement(module)
+      } else if current.steps.first?.showProof != nil {
+        // Exact reply validated above. The active show view reloads when busy ends.
+      } else if current.steps.first?.bottleStorageProof != nil {
+        // The validated receipt is the authoritative original result. The view
+        // refreshes its selected list/detail without sending the completed step.
+      } else if current.steps.first?.experiencePlanProof != nil || current.steps.first?.remakeHandoverProof != nil {
+        // The view reloads after the original mutation has a validated receipt.
+      } else if let proof = current.steps.first?.contactGovernanceProof {
+        guard let area = proof["area"] as? String, let search = proof["search"] as? String else { throw StaffAPIError.invalid }
+        contactGovernanceArea = area; contactGovernanceSearch = search; contactGovernanceCursor = ""
+        try await fetchContactGovernance()
+      } else if let proof = current.steps.first?.annualPolicyProof {
+        guard let code = proof["code"] as? String else { throw StaffAPIError.invalid }
+        annualPolicyCode = code; annualPolicyCursor = ""
+        try await fetchAnnualPolicies()
+      } else if let proof = current.steps.first?.loyaltyRefundProof {
+        loyaltyRefundPage = try walletInteger(proof["page"])
+        try await fetchLoyaltyRefunds()
+      } else if let proof = current.steps.first?.loyaltyOperationProof {
+        guard let rawKind = proof["kind"] as? String, let kind = LoyaltyOperationKind(rawValue: rawKind),
+          let section = proof["section"] as? String else { throw StaffAPIError.invalid }
+        loyaltyOperationsKind = kind; loyaltyOperationsSection = section; loyaltyOperationsPage = try walletInteger(proof["page"])
+        try await fetchLoyaltyOperations()
+      } else if let proof = current.steps.first?.couponPolicyProof {
+        guard let rawKind = proof["kind"] as? String, let kind = CouponPolicyKind(rawValue: rawKind) else { throw StaffAPIError.invalid }
+        couponPolicyKind = kind; couponPolicySearch = proof["search"] as? String ?? ""; couponPolicyCursor = ""
+        try await fetchCouponPolicies()
+      } else if let proof = current.steps.first?.membershipRecoveryProof {
+        membershipRecoveryHistory = try walletBoolean(proof["history"])
+        membershipRecoveryCursor = ""
+        try await fetchMembershipRecovery()
+      } else if current.steps.first?.memberNumberProof != nil {
+        try await fetchMemberNumber()
+      } else if let proof = current.steps.first?.memberGiftProof, let section = proof["section"] as? String {
+        if memberGiftsSection != section { memberGiftsCursor = "" }
+        memberGiftsSection = section
+        try await fetchMemberGifts()
+      } else if let step = current.steps.first, let proof = step.membershipConfigProof {
+        membershipConfigSection = proof["action"] as? String == "control" ? "controls" : "rules"
+        if let domain = step.object["domain"] as? String, let id = step.object["configurationId"] as? String {
+          membershipConfigTarget = domain + "/" + id
+        } else { membershipConfigTarget = nil }
+        try await fetchMembershipConfig()
+      } else if current.steps.first?.memberCardProof != nil {
+        if let actor = identity, !memberCardSections(actor).contains(memberCardsSection),
+          let section = memberCardSections(actor).first { memberCardsSection = section; memberCardsCursor = "" }
+        try await fetchMemberCards()
+      } else if current.steps.first?.benefitWalletProof != nil {
+        try await fetchBenefitWallet()
+      } else if current.steps.first?.ownerFinanceProof != nil {
+        try await fetchOwnerFinance()
       } else if current.steps.first?.financeProof != nil {
         try await fetchFinance(query: financeQuery)
       } else if current.steps.first?.assignmentProof != nil {
@@ -1422,6 +2878,19 @@ import SwiftUI
         resetParticipantPreview()
         participants = []
         participantState = "人员调整已确认，请让顾客扫描目标桌二维码；如需继续，请刷新名单。"
+      }
+      if let key = current.steps.first?.nativeManagementProof?["payloadKey"] as? String {
+        nativeManagementPersistence.removePayload(key)
+      }
+      if let key = current.steps.first?.experiencePlanProof?["payloadKey"] as? String { ExperiencePlanSecrets.remove(key) }
+      if let key = current.steps.first?.remakeHandoverProof?["payloadKey"] as? String { RemakeHandoverSecrets.remove(key) }
+      if let key = current.steps.first?.membershipRecoveryProof?["payloadKey"] as? String { MembershipRecoverySecrets.remove(key) }
+      if let key = current.steps.first?.showProof?["payloadKey"] as? String { ShowSecrets.remove(key) }
+      if let key = current.steps.first?.bottleStorageProof?["payloadKey"] as? String {
+        BottleStorageSecrets.remove(key)
+      }
+      if let key = current.steps.first?.ownerFinanceProof?["payloadKey"] as? String {
+        OwnerFinanceSecrets.remove(key)
       }
       if let key = current.steps.first?.voucherProof?["voucherSecretKey"] as? String {
         PaymentSecrets.remove(key)
@@ -1449,6 +2918,24 @@ import SwiftUI
       handleLiveError(error)
     }
   }
+  private func finishAcknowledgedManagement(_ command: LiveCommand) throws -> Bool {
+    guard let proof = command.steps.first?.nativeManagementProof else { return false }
+    guard try hasNativeManagementAcknowledgement(command, readPayload: nativeManagementPersistence.readPayload,
+      readReceipt: nativeManagementPersistence.readReceipt) else {
+      if command.completedSteps > 0 {
+        throw CatalogError("原管理请求缺少安全回执，不能根据本机完成标记清除；请保留原请求核对")
+      }
+      return false
+    }
+    try FileManager.default.removeItem(at: livePendingURL)
+    livePending = nil
+    if let key = proof["payloadKey"] as? String { nativeManagementPersistence.removePayload(key) }
+    nativeManagementPersistence.removeReceipt(command.id)
+    nativeManagementBoard = nil; nativeManagementUpdated = nil; clearBridgePairing()
+    nativeManagementState = "原管理操作已有服务器确认，请重新读取当前配置"
+    message = "原管理操作已确认；如本次修改了本人登录或权限，请重新登录后读取配置。"
+    return true
+  }
   func dismissRejectedLive() {
     guard let command = livePending, command.rejected, command.employeeID == identity?.employee.id,
       !busy
@@ -1457,6 +2944,22 @@ import SwiftUI
     do {
       try FileManager.default.removeItem(at: livePendingURL)
       livePending = nil
+      if let key = command.steps.first?.nativeManagementProof?["payloadKey"] as? String {
+        nativeManagementPersistence.removePayload(key)
+        nativeManagementPersistence.removeReceipt(command.id)
+      }
+      if let key = command.steps.first?.experiencePlanProof?["payloadKey"] as? String { ExperiencePlanSecrets.remove(key) }
+      if let key = command.steps.first?.remakeHandoverProof?["payloadKey"] as? String { RemakeHandoverSecrets.remove(key) }
+      if let key = command.steps.first?.membershipRecoveryProof?["payloadKey"] as? String { MembershipRecoverySecrets.remove(key) }
+      if let key = command.steps.first?.showProof?["payloadKey"] as? String { ShowSecrets.remove(key) }
+      if let key = command.steps.first?.bottleStorageProof?["payloadKey"] as? String {
+        BottleStorageSecrets.remove(key)
+      }
+      if let key = command.steps.first?.ownerFinanceProof?["payloadKey"] as? String {
+        OwnerFinanceSecrets.remove(key)
+      }
+      ownerFinanceUpdated = nil
+      ownerFinanceBoard = nil
       if let key = command.steps.first?.voucherProof?["voucherSecretKey"] as? String {
         PaymentSecrets.remove(key)
       }
@@ -1489,20 +2992,64 @@ import SwiftUI
     participantPrepared = nil
   }
   private func resetDailyBusinessViews() {
+    contactGovernanceBoard = nil; contactGovernanceUpdated = nil; contactGovernanceArea = "policies"; contactGovernanceSearch = ""; contactGovernanceCursor = ""
+    contactGovernanceState = "请读取联系方式保留治理"
+    annualPolicyBoard = nil; annualPolicyUpdated = nil; annualPolicyCode = ""; annualPolicyCursor = ""
+    loyaltyRefundBoard = nil; loyaltyRefundUpdated = nil; loyaltyRefundPage = 0
+    loyaltyOperationsBoard = nil; loyaltyOperationsUpdated = nil; loyaltyOperationsKind = .benefit; loyaltyOperationsSection = "reconciliation"; loyaltyOperationsPage = 0
+    loyaltyOperationsState = "请读取原礼遇异常或积分核对记录"
+    nativeManagementSearch = ""; nativeManagementCursor = ""; nativeManagementCode = "DEFAULT"
+    experiencePlanReceipt = nil; remakeHandoverReceipt = nil
+    couponPolicyBoard = nil; couponPolicyUpdated = nil; couponPolicyKind = .calendar; couponPolicySearch = ""; couponPolicyCursor = ""
+    couponPolicyState = "请读取券日历或优惠叠加规则"
+    inventoryPublishBoard = nil; inventoryPublishPreview = nil; inventoryPublishUpdated = nil; inventoryPublishState = "请读取原采购单"
+    recipeConfigurationBoard = nil; recipeConfigurationUpdated = nil; recipeCostPreview = nil; recipeConfigurationProductID = ""
+    recipeConfigurationState = "请读取原商品配方"
+    ownerFinanceBoard = nil
+    ownerFinanceUpdated = nil
+    ownerFinanceQuery = ""
+    ownerFinanceState = "请读取费用与工资"
+    assignmentScheduleMode = "future"
+    assignmentSchedulePage = 0
     overview = nil
     overviewState = "请读取经营概览"
+    inventorySetupBoard = nil; inventorySetupUpdated = nil; inventorySetupState = "请读取物料与包装条码"
     stockCounts = nil
     stockWaste = nil
     stockAuditUpdated = nil
     stockCountDraft = []
     stockAuditState = "请读取盘点与报损"
+    productPhasesBoard = nil; productPhasesUpdated = nil
+    productPhasesState = "请读取原商品演出阶段"
     productBoard = nil
+    catalogConfigurationBoard = nil
     productUpdated = nil
     productState = "请读取商品"
+    nativeManagementBoard = nil; nativeManagementUpdated = nil
+    nativeManagementState = "请读取门店配置"
+    clearBridgePairing()
+    bottleStorageReceipt = nil
+    showReceipt = nil
+    membershipRecoveryBoard = nil; membershipRecoveryUpdated = nil; membershipRecoveryHistory = false; membershipRecoveryCursor = ""
+    membershipRecoveryState = "请读取历史会员找回申请"
+    memberNumberBoard = nil; memberNumberUpdated = nil; memberNumberState = "请读取会员号规则"
+    memberGiftsBoard = nil; memberGiftsUpdated = nil; memberGiftsSection = "campaigns"; memberGiftsCursor = ""
+    memberGiftsState = "请读取赠礼活动与发放任务"
+    membershipConfigBoard = nil; membershipConfigDetail = nil; membershipConfigUpdated = nil
+    membershipConfigSection = "rules"; membershipConfigTarget = nil
+    membershipConfigState = "请读取会员规则与运行控制"
+    memberCardsBoard = nil; memberCardsUpdated = nil
+    memberCardsSection = "projects"; memberCardsCursor = ""
+    memberCardsState = "请读取会员卡项目"
+    benefitWalletBoard = nil; benefitWalletUpdated = nil
+    benefitWalletCode = ""; benefitWalletCursor = ""
+    benefitWalletState = "请查询会员权益"
     stockBoard = nil
+    stockReceiptQuery = StockReceiptQuery()
     stockUpdated = nil
     stockEmployee = nil
     stockDraft = []
+    stockSupplier = ""
     stockReceipt = nil
     stockState = "请读取库存与采购单"
     serviceAttention = ServiceAttention()
@@ -1557,7 +3104,7 @@ import SwiftUI
     }
   }
   private func fetchService() async throws {
-    guard let actor = identity, actor.allows("service.execute") else {
+    guard let actor = identity, actor.canReadService else {
       throw CatalogError("当前岗位没有服务任务权限")
     }
     let board: LiveServiceBoard = try await api.data("/api/native-service-center")
@@ -1758,8 +3305,18 @@ import SwiftUI
     guard Set(rows.map(\.id)).count == rows.count, Set(queue.map(\.id)).count == queue.count else {
       throw StaffAPIError.invalid
     }
-    let capability: ReservationCapabilities? = try? await api.data(
+    var capability: ReservationCapabilities? = try? await api.data(
       "/api/staff/native-reservation-capabilities")
+    if capability != nil {
+      do {
+        let waitlist: WaitlistCapabilities = try await api.data("/api/staff/native-waitlist-capabilities")
+        capability?.durableWaitlist = waitlist.durableTransitions
+      } catch let failure as StaffAPIError where failure.status == 404 {
+        capability?.durableWaitlist = false
+      }
+    }
+    guard actor.employee.id == identity?.employee.id, actor.employee.id == api.identity?.employee.id
+    else { throw StaffAPIError.invalid }
     let tables: [ReservationTable] =
       capability?.durableCreate == true && actor.allows("reservation.manage")
       ? try await api.data("/api/staff/native-reservation-tables") : []
@@ -1784,6 +3341,12 @@ import SwiftUI
     else { throw CatalogError("预约已过期或权限已变化，请刷新") }
     return try ReservationCommands.transition(
       row, action: action, reason: reason, override: override, actor: actor)
+  }
+  func prepareWaitlist(id: String, to: String, reason: String) throws -> LiveCommand {
+    guard canUseReservations, reservationCapabilities?.durableWaitlist == true,
+      let row = reservationIntake.first(where: { $0.id == id }), let actor = identity
+    else { throw CatalogError("候位操作尚未启用或数据已过期，请刷新后核对") }
+    return try ReservationCommands.waitlist(row, to: to, reason: reason, actor: actor)
   }
   func prepareReservationPriority(id: String, mode: String, reason: String) throws -> LiveCommand {
     guard canUseReservations, reservationCapabilities?.durablePriority == true,
@@ -2761,7 +4324,15 @@ import SwiftUI
     let tables: [LiveAssignments.Table] = try await api.data("/api/table-management/tables")
     let assignments: [LiveAssignments.Assignment] = try await api.data(
       "/api/table-management/assignments")
-    let result = LiveAssignments(options: options, tables: tables, assignments: assignments)
+    let mode = assignmentScheduleMode
+    let page = assignmentSchedulePage
+    let schedule: AssignmentSchedule?
+    if options.supportsNativeAssignmentSchedule == true && actor.allows(LiveAssignments.permission) {
+      schedule = try await api.data(AssignmentSchedule.path(mode: mode, page: page))
+      try schedule?.validate(actorID: actor.employee.id, mode: mode, page: page)
+    } else { schedule = nil }
+    let result = LiveAssignments(options: options, tables: tables, assignments: assignments,
+      schedule: schedule)
     try result.validate()
     guard actor.employee.id == identity?.employee.id else { throw StaffAPIError.invalid }
     assignmentsBoard = result
@@ -2800,6 +4371,20 @@ import SwiftUI
       assignmentsState = "未能读取责任桌，请刷新重试"
       handleLiveError(error)
     }
+  }
+  func loadAssignmentSchedule(mode: String, page: Int = 0) async {
+    guard !busy, !heartbeatBusy, AssignmentSchedule.modes.contains(mode), (0...10000).contains(page)
+    else { return }
+    assignmentScheduleMode = mode
+    assignmentSchedulePage = page
+    await loadAssignments()
+  }
+  func prepareAssignmentSchedule(
+    id: String, reason: String, change: AssignmentSchedule.Change?
+  ) throws -> LiveCommand {
+    guard canAct(LiveAssignments.permission), let board = assignmentsBoard, let actor = identity
+    else { throw CatalogError("权限、会话或排班数据已过期，请刷新后核对") }
+    return try board.changeSchedule(actor: actor, id: id, reason: reason, change: change)
   }
   func prepareAssignment(
     tableIDs: Set<String>, employeeID: String, roleID: String, kind: String, start: Date,

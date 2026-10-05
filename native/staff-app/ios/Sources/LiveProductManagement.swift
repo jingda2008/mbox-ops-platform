@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 struct ProductManagementBoard: Decodable {
   struct Product: Decodable, Identifiable {
@@ -87,7 +88,8 @@ func validateProductManagementReply(_ bytes: Data, step: LiveCommand.Step) throw
   guard let p = step.productManagementProof, let patch = p["expected"] as? [String: Any],
     let root = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
     let data = root["data"] as? [String: Any], data["id"] as? String == p["id"] as? String,
-    let meta = root["meta"] as? [String: Any], meta["replayed"] is Bool
+    let meta = root["meta"] as? [String: Any], let replayed = meta["replayed"] as? NSNumber,
+    CFGetTypeID(replayed) == CFBooleanGetTypeID()
   else { throw StaffAPIError.invalid }
   for key in ["status", "guestVisible", "menuSortOrder"] {
     if let expected = patch[key],

@@ -36,9 +36,12 @@ struct LiveAssignmentsView: View {
           }
           if !error.isEmpty { Text(error).foregroundStyle(.red) }
           if let board = model.assignmentsBoard {
-            if manager { assignmentForm(board) }
+            if manager {
+              assignmentForm(board)
+              AssignmentScheduleSection(board: board, proposed: $proposed)
+            }
             Text("当前生效 · \(board.assignments.count)项").font(.headline)
-            Text("仅显示当前账号可见的责任。未来安排到生效时间后显示；此处暂不提供排班历史。").font(.caption).foregroundStyle(.secondary)
+            Text("当前仅显示本账号可见且已生效的责任；未来安排尚不授予责任桌权限。").font(.caption).foregroundStyle(.secondary)
             if board.assignments.isEmpty { Text("当前没有生效的责任安排").foregroundStyle(.secondary) }
             ForEach(board.assignments) { item in
               Card {
@@ -188,5 +191,113 @@ struct LiveAssignmentsView: View {
         }
       }
     }
+  }
+}
+
+private struct AssignmentScheduleSection: View {
+  @EnvironmentObject var model: AppModel
+  let board: LiveAssignments
+  @Binding var proposed: LiveCommand?
+  @State private var editing: String?
+  @State private var cancelling = false
+  @State private var employee = ""
+  @State private var role = ""
+  @State private var kind = "primary"
+  @State private var start = Date()
+  @State private var end = Date()
+  @State private var hasEnd = false
+  @State private var reason = ""
+  @State private var error = ""
+  private var enabled: Bool { model.canAct(LiveAssignments.permission) }
+  var body: some View {
+    Foldout(title: "未来安排与历史") {
+      if let schedule = board.schedule {
+        Picker("查询范围", selection: Binding(
+          get: { model.assignmentScheduleMode },
+          set: { mode in Task { await model.loadAssignmentSchedule(mode: mode) } }
+        )) {
+          ForEach(AssignmentSchedule.modes, id: \.self) {
+            Text(AssignmentSchedule.labels[$0]!).tag($0)
+          }
+        }.pickerStyle(.segmented).disabled(model.busy || model.heartbeatBusy)
+        Text("\(AssignmentSchedule.labels[schedule.mode]!) · 第\(schedule.page + 1)页 · \(schedule.rows.count)项")
+          .font(.subheadline)
+        HStack {
+          Button("上一页") { Task { await model.loadAssignmentSchedule(mode: schedule.mode, page: schedule.page - 1) } }
+            .disabled(model.busy || model.heartbeatBusy || schedule.page == 0)
+          Spacer()
+          Button("下一页") { Task { await model.loadAssignmentSchedule(mode: schedule.mode, page: schedule.page + 1) } }
+            .disabled(model.busy || model.heartbeatBusy || !schedule.hasMore || schedule.page >= 10000)
+        }
+        if schedule.rows.isEmpty { Text("此页没有\(AssignmentSchedule.labels[schedule.mode]!)记录").foregroundStyle(.secondary) }
+        ForEach(schedule.rows) { row in
+          Card {
+            Text(row.tableCode + " · " + row.employeeName).font(.headline)
+            Text("\(assignmentKinds[row.assignmentType] ?? row.assignmentType) · \(row.roleCode)").font(.subheadline)
+            Text("\(assignmentTime(row.startsAt)) → \(row.endsAt.map(assignmentTime) ?? "不设结束") · 上海时间")
+              .font(.caption)
+            Text("安排原因：" + row.reason).font(.caption).foregroundStyle(.secondary)
+            if let cancelled = row.cancelledAt {
+              Text("已取消 · \(assignmentTime(cancelled))\n取消原因：\(row.cancellationReason ?? "待核对")")
+                .font(.caption)
+            }
+            if schedule.mode == "future" {
+              HStack {
+                Button("修改安排") { begin(row, cancelling: false) }.disabled(!enabled)
+                Spacer()
+                Button("取消安排", role: .destructive) { begin(row, cancelling: true) }.disabled(!enabled)
+              }
+              if editing == row.id { editForm(row) }
+            }
+          }
+        }
+        if !error.isEmpty { Text(error).foregroundStyle(.red) }
+      } else {
+        Text("配套后台尚未提供未来安排管理。已提交的安排请在原管理端核对。").font(.caption)
+      }
+    }.onChange(of: board.schedule) { _, _ in
+      editing = nil; reason = ""; error = ""
+    }
+  }
+  private func begin(_ row: AssignmentSchedule.Row, cancelling: Bool) {
+    self.cancelling = cancelling; editing = row.id; reason = ""; error = ""
+    employee = board.options.employees.contains(where: { $0.id == row.employeeId }) ? row.employeeId : ""
+    role = board.options.roles.contains(where: { $0.id == row.roleId }) ? row.roleId : ""
+    kind = row.assignmentType
+    start = assignmentDate(row.startsAt) ?? Date()
+    hasEnd = row.endsAt != nil
+    end = row.endsAt.flatMap(assignmentDate) ?? start.addingTimeInterval(3600)
+  }
+  @ViewBuilder private func editForm(_ row: AssignmentSchedule.Row) -> some View {
+    if cancelling {
+      Text("取消后此安排不再生效，原记录和原因保留。已生效责任请使用“结束责任”。").font(.caption)
+    } else {
+      Picker("员工", selection: $employee) {
+        Text("请选择当前在职员工").tag("")
+        ForEach(board.options.employees) { Text($0.displayName + " · " + $0.code).tag($0.id) }
+      }
+      Picker("责任岗位", selection: $role) {
+        Text("请选择岗位").tag("")
+        ForEach(board.options.roles) { Text($0.name).tag($0.id) }
+      }
+      Picker("责任类型", selection: $kind) {
+        ForEach(["primary", "backup", "temporary"], id: \.self) { Text(assignmentKinds[$0]!).tag($0) }
+      }.pickerStyle(.segmented)
+      DatePicker("开始 · 上海时间", selection: $start)
+      Toggle("设置结束时间", isOn: $hasEnd)
+      if hasEnd { DatePicker("结束 · 上海时间", selection: $end) }
+    }
+    TextField(cancelling ? "取消原因（2—1000字）" : "修改原因（2—1000字）", text: $reason, axis: .vertical)
+      .textFieldStyle(.roundedBorder)
+    Button(cancelling ? "核对并取消安排" : "核对修改") {
+      do {
+        let change = cancelling ? nil : try AssignmentSchedule.Change(
+          employeeID: employee, roleID: role, kind: kind, start: start, end: hasEnd ? end : nil)
+        proposed = try model.prepareAssignmentSchedule(id: row.id, reason: reason, change: change)
+        error = ""
+      } catch { self.error = error.localizedDescription }
+    }.buttonStyle(Primary(tone: cancelling ? .danger : .secondary, symbol: cancelling ? "calendar.badge.minus" : "calendar"))
+      .disabled(!enabled)
+    Button("放弃编辑") { editing = nil; reason = ""; error = "" }
   }
 }

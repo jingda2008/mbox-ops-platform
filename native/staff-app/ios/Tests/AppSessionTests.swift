@@ -35,7 +35,7 @@ private final class AppSessionStore: StaffSessionStore {
       return (try JSONSerialization.data(withJSONObject: ["data": auth]),
         HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }, store: store)
-    let model = AppModel(api: api, loadPersistedState: false)
+    let model = AppModel(api: api, loadPersistedState: false, trainingAllowed: true)
     var count = 0
     func check(_ condition: Bool, _ label: String) {
       precondition(condition, label)

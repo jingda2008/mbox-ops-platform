@@ -41,7 +41,7 @@ struct LiveReservationsView: View {
           }
           Picker("业务", selection: $queue) {
             Text("预约").tag(false)
-            Text("优先安排").tag(true)
+            Text("候位与排序").tag(true)
           }.pickerStyle(.segmented)
           if !queue {
             Picker("查询范围", selection: $range) {
@@ -61,7 +61,7 @@ struct LiveReservationsView: View {
             Primary(tone: .secondary, symbol: "arrow.clockwise")
           ).disabled(model.busy)
           TextField("姓名、桌号或预约编号", text: $search).textFieldStyle(.roundedBorder)
-          Toggle("显示已完成 / 已取消", isOn: $showFinished)
+          Toggle("显示已结束记录", isOn: $showFinished)
           if queue {
             let rows = model.reservationIntake.filter {
               (showFinished || $0.active)
@@ -82,16 +82,31 @@ struct LiveReservationsView: View {
                 )
                 Text(reservationTime(row.arrivalAt)).font(.caption)
                 Text(row.maskedContact).font(.caption)
+                Text("状态：" + row.statusLabel).font(.caption).foregroundStyle(ink)
                 Text(row.priorityBooking == nil ? "普通安排" : "会员优先安排").foregroundStyle(ink)
                 if let change = row.queueOverride {
                   Text((ReservationCommands.labels[change.mode] ?? "已调整") + " · " + change.reason)
                     .font(.caption)
                 }
                 if row.active && model.identity?.allows("reservation.manage") == true {
+                  if row.kind == "waitlist" {
+                    if model.reservationCapabilities?.durableWaitlist == true {
+                      Text("处理候位").font(.subheadline.bold())
+                      ForEach(ReservationCommands.waitlistActions(row.status), id: \.self) { next in
+                        Button(ReservationCommands.waitlistLabels[next]!) { choose(row.id, "waitlist:" + next) }
+                          .buttonStyle(Primary(tone: next == "cancelled" || next == "expired" ? .danger : .secondary,
+                            symbol: next == "cancelled" || next == "expired" ? "xmark.circle" : "checkmark.circle"))
+                          .disabled(!actionable)
+                      }
+                    } else {
+                      Text("此后台尚未启用 App 候位处理，可查看记录；请在原管理端处理。").font(.caption)
+                    }
+                  }
+                  Text("调整同一时段排序").font(.subheadline.bold())
                   ForEach(["promote", "demote", "clear"], id: \.self) { mode in
                     Button(ReservationCommands.labels[mode] ?? "调整") { choose(row.id, mode) }
                       .buttonStyle(Primary(tone: .secondary, symbol: "arrow.up.arrow.down"))
-                      .disabled(!actionable)
+                      .disabled(!actionable || model.reservationCapabilities?.durablePriority != true)
                   }
                 }
               }
@@ -148,9 +163,13 @@ struct LiveReservationsView: View {
       NavigationStack {
         ScrollView {
           VStack(alignment: .leading, spacing: 16) {
-            Text(ReservationCommands.labels[selectedAction] ?? "处理预约").font(.headline)
-            TextField("处理原因（取消、排序调整必填）", text: $reason, axis: .vertical).textFieldStyle(
+            Text(ReservationCommands.waitlistLabels[String(selectedAction.dropFirst("waitlist:".count))]
+              ?? ReservationCommands.labels[selectedAction] ?? "处理预约").font(.headline)
+            TextField("处理说明（候位、取消、排序调整必填）", text: $reason, axis: .vertical).textFieldStyle(
               .roundedBorder)
+            if selectedAction.hasPrefix("waitlist:") {
+              Text("请先完成并核对现场处理，再登记结果；此操作不会自动联系客人、开台或退款。").font(.caption)
+            }
             if selectedAction == "cancel" {
               Text("取消会释放预约桌位；已有定金仍须按收款与退款记录处理。").font(.caption)
               if model.identity?.allows("reservation.cancel.override") == true {
@@ -160,12 +179,16 @@ struct LiveReservationsView: View {
             if !error.isEmpty { Text(error).foregroundStyle(.red) }
             Button("下一步 · 核对操作") {
               do {
-                proposed =
-                  try queue
-                  ? model.prepareReservationPriority(
+                if selectedAction.hasPrefix("waitlist:") {
+                  proposed = try model.prepareWaitlist(id: selectedID,
+                    to: String(selectedAction.dropFirst("waitlist:".count)), reason: reason)
+                } else if queue {
+                  proposed = try model.prepareReservationPriority(
                     id: selectedID, mode: selectedAction, reason: reason)
-                  : model.prepareReservation(
+                } else {
+                  proposed = try model.prepareReservation(
                     id: selectedID, action: selectedAction, reason: reason, override: override)
+                }
                 editing = false
               } catch { self.error = error.localizedDescription }
             }.buttonStyle(Primary(symbol: "arrow.right")).disabled(!actionable)

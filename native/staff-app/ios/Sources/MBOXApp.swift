@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 extension Color {
   init(hex: UInt32) {
@@ -38,32 +39,45 @@ struct Card<Content: View>: View {
   }
 }
 @main struct MBOXApp: App {
+  @UIApplicationDelegateAdaptor(NativePushAppDelegate.self) private var notificationDelegate
+  @StateObject var push = NativePushCoordinator(system: IOSNativePushSystem())
   @StateObject var model = AppModel()
   @StateObject var updater = AppUpdater()
   var body: some Scene {
     WindowGroup {
-      RootView().environmentObject(model).environmentObject(updater).tint(ink).preferredColorScheme(
+      RootView().environmentObject(model).environmentObject(updater).environmentObject(push).tint(ink).preferredColorScheme(
         .light)
     }
   }
 }
 struct RootView: View {
+  @EnvironmentObject var push: NativePushCoordinator
   @EnvironmentObject var updater: AppUpdater
   @EnvironmentObject var model: AppModel
   @Environment(\.scenePhase) private var scenePhase
-  @State var tab = 0
+  @State var tab = NativeBuildPolicy.allowsTraining ? 0 : 3
+  @State private var pushStartupReady = false
   @State private var serviceTarget: ServiceAttention.Entry?
-  let tabs = [
-    ("桌台", "square.grid.2x2"), ("订单", "list.bullet.rectangle"), ("收银", "creditcard"),
-    ("更多", "line.3.horizontal"),
-  ]
+  private var pushIdentityKey: String {
+    guard let actor = model.identity else { return "signed-out" }
+    return ([actor.employee.id, actor.session.id] + actor.permissions.sorted()
+      + ["denied"] + actor.deniedPermissions.sorted()).joined(separator: "|")
+  }
+  private var training: Bool { !model.live && model.trainingAllowed }
+  private var signedOut: Bool { model.identity == nil && !training }
+  private var tabs: [StaffDestination] { StaffNavigation.tabs(actor: model.identity, training: training) }
+  private var destination: StaffDestination {
+    StaffNavigation.selected(StaffDestination(rawValue: tab) ?? .more,
+      actor: model.identity, training: training)
+  }
+  private var navigationKey: String { (model.identity?.staffNavigationKey ?? "signed-out") + ":\(training)" }
   var body: some View {
     VStack(spacing: 0) {
       if model.live {
         HStack {
           Text(model.connection).font(.caption)
           Spacer()
-          if model.identity?.allows("service.execute") == true,
+          if model.identity?.canOpen(.service) == true,
             let entry = model.serviceAttention.firstUnread ?? model.serviceAttention.entries.first
           {
             Button {
@@ -79,47 +93,64 @@ struct RootView: View {
               .accessibilityLabel(
                 "服务待办，\(model.serviceAttention.entries.count)项；\(entry.table)桌优先查看")
           }
-          Button(model.identity == nil ? "登录" : "刷新") {
-            if model.identity == nil { tab = 3 } else { Task { await model.refresh() } }
-          }.font(.caption).disabled(model.busy)
+          if model.identity != nil {
+            Button("刷新") { Task { await model.refresh() } }.font(.caption).disabled(model.busy)
+          }
         }.padding(.horizontal, 17).padding(.vertical, 6)
       }
       if let release = updater.release {
         Button("新版本 \(release.version) · 查看更新") { tab = 3 }.font(.caption).padding(.vertical, 4)
       }
-      NavigationStack {
-        Group {
-          switch tab {
-          case 0: TablesView()
-          case 1: if model.live { LiveHistoryView() } else { OrdersView() }
-          case 2: if model.live { LiveCashierView() } else { CashierView() }
-          default: MoreView()
+      Group {
+        if signedOut {
+          NavigationStack { StaffLoginEntryView() }
+        } else {
+        switch destination {
+        case .kitchen: LiveKitchenView()
+        case .pickup: LivePickupView()
+        case .service: LiveServiceView()
+        default:
+          NavigationStack {
+            Group {
+              switch destination {
+              case .tables: TablesView()
+              case .orders: if training { OrdersView() } else { LiveHistoryView() }
+              case .cashier: if training { CashierView() } else { LiveCashierView() }
+              default: MoreView()
+              }
+            }.background(paper).toolbar(.hidden, for: .navigationBar)
           }
-        }.background(paper).toolbar(.hidden, for: .navigationBar)
-      }.id("\(tab)-\(model.workspaceVersion)")
-      HStack(spacing: 0) {
-        ForEach(0..<4) { i in
-          Button {
-            tab = i
-          } label: {
-            VStack(spacing: 4) {
-              Image(systemName: tabs[i].1).font(
-                .system(size: 22, weight: tab == i ? .semibold : .regular)
-              )
-              .frame(width: 48, height: 28)
-              .background(tab == i ? ink.opacity(0.09) : .clear, in: Capsule())
-              Text(tabs[i].0).font(.system(size: 12, weight: tab == i ? .semibold : .regular))
-              Capsule().fill(tab == i ? gold : .clear).frame(width: 24, height: 2)
-            }.frame(maxWidth: .infinity, minHeight: 58).foregroundStyle(
-              tab == i ? ink : Color.secondary)
-          }.buttonStyle(CardPress()).accessibilityLabel(tabs[i].0)
         }
-      }.background(Color(hex: 0xFFFDFA))
+        }
+      }.id("\(destination.rawValue)-\(model.workspaceVersion)")
     }.background(paper)
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if !signedOut { StaffTabBar(destinations: tabs, selection: $tab) }
+      }
+      .onChange(of: navigationKey, initial: true) { _, _ in
+        tab = destination.rawValue
+      }
+      .onChange(of: model.identity?.session.id) { _, _ in
+        tab = tabs.first?.rawValue ?? StaffDestination.more.rawValue
+      }
       .sheet(item: $serviceTarget) { entry in
         LiveServiceView(focusedTask: entry.id, focusedSession: entry.session)
       }
-      .onChange(of: model.workspaceVersion) { _, _ in serviceTarget = nil }
+      .sheet(item: $push.target) { destination in
+        if model.identity?.canOpen(.service) == true {
+          LiveServiceView(focusedTask: destination.taskId, focusedSession: destination.tableSessionId)
+        } else {
+          Text("当前岗位未开放服务任务入口，请联系主管").padding()
+        }
+      }
+      .onChange(of: push.navigationNotice) { _, notice in
+        if !notice.isEmpty { model.message = notice; push.navigationNotice = "" }
+      }
+      .onChange(of: model.workspaceVersion) { _, _ in serviceTarget = nil; push.target = nil }
+      .task(id: "\(pushStartupReady)-\(pushIdentityKey)") {
+        guard pushStartupReady else { return }
+        await push.sessionChanged(model.identity)
+      }
       .task {
         #if DEBUG && targetEnvironment(simulator)
           if let result = SimulatorKeychainCheck.run() {
@@ -127,9 +158,18 @@ struct RootView: View {
             return
           }
         #endif
+        push.connect(api: model.api) { try await model.revalidateNativePushSession() }
+        model.willEndStaffSession = { push.endSession() }
+        NativePushEventBridge.shared.attach(push)
         await model.restoreRememberedSession()
+        pushStartupReady = true
       }
-      .task(id: scenePhase) { if scenePhase == .active { await updater.check() } }
+      .task(id: scenePhase) {
+        if scenePhase == .active {
+          await updater.check()
+          if pushStartupReady { await push.refresh() }
+        }
+      }
       .task(id: scenePhase == .active && model.live) {
         guard scenePhase == .active && model.live else { return }
         while !Task.isCancelled {
@@ -149,21 +189,28 @@ struct RootView: View {
   }
 }
 struct Heading: View {
+  @Environment(\.dynamicTypeSize) private var typeSize
   let title: String
   let subtitle: String
   var summary: String? = nil
   var body: some View {
-    HStack(spacing: 12) {
-      Text(title).font(.system(size: 20, weight: .semibold)).fixedSize(
-        horizontal: true, vertical: false)
-      Spacer(minLength: 0)
-      if let summary {
-        Text(summary).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+    Group {
+      if typeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(title).font(.headline).fixedSize(horizontal: false, vertical: true)
+          if let summary { Text(summary).font(.subheadline).foregroundStyle(.white.opacity(0.9)) }
+          Text(subtitle).font(.caption).foregroundStyle(gold).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        HStack(spacing: 12) {
+          Text(title).font(.system(size: 20, weight: .semibold)).fixedSize(horizontal: true, vertical: false)
+          Spacer(minLength: 0)
+          if let summary { Text(summary).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.9)) }
+          Text(subtitle).font(.caption).foregroundStyle(gold).fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, summary == nil ? 0 : 7).padding(.vertical, 4)
+            .background(summary == nil ? .clear : .white.opacity(0.08), in: Capsule())
+        }
       }
-      Text(subtitle).font(.caption).foregroundStyle(gold)
-        .lineLimit(1).truncationMode(.tail)
-        .padding(.horizontal, summary == nil ? 0 : 7).padding(.vertical, 4)
-        .background(summary == nil ? .clear : .white.opacity(0.08), in: Capsule())
     }.padding(.horizontal, 17).padding(.vertical, 10).frame(minHeight: 48)
       .foregroundStyle(.white).background(BrandSurface())
   }
@@ -186,6 +233,9 @@ struct TablesView: View {
   @EnvironmentObject var model: AppModel
   @State var query = ""
   @State var filter = "全部"
+  @State private var showTableScanner = false
+  @State private var scannedTableID: String?
+  @State private var openScannedTable = false
   var body: some View {
     ScrollView {
       VStack(spacing: 12) {
@@ -195,14 +245,15 @@ struct TablesView: View {
             "营业 \(model.world.tables.filter{$0.session != nil}.count) · 待办 \(model.world.tables.filter{$0.service}.count)"
         )
         VStack(spacing: 12) {
-          PendingView()
+          if !model.live && model.trainingAllowed { PendingView() }
           LivePendingView()
           HStack {
             Image(systemName: "magnifyingglass")
             TextField("搜索桌号，如 A、5、A5", text: $query).textInputAutocapitalization(.characters)
               .autocorrectionDisabled()
             Button {
-              model.requestCamera()
+              if model.live { showTableScanner = true }
+              else { model.message = "演练模式请手动搜索桌号；真实桌码需员工登录后使用。" }
             } label: {
               Image(systemName: "qrcode.viewfinder")
             }.buttonStyle(RoundControl())
@@ -230,6 +281,18 @@ struct TablesView: View {
         }.padding(.horizontal, 17).padding(.bottom, 20)
       }
     }.refreshable { await model.refresh() }.background(paper)
+      .sheet(isPresented: $showTableScanner) {
+        NativeTableScannerView { id in scannedTableID = id; openScannedTable = true }
+      }
+      .navigationDestination(isPresented: $openScannedTable) {
+        if let id = scannedTableID { TableDetail(tableID: id) }
+      }
+      .onChange(of: model.identity?.staffNavigationKey) { _, _ in
+        showTableScanner = false; openScannedTable = false; scannedTableID = nil
+      }
+      .onChange(of: model.workspaceVersion) { _, _ in
+        showTableScanner = false; openScannedTable = false; scannedTableID = nil
+      }
   }
 }
 struct TableTile: View {
@@ -649,16 +712,59 @@ struct Foldout<Content: View>: View {
     }
   }
 }
+struct StaffLoginEntryView: View {
+  @EnvironmentObject var model: AppModel
+  @EnvironmentObject var updater: AppUpdater
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 16) {
+        Heading(title: "门店登录", subtitle: "验证门店设备后，使用自己的员工账号登录")
+        VStack(spacing: 12) {
+          LivePendingView()
+          Card { LiveAccountView() }
+          Foldout(title: updater.release == nil ? "版本与更新" : "版本与更新 · 有新版本") {
+            AppUpdateView(updater: updater)
+          }
+        }.padding(.horizontal, 17).padding(.bottom, 24)
+      }
+    }.background(paper).toolbar(.hidden, for: .navigationBar)
+  }
+}
 struct MoreView: View {
   @EnvironmentObject var updater: AppUpdater
   @EnvironmentObject var model: AppModel
   @State private var showStock = false
   @State private var showOverview = false
+  @State private var showBusinessReports = false
+  @State private var showCouponCalendars = false
+  @State private var showStackingPolicies = false
+  @State private var showBenefitExceptions = false
+  @State private var showLoyaltySupplements = false
+  @State private var showLoyaltyRefunds = false
+  @State private var showContactGovernance = false
+  @State private var showAnnualPolicies = false
+  @State private var showOwnerFinance = false
+  @State private var showPrinting = false
+  @State private var showVouchers = false
   @State private var showStockAudit = false
   @State private var showProducts = false
   @State private var showService = false
   @State private var showBenefits = false
   @State private var showMembers = false
+  @State private var showBenefitWallet = false
+  @State private var showMemberCards = false
+  @State private var showDeviceManagement = false
+  @State private var showBottleStorage = false
+  @State private var showMembershipConfig = false
+  @State private var showMemberGifts = false
+  @State private var showMembershipOverview = false
+  @State private var showMemberNumber = false
+  @State private var showMembershipRecovery = false
+  @State private var showRemakeHandover = false
+  @State private var showFulfillmentHistory = false
+  @State private var showPerformance = false
+  @State private var showSongRequests = false
+  @State private var settingsModule: NativeManagementModule?
   @State private var showReservations = false
   @State var code = ""
   @State var pin = ""
@@ -667,6 +773,29 @@ struct MoreView: View {
   @State private var showFulfillment = false
   @State private var showKitchen = false
   @State private var showPickup = false
+  @ViewBuilder private var additionalManagementEntries: some View {
+    if model.live, let actor = model.identity {
+      if actor.canOpen(.businessReports) { Button("销售与客户体验分析") { showBusinessReports = true }.buttonStyle(Primary(tone: .secondary, symbol: "chart.bar.xaxis")) }
+      if actor.canOpen(.couponCalendars) { Button("券日历与使用次数") { showCouponCalendars = true }.buttonStyle(Primary(tone: .secondary, symbol: "calendar")) }
+      if actor.canOpen(.stackingPolicies) { Button("优惠叠加规则") { showStackingPolicies = true }.buttonStyle(Primary(tone: .secondary, symbol: "square.stack")) }
+      if actor.canOpen(.benefitExceptions) { Button("礼遇出品异常") { showBenefitExceptions = true }.buttonStyle(Primary(tone: .secondary, symbol: "exclamationmark.bubble")) }
+      if actor.canOpen(.contactGovernance) { Button("联系方式保留治理") { showContactGovernance = true }.buttonStyle(Primary(tone: .secondary, symbol: "person.badge.shield.checkmark")) }
+      if actor.canOpen(.annualPolicies) { Button("年度礼遇政策") { showAnnualPolicies = true }.buttonStyle(Primary(tone: .secondary, symbol: "calendar.badge.checkmark")) }
+      if actor.canOpen(.loyaltyRefunds) { Button("退款积分复核") { showLoyaltyRefunds = true }.buttonStyle(Primary(tone: .secondary, symbol: "arrow.uturn.backward.circle")) }
+      if actor.canOpen(.loyaltySupplements) { Button("积分对账与漏发") { showLoyaltySupplements = true }.buttonStyle(Primary(tone: .secondary, symbol: "checkmark.circle")) }
+      if actor.canOpen(.memberGifts) { Button("会员赠礼与退款券复核") { showMemberGifts = true }.buttonStyle(Primary(tone: .secondary, symbol: "gift")) }
+      if actor.canOpen(.membershipOverview) { Button("已发布会员等级与权益") { showMembershipOverview = true }.buttonStyle(Primary(tone: .secondary, symbol: "star.circle")) }
+      if actor.canOpen(.memberNumber) { Button("会员号规则") { showMemberNumber = true }.buttonStyle(Primary(tone: .secondary, symbol: "number")) }
+      if actor.canOpen(.membershipRecovery) { Button("历史会员找回与独立复核") { showMembershipRecovery = true }.buttonStyle(Primary(tone: .secondary, symbol: "person.crop.circle.badge.checkmark")) }
+      if actor.canOpen(.remakeHandover) { Button("离店实物交接") { showRemakeHandover = true }.buttonStyle(Primary(tone: .secondary, symbol: "shippingbox")) }
+      if actor.canOpen(.fulfillmentHistory) { Button("制作与送达历史") { showFulfillmentHistory = true }.buttonStyle(Primary(tone: .secondary, symbol: "clock.arrow.circlepath")) }
+      if actor.canOpen(.show) { Button("演出排班与现场") { showPerformance = true }.buttonStyle(Primary(tone: .secondary, symbol: "music.mic")) }
+      if actor.canOpen(.showRequests) { Button("点歌队列") { showSongRequests = true }.buttonStyle(Primary(tone: .secondary, symbol: "music.note.list")) }
+      ForEach([NativeManagementModule.staff, .tableConfiguration, .commercePolicy, .publication, .homeContent, .launchPopup, .recommendations]) { module in
+        if module.available(to: actor) { Button(module.title) { settingsModule = module }.buttonStyle(Primary(tone: .secondary, symbol: "slider.horizontal.3")) }
+      }
+    }
+  }
   var body: some View {
     ScrollView {
       VStack(spacing: 12) {
@@ -675,68 +804,94 @@ struct MoreView: View {
         VStack(spacing: 12) {
           PendingView()
           LivePendingView()
-          Foldout(title: model.identity == nil ? "门店登录" : "员工账号") {
-            LiveAccountView()
+          if model.identity == nil && model.live {
+            Card {
+              Text("门店登录").font(.headline)
+              LiveAccountView()
+            }
+          } else {
+            Foldout(title: model.identity == nil ? "门店登录" : "员工账号") { LiveAccountView() }
           }
-          if model.live,
-            ["inventory.count", "inventory.waste", "inventory.count.approve"].contains(where: {
-              model.identity?.allows($0) == true
-            })
-          {
+          if model.live && model.identity?.canOpen(.stockAudit) == true {
             Button("盘点与报损 · 审核差异") { showStockAudit = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "checklist"))
           }
-          if model.live, model.identity?.allows("commercial.profit.view") == true {
+          if model.live && model.identity?.canOpen(.overview) == true {
             Button("经营概览 · 收款与成本") { showOverview = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "chart.bar"))
           }
-          if model.live, model.identity?.allows("catalog.product.manage") == true {
+          if model.live && model.identity?.canOpen(.ownerFinance) == true {
+            Button("经营费用与工资") { showOwnerFinance = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "banknote"))
+          }
+          if model.live && model.identity?.canOpen(.products) == true {
             Button("商品管理 · 售罄与改价") { showProducts = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "tag"))
           }
-          if model.live, let actor = model.identity,
-            StockBoard.permissions.contains(where: actor.allows)
-          {
+          if model.live && model.identity?.canOpen(.stock) == true {
             Button("库存与收货 · 扫码入库") { showStock = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "shippingbox"))
           }
-          if model.live && model.identity?.allows("service.execute") == true {
+          if model.live && model.identity?.canOpen(.service) == true {
             Button("服务任务中心") { showService = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "checklist"))
           }
-          if model.live
-            && (model.identity?.allows("loyalty.account.view") == true
-              || model.identity?.allows("loyalty.configuration.view") == true)
-          {
+          if model.live && model.identity?.canOpen(.members) == true {
             Button("会员服务 · 签到与奖励") { showMembers = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "person.crop.rectangle"))
           }
-          if model.live && model.identity?.allows("loyalty.redemption.fulfill") == true {
+          if model.live && model.identity?.canOpen(.benefitWallet) == true {
+            Button("会员权益钱包") { showBenefitWallet = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "wallet.pass"))
+          }
+          if model.live && model.identity?.canOpen(.bottleStorage) == true {
+            Button("会员存酒") { showBottleStorage = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "wineglass"))
+          }
+          if model.live && model.identity?.canOpen(.membershipConfig) == true {
+            Button("会员规则与运行控制") { showMembershipConfig = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "slider.horizontal.3"))
+          }
+          if model.live && model.identity?.canOpen(.memberCards) == true {
+            Button("会员卡 · 发放审核与规则") { showMemberCards = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "person.text.rectangle"))
+          }
+          additionalManagementEntries
+          if model.live && model.identity?.canOpen(.deviceManagement) == true {
+            Button("打印设备与路由管理") { showDeviceManagement = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "printer.filled.and.paper"))
+          }
+          if model.live && model.identity?.canOpen(.benefits) == true {
             Button("权益兑付 · 礼遇与点心") { showBenefits = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "gift"))
           }
-          if model.live && model.identity?.allows("reservation.view") == true {
+          if model.live && model.identity?.canOpen(.reservations) == true {
             Button("预约与排队") { showReservations = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "calendar"))
           }
-          if model.live && model.identity != nil {
+          if model.live && model.identity?.canOpen(.assignments) == true {
             Button("人员与责任桌") { showAssignments = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "person.2"))
           }
-          if model.live && model.canReadFulfillment {
+          if model.live && model.identity?.canOpen(.fulfillment) == true {
             Button("出品任务 · 重做与异常") { showFulfillment = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "exclamationmark.bubble"))
           }
-          if model.live && model.identity?.allows("kds.prepare") == true {
+          if model.live && model.identity?.canOpen(.kitchen) == true {
             Button("厨房 / 吧台 · 出品工作台") { showKitchen = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "flame"))
           }
-          if model.live
-            && (model.identity?.allows("kds.deliver") == true
-              || model.identity?.allows("staff.access.configure") == true)
-          {
+          if model.live && model.identity?.canOpen(.pickup) == true {
             Button("取餐台 · 领取与撤回") { showPickup = true }.buttonStyle(
               Primary(tone: .secondary, symbol: "tray.and.arrow.up"))
+          }
+          if model.live && model.identity?.canOpen(.printing) == true {
+            Button("票据与打印记录") { showPrinting = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "printer"))
+          }
+          if model.live && model.identity?.canOpen(.vouchers) == true {
+            Button("团购券核销与记录") { showVouchers = true }.buttonStyle(
+              Primary(tone: .secondary, symbol: "ticket"))
           }
           Foldout(title: updater.release == nil ? "版本与更新" : "版本与更新 · 有新版本") {
             AppUpdateView(updater: updater)
@@ -748,10 +903,11 @@ struct MoreView: View {
                 Primary(tone: .secondary, symbol: "camera"))
               Button("麦克风与语音识别权限") { model.requestVoice() }.buttonStyle(
                 Primary(tone: .secondary, symbol: "mic"))
-              Text("扫码识别与语音转文字仍在开发；可手动输入。").font(.caption).foregroundStyle(.secondary)
+              Text("扫码用于已接入的业务入口；语音转写为可编辑草稿，提交前需核对。设备权限与实际使用结果分别验证。").font(.caption).foregroundStyle(.secondary)
             }
           }
-          if !model.live {
+          Foldout(title: "服务提醒与通知") { NativePushView() }
+          if !model.live && model.trainingAllowed {
             Foldout(title: "异常场景演练") {
               VStack(alignment: .leading, spacing: 12) {
 
@@ -765,14 +921,39 @@ struct MoreView: View {
               }
             }
           }
-          Text("开发预览 · 仅供测试\n扫码支付、打印与推送暂不可用").font(.caption).multilineTextAlignment(
+          Text("业务操作以服务器回执为准\n支付、打印与推送仍需对应渠道、门店设备及安装签名验证").font(.caption).multilineTextAlignment(
             .center
           ).foregroundStyle(.secondary)
         }.padding(.horizontal, 17).padding(.bottom, 24)
       }
     }.background(paper).sheet(isPresented: $showProducts) { LiveProductManagementView() }.sheet(
       isPresented: $showStockAudit
-    ) { LiveStockAuditView() }.sheet(isPresented: $showOverview) { LiveOverviewView() }.sheet(
+    ) { LiveStockAuditView() }.sheet(isPresented: $showOverview) { LiveOverviewView() }
+    .sheet(isPresented: $showBusinessReports) { NativeBusinessReportsView() }
+    .sheet(isPresented: $showCouponCalendars) { LiveCouponCalendarsView() }
+    .sheet(isPresented: $showStackingPolicies) { LiveStackingPoliciesView() }
+    .sheet(isPresented: $showBenefitExceptions) { LiveBenefitExceptionsView() }
+    .sheet(isPresented: $showContactGovernance) { LiveContactGovernanceView() }
+    .sheet(isPresented: $showAnnualPolicies) { LiveAnnualPoliciesView() }
+    .sheet(isPresented: $showLoyaltyRefunds) { LiveLoyaltyRefundsView() }
+    .sheet(isPresented: $showLoyaltySupplements) { LiveLoyaltySupplementsView() }
+    .sheet(isPresented: $showOwnerFinance) { LiveOwnerFinanceView() }
+    .sheet(isPresented: $showBenefitWallet) { LiveBenefitWalletView() }
+    .sheet(isPresented: $showMemberCards) { LiveMemberCardsView() }
+    .sheet(isPresented: $showBottleStorage) { LiveBottleStorageView() }
+    .sheet(isPresented: $showMembershipConfig) { LiveMembershipConfigView() }
+    .sheet(isPresented: $showMemberGifts) { LiveMemberGiftsView() }
+    .sheet(isPresented: $showMembershipOverview) { LiveMembershipOverviewView() }
+    .sheet(isPresented: $showMemberNumber) { LiveMemberNumberView() }
+    .sheet(isPresented: $showMembershipRecovery) { LiveMembershipRecoveryView() }
+    .sheet(isPresented: $showRemakeHandover) { LiveRemakeHandoverView() }
+    .sheet(isPresented: $showFulfillmentHistory) { LiveFulfillmentHistoryView() }
+    .sheet(isPresented: $showPerformance) { LiveShowView() }
+    .sheet(isPresented: $showSongRequests) { LiveShowRequestsView() }
+    .sheet(item: $settingsModule) { module in if module.isCustomerContent { NativeCustomerContentView(module: module) } else { NativeSettingsView(module: module) } }
+    .sheet(isPresented: $showDeviceManagement) { NativeManagementView(module: .devices) }
+    .sheet(isPresented: $showPrinting) { LivePrintingView() }
+    .sheet(isPresented: $showVouchers) { LiveVouchersView() }.sheet(
       isPresented: $showStock
     ) { LiveStockView() }
     .sheet(isPresented: $showService) { LiveServiceView() }.sheet(

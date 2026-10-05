@@ -23,13 +23,18 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport + 1)
 }
 
-async function expectReservationTouchTargets(page: import('@playwright/test').Page) {
-  const undersized = await page.locator('[data-testid="reservation-booking"] button, [data-testid="reservation-booking"] input, [data-testid="reservation-booking"] select, [data-testid="reservation-booking"] textarea')
-    .evaluateAll((elements) => elements
+async function expectTouchTargets(page: import('@playwright/test').Page, selector: string) {
+  // Query and measure in one browser turn. evaluateAll first captures an array
+  // handle, which can retain controls unmounted by an intervening React update.
+  const targets = await page.evaluate((query) => [...document.querySelectorAll(query)]
       .filter((element) => {
+        if (!element.isConnected) return false
         const style = getComputedStyle(element)
-        const rect = element.getBoundingClientRect()
-        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
+        if (style.visibility === 'hidden' || style.visibility === 'collapse') return false
+        for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+          if (getComputedStyle(ancestor).display === 'none') return false
+        }
+        return true
       })
       .map((element) => {
         const rect = element.getBoundingClientRect()
@@ -38,27 +43,19 @@ async function expectReservationTouchTargets(page: import('@playwright/test').Pa
           width: rect.width,
           height: rect.height,
         }
-      }))
-  expect(undersized).toEqual([])
+      }), selector)
+  expect(targets.length, 'touch target checks must measure a nonempty rendered surface').toBeGreaterThan(0)
+  // Keep connected zero-size controls in the failure set; never hide a real
+  // undersized target merely because it has no positive bounding rectangle.
+  expect(targets.filter(({ width, height }) => width < 44 || height < 44)).toEqual([])
+}
+
+async function expectReservationTouchTargets(page: import('@playwright/test').Page) {
+  await expectTouchTargets(page, '[data-testid="reservation-booking"] button, [data-testid="reservation-booking"] input, [data-testid="reservation-booking"] select, [data-testid="reservation-booking"] textarea')
 }
 
 async function expectCashierTouchTargets(page: import('@playwright/test').Page) {
-  const undersized = await page.locator('.cashier-workbench button, .cashier-workbench input, .cashier-workbench textarea')
-    .evaluateAll((elements) => elements
-      .filter((element) => {
-        const style = getComputedStyle(element)
-        const rect = element.getBoundingClientRect()
-        return style.visibility !== 'hidden' && style.display !== 'none' && (rect.width < 44 || rect.height < 44)
-      })
-      .map((element) => {
-        const rect = element.getBoundingClientRect()
-        return {
-          label: element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName,
-          width: rect.width,
-          height: rect.height,
-        }
-      }))
-  expect(undersized).toEqual([])
+  await expectTouchTargets(page, '.cashier-workbench button, .cashier-workbench input, .cashier-workbench textarea')
 }
 
 async function setRenderedTextScale(page: import('@playwright/test').Page, scale: 1 | 2) {
@@ -570,6 +567,8 @@ test('reservation actions keep mobile touch targets at least 44px through confir
   await page.setViewportSize({ width: 320, height: 568 })
   await page.goto(data.reservationUrl)
   await expect(page.getByTestId('reservation-booking')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '选择日期和人数', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: /下一步：位置与联系/ })).toBeEnabled()
   await expectReservationTouchTargets(page)
   await page.screenshot({ path: 'artifacts/normalized-browser/audit-rc78-reservation/reservation-initial-320.png', fullPage: true })
 

@@ -6,6 +6,7 @@ import type { JsonCodec, JsonObject } from './command-executor.js'
 import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
+  hashRequestFingerprint,
   NormalizedCommandExecutor,
 } from './command-executor.js'
 import type {
@@ -235,6 +236,9 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         // Set-Cookie. Returning the opaque token lets clients persist it and
         // send it back via Cookie or x-mbox-reservation-session.
         sessionToken: execution.value.sessionToken,
+        // Partition pending browser requests by the authenticated store/customer
+        // without persisting credentials or publishing internal UUIDs.
+        recoveryScope: fingerprint({ tenantId: scope.tenantId, storeId: scope.storeId, customerId: execution.value.session.customerId }),
         expiresAt: execution.value.session.expiresAt,
         capabilities: execution.value.session.scopes,
       },
@@ -300,23 +304,40 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const preferredScheduleId = readOptionalUuid(body.preferredScheduleId, '演出偏好')
     if (body.tableCodes !== undefined) throw new PublicReservationRequestError('预约只登记位置偏好，具体位置到店后由门店安排')
     const idempotencyKey = readIdempotencyKey(request)
-    const publicId = readOptionalString(body.publicId, '预约编号', 128) ?? createPublicId('reservation')
+    const requestedPublicId = readOptionalString(body.publicId, '预约编号', 128)
+    const requestedExpectedEndAt = body.expectedEndAt === undefined ? null : readTimestamp(body.expectedEndAt, '预计结束时间')
+    const requestFields = { mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference, acknowledgedPolicyVersion, preferredScheduleId }
+    const legacyFingerprint = fingerprint(requestFields)
+    const requestFingerprint = fingerprint({ ...requestFields, customerId: context.customerId, publicId: requestedPublicId, expectedEndAt: requestedExpectedEndAt })
+    let receiptPublicId: string | null = null
+    let recovered = false
     const execution = await options.commands.execute({
       scope: context.scope,
       operationScope: 'public.reservation.create',
       idempotencyKey,
-      requestFingerprint: fingerprint({ mode, customerName, contact: contact.hash, guestCount, arrivalAt, note, seatPreference, acknowledgedPolicyVersion, preferredScheduleId }),
+      requestFingerprint,
       resultCodec: reservationCodec,
     }, async (transaction) => {
+      const publicId = requestedPublicId ?? receiptPublicId ?? createPublicId('reservation')
+      const existing = await new ReservationRepository(transaction).findByPublicId(publicId)
+      if (existing) {
+        const owned = await ownedReservationInTransaction(transaction, publicId, context.customerId, false)
+        // The original request survives both idempotency expiry and later edits.
+        // Old rows without a bound fingerprint require a verified old receipt.
+        if (owned.reservationSnapshot.requestFingerprint !== requestFingerprint && receiptPublicId !== publicId) {
+          throw new IdempotencyConflictError('public.reservation.create', idempotencyKey)
+        }
+        recovered = true
+        return { result: owned, auditEvents: [], outboxMessages: [] }
+      }
       await enforceRateLimit(transaction, 'reservation', hashActor(context.actorRef), 8, 60_000)
       const policy = await readPolicy(transaction, true)
       if (policy.policy_version !== acknowledgedPolicyVersion) {
         throw new PublicReservationPolicyVersionConflictError()
       }
       await assertPreferredSchedule(transaction, preferredScheduleId, arrivalAt)
-      const expectedEndAt = body.expectedEndAt === undefined
-        ? new Date(Date.parse(arrivalAt) + policy.default_duration_minutes * 60_000).toISOString()
-        : readTimestamp(body.expectedEndAt, '预计结束时间')
+      const expectedEndAt = requestedExpectedEndAt
+        ?? new Date(Date.parse(arrivalAt) + policy.default_duration_minutes * 60_000).toISOString()
       validateReservationWindow(arrivalAt, expectedEndAt, now(), policy.max_advance_days)
       const capacity = await readReservationCapacity(transaction, arrivalAt, expectedEndAt)
       if (!capacityAccepts(capacity, guestCount)) throw new PublicReservationCapacityUnavailableError()
@@ -338,6 +359,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         source: 'wechat',
         note,
         reservationSnapshot: {
+          requestFingerprint,
           bookingMode: mode,
           depositRule: deposit,
           priorityBooking: annualPriority === null ? null : {
@@ -387,12 +409,25 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
           payload,
         }],
       }
+    }, async transaction => {
+      // Serialize different keys that name the same booking before either claims
+      // capacity. No absent-row lock can provide this guarantee.
+      await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `public-reservation:${context.scope.tenantId}:${context.scope.storeId}:${requestedPublicId ?? idempotencyKey}`,
+      ])
+      const receipt = await validateReservationReceipt(transaction, context.customerId, {
+        operationScope: 'public.reservation.create', idempotencyKey, requestFingerprint, legacyFingerprint,
+        publicId: requestedPublicId,
+        expectedEndAt: requestedExpectedEndAt,
+      })
+      receiptPublicId = receipt?.publicId ?? null
     })
     const maskedContact = contact.masked
-    return reply.code(execution.replayed ? 200 : 201).send({
+    const replayed = execution.replayed || recovered
+    return reply.code(replayed ? 200 : 201).send({
       data: publicReservation(execution.value, maskedContact),
       meta: {
-        replayed: execution.replayed,
+        replayed,
         arrivalGraceMinutes: reservationArrivalGraceMinutes(execution.value),
       },
     })
@@ -428,11 +463,13 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         1,
         2_147_483_647,
       )
+      const legacyFingerprint = fingerprint({ publicId, body, acknowledgedPolicyVersion })
+      const requestFingerprint = fingerprint({ publicId, body, acknowledgedPolicyVersion, customerId: context.customerId })
       const execution = await options.commands.execute({
         scope: context.scope,
         operationScope: 'public.reservation.update',
         idempotencyKey,
-        requestFingerprint: fingerprint({ publicId, body, acknowledgedPolicyVersion }),
+        requestFingerprint,
         resultCodec: reservationCodec,
       }, async (transaction) => {
         const current = await ownedReservationInTransaction(transaction, publicId, context.customerId, true)
@@ -539,6 +576,11 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
             payload,
           }],
         }
+      }, async transaction => {
+        await ownedReservationInTransaction(transaction, publicId, context.customerId, false)
+        await validateReservationReceipt(transaction, context.customerId, {
+          operationScope: 'public.reservation.update', idempotencyKey, requestFingerprint, legacyFingerprint, publicId,
+        })
       })
       const owned = await findOwnedReservation(options, context, publicId)
       return reply.send({ data: publicReservation(execution.value, owned.maskedContact), meta: { replayed: execution.replayed } })
@@ -550,11 +592,14 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       const context = await requireGuest(options, request, 'guest.reservation.update')
       const publicId = readPublicId(request.params.publicId)
       const existing = await findOwnedReservation(options, context, publicId)
+      const idempotencyKey = readIdempotencyKey(request)
+      const legacyFingerprint = fingerprint({ publicId })
+      const requestFingerprint = fingerprint({ publicId, customerId: context.customerId })
       const execution = await options.commands.execute({
         scope: context.scope,
         operationScope: 'public.reservation.cancel',
-        idempotencyKey: readIdempotencyKey(request),
-        requestFingerprint: fingerprint({ publicId }),
+        idempotencyKey,
+        requestFingerprint,
         resultCodec: reservationCodec,
       }, async (transaction) => {
         const current = await ownedReservationInTransaction(transaction, publicId, context.customerId, false)
@@ -579,6 +624,11 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
             payload,
           }],
         }
+      }, async transaction => {
+        await ownedReservationInTransaction(transaction, publicId, context.customerId, false)
+        await validateReservationReceipt(transaction, context.customerId, {
+          operationScope: 'public.reservation.cancel', idempotencyKey, requestFingerprint, legacyFingerprint, publicId,
+        })
       })
       return reply.send({ data: publicReservation(execution.value, existing.maskedContact), meta: { replayed: execution.replayed } })
     })
@@ -592,12 +642,16 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     const annualPriority = await options.transactions.run(context.scope, (transaction) => (
       readAnnualReservationPriority(transaction, context.customerId)
     ), { readOnly: true })
+    const idempotencyKey = readIdempotencyKey(request)
+    const requestFields = { ...body, contact: contact.hash }
+    const requestFingerprint = fingerprint({ ...requestFields, customerId: context.customerId })
     const execution = await options.waitlists.create({
       scope: context.scope,
       actor: { type: 'guest', ref: context.actorRef },
       businessDate: context.businessDate,
-      idempotencyKey: readIdempotencyKey(request),
-      requestFingerprint: fingerprint({ ...body, contact: contact.hash, annualPriorityRuleId: annualPriority?.rule_id ?? null }),
+      idempotencyKey,
+      requestFingerprint,
+      beforeClaim: transaction => validateWaitlistCreateReceipt(transaction, context.customerId, idempotencyKey, requestFingerprint, requestFields),
       publicId: createPublicId('waitlist'),
       customerId: context.customerId,
       customerName: readString(body.customerName, '候位姓名', 1, 128),
@@ -957,6 +1011,66 @@ async function findOwnedReservation(
     `, [transaction.scope.tenantId, transaction.scope.storeId, reservation.id])
     return { reservation, maskedContact: contact.rows[0]?.masked_contact ?? '已留联系方式' }
   }, { readOnly: true })
+}
+
+/** Legacy receipts omitted identity and some create fields. Bind them only
+ * after checking the original response and current canonical ownership. */
+async function validateReservationReceipt(
+  transaction: ScopedTransaction,
+  customerId: string,
+  input: {
+    operationScope: string; idempotencyKey: string; requestFingerprint: string; legacyFingerprint: string
+    publicId: string | null; expectedEndAt?: string | null
+  },
+): Promise<Reservation | null> {
+  const result = await transaction.query<{
+    id: string; request_sha256: string; status: string; response_snapshot: { result?: unknown } | null
+  }>(`SELECT id,request_sha256,status,response_snapshot FROM mbox.idempotency_records
+    WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4 FOR UPDATE`,
+  [transaction.scope.tenantId, transaction.scope.storeId, input.operationScope, input.idempotencyKey])
+  const row = result.rows[0]
+  const requestHash = hashRequestFingerprint(input.requestFingerprint)
+  const legacy = row?.request_sha256 === hashRequestFingerprint(input.legacyFingerprint)
+  if (!row || (!legacy && row.request_sha256 !== requestHash)
+    || row.status !== 'completed' || !row.response_snapshot?.result) return null
+  const reservation = reservationCodec.decode(row.response_snapshot.result)
+  if ((input.publicId !== null && reservation.publicId !== input.publicId)
+    || (legacy && input.expectedEndAt != null && Date.parse(reservation.expectedEndAt) !== Date.parse(input.expectedEndAt))) {
+    throw new IdempotencyConflictError(input.operationScope, input.idempotencyKey)
+  }
+  await ownedReservationInTransaction(transaction, reservation.publicId, customerId, false)
+  if (legacy) {
+    await transaction.query(`UPDATE mbox.idempotency_records SET request_sha256=$4,updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+    [transaction.scope.tenantId, transaction.scope.storeId, row.id, requestHash])
+  }
+  return reservation
+}
+
+async function validateWaitlistCreateReceipt(
+  transaction: ScopedTransaction,
+  customerId: string,
+  idempotencyKey: string,
+  requestFingerprint: string,
+  requestFields: Record<string, unknown>,
+): Promise<void> {
+  const result = await transaction.query<{
+    id: string; request_sha256: string; status: string; response_snapshot: { result?: WaitlistEntry } | null
+  }>(`SELECT id,request_sha256,status,response_snapshot FROM mbox.idempotency_records
+    WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='waitlist.create' AND idempotency_key=$3 FOR UPDATE`,
+  [transaction.scope.tenantId, transaction.scope.storeId, idempotencyKey])
+  const row = result.rows[0], entry = row?.response_snapshot?.result
+  if (!row || row.status !== 'completed' || !entry?.publicId) return
+  const requestHash = hashRequestFingerprint(requestFingerprint)
+  const legacyHash = hashRequestFingerprint(fingerprint({ ...requestFields, annualPriorityRuleId: entry.annualPriorityRuleId ?? null }))
+  if (row.request_sha256 !== requestHash && row.request_sha256 !== legacyHash) return
+  const owned = await new WaitlistRepository(transaction).findOwnedByPublicId(entry.publicId, customerId)
+  if (!owned) throw new WaitlistNotFoundError()
+  if (row.request_sha256 === legacyHash) {
+    await transaction.query(`UPDATE mbox.idempotency_records SET request_sha256=$4,updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+    [transaction.scope.tenantId, transaction.scope.storeId, row.id, requestHash])
+  }
 }
 
 async function ownedReservationInTransaction(

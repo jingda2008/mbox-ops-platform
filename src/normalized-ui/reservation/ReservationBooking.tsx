@@ -14,6 +14,7 @@ import {
   PublicReservationApi,
   PublicReservationApiError,
   withReservationSessionRecovery,
+  type PendingReservationSubmission,
 } from './reservation-api'
 import {
   addCalendarDays,
@@ -85,6 +86,8 @@ export function ReservationBooking({
   const [message, setMessage] = useState<string | null>(null)
   const [retryAt, setRetryAt] = useState<string | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
+  const [recoveryReady, setRecoveryReady] = useState(false)
+  const [pendingReservation, setPendingReservation] = useState<PendingReservationSubmission | null>(null)
   const [availability, setAvailability] = useState<ReservationAvailability | null>(null)
   const [performance, setPerformance] = useState<PublicDailyPerformance | null>(null)
   const [performanceLoading, setPerformanceLoading] = useState(false)
@@ -121,7 +124,20 @@ export function ReservationBooking({
     }
   }, [])
 
+  const readRecovery = useCallback(() => {
+    try {
+      setPendingReservation(api.getPendingReservation())
+      setRecoveryReady(true)
+    } catch (error) {
+      setPendingReservation(null)
+      setRecoveryReady(false)
+      setMessage(errorMessage(error))
+    }
+  }, [api])
+
   const connect = useCallback(async () => {
+    setRecoveryReady(false)
+    setPendingReservation(null)
     setPhase('loading')
     try {
       const result = await run(async (signal) => {
@@ -132,13 +148,16 @@ export function ReservationBooking({
         }, signal)
         return true
       })
-      if (result === true) setSessionReady(true)
+      if (result === true) {
+        setSessionReady(true)
+        readRecovery()
+      }
     } catch {
       setSessionReady(false)
     } finally {
       setPhase('idle')
     }
-  }, [api, identity.deviceFingerprint, identity.provider, identity.providerAssertion, run])
+  }, [api, identity.deviceFingerprint, identity.provider, identity.providerAssertion, readRecovery, run])
 
   const runWithSession = useCallback(async <Value,>(
     operation: (signal: AbortSignal) => Promise<Value>,
@@ -312,6 +331,10 @@ export function ReservationBooking({
   }, [draft, slots])
 
   const submit = useCallback(async () => {
+    if (!recoveryReady || pendingReservation !== null) {
+      setMessage('请先查询并恢复原预约，再提交新的预约。')
+      return
+    }
     if (!sessionReady) {
       setMessage('预约服务尚未连接，请先重试')
       return
@@ -382,9 +405,28 @@ export function ReservationBooking({
         setSessionReady(false)
       }
     } finally {
+      readRecovery()
       setPhase('idle')
     }
-  }, [api, availability, draft, editingId, joinWaitlist, onReservationChange, operatingHours, reservation, runWithSession, sessionReady])
+  }, [api, availability, draft, editingId, joinWaitlist, onReservationChange, operatingHours, pendingReservation, readRecovery, recoveryReady, reservation, runWithSession, sessionReady])
+
+  const recoverReservation = useCallback(async () => {
+    setPhase('submitting')
+    try {
+      const saved = await runWithSession(signal => api.recoverReservation(signal))
+      if (saved !== null) {
+        setReservation(saved)
+        setWaitlist(null)
+        setAutoStatusRefreshEnabled(true)
+        setStep('complete')
+        onReservationChange?.(saved)
+      }
+    } catch { /* The original submission remains available for another read. */ }
+    finally {
+      readRecovery()
+      setPhase('idle')
+    }
+  }, [api, onReservationChange, readRecovery, runWithSession])
 
   const cancel = useCallback(async () => {
     if (!cancelArmed) {
@@ -437,6 +479,9 @@ export function ReservationBooking({
       message={message}
       retryAt={retryAt}
       sessionReady={sessionReady}
+      recoveryReady={recoveryReady}
+      pendingReservation={pendingReservation}
+      onRecoverReservation={() => void recoverReservation()}
       draft={draft}
       slots={slots}
       availability={availability}
@@ -479,6 +524,9 @@ export interface ReservationBookingViewProps {
   message: string | null
   retryAt: string | null
   sessionReady: boolean
+  recoveryReady?: boolean
+  pendingReservation?: PendingReservationSubmission | null
+  onRecoverReservation?: () => void
   draft: ReservationDraft
   slots: ReturnType<typeof createArrivalSlots>
   availability: ReservationAvailability | null
@@ -509,6 +557,8 @@ export interface ReservationBookingViewProps {
 
 export function ReservationBookingView(props: ReservationBookingViewProps) {
   const busy = props.phase !== 'idle'
+  const recoveryPending = props.pendingReservation != null
+  const canBook = !recoveryPending && props.recoveryReady !== false
   return (
     <main className="reservation-booking" data-testid="reservation-booking">
       <header className="reservation-header">
@@ -519,7 +569,7 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
         </span>
       </header>
 
-      {props.step !== 'complete' && <Progress step={props.step} />}
+      {canBook && props.step !== 'complete' && <Progress step={props.step} />}
       {props.message !== null && (
         <div ref={props.noticeRef} className="reservation-notice" role="alert">
           <AlertCircle size={18} aria-hidden="true" />
@@ -528,13 +578,28 @@ export function ReservationBookingView(props: ReservationBookingViewProps) {
         </div>
       )}
 
-      {props.step === 'schedule' && (
+      {props.step !== 'complete' && props.recoveryReady === false && (
+        <section className="reservation-step" aria-label="预约恢复检查">
+          <h1>正在核对本人预约</h1>
+          <p>确认上次预约结果后即可继续。</p>
+          <button className="reservation-primary" type="button" disabled={busy} onClick={props.onReconnect}>重新连接并读取预约</button>
+        </section>
+      )}
+      {recoveryPending && (
+        <section className="reservation-step" aria-label="恢复原预约">
+          <h1>上次预约结果待确认</h1>
+          <p>请查询并恢复原预约，确认后再填写新预约。</p>
+          <p>{new Date(props.pendingReservation!.arrivalAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {props.pendingReservation!.guestCount}位</p>
+          <button className="reservation-primary" type="button" disabled={busy || !props.sessionReady} onClick={props.onRecoverReservation}>查询并恢复原预约</button>
+        </section>
+      )}
+      {canBook && props.step === 'schedule' && (
         <ScheduleStep {...props} busy={busy} />
       )}
-      {props.step === 'details' && (
+      {canBook && props.step === 'details' && (
         <DetailsStep {...props} busy={busy} />
       )}
-      {props.step === 'confirm' && props.availability !== null && (
+      {canBook && props.step === 'confirm' && props.availability !== null && (
         <ConfirmStep {...props} busy={busy} />
       )}
       {props.step === 'complete' && (

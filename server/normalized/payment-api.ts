@@ -1,4 +1,5 @@
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
+import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import { safePaymentErrorCode, safePaymentErrorLocation } from './pending-online-payment-reconciliation.js'
 import {REFUND_PURPOSES,type RefundPurpose} from '../../src/shared/refund-purpose.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -45,7 +46,7 @@ import {
 } from './normalized-request-context.js'
 import { StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repository.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
-import type { StoreScope } from './transaction-runner.js'
+import type { ScopedPostgresTransactionRunner, StoreScope } from './transaction-runner.js'
 import type {
   OnlinePaymentAction,
   OnlinePaymentQueryResult,
@@ -226,6 +227,7 @@ export interface OrderSettlementExceptionPort {
 
 export interface PaymentApiOptions {
   commands: PaymentCommandPort
+  transactions?: Pick<ScopedPostgresTransactionRunner, 'run'>
   providerVerifier: PaymentProviderVerifier
   providerObservations: ProviderObservationRecorderPort
   reconciliationQuery: ReconciliationQueryPort
@@ -248,7 +250,7 @@ export interface PaymentApiOptions {
 }
 
 interface ApiErrorBody {
-  error: { code: string; message: string }
+  error: { code: string; message: string; retryable?: boolean }
 }
 
 export class PaymentProviderVerificationError extends Error {
@@ -460,7 +462,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         8,
       )
       const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-        ?? createPublicId('payment')
+        ?? await defaultCommandPublicId(options, context.scope, 'payment.activity.manual-record', idempotencyKey, 'payment')
       const execution = await options.commands.recordManualActivity({
         ...metadata(request, context, idempotencyKey, {
           registrationPublicId,
@@ -665,7 +667,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       )
       const idempotencyKey = readIdempotencyKey(request)
       const publicId = readOptionalString(body.publicId, 'publicId', 128, 8)
-        ?? createPublicId('refund')
+        ?? await defaultCommandPublicId(options, context.scope, 'refund.request', idempotencyKey, 'refund')
       const execution = await options.commands.requestRefund({
         ...metadata(request, context, idempotencyKey, {
           paymentId,
@@ -1078,6 +1080,28 @@ function verifiedSnapshot(
     eventId: readString(eventId, 'eventId', 256),
     occurredAt: readTimestamp(occurredAt, 'occurredAt'),
   })
+}
+
+async function defaultCommandPublicId(
+  options: PaymentApiOptions, scope: Readonly<StoreScope>, operationScope: string,
+  idempotencyKey: string, kind: 'payment' | 'refund',
+): Promise<string> {
+  // Older releases stored a random ID in both the receipt and fingerprint.
+  // Recover only that ID here: the command executor still authenticates the
+  // complete original actor, route and payload fingerprint before replaying.
+  const previous = options.transactions && await options.transactions.run(scope, async transaction => {
+    const row = (await transaction.query<{ public_id: string | null }>(`
+      SELECT response_snapshot->'result'->>'publicId' AS public_id
+      FROM mbox.idempotency_records
+      WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3
+        AND idempotency_key=$4 AND status='completed'
+    `, [scope.tenantId, scope.storeId, operationScope, idempotencyKey])).rows[0]
+    return row?.public_id
+  }, { readOnly: true })
+  if (typeof previous === 'string' && previous.length >= 8 && previous.length <= 128) return previous
+  if (options.createPublicId) return options.createPublicId(kind)
+  return `${kind === 'refund' ? 'R' : 'P'}${createHash('sha256')
+    .update(`${scope.tenantId}:${scope.storeId}:${operationScope}:${idempotencyKey}`).digest('hex').slice(0, 32)}`
 }
 
 function metadata(
@@ -1548,6 +1572,9 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (error instanceof InventoryReturnCostProjectionBusyError) {
+    return { statusCode: 503, body: { error: { code: error.code, message: error.message, retryable: true } } }
+  }
   if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505'
     && 'constraint' in error && ['payments_provider_transaction_uq', 'refunds_provider_refund_uq'].includes(String(error.constraint))) {
     return apiError(409, 'FINANCIAL_REFERENCE_CONFLICT', '该收退款凭证已有记录，请核对原付款或退款结果；不要重复收付或另编凭证号')

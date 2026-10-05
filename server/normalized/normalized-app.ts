@@ -1,3 +1,4 @@
+import { registerNativeUpdateDistribution } from './native-update-distribution.js'
 import {nativeAnnualPolicyApiPlugin} from './native-annual-policy-api.js'
 import {nativeMembershipRecoveryApiPlugin} from './native-membership-recovery-api.js'
 import {nativeCheckoutManagementApiPlugin} from './native-checkout-management-api.js'
@@ -515,6 +516,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       })
     }
     registerDomainPlugins(app)
+    registerNativeUpdateDistribution(app, options.config.nativeUpdatesDir ?? null)
     await registerInjectedPlugins(app, options.injectedPlugins ?? [])
     if (options.config.staticDir !== null) {
       await app.register(staticPlugin, {
@@ -835,6 +837,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(paymentApiPlugin, {
       prefix: '/api',
       commands: paymentCommands,
+      transactions,
       providerVerifier: options.paymentProviderVerifier ?? paymentVerifier(options.config, scope),
       providerObservations,
       reconciliationQuery: new PostgresReconciliationQuery(transactions),

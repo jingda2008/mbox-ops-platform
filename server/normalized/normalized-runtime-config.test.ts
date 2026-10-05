@@ -15,6 +15,14 @@ const base = {
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('keeps native updates disabled by default and accepts only an absolute public directory', () => {
+    expect(loadNormalizedRuntimeConfig(base).nativeUpdatesDir).toBeNull()
+    expect(loadNormalizedRuntimeConfig({ ...base, MBOX_NATIVE_UPDATES_DIR: '/run/mbox-native-updates' }).nativeUpdatesDir).toBe('/run/mbox-native-updates')
+    for (const path of ['relative/files', '/run/../private']) {
+      expect(() => loadNormalizedRuntimeConfig({ ...base, MBOX_NATIVE_UPDATES_DIR: path })).toThrow(/MBOX_NATIVE_UPDATES_DIR/)
+    }
+  })
+
   it('requires an explicit production database login and rejects maintenance credentials in app environment',()=>{
     for(const override of [{DATABASE_URL:'postgresql://localhost/mbox'}, {PGPASSFILE:'/run/admin-pass'},
       {PGPASSWORD:'maintenance-secret'}, {ADMIN_DATABASE_URL:'postgresql://admin:secret@db/mbox'}]){

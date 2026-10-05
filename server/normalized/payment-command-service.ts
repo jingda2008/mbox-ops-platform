@@ -1,4 +1,5 @@
 import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
+import { hashRequestFingerprint, IdempotencyConflictError, NativeCommandNotCommittedError } from './command-executor.js'
 import {assertStandaloneRefundDecision} from './refund-case-decision.js'
 import {ItemAfterSalesProgressRepository} from './item-after-sales-progress-repository.js'
 import { RefundFulfillmentRepository } from './refund-fulfillment-repository.js'
@@ -483,21 +484,7 @@ export class PaymentCommandService {
     if (evidence.collectedByEmployeeId !== employeeId) {
       throw new TypeError('Manual activity payment evidence collector must match the acting employee')
     }
-    return this.commands.execute(command(input, 'payment.activity.manual-record', paymentCodec), async (transaction) => {
-      await this.authorization.assertEmployeeCapability({
-        transaction,
-        employeeId,
-        capability: input.provider === 'cash'
-          ? 'payment.manual.cash.record'
-          : input.provider === 'physical_pos'
-            ? 'payment.manual.pos.record'
-            : 'payment.manual.external.record',
-      })
-      await this.authorization.assertEmployeeCapability({
-        transaction,
-        employeeId,
-        capability: 'community.activity.cashier',
-      })
+    return this.commands.execute({ ...command(input, 'payment.activity.manual-record', paymentCodec), retainReceipt: true }, async (transaction) => {
       const result = await new PaymentRepository(transaction).recordManualForActivityRegistration({
         expectedAmountMinor: input.expectedAmountMinor,
         registrationPublicId: input.registrationPublicId,
@@ -573,7 +560,13 @@ export class PaymentCommandService {
           ...outcome.outboxMessages,
         ],
       }
-    })
+    }, async transaction => {
+      await this.authorization.assertEmployeeCapability({ transaction, employeeId,
+        capability: input.provider === 'cash' ? 'payment.manual.cash.record'
+          : input.provider === 'physical_pos' ? 'payment.manual.pos.record' : 'payment.manual.external.record' })
+      await this.authorization.assertEmployeeCapability({ transaction, employeeId, capability: 'community.activity.cashier' })
+      await retainCompletedFinancialReceipt(transaction, input, 'payment.activity.manual-record')
+    }).catch(rethrowFinancialCommandError)
   }
 
   authorizeRecollection(
@@ -882,12 +875,7 @@ export class PaymentCommandService {
   requestRefund(input: Readonly<RequestRefundCommand>): Promise<CommandExecution<Refund>> {
     const employeeId = requireEmployee(input.actor, 'Refund request')
     const requestEvidence = sanitizeClientRefundEvidence(input.requestEvidence)
-    return this.commands.execute(command(input, 'refund.request', refundCodec), async (transaction) => {
-      await this.authorization.assertEmployeeCapability({
-        transaction,
-        employeeId,
-        capability: 'refund.request',
-      })
+    return this.commands.execute({ ...command(input, 'refund.request', refundCodec), retainReceipt: true }, async (transaction) => {
       const refund = await new RefundRepository(transaction).request({
         paymentId: input.paymentId,
         publicId: input.publicId,
@@ -903,7 +891,10 @@ export class PaymentCommandService {
         refundId: refund.id,
       })
       return refundOutcome(input, refund, 'refund.requested', 1)
-    })
+    }, async transaction => {
+      await this.authorization.assertEmployeeCapability({ transaction, employeeId, capability: 'refund.request' })
+      await retainCompletedFinancialReceipt(transaction, input, 'refund.request')
+    }).catch(rethrowFinancialCommandError)
   }
 
   requestActivityRefund(input: Readonly<RequestActivityRefundCommand>): Promise<CommandExecution<Refund>> {
@@ -1143,6 +1134,31 @@ export class PaymentCommandService {
       )
     })
   }
+}
+
+function rethrowFinancialCommandError(error: unknown): never {
+  // Permanent receipts use the native executor's rollback wrapper, but these
+  // established financial commands retain their original typed error contract.
+  throw error instanceof NativeCommandNotCommittedError ? error.original : error
+}
+
+async function retainCompletedFinancialReceipt(
+  transaction: ScopedTransaction, input: Readonly<CommandMetadata>, operationScope: string,
+): Promise<void> {
+  const row = (await transaction.query<{ request_sha256: string; status: string }>(`
+    SELECT request_sha256,status FROM mbox.idempotency_records
+    WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4
+    FOR UPDATE
+  `, [input.scope.tenantId, input.scope.storeId, operationScope, input.idempotencyKey])).rows[0]
+  if (row?.status !== 'completed') return
+  if (row.request_sha256 !== hashRequestFingerprint(input.requestFingerprint)) {
+    throw new IdempotencyConflictError(operationScope, input.idempotencyKey)
+  }
+  // Promote surviving old receipts before the generic 24-hour reclaim logic.
+  // Deleted historical receipts cannot be reconstructed from a random ID.
+  await transaction.query(`UPDATE mbox.idempotency_records SET expires_at='infinity'::timestamptz
+    WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4`,
+  [input.scope.tenantId, input.scope.storeId, operationScope, input.idempotencyKey])
 }
 
 function command<Result>(

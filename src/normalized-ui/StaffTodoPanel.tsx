@@ -45,7 +45,9 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
         error: denied ? '当前权限已变更，请刷新工作台核对' : failed ? '读取失败，当前结果可能不完整' : null, limited: source.limit !== undefined }
     }))
     setLoading(false)
-    setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))
+    if (settled.every(result => result.status === 'fulfilled')) {
+      setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))
+    }
   }, [api, sources])
   useEffect(() => {
     void load()
@@ -62,7 +64,7 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
   const errors = visibleResults.filter(result => result.error)
   const staleIds = new Set(errors.flatMap(result => result.items.map(item => item.id)))
   return <section className="normalized-section staff-unified-todos" aria-labelledby="staff-todo-title">
-    <div className="normalized-section-heading"><div><h2 id="staff-todo-title">待办事项</h2><small>{updatedAt ? `最近核对 ${updatedAt} · 当前已读取 ${todos.length} 项` : '正在读取各业务待办'}</small></div><button type="button" disabled={loading} onClick={() => void load()}>{loading ? '读取中…' : '刷新待办'}</button></div>
+    <div className="normalized-section-heading"><div><h2 id="staff-todo-title">待办事项</h2><small>{updatedAt ? `最近全部核对成功 ${updatedAt} · 当前已读取 ${todos.length} 项` : loading ? '正在读取各业务待办' : `尚未完整读取各业务待办 · 当前已读取 ${todos.length} 项`}</small></div><button type="button" disabled={loading} onClick={() => void load()}>{loading ? '读取中…' : '刷新待办'}</button></div>
     <div className="staff-todo-filters">
       <div role="group" aria-label="待办处理状态">
         <button type="button" aria-pressed={stateFilter === 'action'} onClick={() => setStateFilter('action')}>现在可处理</button>

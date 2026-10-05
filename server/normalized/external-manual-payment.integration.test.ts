@@ -10,6 +10,9 @@ import { NormalizedPaymentCapabilityAuthorization } from './payment-security-pol
 import { NormalizedProviderObservationAuthority, VerifiedProviderObservationService } from './provider-verification-observation.js'
 import { paymentApiPlugin } from './payment-api.js'
 import { PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
+import { guestCommerceServiceApiPlugin, type GuestCommerceServiceApiOptions } from './guest-commerce-service-api.js'
+import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
+import { PaymentRepository } from './payment-repository.js'
 
 const adminUrl = process.env.TEST_NORMALIZED_DATABASE_URL
 const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
@@ -18,7 +21,7 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
   let admin: Pool, runtime: Pool, runner: ScopedPostgresTransactionRunner, money: PaymentCommandService, date: string
   const scope = { tenantId: randomUUID(), storeId: randomUUID() }
   const area = randomUUID(), product = randomUUID(), cashier = randomUUID(), requester = randomUUID()
-  const capabilities = ['payment.manual.cash.record', 'payment.manual.external.record', 'payment.collect.all_tables',
+  const capabilities = ['payment.manual.cash.record', 'payment.manual.pos.record', 'community.activity.cashier', 'payment.manual.external.record', 'payment.collect.all_tables',
     'payment.recollect.authorize', 'reconciliation.view', 'refund.request', 'refund.approve', 'refund.execute']
 
   beforeAll(async () => {
@@ -49,11 +52,12 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
   afterAll(async () => { await runtime?.end(); await admin?.end() })
 
   const meta = (employeeId = cashier, businessDate = date) => ({ scope, actor: { type: 'employee' as const, employeeId }, businessDate, idempotencyKey: randomUUID(), requestFingerprint: randomUUID() })
-  async function post(path: string, payload: object, key = randomUUID(), employeeId = cashier, currentScope = scope) {
+  async function post(path: string, payload: object, key = randomUUID(), employeeId = cashier, currentScope = scope, generatedPublicId?: string) {
     const app = Fastify({ logger: false })
     const context = () => ({ scope: currentScope, actor: { type: 'employee' as const, employeeId }, employeeId, businessDate: date, capabilities })
     const unused = async () => { throw new Error('External provider calls are forbidden in this fixture') }
-    await app.register(paymentApiPlugin, { commands: money, providerVerifier: { verifyPaymentCallback: unused, verifyRefundCallback: unused },
+    await app.register(paymentApiPlugin, { commands: money, transactions: runner,
+      ...(generatedPublicId ? { createPublicId: () => generatedPublicId } : {}), providerVerifier: { verifyPaymentCallback: unused, verifyRefundCallback: unused },
       providerObservations: new VerifiedProviderObservationService(runner), reconciliationQuery: { list: unused },
       cashierWorkbenchQuery: new PostgresCashierWorkbenchQuery(runner), orderCancellation: { cancel: unused }, orderSettlementException: { settle: unused },
       resolveActorContext: context, resolveStaffContext: context, resolveProviderBusinessDate: () => date })
@@ -85,6 +89,125 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     await admin.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'deny','fixture current revocation',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4", [scope.tenantId, scope.storeId, cashier, code])
     try { await action() } finally { await admin.query('DELETE FROM mbox.employee_permission_overrides WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3', [scope.tenantId, scope.storeId, cashier]) }
   }
+
+  it.each([false, true])('recovers refund without a client ID, including legacy receipt=%s', async legacy => {
+    const f = await newOrder()
+    const collected = await post('/payments/manual', { orderId: f.order, provider: 'cash', method: 'cash' })
+    expect(collected.statusCode, collected.body).toBe(201)
+    const paymentId = collected.json().data.id, key = randomUUID()
+    const body = { reason: '原申请网络响应丢失恢复', purpose: 'price_adjustment', allocations: [{ orderItemId: f.item, amountMinor: 500 }] }
+    const path = `/payments/${paymentId}/refunds`
+    const overLimit = await post(path, { ...body, allocations: [{ orderItemId: f.item, amountMinor: 5000 }] })
+    expect(overLimit.statusCode, overLimit.body).toBe(409)
+    expect(overLimit.json().error.code).toBe('REFUND_LIMIT_CONFLICT')
+    const first = await post(path, body, key, cashier, scope, legacy ? `refund-${randomUUID()}` : undefined)
+    expect(first.statusCode, first.body).toBe(201)
+    if (legacy) await admin.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '3 days',expires_at=clock_timestamp()-interval '1 day' WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3", [scope.tenantId, scope.storeId, key])
+    const replay = await post(path, body, key)
+    expect(replay.statusCode, replay.body).toBe(200)
+    expect(replay.json()).toMatchObject({ data: { id: first.json().data.id, publicId: first.json().data.publicId }, meta: { replayed: true } })
+    expect((await post(path, { ...body, reason: '改变原申请原因' }, key)).statusCode).toBe(409)
+    expect((await post(path, body, key, requester)).statusCode).toBe(409)
+    await withDeniedPermission('refund.request', async () => { expect((await post(path, body, key)).statusCode).toBe(403) })
+    expect((await admin.query("SELECT expires_at='infinity'::timestamptz retained FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3", [scope.tenantId, scope.storeId, key])).rows[0].retained).toBe(true)
+    expect((await admin.query('SELECT count(*)::int n FROM mbox.refunds WHERE payment_id=$1', [paymentId])).rows[0].n).toBe(1)
+  })
+
+  it.each([['cash', false], ['cash', true], ['physical_pos', false], ['physical_pos', true]] as const)('replays %s activity collection legacy=%s without duplicate payment, ledger or audit', async (provider, legacy) => {
+    const activity = randomUUID(), customer = randomUUID(), registration = randomUUID(), key = randomUUID()
+    await admin.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)', [customer, scope.tenantId, scope.storeId, customer])
+    await admin.query(`INSERT INTO mbox.community_activities(
+      id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,assembly_location,capacity,
+      fee_amount_minor,deposit_amount_minor,fee_basis,registration_payment_mode,payment_deadline_minutes,
+      currency,safety_policy_version,safety_acknowledgement_text,safety_requirements,refund_policy_version,refund_policy_summary,activity_details,contact_instructions,
+      status,published_at,created_by_employee_id,approved_by_employee_id
+    ) VALUES($1,$2,$3,$4,'member_night','现金活动回执','原请求回执恢复',clock_timestamp()+interval '1 day',
+      clock_timestamp()+interval '1 day 3 hours','MBOX',20,6800,0,'per_registration','full_required',15,
+      'CNY','safe-v1','遵守要求',ARRAY['遵守现场安全要求'],'refund-v1','原路退款','活动回执恢复测试，验证原成功收款回执只产生一笔活动支付及对账流水','门店收银办理','published',clock_timestamp(),$5,$5)`,
+    [activity, scope.tenantId, scope.storeId, activity, cashier])
+    await admin.query(`INSERT INTO mbox.community_activity_registrations(
+      id,tenant_id,store_id,public_id,activity_id,customer_id,party_size,status,payment_choice,payment_status,
+      fee_amount_minor,amount_due_minor,paid_amount_minor,currency,safety_acknowledgement,idempotency_key,
+      payment_due_at,seat_hold_expires_at,requested_payment_choice,requested_payment_method,requested_amount_due_minor,
+      acknowledged_safety_policy_version,acknowledged_refund_policy_version,terms_acknowledged_at,terms_acknowledgement_source
+    ) VALUES($1,$2,$3,$4,$5,$6,1,'payment_pending','full','pending',6800,6800,0,'CNY',
+      '{"acknowledged":true,"policyVersion":"safe-v1"}',$4,clock_timestamp()+interval '15 minutes',
+      clock_timestamp()+interval '15 minutes','full','jsapi',6800,'safe-v1','refund-v1',clock_timestamp(),'mini_program')`,
+    [registration, scope.tenantId, scope.storeId, registration, activity, customer])
+    const path = `/activity-registrations/${registration}/manual-collections`
+    const body = { provider, method: provider === 'cash' ? 'cash' : 'card', receiptReference: randomUUID(), ...(provider === 'physical_pos' ? { terminalId: 'AUDIT-POS-1' } : {}) }
+    const missing = await post(`/activity-registrations/${randomUUID()}/manual-collections`, body)
+    expect(missing.statusCode, missing.body).toBeLessThan(500)
+    expect(missing.statusCode).toBeGreaterThanOrEqual(400)
+    // Simulate the random server-generated ID in an already committed old release.
+    const first = await post(path, body, key, cashier, scope, legacy ? `payment-${randomUUID()}` : undefined)
+    expect(first.statusCode, first.body).toBe(201)
+    if (legacy) await admin.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '3 days',expires_at=clock_timestamp()-interval '1 day' WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3", [scope.tenantId, scope.storeId, key])
+    const replay = await post(path, body, key)
+    expect(replay.statusCode, replay.body).toBe(200)
+    expect(replay.json()).toMatchObject({ data: { id: first.json().data.id }, meta: { replayed: true } })
+    expect((await post(path, { ...body, receiptReference: 'changed-receipt' }, key)).statusCode).toBe(409)
+    const result = (await admin.query(`SELECT
+      (SELECT count(*)::int FROM mbox.payments WHERE activity_registration_id=$1) payments,
+      (SELECT count(*)::int FROM mbox.reconciliation_entries WHERE payment_id=$2) ledger,
+      (SELECT count(*)::int FROM mbox.audit_events WHERE object_id=$2::text AND action='payment.activity_manual_recorded') audit`,
+    [registration, first.json().data.id])).rows[0]
+    expect(result).toEqual({ payments: 1, ledger: 1, audit: 1 })
+    await withDeniedPermission('community.activity.cashier', async () => { expect((await post(path, body, key)).statusCode).toBe(403) })
+    await withDeniedPermission(provider === 'cash' ? 'payment.manual.cash.record' : 'payment.manual.pos.record', async () => { expect((await post(path, body, key)).statusCode).toBe(403) })
+  })
+
+  it.each(['wechat_jsapi', 'alipay_jsapi', 'simulation'] as const)('recovers terminal guest batch before disabled policy in %s, with principal and payload binding', async paymentMode => {
+    const f = await newOrder(), second = await newOrder(date, f.session), customer = randomUUID(), key = randomUUID()
+    await admin.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)', [customer, scope.tenantId, scope.storeId, customer])
+    await admin.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')", [scope.tenantId, scope.storeId, f.session, customer])
+    const actorRef = await seedActiveGuestTableAuthority(admin, { ...scope, tableSessionId: f.session, customerId: customer })
+    let mode: typeof paymentMode | null = paymentMode, wechatPreflights = 0, alipayPreflights = 0, providerCreates = 0
+    const context = { scope, sessionKind: 'table' as const, customerId: customer, tableSessionId: f.session,
+      reservationId: null, tableCode: 'fixture', tableDisplayName: 'fixture', businessDate: date,
+      expiresAt: new Date(Date.now() + 3600000).toISOString(), capabilities: ['guest.order.create'], actorRef }
+    const app = Fastify()
+    const options = { transactions: runner, commandExecutor: new NormalizedCommandExecutor(runner), commerce: {}, payments: money,
+      resolveGuestContext: () => context, paymentActionSecret: 'local-audit-payment-secret-32-characters', paymentMode,
+      resolvePaymentMode: () => mode, onlinePayments: { assertAvailable: () => {},
+        assertGuestJsapiReady: async () => { wechatPreflights++; return 'jsapi' },
+        assertGuestAlipayJsapiReady: async () => { alipayPreflights++; return 'jsapi' },
+        create: async (input: { paymentId: string }) => { providerCreates++; return { paymentId: input.paymentId, status: 'pending', payload: null } },
+      } } as unknown as GuestCommerceServiceApiOptions
+    await app.register(guestCommerceServiceApiPlugin, options)
+    const inject = (ids = [f.order, second.order]) => app.inject({ method: 'POST', url: '/guest/orders/payment-batch', headers: { 'idempotency-key': key }, payload: { orderPublicIds: ids } })
+    try {
+      const first = await inject()
+      expect(first.statusCode, first.body).toBe(200)
+      const paymentId = first.json().data.paymentId
+      expect([wechatPreflights, alipayPreflights]).toEqual(paymentMode === 'simulation' ? [0, 0] : paymentMode === 'alipay_jsapi' ? [0, 1] : [1, 0])
+      expect((await inject()).json().meta.replayed).toBe(true)
+      const single = await newOrder(date, f.session)
+      const singleResult = await app.inject({ method: 'POST', url: `/guest/orders/${single.order}/payment`, headers: { 'idempotency-key': randomUUID() } })
+      expect(singleResult.statusCode, singleResult.body).toBe(200)
+      expect([wechatPreflights, alipayPreflights]).toEqual(paymentMode === 'simulation' ? [0, 0] : paymentMode === 'alipay_jsapi' ? [0, 2] : [2, 0])
+      await runner.run(scope, async tx => {
+        const repository = new PaymentRepository(tx)
+        const payment = (await tx.query<{ public_id: string }>('SELECT public_id FROM mbox.payments WHERE id=$1', [paymentId])).rows[0]!
+        await repository.applySucceededCallback({ paymentPublicId: payment.public_id, provider: paymentMode === 'simulation' ? 'simulation' : 'postar', providerTransactionId: randomUUID(), reportedAmountMinor: 8000, reportedCurrency: 'CNY', succeededAt: new Date().toISOString() })
+        await repository.syncOrderPaymentStatus(f.order); await repository.syncOrderPaymentStatus(second.order)
+      })
+      mode = null
+      const createsBeforeRecovery = providerCreates
+      const recovered = await inject()
+      expect(recovered.statusCode, recovered.body).toBe(200)
+      expect(recovered.json()).toMatchObject({ data: { paymentId, status: 'resolved', terminalPaymentStatus: 'succeeded', payload: null }, meta: { replayed: true } })
+      expect(providerCreates).toBe(createsBeforeRecovery)
+      expect((await inject([f.order])).statusCode).toBe(409)
+      const originalCustomer = context.customerId
+      context.customerId = randomUUID()
+      expect((await inject()).statusCode).toBe(409)
+      context.customerId = originalCustomer
+      await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1", [f.session, cashier])
+      expect((await inject()).statusCode).not.toBe(200)
+      expect((await admin.query('SELECT count(*)::int n FROM mbox.payments WHERE id=$1', [paymentId])).rows[0].n).toBe(1)
+    } finally { await app.close() }
+  })
 
   it('preserves ordinary receipt evidence through concurrent original-key replay and current revocation', async () => {
     const f = await newOrder(), evidence = receipt(), body = { orderId: f.order, ...evidence }, key = randomUUID()

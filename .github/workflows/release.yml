@@ -133,7 +133,7 @@ jobs:
               if (digest !== item.sha256) throw new Error('release configuration digest mismatch');
             }
             const scripts = Object.values(manifest.deploymentScripts ?? {});
-            if (scripts.length !== 15) throw new Error('deployment script manifest is incomplete');
+            if (scripts.length !== 16) throw new Error('deployment script manifest is incomplete');
             for (const item of scripts) {
               if (!item || !/^[a-z0-9-]+\.(sh|py|mjs)$/.test(item.file) || !/^[0-9a-f]{64}$/.test(item.sha256)) throw new Error('deployment script identity is invalid');
               const path = 'release-artifact/' + item.file;

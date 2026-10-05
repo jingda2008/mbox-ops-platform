@@ -564,20 +564,13 @@ async function getReservationAvailability(arrivalAt, guestCount) {
 }
 
 async function createCustomerReservation(input) {
-  const response = await publicRequest('/api/public/reservations', {
-    method: 'POST', headers: { 'idempotency-key': randomId('reservation') },
-    data: {
-      mode: 'direct', customerName: input.customerName, contact: input.contact,
-      guestCount: input.partySize, arrivalAt: input.scheduledAt,
-      seatPreference: input.seatPreference || 'no_preference', note: input.note || null,
-      reservationPolicyVersion: input.reservationPolicyVersion,
-      preferredScheduleId: input.preferredScheduleId || null,
-    },
-  })
-  const data = response.data
-  const ids = wx.getStorageSync('mbox.reservation.public.ids') || []
-  if (data && data.publicId) wx.setStorageSync('mbox.reservation.public.ids', [data.publicId].concat(ids.filter((id) => id !== data.publicId)).slice(0, 20))
-  return data
+  return require('./reservation-submission').createCustomerReservation(input)
+}
+async function getPendingCustomerReservation() {
+  return require('./reservation-submission').getPendingCustomerReservation()
+}
+async function recoverCustomerReservation() {
+  return require('./reservation-submission').recoverCustomerReservation()
 }
 
 async function cancelCustomerReservation(publicId, idempotencyKey) {
@@ -1071,7 +1064,7 @@ module.exports = {
   startMembershipRecovery, verifyMembershipRecovery, updatePreferences,
   registerActivity, getActivityRegistrationPayment, startActivityRegistrationPayment,
   queryActivityRegistrationPayment, cancelActivityRegistration,
-  getReservations, getReservationAvailability, getReservationPerformances, createCustomerReservation,
+  getReservations, getReservationAvailability, getReservationPerformances, createCustomerReservation, getPendingCustomerReservation, recoverCustomerReservation,
   cancelCustomerReservation,
   getReservationPerformanceImpacts, acknowledgeReservationPerformanceImpact,
   getReservationPerformanceNotificationAuthorizations,

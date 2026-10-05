@@ -421,9 +421,17 @@ export class HardwareRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.sourceOutboxMessageId])
     if (!source.rows[0]) throw new HardwareNotFoundError('打印源Outbox事件不存在')
 
-    const policy = (await this.transaction.query<{enabled:boolean;copies:number;updated_at?:string}>(`
-      SELECT enabled,copies,updated_at::text FROM mbox.print_ticket_policies
-      WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR SHARE`,
+    await this.transaction.query('SELECT pg_advisory_xact_lock_shared(hashtext($1),hashtext($2))',
+      [`${this.transaction.scope.tenantId}:${this.transaction.scope.storeId}`,`print-ticket-policy:${input.printSnapshot.kind??''}`])
+    await this.transaction.query('SELECT ticket_kind FROM mbox.print_ticket_policies WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR SHARE',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.printSnapshot.kind??''])
+    const policy = (await this.transaction.query<{enabled:boolean;copies:number|null;updated_at?:string}>(`
+      SELECT COALESCE(p.enabled,true) AS enabled,
+        CASE WHEN i.ticket_kind IS NOT NULL THEN NULL ELSE p.copies END AS copies,
+        COALESCE(i.updated_at,p.updated_at)::text AS updated_at
+      FROM mbox.print_ticket_policies p
+      FULL JOIN mbox.print_ticket_policy_inheritance i USING(tenant_id,store_id,ticket_kind)
+      WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3`,
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.printSnapshot.kind ?? ''])).rows[0]
     if (policy?.enabled === false && !input.manualRequest) {this.lastSkipReason='print_policy_disabled';return []}
     if(!input.manualRequest&&input.printSnapshot.kind==='cashier_payment'&&policy?.updated_at&&source.rows[0]?.created_at&&Date.parse(source.rows[0].created_at)<Date.parse(policy.updated_at)){this.lastSkipReason='payment_before_policy_change';return []}
@@ -473,7 +481,7 @@ export class HardwareRepository {
 
     const jobs: PrintJob[] = []
     for (const route of routes.rows) {
-      if (policy) route.copies = policy.copies
+      if (policy?.copies != null) route.copies = policy.copies
       const businessKey = printBusinessKey(input.sourceOutboxMessageId, route.id, input.sourceReference)
       const inserted = await this.transaction.query<{ id: string }>(`
         INSERT INTO mbox.print_jobs (

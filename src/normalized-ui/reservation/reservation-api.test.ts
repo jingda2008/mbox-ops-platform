@@ -66,10 +66,13 @@ describe('PublicReservationApi', () => {
   })
 
   it('preserves conflict and rate-limit recovery details', async () => {
+    const recoveryRecords = new Map<string, string>()
     const conflictApi = new PublicReservationApi({
-      fetch: vi.fn(async () => json({ error: { code: 'RESERVATION_CAPACITY_FULL', message: '这个时段预约已满' } }, 409)) as unknown as typeof fetch,
+      storage: { getItem: key => recoveryRecords.get(key) ?? null, setItem: (key, value) => { recoveryRecords.set(key, value) }, removeItem: key => { recoveryRecords.delete(key) } },
+      fetch: vi.fn(async (url) => String(url).endsWith('/session') ? json({ data: { recoveryScope: 'a'.repeat(64) } }) : json({ error: { code: 'RESERVATION_CAPACITY_FULL', message: '这个时段预约已满' } }, 409)) as unknown as typeof fetch,
       createIdempotencyKey: () => 'reservation-command-0001',
     })
+    await conflictApi.issueSession({ provider: 'anonymous', providerAssertion: 'anonymous-test', deviceFingerprint: 'device-test' })
     await expect(conflictApi.createReservation('direct', {
       customerName: '王女士', contact: '13800138000', guestCount: 2,
       arrivalAt: '2026-08-12T20:30:00+08:00',

@@ -35,9 +35,11 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${release_dir}/release-manifest.json")
-  test "${count}" = 15
+  test "${count}" = 16
 }
 verify_deployment_scripts
+# shellcheck source=release-state.sh
+source "${release_dir}/release-state.sh"
 rollback_mode=$(jq -r '.rollbackMode // "application_image"' "${manifest}")
 if [ "${rollback_mode}" = planned_maintenance_forward_only ]; then
   # A post-cutover browser failure closes routing and all writers. It never
@@ -143,16 +145,34 @@ restore_failed_release_on_error() {
     docker update --restart=no "${rollback_container}" >/dev/null 2>&1
     docker stop -t 10 "${rollback_container}" >/dev/null 2>&1
   fi
-  verify_public_release "${failed_sha}" "${failed_release_digest}" \
-    "${failed_schema_version}" "${failed_deployment_tier}" 5 >/dev/null 2>&1 || true
+  local recovery_verified=false
+  if verify_public_release "${failed_sha}" "${failed_release_digest}" \
+    "${failed_schema_version}" "${failed_deployment_tier}" 5 >/dev/null 2>&1; then
+    recovery_verified=true
+  fi
+  if [ -f "${release_dir}/print-policy-rollback-guard.json" ]; then
+    local recovery_evidence
+    recovery_evidence=$(mktemp "${release_dir}/.print-rollback-recovery.XXXXXX")
+    jq --argjson verified "${recovery_verified}" --arg sha "${failed_sha}" \
+      '.recovery={action:"restore_current_release_keep_previous_workers_stopped",releaseSha:$sha,verified:$verified}' \
+      "${release_dir}/print-policy-rollback-guard.json" > "${recovery_evidence}" \
+      && mv "${recovery_evidence}" "${release_dir}/print-policy-rollback-guard.json"
+  fi
+  echo "rollback aborted: restored current release attempted for ${failed_sha}; verified=${recovery_verified}; previous workers stopped; inspect ${release_dir}/print-policy-rollback-guard.json" >&2
   exit "${exit_code}"
 }
 trap 'restore_failed_release_on_error $?' ERR
 trap 'restore_failed_release_on_error 130' INT
 trap 'restore_failed_release_on_error 143' TERM
 
+# Drain new writers before the compatibility query, closing the policy-save
+# race between a read-only check and the first old-worker execution.
+release_assert_print_rollback_safe "${release_dir}" "${failed_platform_image_digest}" \
+  "${previous_schema_version}" "${active_container}" "${rollback_container}"
+
 # Bring the previous release up under its immutable rollback name first. The
-# currently active release remains available until the previous SHA is healthy.
+# active release stays available for compatible targets; pre-259 targets have
+# already drained it so no policy edits can race the compatibility check.
 docker start "${rollback_container}" >/dev/null
 docker update --restart=no "${rollback_container}" >/dev/null
 for _ in $(seq 1 60); do

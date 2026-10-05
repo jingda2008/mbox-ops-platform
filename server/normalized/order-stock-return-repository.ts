@@ -1,5 +1,7 @@
 import type {ScopedTransaction} from './transaction-runner.js'
 import {InventoryConflictError} from './inventory-repository.js'
+import {restoreQuantityInventoryBalance} from './quantity-inventory-return-balance.js'
+import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 
 export class OrderStockReturnRepository {
  constructor(private readonly tx:ScopedTransaction){}
@@ -47,6 +49,10 @@ export class OrderStockReturnRepository {
   const result=(await this.tx.query<{id:string}>(`INSERT INTO mbox.order_stock_returns(tenant_id,store_id,order_item_id,quantity,disposition,reason,created_by_employee_id)
    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,[...scope,item.id,input.quantity,input.disposition,input.reason.trim(),input.employeeId])).rows[0]!
   for(const reservation of reservations){
+   // Keep reservation -> balance lock ordering and the sorted inventory order.
+   // A concurrent receipt must be included in the return's weighted cost.
+   await this.tx.query(`SELECT inventory_item_id FROM mbox.inventory_balances
+    WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3 FOR UPDATE`,[...scope,reservation.inventory_item_id])
    // Use database decimal arithmetic. Final partial return consumes the exact remaining fraction.
    const amount=(await this.tx.query<{quantity:string}>(`SELECT CASE WHEN $5::integer=$6::integer THEN $3::numeric-COALESCE(sum(quantity),0)
     ELSE round($3::numeric*$4::integer/$6::integer,6) END::text AS quantity
@@ -58,9 +64,12 @@ export class OrderStockReturnRepository {
       (SELECT original.unit_cost_minor FROM mbox.inventory_order_reservations reservation JOIN mbox.inventory_movements original
        ON original.tenant_id=reservation.tenant_id AND original.store_id=reservation.store_id AND original.id=reservation.movement_id
        WHERE reservation.tenant_id=$1 AND reservation.store_id=$2 AND reservation.id=$9)) RETURNING id`,[...scope,reservation.inventory_item_id,amount,result.id,item.id,input.reason.trim(),input.employeeId,reservation.id])).rows[0]!
-   const balance=await this.tx.query(`UPDATE mbox.inventory_balances SET on_hand_quantity=on_hand_quantity+$4::numeric,last_movement_id=$5
-    WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3`,[...scope,reservation.inventory_item_id,amount,movement.id])
-   if(balance.rowCount!==1)throw new InventoryConflictError('库存余额记录缺失，退库未执行')
+   try{
+    await restoreQuantityInventoryBalance(this.tx,{inventoryItemId:reservation.inventory_item_id,movementId:movement.id,quantity:amount})
+   }catch(error){
+    if(error instanceof ItemQuantityConflict)throw new InventoryConflictError('实际退库流水与库存余额不一致，退库未执行')
+    throw error
+   }
    await this.tx.query(`INSERT INTO mbox.order_stock_return_movements(tenant_id,store_id,return_id,reservation_id,movement_id,quantity) VALUES($1,$2,$3,$4,$5,$6::numeric)`,[...scope,result.id,reservation.id,movement.id,amount])
   }
   return {id:result.id,orderItemId:item.id,quantity:input.quantity,disposition:input.disposition}

@@ -127,7 +127,7 @@ const wechatPolicyTemplateDivergences = {
   'pages/order/index': {"wechat": "6fe80eba47b215d81b90d00eeedffd1631be93af8b2cd3852f62f97d2995e0a1", "alipay": "546b3d9ca186fcf10a1ccf24170bb203fd0ef21775422ac38168333f5bb1ef07"},
   'pages/profile/index': {"wechat": "e5f41736e60d97a70656cab7a39866f311c4aa2bb2ca3a3f33c17a59c6fe2dba", "alipay": "d201aaa6b4afef2375e261e8fe498b9cd3855fad075cb23b32eb249b5fb15031", "wechatStyle": "e76f5064443057e0ef4399ce4cb1fc4f187e512cf7e6815e5ab0c66bc9752902", "alipayStyle": "84354389b7d14cd38cae1d65e306055254fdfe264c940824bda1db9fae602e21"},
   'pages/community/index': {"wechat": "94a74035ef9f9b5602985232e32432dde0e1765e2a366b7e8d4a3819e85f2316", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
-  'pages/reservations/index': {"wechat": "0ba7c6c6ba1e21ad983f4be42b65ff483eff8d255f421aa729bf6d8c9d327f1e", "alipay": "8e8e666661e7ac33df6eeb2393707c0c3ba1eb7462c3534a9dbaeb4c588c5675"},
+  'pages/reservations/index': {"wechat": "908065ef64649b8b306e1edb21a49914b0389b723f248bc016f345c307173c68", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
   'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},
 
   'pages/profile-preferences/index': { wechat: '821b839de36340872e068bcef174a1f58d63c285160f3e2fa048d7be69508276', alipay: 'a842657e97e011a6b76259dd9c9281e8878836d42e70d3ef32a5ae06b9ff9303' },

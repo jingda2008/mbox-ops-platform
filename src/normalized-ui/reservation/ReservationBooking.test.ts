@@ -30,6 +30,24 @@ function render(props: ReservationBookingViewProps): string {
 }
 
 describe('ReservationBookingView', () => {
+  it('keeps a pending original submission separate from editable new booking fields', () => {
+    const html = render(base({
+      pendingReservation: { publicId: 'reservation-original', arrivalAt: '2026-08-12T12:30:00.000Z', guestCount: 4 },
+      recoveryReady: true,
+    }))
+    expect(html).toContain('查询并恢复原预约')
+    expect(html).toContain('4位')
+    expect(html).not.toContain('下一步：位置与联系')
+    expect(html).not.toContain('reservation-original')
+    expect(html).not.toContain('手机或微信')
+  })
+
+  it('does not allow a new booking when durable recovery storage cannot be read', () => {
+    const html = render(base({ recoveryReady: false }))
+    expect(html).toContain('重新连接并读取预约')
+    expect(html).not.toContain('下一步：位置与联系')
+  })
+
   it('keeps date, time and people on one compact first step', () => {
     const html = render(base())
     expect(html).toContain('选择日期和人数')

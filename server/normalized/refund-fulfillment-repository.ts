@@ -1,5 +1,6 @@
 import type { ScopedTransaction } from './transaction-runner.js'
 import { InventoryRepository } from './inventory-repository.js'
+import { restoreQuantityInventoryBalance } from './quantity-inventory-return-balance.js'
 
 /** Refund money is not a unit count: only fully returned lines (or a fully paid,
  * fully refunded bill) can cancel unstarted fulfilment automatically. */
@@ -127,9 +128,9 @@ export class RefundFulfillmentRepository {
             FROM mbox.inventory_movements original WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=$8
             RETURNING id`, [...scope, row.inventory_item_id, previous.remaining, refundId, itemId, row.id, row.movement_id])).rows[0]?.id ?? null
           if (!movementId) throw new Error('Refund inventory return lacks original consumption evidence')
-          const balance = await this.tx.query(`UPDATE mbox.inventory_balances SET on_hand_quantity=on_hand_quantity+$4::numeric,
-            last_movement_id=$5,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3`, [...scope, row.inventory_item_id, previous.remaining, movementId])
-          if (balance.rowCount !== 1) throw new Error('Refund inventory return lacks inventory balance')
+          await restoreQuantityInventoryBalance(this.tx, {
+            inventoryItemId: row.inventory_item_id, movementId, quantity: previous.remaining,
+          })
         }
         if (!movementId) throw new Error('Refund inventory return lacks movement evidence')
         await this.tx.query(`UPDATE mbox.inventory_order_reservations SET status='returned',return_movement_id=$4,
@@ -166,10 +167,9 @@ export class RefundFulfillmentRepository {
         VALUES($1,$2,$3,'return',$4::numeric,'refund_unmade',$5,$6,'退款确认成功，未开始制作',$7,
           jsonb_build_object('originalMovementId',$8::text,'source','deferred_order_sale')) RETURNING id`,
         [...scope,movement.inventory_item_id,movement.remaining,refundId,itemId,movement.unit_cost_minor,movement.id])).rows[0]!
-      const balance=await this.tx.query(`UPDATE mbox.inventory_balances SET on_hand_quantity=on_hand_quantity+$4::numeric,
-        last_movement_id=$5,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3`,
-        [...scope,movement.inventory_item_id,movement.remaining,restored.id])
-      if(balance.rowCount!==1) throw new Error('Deferred refund inventory return lacks matching balance')
+      await restoreQuantityInventoryBalance(this.tx, {
+        inventoryItemId: movement.inventory_item_id, movementId: restored.id, quantity: movement.remaining,
+      })
       count++
     }
     return count

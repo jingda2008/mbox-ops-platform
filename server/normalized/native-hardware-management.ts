@@ -8,6 +8,7 @@ import type { NormalizedOperationsRequestContext } from './normalized-operations
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import { PRINT_TICKET_KINDS } from '../../src/shared/print-ticket-policy.js'
+import { lockPrintTicketPolicy, readPrintTicketPolicies, writePrintTicketPolicy } from './print-ticket-policy-repository.js'
 
 const code = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/)
 const name = z.string().trim().min(1).max(120)
@@ -24,7 +25,7 @@ const inputSchema = z.discriminatedUnion('kind', [
     stationCode:z.enum(['bar','kitchen','cashier']),productCategoryCode:z.string().trim().min(1).max(64).nullable(),
     printerDeviceId:z.uuid(),copies:z.number().int().min(1).max(5),priority:z.number().int().min(0).max(1000),status}).strict()}).strict(),
   z.object({kind:z.literal('policy-save'),expected:fingerprint,reason,policy:z.object({ticketKind:z.enum(PRINT_TICKET_KINDS),
-    enabled:z.boolean(),copies:z.number().int().min(1).max(5)}).strict()}).strict(),
+    enabled:z.boolean(),copies:z.number().int().min(1).max(5).nullable()}).strict()}).strict(),
   z.object({kind:z.literal('device-test'),id:z.uuid(),expected:fingerprint,reason,command:z.enum(['test_print','reconnect','ping'])}).strict(),
 ])
 const deviceFields=['id','code','name','deviceType','stationCode','status','printBridgeId','windowsQueueName','printProfile']
@@ -48,9 +49,7 @@ export async function registerNativeHardware(app: FastifyInstance, options: Hard
         const repo=options.createRepository?.(tx)??new HardwareRepository(tx)
         const devices=(await repo.listDevices()).filter(d=>d.deviceType==='printer').map(d=>withHash(d,deviceFields))
         const routes=(await repo.listPrinterRoutes()).map(r=>withHash(r,routeFields))
-        const stored=(await tx.query<{ticketKind:string;enabled:boolean;copies:number}>(`SELECT ticket_kind AS "ticketKind",enabled,copies
-          FROM mbox.print_ticket_policies WHERE tenant_id=$1 AND store_id=$2`,[context.scope.tenantId,context.scope.storeId])).rows
-        const policies=PRINT_TICKET_KINDS.map(ticketKind=>withHash(stored.find(p=>p.ticketKind===ticketKind)??{ticketKind,enabled:true,copies:null},['ticketKind','enabled','copies']))
+        const policies=(await readPrintTicketPolicies(tx)).map(p=>withHash(p,['ticketKind','enabled','copies']))
         const commands=(await tx.query(`SELECT h.id,h.device_id AS "deviceId",d.name AS "deviceName",h.command_type AS "commandType",h.status,
           h.last_error_code AS "errorCode",h.created_at::text AS "createdAt",h.completed_at::text AS "completedAt"
           FROM mbox.hardware_commands h JOIN mbox.devices d ON d.tenant_id=h.tenant_id AND d.store_id=h.store_id AND d.id=h.device_id
@@ -92,15 +91,10 @@ export async function registerNativeHardware(app: FastifyInstance, options: Hard
           row=await repo.upsertPrinterRoute({...input.route,createOnly:current===null});objectId=(row as {id:string}).id
         } else {
           const p=input.policy
-          const current=(await tx.query<{ticketKind:string;enabled:boolean;copies:number}>(`SELECT ticket_kind AS "ticketKind",enabled,copies
-            FROM mbox.print_ticket_policies WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3 FOR UPDATE`,[context.scope.tenantId,context.scope.storeId,p.ticketKind])).rows[0]
-          before=current??{ticketKind:p.ticketKind,enabled:true,copies:null}
+          await lockPrintTicketPolicy(tx,p.ticketKind)
+          before=(await readPrintTicketPolicies(tx)).find(row=>row.ticketKind===p.ticketKind)!
           if(hash(before,['ticketKind','enabled','copies'])!==input.expected)throw new HardwareConflictError('票据策略已变化，请刷新后重新核对')
-          const changed=current ? await tx.query(`UPDATE mbox.print_ticket_policies SET enabled=$4,copies=$5,updated_at=clock_timestamp()
-            WHERE tenant_id=$1 AND store_id=$2 AND ticket_kind=$3`,[context.scope.tenantId,context.scope.storeId,p.ticketKind,p.enabled,p.copies])
-            : await tx.query(`INSERT INTO mbox.print_ticket_policies(tenant_id,store_id,ticket_kind,enabled,copies) VALUES($1,$2,$3,$4,$5)
-              ON CONFLICT(tenant_id,store_id,ticket_kind) DO NOTHING`,[context.scope.tenantId,context.scope.storeId,p.ticketKind,p.enabled,p.copies])
-          if(changed.rowCount!==1)throw new HardwareConflictError('票据策略刚被创建，请刷新')
+          await writePrintTicketPolicy(tx,p)
           row=p
         }
         const result={kind:input.kind,employeeId:context.employeeId,reason:input.reason,row:JSON.parse(JSON.stringify(row))} as JsonObject

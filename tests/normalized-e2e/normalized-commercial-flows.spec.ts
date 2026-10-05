@@ -383,7 +383,7 @@ test('confirmed reservation starts its ten-minute arrival retention only at the 
   await page.route('**/api/public/reservation/session', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ data: { status: 'active' } }),
+    body: JSON.stringify({ data: { status: 'active', recoveryScope: 'a'.repeat(64) } }),
   }))
   await page.route('**/api/public/reservations/reservation-arrival-grace-001', (route) => route.fulfill({
     status: 200,
@@ -473,7 +473,7 @@ test('opening a missing reservation link reports once without creating a 4xx pol
   await page.route('**/api/public/reservation/session', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ data: { status: 'active' } }),
+    body: JSON.stringify({ data: { status: 'active', recoveryScope: 'a'.repeat(64) } }),
   }))
   await page.route('**/api/public/reservations/reservation-missing-001', (route) => {
     statusLookupAttempts += 1

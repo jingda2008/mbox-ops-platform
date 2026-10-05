@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import {
   STALE_GUEST_IMMEDIATE_PAYMENT_DEFERRED_RETRY_SECONDS,
   STALE_GUEST_IMMEDIATE_PAYMENT_MIN_AGE_SECONDS,
@@ -21,6 +22,33 @@ function observed(id: string, status: 'closed' | 'failed' | 'succeeded') {
 }
 
 describe('stale guest immediate payment worker', () => {
+  it('defers a verified refund under cost contention and applies the same refund on the next pass', async () => {
+    const recordProviderRefundResult = vi.fn().mockRejectedValueOnce(new InventoryReturnCostProjectionBusyError())
+      .mockResolvedValueOnce({ replayed: false, value: {} })
+    const queryRefund = vi.fn(async () => ({
+      merchantRefundId: 'original-merchant-refund', originalProviderTransactionId: 'original-payment',
+      verifiedObservationId: 'verified-original-refund',
+      observation: { status: 'succeeded', providerRefundTransactionId: 'channel-refund',
+        amount: 4000, currency: 'CNY', occurredAt: '2026-09-07T10:00:00.000Z' },
+    }))
+    const recordAutomaticRefundQueryOutcome = vi.fn(async () => {})
+    const worker = new StaleGuestImmediatePaymentWorker({
+      onlinePayments: { listStaleGuestImmediateCheckoutPaymentCandidates: async () => [],
+        listStaleProcessingPostarRefundIds: async () => ['original-refund'], queryRefund, recordAutomaticRefundQueryOutcome } as never,
+      payments: { recordProviderRefundResult } as never,
+      reconciliation: {} as never,
+    })
+    const deferred = await worker.runBatch(scope, 'worker-test', businessDate)
+    expect(deferred.deferredRefundIds).toEqual(['original-refund'])
+    expect(deferred.failedRefundIds).toEqual([])
+    expect(deferred.terminalRefundIds).toEqual([])
+    expect(recordAutomaticRefundQueryOutcome).toHaveBeenCalledWith(scope, 'original-refund', 'error')
+    const recovered = await worker.runBatch(scope, 'worker-test', businessDate)
+    expect(recovered.terminalRefundIds).toEqual(['original-refund'])
+    expect(recordProviderRefundResult.mock.calls.map(call => call[0].refundPublicId)).toEqual(['original-merchant-refund', 'original-merchant-refund'])
+    expect(queryRefund).toHaveBeenCalledTimes(2)
+  })
+
   it.each(['query-only', 'durable-submit'] as const)('automatically applies only a provider-verified terminal refund result (%s)', async (mode) => {
     const listRefunds = vi.fn(async () => ['refund-processing'])
     const queryRefund = vi.fn(async () => ({

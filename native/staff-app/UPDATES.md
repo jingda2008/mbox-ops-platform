@@ -2,7 +2,11 @@
 
 ## 本批状态
 
-当前Android候选为 **0.4.0-rc.3（build 8）**，使用固定正式证书，生产登录且禁用演练。0.2.0/build2与0.4.0-rc.1/build6是历史版本。开发构建渠道是 `preview`，正式构建渠道是 `stable`。2026-10-05只读检查线上两个清单均为404，正式包生成与线上启用分开留证，详见 `COMMERCIAL_READINESS_ANDROID_20261005.md`。
+Android正式签名 **0.4.0-rc.3（build 8）** 已于2026-10-05 12:41 CST发布`stable`，生产登录且禁用演练；配套rc.246/schema260于12:35:48先行部署。[APK](https://mbox.shmbox.com/native-updates/staff/MBOX-Staff-0.4.0-rc.3-build8-6c07f67441f3.apk)及[stable清单](https://mbox.shmbox.com/native-updates/staff/stable.json)经发布器和独立HTTPS回读通过，实体手机安装与营业验收未据此关闭。开发构建使用`preview`，该清单仍未发布、返回404；正式构建使用`stable`。10月5日较早两清单404仅为历史查询，0.2.0/build2与0.4.0-rc.1/build6是历史版本。详见[rc.246发布记录](../../docs/release-1.0.0-rc.246.md)及[商业检查表](COMMERCIAL_READINESS_ANDROID_20261005.md)。
+
+后续PR #328于12:56:56 CST通过首次PR CI后合并至`91f84ff59df0fff9007991d639edaad5c296828b`，包含小程序海报保留及短期CI归档修复；两项只在后续主线，不在冻结后端6e4标签，不改变本次build8 APK、清单或正式证书。双小程序最终候选已按91f另行生成并校验，当前未上传；不能用Android分发代替平台交付。
+
+本次APK为15,493,467字节，SHA256 `6c07f67441f39736b48ca7a8fe6de98cdbb834764af4c7da04d42d959d8e7c98`；stable清单SHA256 `d7711af5bc16f3f5863bb3aea3c49c302c1197275486017a0174dfed417d12e0`。stable为200／no-store，APK为200／正确MIME／immutable，缺失文件真实404。[发布回执](../../../outputs/system-audit-20261005/native-update-publish-build8.json)、[独立回读](../../../outputs/system-audit-20261005/native-update-public-ehoiy6w5/result.json)留证；HTTPS经进程proxy且TLS验证通过，不代表所有员工网络。
 
 - 启动／回到前台自动检查，每次运行最多每6小时一次；更多 → 版本与更新可立即手动检查。不要求员工登录，不携带员工会话。
 - 有新版本时顶部小条提示，不占用大面积桌台业务空间；显示版本、更新说明、系统要求。不存在已发布版本、404、网络失败不显示“已是最新版”。
@@ -38,12 +42,14 @@
 1. 在隔离环境验证新旧版本API兼容、未决请求和草稿升级；版本号递增，变更存储结构时先写迁移和失败恢复，不覆盖原文件。
 2. Android用固定正式签名打包；iOS先完成对应分发渠道的上传／审核，使目标版本实际可安装。
 3. 使用 `scripts/prepare-update.py` 生成本地清单（`--help`列出参数）。Android从真实APK读取包名、版本与最低系统，验证签名并生成摘要，要求传入已确定的证书SHA256；iOS填实际版本／build和官方入口。脚本保留另一平台记录，禁止覆盖同号或降级版本，原子写文件。它不上传、不签名、不自动发布。
-4. 在专用静态目录先上传不可变APK，再通过HTTPS验证大小、摘要和可下载性，最后原子替换清单。APK路径包含构建号，不能用新文件覆盖旧路径。清单必须 `Cache-Control: no-store` 或短期可重新验证缓存；不能落入网页SPA返回HTML。
-5. 下载文件不放在业务上传／备份／密钥目录。可按 `distribution/nginx-location.example.conf` 增加独立静态路径，现有网页资源及路由保持原状。先核验配置与回退方案再正式启用；本批未修改生产Nginx。
+4. 配套后台先通过标准部署上线固定版本，再使用仓库根目录`deploy/aliyun/publish-native-update.py publish`发布Android。提供实际APK、本地feed、固定证书SHA256、SDK的aapt／apksigner、SSH目标、当前release目录及预期线上SHA；远端Python使用已核实的绝对路径。发布器核验包名、版本、正式渠道、禁演练、不可调试和签名，核对线上版本及发布脚本身份，先写不可变APK，再经HTTPS下载重验字节、摘要和签名，最后按原清单摘要原子提交并保留另一平台记录。提交前失败保持旧清单，提交后回读不明须核对并恢复同一次发布，不覆盖旧APK重发。
+5. 本次标准生产路径由既有Caddy继续反向代理，应用只读服务`/native-updates/staff/`。专用主机目录`/opt/mbox/native-updates/staff`由普通部署及计划维护只读挂载到容器`/run/mbox-native-updates`，与业务上传、备份和密钥目录分离。清单返回`Cache-Control: no-store`，固定内容名APK使用immutable缓存，未发布文件返回真实404，不落入网页SPA。无需另设Nginx静态入口；`distribution/nginx-location.example.conf`仅为其他部署示例，不是本次生产步骤。
 6. 真机从旧版安装更新后，核对版本号、原账号处理、草稿及未决订单／资金请求；iOS、Android分别留证。确认通知到达不等于更新完成。
 
-撤回有问题的更新时，从清单移除该候选，可保留旧文件供审计；不能向已升级设备强装更低版本。已升级的设备需要新的递增build修复包。`distribution/preview.json` 与 `distribution/stable.json` 当前均为空清单，不能当作已发布证据；`shared/fixtures/app-update.json` 是假链接测试数据，**禁止发布**。
+发布器提供`--channel`、`--release-dir`、`--expected-live-sha`、`--ssh-host`、`--ssh-port`、`--identity-file`、`--remote-python`、`--origin-ip`、`--apk`、`--feed`、`--certificate-sha256`、`--aapt`及`--apksigner`，完整合同见`--help`。SSH默认6122及`~/.ssh/mbox_aliyun_ed25519`；本次核实远端Python为`/root/.pyenv/versions/3.7.17/bin/python3.7`，不使用无有效配置的pyenv shim，不改主机Python。显式`--origin-ip`仅作用于该次保持TLS校验的HTTPS连接，证据须注明指定源站读回，不能替代所有员工网络验证。
+
+撤回有问题的更新时，从清单移除该候选，可保留旧文件供审计；不能向已升级设备强装更低版本。已升级的设备需要新的递增build修复包。仓库`distribution/preview.json`与`distribution/stable.json`是空清单模板，不代表线上当前状态；线上以对应HTTPS清单及发布回执为准。`shared/fixtures/app-update.json`是测试数据，**禁止发布**。
 
 ## 尚需验收
 
-正式Android签名已建立；线上HTTPS清单和Apple分发渠道尚未启用；两端真机实际下载与安装、来源权限拒绝／取消、弱网／磁盘满、更新中杀进程、跨版本业务数据迁移尚未验收。Android本地合同验证不替代系统安装器验收。详见 `FEATURE_PARITY.md` 与商业风险 NATIVE-20260927-05。
+正式Android签名及stable渠道HTTPS清单／APK分发已验证，Apple分发渠道仍未启用。实体Android手机首次安装、同正式证书覆盖升级、旧debug签名迁移及iOS对应渠道安装分别留证。来源权限拒绝／取消、弱网／磁盘满、更新中杀进程、跨版本未决业务和草稿保留、真实支付／打印及整班营业仍需独立验收。分发可用或调用系统安装器均不证明设备升级完成，应读取安装后真实版本与签名并核对业务状态。详见[功能台账](FEATURE_PARITY.md)与商业风险NATIVE-20260927-05。

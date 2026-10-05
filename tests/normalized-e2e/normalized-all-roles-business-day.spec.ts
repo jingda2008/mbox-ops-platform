@@ -347,7 +347,7 @@ test('future public reservation is confirmed by marketing and kept out of today 
   await expect(pending).toBeVisible()
   await expect(pending).toContainText('待确认')
   await pending.getByRole('button', { name: '确认预约' }).click()
-  await expect(marketing.page.getByRole('status')).toContainText('预约已确认')
+  await expect(marketing.page.getByRole('status').filter({ hasText: `${customerName} 的预约已确认` })).toContainText('预约已确认')
   await marketing.context.close()
 
   await booking.getByRole('button', { name: '刷新确认状态' }).click()

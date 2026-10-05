@@ -16,6 +16,7 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun LiveReservationsView(m: AppModel, close: () -> Unit) {
     var creating by remember { mutableStateOf(false) }
+    var receptionID by remember { mutableStateOf<String?>(null) }
     var range by remember { mutableStateOf("current") }
     var from by remember { mutableStateOf(ReservationQuery.day()) }
     var to by remember { mutableStateOf(ReservationQuery.day()) }
@@ -30,8 +31,14 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
     var error by remember { mutableStateOf("") }
     var proposed by remember { mutableStateOf<LiveCommand?>(null) }
     if (creating) ReservationCreateView(m) { creating = false }
+    receptionID?.let { id ->
+        ReservationReceptionView(m, id, close = { receptionID = null },
+            leaveReservations = { receptionID = null; close() })
+    }
     val query = ReservationQuery(range, from, to)
     val actionable = m.canUseReservations && query == m.reservationQuery
+    val receptionSupported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
+        m.reservationCapabilities?.opt("receptionSeatV1") == true
     val version = remember { m.workspaceVersion }
     fun choose(id: String, a: String) {
         selectedID = id
@@ -58,15 +65,20 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     LivePendingView(m)
+                    ReceptionPendingRetryView(m)
                     Text(m.reservationState, fontSize = 12.sp)
-                    if (m.identity?.allows("reservation.manage") == true)
+                    if (m.identity?.allows("reservation.manage") == true) {
                         Primary(
                             "新建预约",
-                            actionable &&
-                                m.reservationCapabilities?.optBoolean("durableCreate") == true,
+                            !m.busy && !m.liveStorageDamaged && m.livePending == null &&
+                                m.liveOrderPending == null && receptionSupported,
                         ) {
                             creating = true
                         }
+                        if (!m.busy && !receptionSupported)
+                            Text("后台尚未确认新版预约接待能力，请刷新；仍未启用时需由管理员升级后台。原有未决请求仍可核对。",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
                             selected = !queue,
@@ -180,7 +192,11 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                         if (rows.isEmpty()) Text("此范围没有符合条件的预约")
                         for (row in rows) Panel {
                             Text(row.name + " · " + row.statusLabel, fontSize = 18.sp)
-                            Text("${row.count}人 · ${row.tables}")
+                            Text("${row.count}人 · " + if (row.receptionProtocol == 1) {
+                                if (row.status in listOf("seated", "completed")) "已关联实际桌次"
+                                else if (row.status in listOf("pending", "confirmed", "arrived")) "到店后核对实际桌位"
+                                else "预约不预绑桌台"
+                            } else row.tables)
                             Text(
                                 reservationTime(row.arrival) +
                                     " — " +
@@ -188,7 +204,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                                 fontSize = 12.sp,
                             )
                             Text(
-                                row.source.textOrNull("contactToken")
+                                row.source.textOrNull("maskedContact")
                                     ?: if (row.source.getBoolean("contactAvailable")) "联系方式已保护"
                                     else "未留联系方式",
                                 fontSize = 12.sp,
@@ -204,6 +220,10 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                                 fontSize = 12.sp,
                             )
                             row.source.textOrNull("note")?.let { Text(it, fontSize = 12.sp) }
+                            if (m.identity?.allows("reservation.view") == true)
+                                SecondaryAction(onClick = { receptionID = row.id }, enabled = !m.busy) {
+                                    Text(if (row.receptionProtocol == 1 && row.status == "arrived") "核对已开桌次 · 确认入座" else "查看接待详情")
+                                }
                             if (m.identity?.allows("reservation.manage") == true)
                                 for (a in row.actions) SecondaryAction(
                                     onClick = { choose(row.id, a) },
@@ -226,7 +246,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(reason, { reason = it }, label = { Text("处理说明（候位、取消、排序必填）") })
                     if (action == "cancel") {
-                        Text("取消会释放预约桌位；已有定金仍须按收款与退款记录处理。", fontSize = 12.sp)
+                        Text("取消后释放预约占用；已开桌台和已有收款仍须按各自流程处理，不会自动关台或退款。", fontSize = 12.sp)
                         if (m.identity?.allows("reservation.cancel.override") == true)
                             Row {
                                 Checkbox(override, { override = it })

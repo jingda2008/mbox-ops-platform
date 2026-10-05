@@ -14,8 +14,8 @@ import javax.crypto.spec.GCMParameterSpec
 import org.json.JSONObject
 
 class PaymentSecrets(private val context: Context, private val namespace: String = "payment-code") {
-    init { require(namespace in setOf("payment-code", "custody-receipt")) }
-    private val keyAlias get() = if(namespace == "payment-code") "mbox-payment-codes" else "mbox-custody-receipts"
+    init { require(namespace in setOf("payment-code", "custody-receipt", "reservation-create", "reservation-seat", "reservation-legacy-create")) }
+    private val keyAlias get() = when(namespace) { "payment-code" -> "mbox-payment-codes"; "custody-receipt" -> "mbox-custody-receipts"; else -> "mbox-$namespace" }
     private fun file(key: String): AtomicFile {
         require(Regex("^[a-f0-9-]{36}$").matches(key))
         return AtomicFile(File(context.filesDir, "$namespace-$key.enc"))
@@ -44,8 +44,8 @@ class PaymentSecrets(private val context: Context, private val namespace: String
 
     fun store(key: String, code: String) {
         val target = file(key)
-        if (target.baseFile.exists()) {
-            require(read(key) == code) { "原付款码与原请求不一致，未发送" }
+        if (target.baseFile.exists() || File(target.baseFile.path + ".bak").exists()) {
+            require(read(key) == code) { "安全存储与原请求不一致，未发送" }
             return
         }
         val cipher =
@@ -86,11 +86,13 @@ class PaymentSecrets(private val context: Context, private val namespace: String
                 cipher.doFinal(Base64.decode(data.getString("ciphertext"), Base64.NO_WRAP))
             )
         } catch (_: Exception) {
-            error(if(namespace == "payment-code") "原操作安全凭据暂不可读，请解锁设备后核对原请求；不要重复提交" else "存酒原回执暂不可读，请保留原请求")
+            error(when { namespace.startsWith("reservation-") -> "预约原请求安全记录暂不可读，请解锁设备后核对原请求；不要重新建单"; namespace == "payment-code" -> "原操作安全凭据暂不可读，请解锁设备后核对原请求；不要重复提交"; else -> "存酒原回执暂不可读，请保留原请求" })
         }
     }
 
     fun remove(key: String) {
-        file(key).delete()
+        val target = file(key)
+        target.delete()
+        check(listOf(target.baseFile, File(target.baseFile.path + ".bak"), File(target.baseFile.path + ".new")).none { it.exists() }) { "原安全记录无法清除，请保留已确认请求并检查设备空间" }
     }
 }

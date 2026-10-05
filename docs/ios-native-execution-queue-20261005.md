@@ -1,5 +1,7 @@
 # iOS 原功能迁移执行队列
 
+> 范围已更新（2026-10-05 21:03:34 CST）：用户直接明确“ios不需要开发 只开发安卓”。本文件此后的iOS计划与状态均保留为历史，不继续开发、测试、签名或验收；PR340已转draft且不合并，已有成果保留。Android及必要后端/Web继续，Apple条件不再属于完成门禁。详见[当前商用清单](commercialization-pending-checklist.md)和直接消息01a10c29-9776-7331-855c-5c391e705aa4。
+
 更新时间：2026-10-05 14:09 CST。范围依据见[native-scope-gap-audit](native-scope-gap-audit-20261005.md)。本表是原需求拆分执行记录，不增加已证缺陷计数，不把本地C状态当成实体设备A。供应商采购退货是唯一已明确排除的相关条目。当前集成分支 `feat/native-push-ios-parity-20261005`；未提交工作不属于已发布rc246或Android build8。
 
 | 顺序/功能ID | 必须完成的子流程 | 依赖 | 代码责任 | 当前状态与下一门禁 |

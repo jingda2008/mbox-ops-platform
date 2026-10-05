@@ -105,15 +105,49 @@ class NativePushUnsupportedException : UnsupportedOperationException("当前 And
 class NativePushInvalidResponse(cause: Exception) : IllegalStateException("通知服务回执无法核对，原请求已保留", cause)
 
 /**
- * Contract-v1 client. No SDK, token generation, registration PUT, or application lifecycle ownership.
+ * Contract-v1 client with a gated future registration boundary. No SDK or production Android adapter.
  * Ordinary calls share the caller's serialized StaffAPI. Capability revocation uses a fresh client.
  */
 class NativePushClient(
     private val api: StaffAPI,
     private val capabilityTransport: ((APIRequest) -> APIResponse)? = null,
+    private val registrationContract: NativePushRegistrationContract? = null,
 ) {
     fun registerAndroid(): Nothing = throw NativePushUnsupportedException()
     fun rotateAndroidToken(): Nothing = throw NativePushUnsupportedException()
+
+    val registrationAvailable: Boolean get() = registrationContract != null
+
+    fun supportsRegistration(token: NativePushSdkToken): Boolean = registrationContract?.let {
+        it.id == token.contractId && it.accepts(token)
+    } == true
+
+    /** No production adapter is supplied. Tests exercise this boundary through StaffAPI transport. */
+    fun registerAndroid(request: NativePushRegistrationRequest): NativePushRegistrationReceipt {
+        if (!supportsRegistration(NativePushSdkToken(request.contractId, request.provider, request.token)))
+            throw NativePushUnsupportedException()
+        ensureOwner(request.owner)
+        val response = api.raw(request.path, JSONObject(request.bodyText), mapOf("Idempotency-Key" to request.requestKey), method = "PUT")
+        ensureOwner(request.owner)
+        return verified {
+            require(response.status in setOf(200, 201))
+            val root = JSONObject(response.text).apply { pushKeys("data", "meta") }
+            val data = root.pushObject("data").apply { pushKeys("protocol", "employeeId", "staffSessionId", "requestKey", "installation") }
+            checkOwner(data, request.owner)
+            require(data.pushString("requestKey") == request.requestKey)
+            val installation = parseInstallation(data.pushObject("installation"), request.owner)
+            require(installation.binding == request.targetBinding && installation.boundToCurrentSession &&
+                installation.lastRequestKey == request.requestKey && installation.status == NativePushInstallationStatus.ACTIVE)
+            val replayed = root.pushReplayed()
+            require(response.status == if (request.expectedRevision == 0L && !replayed) 201 else 200)
+            NativePushRegistrationReceipt(installation, request.requestKey, replayed)
+        }
+    }
+
+    fun rotateAndroidToken(request: NativePushRegistrationRequest): NativePushRegistrationReceipt {
+        require(request.expectedRevision > 0) { "通知令牌轮换须先核对原安装版本" }
+        return registerAndroid(request)
+    }
 
     private fun ensureOwner(owner: NativePushOwner) {
         val current = api.identity
@@ -180,10 +214,11 @@ class NativePushClient(
         }
     }
 
-    fun observe(request: NativePushObservationRequest): NativePushObservationReceipt {
+    fun observe(request: NativePushObservationRequest, beforePost: () -> Boolean = { true }): NativePushObservationReceipt {
         // The observation receipt has no installation/revision fields in v1. Re-resolve
         // before sending; the POST also reauthorizes this original delivery server-side.
         target(request.owner, request.deliveryId, request.binding)
+        check(beforePost()) { "通知回报上下文已变化，原记录仍需核对" }
         val root = ordinary(request.owner, request.path, request.body, request.requestKey)
         return verified {
             val data = root.pushObject("data").apply {

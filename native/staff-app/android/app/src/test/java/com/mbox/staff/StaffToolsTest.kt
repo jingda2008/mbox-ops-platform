@@ -14,6 +14,19 @@ class StaffToolsTest{
   val a=actor("inventory.receive","catalog.product.manage").copy(navigationRoutes=listOf("/staff/inventory"));val tools=staffTools(a)
   assertEquals(listOf("stock"),filterStaffTools(tools," 扫码 入库 ","").map{it.id});assertEquals(listOf("products"),filterStaffTools(tools,"套餐","").map{it.id});assertTrue(filterStaffTools(tools,"退款","").isEmpty());assertTrue(filterStaffTools(tools,"","会员服务").isEmpty());assertEquals(tools.size,tools.map{it.id}.distinct().size)
  }
+ @Test fun voucherOnlyRoleCanReachItsWorkspaceWithoutCashierPrivileges(){
+  val viewer=actor("commercial.voucher.view").copy(navigationRoutes=listOf("/staff/payments"))
+  assertEquals(listOf(3),staffTabs(viewer))
+  assertEquals(listOf("vouchers"),staffTools(viewer).map{it.id})
+  assertFalse(LiveCashier.permissions.any(viewer::allows))
+  assertFalse(viewer.allows("commercial.voucher.redeem"))
+  assertEquals(listOf("vouchers"),filterStaffTools(staffTools(viewer),"核销","").map{it.id})
+  val operator=viewer.copy(permissions=viewer.permissions+"commercial.voucher.redeem")
+  assertEquals(listOf("vouchers"),staffTools(operator).map{it.id})
+  assertTrue(operator.allows("commercial.voucher.redeem"))
+  assertTrue(staffTools(viewer.copy(denied=setOf("commercial.voucher.view"))).isEmpty())
+  assertTrue(staffTools(viewer.copy(navigationRoutes=emptyList())).isEmpty())
+ }
  @Test fun publishedOverviewDoesNotTreatScheduledOrExpiredRulesAsEffective(){
   val r=JSONObject().put("id","a").put("version",1).put("status","published").put("effectiveFrom","2037-01-01 10:00:00+08").put("effectiveUntil","2037-01-02T10:00:00+08:00")
   assertEquals("已发布 · 待生效",membershipEffective(r,Instant.parse("2037-01-01T01:59:59Z")));assertEquals("生效时段内",membershipEffective(r,Instant.parse("2037-01-01T02:00:00Z")));assertEquals("历史已结束",membershipEffective(r,Instant.parse("2037-01-02T02:00:00Z")))

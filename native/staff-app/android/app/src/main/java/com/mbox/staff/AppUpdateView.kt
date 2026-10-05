@@ -13,12 +13,7 @@ fun AppUpdateView(m: AppModel) {
     val updater = m.updater
     val scope = rememberCoroutineScope()
     var confirm by remember { mutableStateOf(false) }
-    fun blocked() =
-        m.busy ||
-            m.pending != null ||
-            m.livePending != null ||
-            m.liveOrderPending != null ||
-            m.liveStorageDamaged
+    fun blocked() = m.updateInstallBlocked()
     Text("当前版本 ${updater.currentVersion}（${updater.currentBuild}）")
     Text(if (updater.checking) "正在检查更新…" else updater.status, fontSize = 12.sp)
     SecondaryAction(
@@ -35,7 +30,11 @@ fun AppUpdateView(m: AppModel) {
             Text("此版本需要 Android API ${release.minimumOS} 或以上，请先升级系统。")
         else {
             if (updater.downloading) Text("下载进度 ${updater.percent}%")
-            if (blocked()) Text("请先完成当前操作并核对未决结果，再安装更新。", fontSize = 12.sp)
+            if (blocked()) Text(
+                if (m.liveStorageDamaged || m.draftStorageDamaged) "本机业务记录读取异常，请先联系管理员核对，再安装更新。"
+                else "请先完成当前操作并核对未决结果，再安装更新。",
+                fontSize = 12.sp,
+            )
             Primary(
                 if (updater.ready) "安装更新" else "下载更新",
                 enabled =

@@ -35,7 +35,7 @@ data class AppRelease(
                     u.rawUserInfo == null &&
                     u.rawFragment == null &&
                     u.rawQuery == null &&
-                    u.rawPath.matches(Regex("/native-updates/staff/[A-Za-z0-9_./-]+\\.apk")) &&
+                    u.rawPath.matches(Regex("/native-updates/staff/[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.apk")) &&
                     !u.rawPath.contains("..") &&
                     !u.rawPath.contains("//")
             } catch (_: Exception) {
@@ -104,6 +104,18 @@ data class AppRelease(
             require(currentSigners.isNotEmpty() && currentSigners == newSigners) {
                 "更新包签名与当前应用不一致，不能安装"
             }
+        }
+
+        fun verifyPackagedConfiguration(
+            channel: String,
+            archiveChannel: String?,
+            allowLocalDemo: Boolean?,
+            debuggable: Boolean,
+        ) {
+            require(archiveChannel == channel && allowLocalDemo == false) {
+                "更新包渠道或营业环境不符，不能安装"
+            }
+            require(channel != "stable" || !debuggable) { "正式应用不能安装调试版本" }
         }
     }
 }

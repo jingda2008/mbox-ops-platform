@@ -15,6 +15,11 @@ import androidx.compose.ui.window.DialogProperties
 
 @Composable
 fun LivePickupView(m: AppModel, close: () -> Unit) {
+    val originalAccess = remember { m.priorityAccessKey }
+    val originalWorkspace = remember { m.workspaceVersion }
+    LaunchedEffect(m.priorityAccessKey, m.workspaceVersion) {
+        if (m.priorityAccessKey != originalAccess || m.workspaceVersion != originalWorkspace) close()
+    }
     var historyVisible by remember { mutableStateOf(false) }
     if(historyVisible) LiveFulfillmentHistoryView(m,"delivered"){historyVisible=false}
     var proposed by remember { mutableStateOf<LiveCommand?>(null) }
@@ -33,7 +38,10 @@ fun LivePickupView(m: AppModel, close: () -> Unit) {
             error = e.message ?: "请刷新后核对"
         }
     }
-    LaunchedEffect(Unit) { m.loadPickup() }
+    LiveWorkspacePolling(
+        m, "pickup",
+        active = proposed == null && !historyVisible && label == (m.pickupBoard?.device?.optString("label") ?: ""),
+    ) { m.loadPickup(automatic = true) }
     LaunchedEffect(m.pickupBoard?.device?.optString("label")) {
         label = m.pickupBoard?.device?.optString("label") ?: ""
     }

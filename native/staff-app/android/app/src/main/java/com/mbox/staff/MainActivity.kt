@@ -848,6 +848,8 @@ fun More(m: AppModel, camera: () -> Unit) {
     if(memberNumberVisible) LiveMemberNumberView(m){memberNumberVisible=false}
     var printingVisible by remember { mutableStateOf(false) }
     if(printingVisible) LivePrintingView(m){printingVisible=false}
+    var vouchersVisible by remember { mutableStateOf(false) }
+    if(vouchersVisible) LiveVouchersView(m, close = { vouchersVisible=false })
     var membershipOverviewVisible by remember { mutableStateOf(false) }
     if(membershipOverviewVisible) LiveMembershipOverviewView(m){membershipOverviewVisible=false}
     var devicesVisible by remember { mutableStateOf(false) }
@@ -948,6 +950,7 @@ fun More(m: AppModel, camera: () -> Unit) {
                 "membershipRecovery" -> membershipRecoveryVisible=true
                 "memberNumber" -> memberNumberVisible=true
                 "printing" -> printingVisible=true
+                "vouchers" -> vouchersVisible=true
                 "devices" -> devicesVisible=true
                 "songs" -> songsVisible=true
                 "benefits" -> benefitsVisible=true

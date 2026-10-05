@@ -140,6 +140,33 @@ class LiveCashierTest {
     }
 
     @Test
+    fun paymentQueryBindsReturnedMoneyToWholeOriginalPayment() {
+        val raw = raw()
+        payment(raw).put("provider", "postar").put("originalAmountMinor", 15000)
+        val step = LiveCashier(raw).command(actor, "order1", "pay1", "payment-query").steps.single()
+        val publicID = payment(raw).getString("publicId")
+        val complete = JSONObject().put("id", "pay1").put("publicId", publicID)
+            .put("currency", "CNY").put("amountMinor", 15000).put("status", "succeeded")
+        validateCashierReply(reply(complete), step)
+        // The actual API also returns a compact observation without id/amount.
+        validateCashierReply(reply(JSONObject().put("publicId", publicID).put("status", "pending")), step)
+        mapOf("id" to "another-payment", "currency" to "USD", "amountMinor" to 14999).forEach { (field, value) ->
+            val bad = JSONObject(complete.toString()).put(field, value)
+            assertThrows(Exception::class.java) { validateCashierReply(reply(bad), step) }
+        }
+        assertThrows(Exception::class.java) {
+            validateCashierReply(reply(complete), step.copy(path = "/api/payments/another-payment/provider-query"))
+        }
+        // Never compare the order allocation against the combined whole payment.
+        payment(raw).put("amountMinor", 5000)
+        val combined = LiveCashier(raw).command(actor, "order1", "pay1", "payment-query").steps.single()
+        validateCashierReply(reply(complete), combined)
+        assertThrows(Exception::class.java) {
+            validateCashierReply(reply(JSONObject(complete.toString()).put("amountMinor", 5000)), combined)
+        }
+    }
+
+    @Test
     fun lostAcknowledgementAndWrongMoney() {
         val command = request()
         val receipt =

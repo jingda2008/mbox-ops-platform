@@ -276,6 +276,7 @@ private fun AfterSalesCaseCard(
     var count by remember { mutableStateOf("1") }
     var funding by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var unitIDs by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var refundReferences by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val id = row.getString("caseId")
     fun action(name: String, refundID: String = "", confirmed: Boolean = false) {
         runCatching {
@@ -294,6 +295,7 @@ private fun AfterSalesCaseCard(
                     unitIDs,
                     refundID,
                     confirmed,
+                    refundReferences[refundID].orEmpty(),
                 )
             }
             .onSuccess(propose)
@@ -473,18 +475,31 @@ private fun AfterSalesCaseCard(
                 ) {
                     Text("重试此笔已确认失败退款")
                 }
+            val manualProvider = refund.getString("provider")
             if (
                 board.source.getBoolean("canExecuteRefund") &&
-                    refund.getString("provider") == "cash" &&
+                    manualProvider in listOf("cash", "physical_pos", "external_manual") &&
                     refund.getString("status") in listOf("approved", "processing")
-            )
+            ) {
+                if (manualProvider != "cash") {
+                    Text("先在原线下工具完成退款，再登记凭证；此操作不会替你扣款或退钱。", fontSize = 12.sp)
+                    OutlinedTextField(
+                        refundReferences[rid].orEmpty(),
+                        { refundReferences = refundReferences + (rid to it) },
+                        label = { Text("原退款凭证号（1—256字）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !m.busy,
+                    )
+                }
                 Primary(
-                    "现金${historyMoney(refund.getLong("amountMinor"))}已实际退给客人",
-                    enabled = m.canUseAfterSales,
+                    "${cashierProvider(manualProvider)}${historyMoney(refund.getLong("amountMinor"))}已实际退给客人",
+                    enabled = m.canUseAfterSales &&
+                        (manualProvider == "cash" || refundReferences[rid].orEmpty().trim().length in 1..256),
                     icon = Icons.Outlined.Payments,
                 ) {
-                    action("cash-paid", rid, true)
+                    action(if (manualProvider == "cash") "cash-paid" else "manual-paid", rid, true)
                 }
+            }
         }
     }
 }

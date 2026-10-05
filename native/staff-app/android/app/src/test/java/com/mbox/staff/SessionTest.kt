@@ -115,6 +115,7 @@ class SessionTest {
         offline = true
         assertThrows(IOException::class.java) { restored.restoreSession() }
         assertEquals(original, store.text)
+        assertNull(restored.identity)
         offline = false
         response = APIResponse(401, "{}")
         assertThrows(StaffAPIError::class.java) { restored.restoreSession() }
@@ -127,6 +128,98 @@ class SessionTest {
         assertThrows(StaffAPIError::class.java) { restored.restoreSession() }
         assertNull(store.text)
         assertNull(restored.identity)
+    }
+
+    @Test
+    fun failedRestoreDoesNotAttachCachedEmployeeCredentialsAndCanRetry() {
+        val store = MemoryStore()
+        var response = reply(auth())
+        val requests = mutableListOf<APIRequest>()
+        var offline = false
+        val api = StaffAPI(store) {
+            requests.add(it)
+            if (offline) throw IOException("timeout")
+            response
+        }
+        api.rememberSession = true
+        api.login("staff", "1234", false)
+        val original = store.text
+        api.clearIdentity()
+        store.text = original
+
+        offline = true
+        assertThrows(IOException::class.java) { api.restoreSession() }
+        assertNull(api.identity)
+        assertEquals(original, store.text)
+        offline = false
+        response = APIResponse(200, "{}")
+        api.raw("/api/auth/session")
+        assertNull(requests.last().headers["x-mbox-staff-session-id"])
+        assertFalse(requests.last().headers.values.any { it.contains("test-session-token") })
+
+        response = reply(auth(), false)
+        assertNotNull(api.restoreSession())
+        assertEquals("session-1", api.identity?.sessionId)
+        assertTrue(requests.last().headers.values.any { it.contains("test-session-token") })
+    }
+
+    @Test
+    fun malformedRestoreHeartbeatLocksRuntimeButRetainsSavedRecordForRetry() {
+        val store = MemoryStore()
+        var response = reply(auth())
+        val api = StaffAPI(store) { response }
+        api.rememberSession = true
+        api.login("staff", "1234", false)
+        val original = store.text
+        response = APIResponse(200, "{\"data\":{}}")
+
+        assertThrows(StaffAPIError::class.java) { api.restoreSession() }
+        assertNull(api.identity)
+        assertEquals(original, store.text)
+    }
+
+    @Test
+    fun authenticationDenialRemovesSavedLoginButBusinessDenialDoesNot() {
+        val store = MemoryStore()
+        var response = reply(auth())
+        val api = StaffAPI(store) { response }
+        api.rememberSession = true
+        api.login("staff", "1234", false)
+        val original = store.text
+        response = APIResponse(403, "{\"error\":{\"code\":\"STAFF_ACCESS_FORBIDDEN\"}}")
+
+        assertThrows(StaffAPIError::class.java) { api.raw("/api/native-service-center") }
+        assertNotNull(api.identity)
+        assertEquals(original, store.text)
+
+        assertThrows(StaffAPIError::class.java) { api.heartbeat() }
+        assertNull(api.identity)
+        assertNull(store.text)
+    }
+
+    @Test
+    fun lostLogoutResponseLocksLocalSessionWithoutClaimingRemoteSuccess() {
+        val store = MemoryStore()
+        var response = reply(auth())
+        var timeout = false
+        val requests = mutableListOf<APIRequest>()
+        val api = StaffAPI(store) {
+            requests.add(it)
+            if (timeout) throw IOException("receipt lost")
+            response
+        }
+        api.rememberSession = true
+        api.login("staff", "1234", false)
+        timeout = true
+        assertThrows(IOException::class.java) { api.logout() }
+        assertNull(api.identity)
+        assertNull(store.text)
+
+        timeout = false
+        response = APIResponse(200, "{}")
+        api.raw("/api/auth/session")
+        assertNull(requests.last().headers["x-mbox-staff-employee-id"])
+        assertFalse(requests.last().headers.values.any { it.contains("test-session-token") })
     }
 
     @Test

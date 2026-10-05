@@ -36,8 +36,14 @@ fun LiveServiceView(
     var proposed by remember { mutableStateOf<LiveCommand?>(null) }
     var itemID by remember { mutableStateOf<String?>(null) }
     val version = remember { m.workspaceVersion }
-    LaunchedEffect(Unit) { m.loadService() }
-    LaunchedEffect(m.workspaceVersion) { if (version != m.workspaceVersion) close() }
+    val originalAccess = remember { m.priorityAccessKey }
+    LiveWorkspacePolling(
+        m, "service",
+        active = selected == null && proposed == null && !plansVisible && itemID == null,
+    ) { m.loadService(automatic = true) }
+    LaunchedEffect(m.workspaceVersion, m.priorityAccessKey) {
+        if (version != m.workspaceVersion || originalAccess != m.priorityAccessKey) close()
+    }
     itemID?.let {
         LiveAfterSalesView(m, it) {
             itemID = null

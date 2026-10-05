@@ -131,4 +131,25 @@ class LiveOrderingTest {
         )
         assertNull(LiveOrderSubmission.initialRejection(StaffAPIError(503, "REQUEST_INVALID", "")))
     }
+
+    @Test
+    fun initialCapacityRejectionReturnsToOriginalDraftWithoutAcceptingUnknownFailure() {
+        val command = make()
+        val before = command.json().toString()
+        listOf("FULFILLMENT_CAPACITY_EXCEEDED", "FULFILLMENT_CAPACITY_CONFIGURATION_INCOMPLETE",
+            "FULFILLMENT_CAPACITY_STATE_CONFLICT").forEach { code ->
+            assertEquals(code, LiveOrderSubmission.initialRejection(StaffAPIError(409, code, "出品产能不足")))
+            assertNull(LiveOrderSubmission.initialRejection(StaffAPIError(503, code, "网关错误")))
+            assertNull(LiveOrderSubmission.initialRejection(StaffAPIError(403, code, "权限错误")))
+            assertNull(LiveOrderSubmission.initialRejection(StaffAPIError(400, code, "非合同状态")))
+            val rejected = command.copy(rejectedCode = code)
+            val restored = LiveOrderSubmission.parse(rejected.json())
+            assertEquals(command.draftIDs, restored.draftIDs)
+            assertEquals(command.key, restored.key)
+            assertEquals(command.body, restored.body)
+        }
+        assertEquals(before, command.json().toString())
+        assertNull(LiveOrderSubmission.initialRejection(StaffAPIError(409, "FULFILLMENT_CAPACITY_UNKNOWN", "未知结果")))
+        assertNull(LiveOrderSubmission.initialRejection(java.io.IOException("lost response")))
+    }
 }

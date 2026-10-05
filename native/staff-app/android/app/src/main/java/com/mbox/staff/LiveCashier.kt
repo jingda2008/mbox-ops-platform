@@ -524,6 +524,12 @@ data class LiveCashier(val source: JSONObject) {
             title = "核对渠道并关闭原付款"
         } else if (action == "payment-query") {
             require(payment.provider == "postar") { "该付款不支持此渠道查询" }
+            // Workbench amount may be only this order's share of a combined payment.
+            // Compare only the explicit whole-payment amount supplied by the server.
+            payment.source.longOrNull("originalAmountMinor")?.let {
+                require(it > 0) { "原付款整笔金额无效，请刷新核对" }
+                proof.put("originalAmountMinor", it)
+            }
             path = "/api/payments/${LiveCommand.part(payment.id)}/provider-query"
             title = "核对原付款 ${payment.publicId} · 不再次扣款"
         } else {
@@ -758,7 +764,12 @@ fun validateCashierReply(text: String, step: LiveStep) {
     }
     if (action == "payment-query") {
         if (
-            data.getString("publicId") != proof.getString("paymentPublicId") ||
+            step.path != "/api/payments/${LiveCommand.part(proof.getString("paymentId"))}/provider-query" ||
+                data.getString("publicId") != proof.getString("paymentPublicId") ||
+                (data.has("id") && data.getString("id") != proof.getString("paymentId")) ||
+                (data.has("currency") && data.getString("currency") != "CNY") ||
+                (data.has("amountMinor") && (data.getLong("amountMinor") <= 0 ||
+                    proof.has("originalAmountMinor") && data.getLong("amountMinor") != proof.getLong("originalAmountMinor"))) ||
                 status !in
                     listOf(
                         "created",

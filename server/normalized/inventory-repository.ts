@@ -908,44 +908,20 @@ export class InventoryRepository {
           ELSE 'moving_weighted_average'
         END::text AS cost_basis,
         CASE
-          WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
-            CASE
-              WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
-              WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
-                ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
-                  +(incoming.quantity*incoming.unit_cost_minor))
-                  /(balance.on_hand_quantity+incoming.quantity),6)
-              ELSE NULL
-            END
+          WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN incoming.projected_unit_cost_minor
           WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
           ELSE NULL
         END::numeric(18,6)::text AS source_unit_cost_minor,
         CASE WHEN (
           CASE
-            WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
-              CASE
-                WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
-                WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
-                  ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
-                    +(incoming.quantity*incoming.unit_cost_minor))
-                    /(balance.on_hand_quantity+incoming.quantity),6)
-                ELSE NULL
-              END
+            WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN incoming.projected_unit_cost_minor
             WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
             ELSE NULL
           END
         ) IS NULL THEN NULL ELSE (
           (component.quantity+component.expected_waste_quantity)*(
             CASE
-              WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN
-                CASE
-                  WHEN balance.on_hand_quantity=0 THEN incoming.unit_cost_minor
-                  WHEN balance.cost_status='complete' AND balance.weighted_unit_cost_minor IS NOT NULL THEN
-                    ROUND(((balance.on_hand_quantity*balance.weighted_unit_cost_minor)
-                      +(incoming.quantity*incoming.unit_cost_minor))
-                      /(balance.on_hand_quantity+incoming.quantity),6)
-                  ELSE NULL
-                END
+              WHEN incoming.id IS NOT NULL AND incoming.receipt_status='draft' THEN incoming.projected_unit_cost_minor
               WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor
               ELSE NULL
             END
@@ -962,15 +938,32 @@ export class InventoryRepository {
         ON balance.tenant_id=component.tenant_id AND balance.store_id=component.store_id
        AND balance.inventory_item_id=component.inventory_item_id
       LEFT JOIN LATERAL (
-        SELECT line.id,line.quantity,line.unit_cost_minor,receipt.status AS receipt_status
-        FROM mbox.purchase_receipt_lines AS line
-        JOIN mbox.purchase_receipts AS receipt
-          ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id
-         AND receipt.id=line.receipt_id
-        WHERE line.tenant_id=component.tenant_id AND line.store_id=component.store_id
-          AND line.inventory_item_id=component.inventory_item_id
-          AND receipt.id=$4::uuid
-        ORDER BY line.id DESC LIMIT 1
+        -- One receipt may contain several batches of the same material. Follow
+        -- receivePurchaseReceipt's exact line order and six-decimal rounding;
+        -- selecting just the last batch changes the confirmed purchase cost.
+        WITH RECURSIVE lines AS (
+          SELECT line.id,line.quantity,line.unit_cost_minor,
+            row_number() OVER (ORDER BY line.id) AS ordinal
+          FROM mbox.purchase_receipt_lines AS line
+          JOIN mbox.purchase_receipts AS receipt
+            ON receipt.tenant_id=line.tenant_id AND receipt.store_id=line.store_id AND receipt.id=line.receipt_id
+          WHERE line.tenant_id=component.tenant_id AND line.store_id=component.store_id
+            AND line.inventory_item_id=component.inventory_item_id
+            AND receipt.id=$4::uuid AND receipt.status='draft'
+        ), projected(ordinal,on_hand,unit_cost) AS (
+          SELECT 0::bigint,balance.on_hand_quantity::numeric,
+            CASE WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor ELSE NULL END::numeric
+          UNION ALL
+          SELECT line.ordinal,(prior.on_hand+line.quantity)::numeric,
+            CASE WHEN prior.on_hand=0 THEN line.unit_cost_minor
+              WHEN prior.unit_cost IS NOT NULL THEN ROUND(
+                ((prior.on_hand*prior.unit_cost)+(line.quantity*line.unit_cost_minor))/(prior.on_hand+line.quantity),6)
+              ELSE NULL END::numeric
+          FROM projected prior JOIN lines line ON line.ordinal=prior.ordinal+1
+        )
+        SELECT line.id,'draft'::text AS receipt_status,projected.unit_cost AS projected_unit_cost_minor
+        FROM projected JOIN lines line ON line.ordinal=projected.ordinal
+        ORDER BY projected.ordinal DESC LIMIT 1
       ) AS incoming ON true
       WHERE recipe.tenant_id=$1::uuid AND recipe.store_id=$2::uuid
         AND recipe.product_id=$3::uuid AND recipe.status='active'

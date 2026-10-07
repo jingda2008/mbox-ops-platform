@@ -8,7 +8,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-07 22:07 CST`
+最后更新：`2026-10-07 22:33 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -6103,3 +6103,20 @@ DEPENDENCY-20261007-01已从“待核实”推进至本地修复：@capacitor/io
 | 时间 | 变更 | 证据边界 |
 |---|---|---|
 | 2026-10-07 22:07 CST | Android预约与基础推送分开提交，Android CI保持原android-debug检查名称，增加无SDK/真实SDK两次构建；依赖告警做最小版本修复 | 已有两种Android573项及后端专项源文件一致；本轮native-web-compat 364通过/15环境跳过、服务端/Web类型和生产构建通过。全库及CI继续。outputs/android-pr-integration-20261007、native-web-compat-before-merge.log；本轮不启用、不部署、不签正式包、不改线上stable |
+
+### 2026-10-07 22:33 CST Android最小接入第一步完成
+
+[PR #349](https://github.com/jingda2008/mbox-ops-platform/pull/349) 的准确头提交 `a2a570be1c2e5e985897cc49bbfb7a910e1d919c` 已通过完整适用CI，2026-10-07 22:32:47 CST 合入main，合并提交 `e76a7a0c1fbd46e3a190dc6ae5ba204ff39f84c8`。预约接续、可选个推基础通道、必要后台接线和最小依赖安全修补共49文件；未混入历史工作区、PR346或iOS功能批次。
+
+- [完整CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/37634199722) completed/success：quality、normalized_database、normalized_browser、performance、verify通过；docs与fast_quality按代码变更分类跳过，image按非发布条件跳过。
+- [Android CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/37634199334) completed/success：默认不含SDK、实际个推SDK两种构建的单测、lint和debug assemble通过。没有签名或发布APK。
+- 本地 `npm run check` 2463通过／1480环境跳过；本地完整release-system因macOS缺少flock未完成，Linux远端quality中的同一套检查已通过。最终npm audit全部严重性为0，DEPENDENCY-20261007-01本批依赖修复通过CI；不推断未来无新增通告。
+- 合并后仅只读回查：生产仍为 `a3ccec909243378460e9fc577a324fe5738cb38e`／schema264，ready、workers healthy；Android stable仍为 `0.4.0-rc.4` build9。没有生产迁移、配置变更、标签、部署、小程序上传或正式安装包发布。
+
+本节完成的是提交、CI和合并。个推默认关闭，平台配置、SDK-SECURITY-20261007-01、真实手机送达与品牌省电策略、正式发包和营业现场验收仍独立待验；不据此关闭全部商用门禁。
+
+#### 变更记录
+
+| 时间 | 变更 | 证据边界 |
+|---|---|---|
+| 2026-10-07 22:33 CST | PR349完整CI及Android双构建通过后合入main，第一步代码整合完成 | 两个准确头CI链接、合并提交及outputs/android-pr-integration-20261007只读线上回查。后续仅补文档证据；生产rc250/schema264、stable build9不变，未部署或启用个推 |

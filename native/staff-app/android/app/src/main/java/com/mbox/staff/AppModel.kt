@@ -39,7 +39,14 @@ class AppModel @JvmOverloads constructor(
     private val pushLifecycle by lazy {
         NativePushLifecycle(pushStateStoreOverride ?: KeystoreNotificationStateStore(app, NotificationStorePurpose.REGISTRATION))
     }
-    private val pushCallbacks by lazy { NativePushCallbackBridge(pushLifecycle) }
+    private val getuiClient by lazy { NativePushClient(api, registrationContract = GetuiRegistrationContract) }
+    private val getuiRegistration by lazy { NativePushRegistrationCoordinator(pushLifecycle, getuiClient, BuildConfig.VERSION_NAME) }
+    private val pushCallbacks by lazy { NativePushCallbackBridge(pushLifecycle, getuiRegistration) }
+    private var getuiPendingClick: String? = null
+    private var getuiClickBusy = false
+    private var getuiRegistrationBusy = false
+    private var getuiPendingToken: Pair<NativePushTokenContext, String>? = null
+    val nativePushConsented get() = runCatching { GetuiPush.consented(getApplication(), identity?.let(NativePushOwner::from)) }.getOrDefault(false)
     private val pushDeliveryRecovery by lazy { NativePushDeliveryRecovery(pushLifecycle, NativePushClient(api)) }
     private data class NativePushNavigationClaim(val verified: NativePushVerifiedOpen,
         val identity: NotificationTaskIdentity, val checkedAt: java.time.Instant)
@@ -229,8 +236,13 @@ class AppModel @JvmOverloads constructor(
     private fun synchronizePushOwner() {
         try {
             val owner = identity?.takeIf { it.canReadService() }?.let(NativePushOwner::from)
+            if (pushLifecycle.owner != owner) {
+                getuiPendingToken = null
+                GetuiPush.revoke(getApplication())
+            }
             pushLifecycle.reconcileOwner(owner)
             pendingPushRevocations = pushLifecycle.pendingRevocationCount
+            if (owner != null) getuiPendingClick?.let { receiveGetuiPayload(it, true) }
             if (owner == null) runCatching { ServiceReminders.disable(getApplication()) }
         } catch (_: Exception) {
             nativePushStatus = "实时通知保持关闭；安全记录暂不可读取或保存，原记录已保留"
@@ -238,6 +250,9 @@ class AppModel @JvmOverloads constructor(
     }
 
     private fun disableNativePush() {
+        getuiPendingClick = null
+        getuiPendingToken = null
+        runCatching { GetuiPush.revoke(getApplication()) }
         try {
             pushLifecycle.disable()
             pendingPushRevocations = pushLifecycle.pendingRevocationCount
@@ -247,12 +262,20 @@ class AppModel @JvmOverloads constructor(
         runCatching { ServiceReminders.clearNotice(getApplication()) }
     }
 
-    /** Also called after returning from system notification settings. No SDK is enabled in v1. */
+    fun turnOffNativePush() {
+        disableNativePush()
+        nativePushStatus = "实时通知已关闭；原绑定撤销将继续核对"
+        flushPushRevocations()
+    }
+
+    /** Also called after returning from system notification settings. */
     fun resumeNativePushRecovery() {
-        if (!ServiceReminders.allowed(getApplication())) disableNativePush()
+        if (!GetuiPush.allowed(getApplication())) disableNativePush()
         flushPushRevocations()
         resumeNativePushOpen()
         flushNativePushObservations()
+        getuiPendingClick?.let { receiveGetuiPayload(it, true) }
+        if (nativePushConsented) checkNativePushChannel()
     }
 
     fun flushPushRevocations() {
@@ -293,7 +316,75 @@ class AppModel @JvmOverloads constructor(
         }
     }
 
-    fun checkNativePushChannel() {
+    private fun flushGetuiRegistration() {
+        if (getuiRegistrationBusy || getuiPendingToken == null) return
+        getuiRegistrationBusy = true
+        viewModelScope.launch {
+            var acquired = false
+            try {
+                // Serialize with foreground operations and retain the original captured owner.
+                repeat(150) { if (busy || heartbeatBusy) delay(200) }
+                if (busy || heartbeatBusy) return@launch
+                val (context, value) = getuiPendingToken ?: return@launch
+                if (!GetuiPush.consented(getApplication(), context.owner) || pushLifecycle.owner != context.owner ||
+                    pushLifecycle.generation != context.generation || !GetuiPush.allowed(getApplication())) return@launch
+                val token = NativePushSdkToken("getui-v1", "getui", value)
+                if (!GetuiRegistrationContract.accepts(token)) return@launch
+                busy = true; acquired = true
+                val outcome = withContext(Dispatchers.IO) { pushCallbacks.onTokenAvailable(context, token) }
+                if (pushLifecycle.owner == context.owner && pushLifecycle.generation == context.generation) {
+                    nativePushStatus = if (outcome == NativePushRegistrationOutcome.REGISTERED)
+                        "实时通知绑定已核对；送达受网络和系统限制，营业请关注工作台"
+                    else "实时通知绑定待核对，原请求已保留；可重新检查通道"
+                    if (outcome == NativePushRegistrationOutcome.REGISTERED) getuiPendingToken = null
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { nativePushStatus = "实时通知绑定暂未核实，原请求保留" }
+            finally { if (acquired) busy = false; getuiRegistrationBusy = false }
+        }
+    }
+
+    /** SDK/intent payloads contain only a delivery reference, never trusted identity. */
+    fun receiveGetuiPayload(text: String, opened: Boolean) {
+        val mbox = GetuiPush.payload(text) ?: return
+        if (opened) {
+            getuiPendingClick = text
+            if (getuiClickBusy) return
+            getuiClickBusy = true
+        }
+        val originalContext = pushCallbacks.captureContext()
+        val reference = parseNativePushNotification(mbox) ?: return
+        viewModelScope.launch {
+            var acquired = false
+            try {
+                repeat(150) { if (busy || heartbeatBusy || identity == null) delay(200) }
+                val captured = originalContext ?: pushCallbacks.captureContext() ?: return@launch
+                if (opened && getuiPendingClick != text) return@launch
+                if (busy || heartbeatBusy || !live || identity?.let(NativePushOwner::from) != captured.owner ||
+                    pushLifecycle.generation != captured.generation || pushLifecycle.currentBinding != captured.binding ||
+                    !GetuiPush.consented(getApplication(), captured.owner)) return@launch
+                busy = true; acquired = true
+                // A late notification from another employee/revision must fail this GET BEFORE
+                // any observation is persisted or an existing pending destination is disturbed.
+                withContext(Dispatchers.IO) { getuiClient.target(captured.owner, reference.deliveryId, captured.binding) }
+                if (identity?.let(NativePushOwner::from) != captured.owner || pushLifecycle.generation != captured.generation ||
+                    pushLifecycle.currentBinding != captured.binding || (opened && getuiPendingClick != text)) return@launch
+                val result = receiveNativePushPayload(captured, mbox, opened)
+                if (opened && result == NativePushCallbackOutcome.STAGED && getuiPendingClick == text) getuiPendingClick = null
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (opened) notificationOpenStatus = "通知暂无法核对，请从服务工作台查看当前任务" }
+            finally {
+                if (acquired) busy = false
+                if (opened) {
+                    getuiClickBusy = false
+                    resumeNativePushOpen()
+                    if (getuiPendingClick != null && getuiPendingClick != text) receiveGetuiPayload(getuiPendingClick!!, true)
+                } else flushNativePushObservations()
+            }
+        }
+    }
+
+    fun checkNativePushChannel(consent: Boolean = false) {
         if (!live || identity == null || busy || heartbeatBusy) return
         busy = true
         val expected = workspaceReadIdentity()
@@ -307,11 +398,28 @@ class AppModel @JvmOverloads constructor(
                 val capabilities = readCurrentWorkspace(current, { workspaceReadIdentity() }) {
                     withContext(Dispatchers.IO) { NativePushClient(api).capabilities(owner) }
                 }
-                check(!capabilities.androidAvailable)
-                nativePushStatus = "安卓实时通知通道尚未接入，当前不会注册推送；下方定期检查可继续使用"
+                if (!capabilities.androidAvailable || !BuildConfig.GETUI_CONFIGURED) {
+                    GetuiSdk.stop(getApplication())
+                    nativePushStatus = if (!BuildConfig.GETUI_CONFIGURED) "此安装包尚未配置实时通知平台；后台定期检查可单独使用"
+                        else "服务器实时通知通道尚未启用，当前保持关闭"
+                } else if (consent || GetuiPush.consented(getApplication(), owner)) {
+                    require(rememberLogin) { "请先开启记住本机登录" }
+                    GetuiPush.createChannel(getApplication())
+                    require(GetuiPush.allowed(getApplication())) { "请先在系统设置中允许通知" }
+                    if (consent) GetuiPush.grant(getApplication(), owner)
+                    val tokenContext = NativePushTokenContext(owner, pushLifecycle.generation)
+                    val started = GetuiSdk.start(getApplication(), owner, { token ->
+                        viewModelScope.launch(Dispatchers.Main.immediate) {
+                            getuiPendingToken = tokenContext to token
+                            flushGetuiRegistration()
+                        }
+                    }, { payload, opened -> viewModelScope.launch(Dispatchers.Main.immediate) { receiveGetuiPayload(payload, opened) } })
+                    nativePushStatus = if (started) "正在核对实时通知绑定；实际送达仍受网络和系统限制" else "此安装包未包含实时通知 SDK"
+                } else nativePushStatus = "通道可用；阅读隐私说明并同意后才会启动实时通知"
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                GetuiSdk.stop(getApplication())
                 if (expected.employee == identity?.employeeId && expected.session == identity?.sessionId) {
                     nativePushStatus = if ((e as? StaffAPIError)?.status == 404)
                         "服务器暂未提供实时通知能力，当前保持关闭"
@@ -320,6 +428,7 @@ class AppModel @JvmOverloads constructor(
                 }
             } finally {
                 busy = false
+                flushGetuiRegistration()
             }
         }
     }
@@ -2325,6 +2434,7 @@ class AppModel @JvmOverloads constructor(
 
     fun changeRememberLogin(enabled: Boolean) {
         if (busy || heartbeatBusy) return
+        if (!enabled) disableNativePush()
         busy = true
         viewModelScope.launch {
             try {

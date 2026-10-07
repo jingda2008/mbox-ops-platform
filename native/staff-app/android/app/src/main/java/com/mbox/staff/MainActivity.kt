@@ -96,6 +96,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun receiveNotificationIntent(incoming: Intent?) {
+        if (incoming?.action == GetuiPush.action) {
+            GetuiPush.payload(incoming)?.let { model.receiveGetuiPayload(org.json.JSONObject().put("mbox", it).toString(), true) }
+            return
+        }
         val consumed = when (val result = NotificationIntents.parse(incoming)) {
             is NotificationIntentResult.Target -> model.receiveNotificationTarget(result.target)
             NotificationIntentResult.Invalid -> {

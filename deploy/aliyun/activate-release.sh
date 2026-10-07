@@ -405,31 +405,40 @@ set_env MBOX_EXPECTED_IMAGE_DIGEST "${expected_digest}"
 # BEGIN NATIVE PUSH SECRET GUARD (also executed by the isolated shell contract tests)
 prepare_native_push_mount() {
   native_push_mount_args=()
-  local enabled configured source ancestor mode owner group runtime_identity runtime_uid runtime_gid size
-  enabled=$(sed -n 's/^MBOX_NATIVE_PUSH_ENABLED=//p' "${release_env}")
-  case "${enabled}" in ''|false) return 0 ;; true) ;; *) echo "native push enabled flag is invalid" >&2; return 1 ;; esac
-  configured=$(sed -n 's/^MBOX_APNS_PRIVATE_KEY_FILE=//p' "${release_env}")
-  test "${configured}" = /run/mbox-native-push/apns.p8 || { echo "native push secret path is invalid" >&2; return 1; }
-  source=${install_root}/secrets/native-push/apns.p8
-  test -f "${source}" && test ! -L "${source}" || { echo "native push secret file is missing or unsafe" >&2; return 1; }
-  ancestor=$(dirname "${source}")
-  while :; do
-    test -d "${ancestor}" && test ! -L "${ancestor}" || return 1
-    owner=$(stat -c '%u' "${ancestor}")
-    mode=$(stat -c '%a' "${ancestor}")
-    test "${owner}" = 0 && (( (8#${mode} & 8#022) == 0 )) || { echo "native push secret parent is not protected" >&2; return 1; }
-    [ "${ancestor}" != / ] || break
-    ancestor=$(dirname "${ancestor}")
-  done
+  local apns_enabled getui_enabled filename configured source ancestor mode owner group runtime_identity runtime_uid runtime_gid size limit
+  local files=()
+  apns_enabled=$(sed -n 's/^MBOX_NATIVE_PUSH_ENABLED=//p' "${release_env}")
+  getui_enabled=$(sed -n 's/^MBOX_GETUI_ENABLED=//p' "${release_env}")
+  case "${apns_enabled}" in ''|false) ;; true) files+=(apns.p8) ;; *) echo "native push enabled flag is invalid" >&2; return 1 ;; esac
+  case "${getui_enabled}" in ''|false) ;; true) files+=(getui-master-secret) ;; *) echo "Android push enabled flag is invalid" >&2; return 1 ;; esac
+  [ "${#files[@]}" -gt 0 ] || return 0
   # Query the verified image's configured USER without secrets or network access.
   runtime_identity=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "${image_tag}" node -e 'process.stdout.write(`${process.getuid()}:${process.getgid()}`)') || return 1
   [[ "${runtime_identity}" =~ ^[0-9]+:[0-9]+$ ]] || return 1
   runtime_uid=${runtime_identity%%:*}; runtime_gid=${runtime_identity##*:}
   test "${runtime_uid}" -gt 0 && test "${runtime_gid}" -gt 0 || { echo "native push requires the non-root runtime USER" >&2; return 1; }
-  owner=$(stat -c '%u' "${source}"); group=$(stat -c '%g' "${source}"); mode=$(stat -c '%a' "${source}"); size=$(stat -c '%s' "${source}")
-  # Host parent is root-only; the container USER gets group read through this single RO bind.
-  test "${owner}" = 0 && test "${group}" = "${runtime_gid}" && test "${mode}" = 440 && test "${size}" -gt 0 && test "${size}" -le 16384 || { echo "native push secret owner, group, mode or size is invalid" >&2; return 1; }
-  native_push_mount_args=(--mount "type=bind,src=${source},dst=/run/mbox-native-push/apns.p8,readonly")
+  for filename in "${files[@]}"; do
+    case "${filename}" in
+      apns.p8) configured=$(sed -n 's/^MBOX_APNS_PRIVATE_KEY_FILE=//p' "${release_env}"); limit=16384 ;;
+      getui-master-secret) configured=$(sed -n 's/^MBOX_GETUI_MASTER_SECRET_FILE=//p' "${release_env}"); limit=1024 ;;
+    esac
+    test "${configured}" = "/run/mbox-native-push/${filename}" || { echo "native push secret path is invalid" >&2; return 1; }
+    source=${install_root}/secrets/native-push/${filename}
+    test -f "${source}" && test ! -L "${source}" || { echo "native push secret file is missing or unsafe" >&2; return 1; }
+    ancestor=$(dirname "${source}")
+    while :; do
+      test -d "${ancestor}" && test ! -L "${ancestor}" || return 1
+      owner=$(stat -c '%u' "${ancestor}")
+      mode=$(stat -c '%a' "${ancestor}")
+      test "${owner}" = 0 && (( (8#${mode} & 8#022) == 0 )) || { echo "native push secret parent is not protected" >&2; return 1; }
+      [ "${ancestor}" != / ] || break
+      ancestor=$(dirname "${ancestor}")
+    done
+    owner=$(stat -c '%u' "${source}"); group=$(stat -c '%g' "${source}"); mode=$(stat -c '%a' "${source}"); size=$(stat -c '%s' "${source}")
+    # Fixed single-file read-only binds; no provider secret enters a command or env value.
+    test "${owner}" = 0 && test "${group}" = "${runtime_gid}" && test "${mode}" = 440 && test "${size}" -gt 0 && test "${size}" -le "${limit}" || { echo "native push secret owner, group, mode or size is invalid" >&2; return 1; }
+    native_push_mount_args+=(--mount "type=bind,src=${source},dst=/run/mbox-native-push/${filename},readonly")
+  done
 }
 # END NATIVE PUSH SECRET GUARD
 prepare_native_push_mount

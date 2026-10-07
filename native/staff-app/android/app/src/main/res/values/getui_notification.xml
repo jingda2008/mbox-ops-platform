@@ -1,0 +1,4 @@
+<resources>
+    <item name="push_small" type="drawable">@drawable/ic_service_notification</item>
+    <item name="push" type="drawable">@drawable/ic_service_notification</item>
+</resources>

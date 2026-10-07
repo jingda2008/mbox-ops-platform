@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove"/>
+    <!-- Removes the SDK permission from the merged manifest; this is not an application permission request. Lint flags the source removal node. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" tools:ignore="QueryAllPackagesPermission"/>
+    <uses-permission android:name="android.permission.GET_TASKS" tools:node="remove"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove"/>
+    <application android:label="M-BOX 员工" android:usesCleartextTraffic="false" tools:replace="android:usesCleartextTraffic,android:label">
+        <service android:name="com.igexin.sdk.PushService" android:enabled="false"/>
+        <service android:name="com.igexin.sdk.GTIntentService" android:enabled="false" android:exported="false" tools:replace="android:exported"/>
+        <service android:name="com.igexin.sdk.GService" android:enabled="false" android:exported="false" tools:replace="android:exported"/>
+        <service android:name="com.getui.gtc.GtcService" android:enabled="false"/>
+        <provider android:name="com.getui.gtc.base.GtcProvider" android:enabled="false"/>
+        <activity android:name="com.igexin.sdk.GetuiActivity" android:enabled="false" android:exported="false" tools:replace="android:exported"/>
+        <activity android:name="com.igexin.sdk.PopupActivity" android:enabled="false"/>
+        <service android:name=".MboxGetuiIntentService" android:exported="false" android:enabled="false"/>
+    </application>
+</manifest>

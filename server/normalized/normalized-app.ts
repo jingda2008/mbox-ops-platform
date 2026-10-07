@@ -226,6 +226,9 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'req.body.revocationSecret',
   'nativePush.privateKey',
   'nativePush.tokenKey',
+  'getuiPush.masterSecret',
+  'getuiPush.appKey',
+  'getuiPush.tokenKey',
   'body.pin',
   'body.credential',
   'body.tableQrToken',
@@ -590,7 +593,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       return { scope: context.scope, employeeId: context.employeeId, businessDate: context.businessDate }
     }
 
-    instance.register(nativePushApiPlugin, { prefix:'/api/native/push', scope, resolveContext:commerceContext, repository:new NativePushRepository(transactions,options.config.nativePush ?? null,options.config.secret) })
+    instance.register(nativePushApiPlugin, { prefix:'/api/native/push', scope, resolveContext:commerceContext, repository:new NativePushRepository(transactions,options.config.nativePush ?? null,options.config.secret,options.config.getuiPush ?? null) })
     instance.register(staffAuthApiPlugin, {
       prefix: '/api/auth',
       auth: staffAuth,

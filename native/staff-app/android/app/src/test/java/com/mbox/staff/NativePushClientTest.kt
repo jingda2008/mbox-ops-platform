@@ -99,6 +99,16 @@ class NativePushClientTest {
         }
     }
 
+    @Test fun getuiConfiguredCanEnableAndroidWithoutIosAndGlobalOffStillBlocks() {
+        var result = capability().put("enabled", true).put("reasonCode", JSONObject.NULL).apply {
+            getJSONObject("platforms").getJSONObject("android").put("provider", "getui").put("configured", true).put("reasonCode", JSONObject.NULL)
+        }
+        val client = NativePushClient(api { reply(result) })
+        assertTrue(client.capabilities(owner).androidAvailable)
+        result.put("enabled", false).put("reasonCode", "PUSH_DISABLED")
+        assertFalse(client.capabilities(owner).androidAvailable)
+    }
+
     @Test fun installationChecksSafeIntegerAndBindingWithoutRevealingPreviousEmployee() {
         var result = data().put("installation", installation(bound = false))
         val client = NativePushClient(api { reply(result) })

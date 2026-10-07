@@ -184,3 +184,38 @@ printf '%s\n' 'MBOX_NATIVE_PUSH_ENABLED=yes' >> "${env_file}"
 if "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation >/dev/null 2>&1; then
   echo 'invalid native push flag unexpectedly accepted' >&2; exit 1
 fi
+
+
+# Android-only works without APNs; re-normalization retains configured application identity and
+# strips inline secrets/endpoint overrides rather than passing them to containers.
+copy_getui_fixture() {
+  awk -F= '$1 !~ /^MBOX_GETUI_/ && $1 != "MBOX_NATIVE_PUSH_ENABLED" && $1 != "MBOX_APNS_PRIVATE_KEY_FILE" {print}' "${postar_env_file}" > "${env_file}"
+}
+copy_getui_fixture
+"${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation
+grep -qx 'MBOX_GETUI_ENABLED=false' "${env_file}"
+! grep -q '^MBOX_GETUI_MASTER_SECRET_FILE=' "${env_file}"
+for tier in validation production; do
+  copy_getui_fixture
+  printf '%s\n' 'MBOX_GETUI_ENABLED=true' 'MBOX_GETUI_MASTER_SECRET_FILE=/untrusted/getui-secret' 'MBOX_GETUI_MASTER_SECRET=do-not-forward' 'MBOX_GETUI_ENDPOINT=https://untrusted.invalid' >> "${env_file}"
+  for key in MBOX_GETUI_APP_ID MBOX_GETUI_APP_KEY; do
+    printf '%s=preserved-getui-value\n' "${key}" >> "${env_file}"
+  done
+  for pass in 1 2; do
+    "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+    grep -qx 'MBOX_GETUI_ENABLED=true' "${env_file}"
+    grep -qx 'MBOX_NATIVE_PUSH_ENABLED=false' "${env_file}"
+    grep -qx 'MBOX_GETUI_MASTER_SECRET_FILE=/run/mbox-native-push/getui-master-secret' "${env_file}"
+    ! grep -q '^MBOX_GETUI_MASTER_SECRET=' "${env_file}"
+    ! grep -q '^MBOX_GETUI_ENDPOINT=' "${env_file}"
+    ! grep -q '^MBOX_APNS_PRIVATE_KEY_FILE=' "${env_file}"
+    for key in MBOX_GETUI_APP_ID MBOX_GETUI_APP_KEY; do
+      grep -qx "${key}=preserved-getui-value" "${env_file}"
+    done
+  done
+done
+copy_getui_fixture
+printf '%s\n' 'MBOX_GETUI_ENABLED=yes' >> "${env_file}"
+if "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" validation >/dev/null 2>&1; then
+  echo 'invalid Android push flag unexpectedly accepted' >&2; exit 1
+fi

@@ -59,8 +59,8 @@ describe('optional APNs failure isolation and operator health',()=>{
    return {result:await coordinator.runOnce(),errors}
   }
   const provider=await run();expect(provider.result.failures).toEqual([]);expect(provider.errors).toContain('native-push');expect(provider.result.workers.nativePush?.configurationRejected).toBe(1)
-  const tracker=new NormalizedWorkerHealthTracker(2000,false,[],true);tracker.report(provider.result);expect(tracker.snapshot()).toMatchObject({status:'healthy',nativePush:{status:'degraded',lastErrorCode:'APNS_CONFIGURATION_REJECTED'}})
-  tracker.report({...provider.result,workers:{...provider.result.workers,nativePush:{...batch,claimed:0,rejected:0,configurationRejected:0}}});expect(tracker.snapshot().nativePush?.lastErrorCode).toBe('APNS_CONFIGURATION_REJECTED')
+  const tracker=new NormalizedWorkerHealthTracker(2000,false,[],true);tracker.report(provider.result);expect(tracker.snapshot()).toMatchObject({status:'healthy',nativePush:{status:'degraded',lastErrorCode:'NATIVE_PUSH_CONFIGURATION_REJECTED'}})
+  tracker.report({...provider.result,workers:{...provider.result.workers,nativePush:{...batch,claimed:0,rejected:0,configurationRejected:0}}});expect(tracker.snapshot().nativePush?.lastErrorCode).toBe('NATIVE_PUSH_CONFIGURATION_REJECTED')
   tracker.report({...provider.result,workers:{...provider.result.workers,nativePush:{...batch,accepted:1,rejected:0,configurationRejected:0}}});expect(tracker.snapshot().nativePush).toMatchObject({status:'healthy',lastErrorCode:null})
   const database=await run(true);expect(database.result.failures).toContain('native-push');tracker.report(database.result);expect(tracker.snapshot()).toMatchObject({status:'degraded',nativePush:{status:'degraded',lastErrorCode:'NATIVE_PUSH_WORKER_FAILED'}})
  })

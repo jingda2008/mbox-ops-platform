@@ -9,8 +9,8 @@ export interface NativePushActor {
 }
 export interface NativePushRegistration {
   expectedRevision: number
-  platform: 'ios'
-  provider: 'apns'
+  platform: 'ios' | 'android'
+  provider: 'apns' | 'getui'
   token: string
   permission: 'authorized' | 'provisional'
   appVersion: string

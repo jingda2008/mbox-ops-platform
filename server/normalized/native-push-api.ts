@@ -25,10 +25,11 @@ function secret(value:unknown) {if(typeof value!=='string'||!canonicalRevocation
 function key(request:FastifyRequest) {const value=request.headers['idempotency-key'];if(typeof value!=='string'||!value.startsWith('native-push-')||!uuid.test(value.slice(12)))return invalid();return value}
 function registration(value:unknown):NativePushRegistration {
   const body=object(value,['expectedRevision','platform','provider','token','permission','appVersion','revocationSecret'])
-  if(body.platform!=='ios'||body.provider!=='apns')throw new NativePushError('PUSH_PROVIDER_UNSUPPORTED',400,true)
-  if(typeof body.token!=='string'||!/^(?:[a-fA-F0-9]{2}){16,256}$/.test(body.token)
-    || !['authorized','provisional'].includes(body.permission as string) || typeof body.appVersion!=='string'||body.appVersion.trim().length===0||body.appVersion.length>64)return invalid()
-  return {expectedRevision:integer(body.expectedRevision,0),platform:'ios',provider:'apns',token:body.token.toLowerCase(),permission:body.permission as NativePushRegistration['permission'],appVersion:body.appVersion,revocationSecret:secret(body.revocationSecret)}
+  const ios=body.platform==='ios'&&body.provider==='apns', android=body.platform==='android'&&body.provider==='getui'
+  if(!ios&&!android)throw new NativePushError('PUSH_PROVIDER_UNSUPPORTED',400,true)
+  if(typeof body.token!=='string'||!(ios ? /^(?:[a-fA-F0-9]{2}){16,256}$/ : /^[a-f0-9]{32}$/).test(body.token)
+    || !(ios ? ['authorized','provisional'] : ['authorized']).includes(body.permission as string) || typeof body.appVersion!=='string'||body.appVersion.trim().length===0||body.appVersion.length>64)return invalid()
+  return {expectedRevision:integer(body.expectedRevision,0),platform:body.platform as NativePushRegistration['platform'],provider:body.provider as NativePushRegistration['provider'],token:ios?body.token.toLowerCase():body.token,permission:body.permission as NativePushRegistration['permission'],appVersion:body.appVersion,revocationSecret:secret(body.revocationSecret)}
 }
 async function respond(reply:FastifyReply,work:()=>Promise<unknown>,capability=false) {
   reply.header('cache-control','private, no-store')

@@ -30,10 +30,9 @@ fun parseNativePushNotification(data: JSONObject): NativePushNotificationReferen
     NativePushNotificationReference(data.pushString("deliveryId"))
 }.getOrNull()
 
-data class NativePushCapabilities(val owner: NativePushOwner, val enabled: Boolean, val reasonCode: String?) {
-    // Contract v1 deliberately has no Android provider. iOS capability never enables Android.
-    val androidAvailable: Boolean get() = false
-    val androidReasonCode: String get() = "PROVIDER_NOT_SELECTED"
+data class NativePushCapabilities(val owner: NativePushOwner, val enabled: Boolean, val reasonCode: String?,
+    val androidConfigured: Boolean = false, val androidReasonCode: String? = "PROVIDER_NOT_SELECTED") {
+    val androidAvailable: Boolean get() = enabled && androidConfigured
 }
 
 enum class NativePushInstallationStatus { ACTIVE, REVOKED, INVALID_TOKEN, EXPIRED }
@@ -182,11 +181,14 @@ class NativePushClient(
             val iosConfigured = ios.pushBoolean("configured")
             val environment = ios.pushNullableString("environment")
             require(if (iosConfigured) environment in setOf("sandbox", "production") else environment == null)
-            require(!enabled || iosConfigured)
             val android = platforms.pushObject("android").apply { pushKeys("provider", "configured", "reasonCode") }
-            require(android.has("provider") && android.get("provider") == JSONObject.NULL &&
-                !android.pushBoolean("configured") && android.pushString("reasonCode") == "PROVIDER_NOT_SELECTED")
-            NativePushCapabilities(owner, enabled, reason)
+            val androidConfigured = android.pushBoolean("configured")
+            val provider = android.pushNullableString("provider")
+            val androidReason = android.pushNullableString("reasonCode")
+            require(if (androidConfigured) provider == "getui" && androidReason == null
+                else provider == null && androidReason == "PROVIDER_NOT_SELECTED")
+            require(!enabled || iosConfigured || androidConfigured)
+            NativePushCapabilities(owner, enabled, reason, androidConfigured, androidReason)
         }
     }
 

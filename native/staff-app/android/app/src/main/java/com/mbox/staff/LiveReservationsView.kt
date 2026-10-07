@@ -59,8 +59,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
     }
     val query = ReservationQuery(range, from, to)
     val actionable = listCurrent() && m.canUseReservations && query == m.reservationQuery
-    val receptionSupported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
-        m.reservationCapabilities?.opt("receptionSeatV1") == true
+    val receptionSupported = m.receptionCreationSupported
     fun choose(id: String, a: String) {
         if (!listCurrent()) return
         selectedID = id
@@ -102,7 +101,7 @@ fun LiveReservationsView(m: AppModel, close: () -> Unit) {
                             }
                         }
                         if (!m.busy && !receptionSupported)
-                            Text("后台尚未确认新版预约接待能力，请刷新；仍未启用时需由管理员升级后台。原有未决请求仍可核对。",
+                            Text("门店暂未开放新预约登记，请刷新或联系管理员。已有预约接待与原未决请求仍可核对。",
                                 fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

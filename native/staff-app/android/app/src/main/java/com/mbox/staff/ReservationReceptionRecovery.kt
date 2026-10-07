@@ -120,7 +120,7 @@ fun removeReservationReceptionPayload(step: LiveStep?, store: ReservationRecepti
 
 fun reservationReceptionDefinitivelyRejected(error: Exception): Boolean =
     error is StaffAPIError && error.commitDisposition == "not_committed" &&
-        ((error.status == 409 && error.code in setOf("RESERVATION_POLICY_CHANGED", "RESERVATION_CAPACITY_UNAVAILABLE",
+        ((error.status == 409 && error.code in setOf("RESERVATION_RECEPTION_CREATE_DISABLED", "RESERVATION_POLICY_CHANGED", "RESERVATION_CAPACITY_UNAVAILABLE",
             "RESERVATION_RECEPTION_CHANGED", "RESERVATION_RECEPTION_REQUIRED")) ||
             (error.status == 503 && error.code == "RESERVATION_RECEPTION_UNAVAILABLE"))
 

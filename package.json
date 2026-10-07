@@ -93,7 +93,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.4.2",
-    "@capacitor/ios": "^8.4.2",
+    "@capacitor/ios": "8.4.3",
     "@fastify/compress": "^8.3.1",
     "@fastify/cors": "^11.3.0",
     "@fastify/static": "^10.1.0",
@@ -110,7 +110,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "read-excel-file": "^9.3.2",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -132,5 +132,10 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "concurrently": {
+      "shell-quote": "1.11.0"
+    }
   }
 }

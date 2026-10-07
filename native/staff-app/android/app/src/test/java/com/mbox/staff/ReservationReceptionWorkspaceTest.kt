@@ -34,6 +34,8 @@ class ReservationReceptionWorkspaceTest {
     private val models = mutableListOf<AppModel>()
     private val requests = CopyOnWriteArrayList<APIRequest>()
     private val secrets = MemoryReceptionSecrets()
+    @Volatile private var capabilityResponse = JSONObject().put("durableTransitions", true).put("durableCreate", true)
+        .put("admissionCreateV1", false).put("receptionSeatV1", false).put("tableBoundCreate", false)
     @Volatile private var receptionResponse: (APIRequest) -> APIResponse = { error("unexpected reception read") }
 
     @Before fun setUp() {
@@ -49,7 +51,7 @@ class ReservationReceptionWorkspaceTest {
                 request.path.startsWith("/api/auth/") -> APIResponse(200, JSONObject().put("data", auth).toString())
                 request.path.startsWith("/api/staff/reservation-receptions") -> receptionResponse(request)
                 request.path.startsWith("/api/staff/reservations") || request.path.startsWith("/api/staff/reservation-intake") -> APIResponse(200, "{\"data\":[]}")
-                request.path == "/api/staff/native-reservation-capabilities" -> APIResponse(200, "{\"data\":{\"durableTransitions\":true,\"durableCreate\":true,\"admissionCreateV1\":false,\"receptionSeatV1\":false,\"tableBoundCreate\":false}}")
+                request.path == "/api/staff/native-reservation-capabilities" -> APIResponse(200, JSONObject().put("data", capabilityResponse).toString())
                 request.path == "/api/staff/native-waitlist-capabilities" -> APIResponse(200, "{\"data\":{\"durableTransitions\":false}}")
                 else -> error("Unexpected offline route ${request.path}")
             }
@@ -148,6 +150,66 @@ class ReservationReceptionWorkspaceTest {
         state(name = "Identity", value = f.actor)
         field("receptionSessionsUpdated", Instant.now().minusSeconds(61))
         assertFalse(model.canExecuteLive(command))
+    }
+
+
+    @Test fun existingSeatingRemainsUsableWhenNewCreationIsDisabled() {
+        capabilityResponse.put("admissionCreateV1", false).put("receptionSeatV1", true).put("tableBoundCreate", true)
+        val token = model.selectReception(f.reservationId)
+        receptionResponse = { request -> APIResponse(200, JSONObject().put("data",
+            if (request.path.endsWith("/table-sessions")) f.sessionsJson()
+            else JSONObject().put("protocol", 1).put("reservation", f.reservation()).put("seating", JSONObject.NULL)
+        ).toString()) }
+        model.loadReceptionSessions(f.reservationId, viewToken = token); awaitIdle()
+        assertTrue(model.receptionState, model.canSeatReception)
+        val command = model.prepareReceptionSeat(f.reservationId, setOf(f.firstSession, f.secondSession), "已核对整组实际桌位", token)
+        assertTrue(model.canExecuteLive(command))
+        assertFalse(model.canCreateReception)
+        assertFalse(requests.any { it.body != null && !it.path.startsWith("/api/auth/") })
+        model.reservationCapabilities!!.put("receptionSeatV1", false)
+        assertFalse(model.canExecuteLive(command))
+    }
+
+    @Test fun optionsClosingBetweenCapabilityAndReadPreventsNewCreation() {
+        capabilityResponse.put("admissionCreateV1", true).put("receptionSeatV1", true)
+        val token = model.beginReceptionCreation()
+        val arrival = Instant.now().plusSeconds(3600); val end = arrival.plusSeconds(7200)
+        receptionResponse = { APIResponse(200, JSONObject().put("data", f.optionsJson()
+            .put("arrivalAt", arrival.toString()).put("expectedEndAt", end.toString()).put("creationEnabled", false)).toString()) }
+        model.loadReceptionOptions(arrival, end, token); awaitIdle()
+        assertFalse(model.canCreateReception)
+        assertThrows(Exception::class.java) { model.prepareReceptionCreate(f.draft().copy(arrival = arrival, end = end), token) }
+        assertTrue(model.receptionState.contains("暂停"))
+    }
+
+    @Test fun explicitDisabledRollbackCanBeDismissedButAnUnknownDisabledReplyCannot() {
+        val original = f.create(); persist(secureReservationReceptionCommand(original, secrets))
+        receptionResponse = { request ->
+            if (request.body == null) APIResponse(404, "{\"error\":{\"code\":\"RESERVATION_RECEIPT_NOT_FOUND\",\"message\":\"unknown\"}}")
+            else APIResponse(409, "{\"error\":{\"code\":\"RESERVATION_RECEPTION_CREATE_DISABLED\",\"message\":\"paused\"}}")
+        }
+        model.recoverLive(retryReceptionOriginal = true); awaitIdle()
+        assertFalse(model.livePending!!.rejected)
+        model.dismissRejectedLive()
+        assertNotNull(model.livePending)
+        assertEquals(1, secrets.values.size)
+        receptionResponse = { request ->
+            if (request.body == null) APIResponse(404, "{\"error\":{\"code\":\"RESERVATION_RECEIPT_NOT_FOUND\",\"message\":\"unknown\"}}")
+            else APIResponse(409, "{\"error\":{\"code\":\"RESERVATION_RECEPTION_CREATE_DISABLED\",\"message\":\"paused\",\"commitDisposition\":\"not_committed\"}}")
+        }
+        model.recoverLive(retryReceptionOriginal = true); awaitIdle()
+        assertTrue(model.livePending!!.rejected)
+        model = reopen()
+        assertTrue(model.livePending!!.rejected)
+        model.dismissRejectedLive()
+        assertNull(model.livePending)
+        assertTrue(secrets.values.isEmpty())
+        val posts = requests.filter { it.path == original.steps.single().path && it.body != null }
+        assertEquals(2, posts.size)
+        for (post in posts) {
+            assertEquals(original.steps.single().key, post.headers["idempotency-key"])
+            assertEquals(original.steps.single().body, post.body.toString())
+        }
     }
 
     @Test fun restart404KeepsOriginalPrivateSlotAndExplicitRetryUsesSameRequestWithCapabilitiesClosed() {

@@ -38,3 +38,38 @@ export function readNativePushConfig(environment: Record<string, string | undefi
     return { environment: apnsEnvironment as NativePushConfig['environment'], topic, teamId, keyId, privateKey, tokenKey, tokenKeyId, eventTtlSeconds }
   } catch { throw new Error('Native push enabled configuration is incomplete or invalid') }
 }
+
+/** Android is independently enabled: no APNs credentials are required. */
+export interface GetuiPushConfig {
+  appId: string
+  appKey: string
+  masterSecret: string
+  environment: 'production'
+  topic: string
+  tokenKey: Buffer
+  tokenKeyId: string
+  eventTtlSeconds: number
+
+}
+export function readGetuiPushConfig(environment: Record<string, string | undefined>): GetuiPushConfig | null {
+  const enabled = environment.MBOX_GETUI_ENABLED?.trim()
+  if (enabled === undefined || enabled === '' || enabled === 'false') return null
+  if (enabled !== 'true') throw new Error('MBOX_GETUI_ENABLED invalid')
+  try {
+    const appId = environment.MBOX_GETUI_APP_ID?.trim() ?? ''
+    const appKey = environment.MBOX_GETUI_APP_KEY?.trim() ?? ''
+    const path = environment.MBOX_GETUI_MASTER_SECRET_FILE?.trim() ?? ''
+    const encoded = environment.MBOX_NATIVE_PUSH_TOKEN_KEY_BASE64?.trim() ?? ''
+    const tokenKey = Buffer.from(encoded, 'base64')
+    const tokenKeyId = environment.MBOX_NATIVE_PUSH_TOKEN_KEY_ID?.trim() ?? ''
+    const eventTtlSeconds = Number(environment.MBOX_NATIVE_PUSH_EVENT_TTL_SECONDS ?? '300')
+    if (!/^[A-Za-z0-9_-]{3,128}$/.test(appId) || !/^[A-Za-z0-9_-]{3,128}$/.test(appKey) || !isAbsolute(path)
+      || tokenKey.length !== 32 || tokenKey.toString('base64') !== encoded || !/^[A-Za-z0-9_.-]{1,64}$/.test(tokenKeyId)
+      || !Number.isInteger(eventTtlSeconds) || eventTtlSeconds < 1 || eventTtlSeconds > 900) throw new Error('invalid')
+    const stat = statSync(path)
+    if (!stat.isFile() || stat.size > 1024 || (stat.mode & 0o037) !== 0 || ![0, process.getuid?.() ?? stat.uid].includes(stat.uid)) throw new Error('unsafe key file')
+    const masterSecret = readFileSync(path, 'utf8').trim()
+    if (!/^[A-Za-z0-9_-]{3,128}$/.test(masterSecret)) throw new Error('invalid secret')
+    return { appId, appKey, masterSecret, environment: 'production', topic: appId, tokenKey, tokenKeyId, eventTtlSeconds }
+  } catch { throw new Error('Getui push enabled configuration is incomplete or invalid') }
+}

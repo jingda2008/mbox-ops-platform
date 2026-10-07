@@ -25,7 +25,7 @@ export interface RuntimePreflightReport {
   modes: Record<string, string>
   externalHosts: string[]
   reservationReception: { creationEnabled: boolean; legacyNativeTableBoundCreate: boolean }
-  nativePush: { enabled:boolean; provider:'apns'|null; environment:'sandbox'|'production'|null }
+  nativePush: { enabled:boolean; provider:'apns'|'getui'|null; environment:'sandbox'|'production'|null; android?: {enabled:boolean;provider:'getui'|null} }
   provisioning: { employeePinCount: number; dailyCredentialConfigured: boolean } | null
   databaseIdentity?: {status:'restricted';login:string}
 }
@@ -48,6 +48,7 @@ export async function verifyNormalizedRuntimeConfig(
     config.integrations.printingEndpoint,
     config.integrations.headsetEndpoint,
     config.nativePush ? (config.nativePush.environment==='sandbox'?'https://api.sandbox.push.apple.com':'https://api.push.apple.com') : null,
+    config.getuiPush ? 'https://restapi.getui.com' : null,
   ].filter((value): value is string => Boolean(value?.trim()))
   const hosts = [...new Set(externalUrls.map((value) => new URL(value).hostname))].toSorted()
   if (checkExternal) {
@@ -68,7 +69,7 @@ export async function verifyNormalizedRuntimeConfig(
     modes: { ...config.integrations.modes },
     externalHosts: hosts,
     reservationReception:{creationEnabled:config.reservationReceptionCreateEnabled===true,legacyNativeTableBoundCreate:config.reservationReceptionCreateEnabled!==true},
-    nativePush:{enabled:!!config.nativePush,provider:config.nativePush?'apns':null,environment:config.nativePush?.environment??null},
+    nativePush:{enabled:!!(config.nativePush||config.getuiPush),provider:config.nativePush?'apns':config.getuiPush?'getui':null,environment:config.nativePush?.environment??config.getuiPush?.environment??null,...(config.getuiPush?{android:{enabled:true,provider:'getui' as const}}:{})},
     provisioning: provisioning
       ? {
           employeePinCount: provisioning.employeePins.size,

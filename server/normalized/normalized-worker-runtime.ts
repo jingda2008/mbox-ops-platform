@@ -1,6 +1,7 @@
 import { NativePushWorker } from './native-push-worker.js'
+import { OfficialGetuiAdapter } from './native-push-getui.js'
 import { OfficialApnsAdapter } from './native-push-apns.js'
-import type { NativePushConfig } from './native-push-config.js'
+import type { NativePushConfig, GetuiPushConfig } from './native-push-config.js'
 import { pathToFileURL } from 'node:url'
 import type { AiScheduledExecutionPort } from './ai-capability-center.js'
 import {
@@ -85,6 +86,7 @@ export interface NormalizedWorkerRuntimeOptions {
   transactions: ScopedPostgresTransactionRunner
   aiExecutions: AiScheduledExecutionPort
   nativePush?: NativePushConfig | null
+  getuiPush?: GetuiPushConfig | null
   adapters?: Readonly<NormalizedWorkerAdapters> | null
   wechatLoyaltyNotification?: Readonly<{
     recipients: WechatMiniProgramNotificationRecipientResolver
@@ -139,7 +141,7 @@ export function createNormalizedWorkerRuntime(
   if (adapters !== null) assertAdapters(adapters)
   const transactions = options.transactions
   const coordinator = new NormalizedBackgroundWorkerCoordinator(options.scope, {
-    ...(options.nativePush ? {nativePush:new NativePushWorker(transactions,options.nativePush,options.hashSecret,new OfficialApnsAdapter(options.nativePush))} : {}),
+    ...((options.nativePush||options.getuiPush) ? {nativePush:new NativePushWorker(transactions,options.nativePush??null,options.hashSecret,options.nativePush?new OfficialApnsAdapter(options.nativePush):null,options.getuiPush??null,options.getuiPush?new OfficialGetuiAdapter(options.getuiPush):null)} : {}),
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
@@ -274,7 +276,7 @@ export class NormalizedWorkerHealthTracker {
   private pushSnapshot():Pick<NormalizedWorkerHealthSnapshot,'nativePush'> {
     if(!this.nativePushEnabled)return {}
     const failed=this.lastCycle?.failures.includes('native-push')
-    return {nativePush:{status:failed||this.pushConfigurationFailureAt?'degraded':this.pushAcceptedAt?'healthy':'idle',lastConfigurationFailureAt:this.pushConfigurationFailureAt,lastProviderAcceptedAt:this.pushAcceptedAt,lastErrorCode:failed?'NATIVE_PUSH_WORKER_FAILED':this.pushConfigurationFailureAt?'APNS_CONFIGURATION_REJECTED':null}}
+    return {nativePush:{status:failed||this.pushConfigurationFailureAt?'degraded':this.pushAcceptedAt?'healthy':'idle',lastConfigurationFailureAt:this.pushConfigurationFailureAt,lastProviderAcceptedAt:this.pushAcceptedAt,lastErrorCode:failed?'NATIVE_PUSH_WORKER_FAILED':this.pushConfigurationFailureAt?'NATIVE_PUSH_CONFIGURATION_REJECTED':null}}
   }
 
 }

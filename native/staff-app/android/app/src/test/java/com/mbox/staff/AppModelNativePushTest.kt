@@ -166,6 +166,82 @@ class AppModelNativePushTest {
     }
     private fun idle(model: AppModel) = await("Native push recovery did not finish") { !model.businessRequestInFlight }
 
+    private fun consentForGetuiFixture() {
+        assertTrue(app.getSharedPreferences("getui-employee-consent-v1", 0).edit().clear()
+            .putString("employee", owner.employeeId).putString("session", owner.staffSessionId).commit())
+    }
+
+    @Test fun coldGetuiIntentWaitsForLoginAndServerTargetBeforeItCanStageOrNavigate() {
+        val f = Seed(opened = false)
+        val m = f.model(signedIn = false)
+        consentForGetuiFixture()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        f.wire.target = { request ->
+            entered.countDown(); assertTrue(release.await(5, TimeUnit.SECONDS))
+            response(f.wire.targetData(request.path.split('/')[5]))
+        }
+        try {
+            m.receiveGetuiPayload(JSONObject().put("mbox", payload()).toString(), true)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(f.wire.recorded().isEmpty())
+            assertNull(f.saved().pendingRemoteOpen)
+            identity(m, f.wire.api.login("staff", "1234", false))
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(250))
+            await("Getui target was not queried after login") { entered.count == 0L }
+            assertNull("An unverified intent must not enter durable recovery", f.saved().pendingRemoteOpen)
+            assertNull(m.notificationOpenTarget)
+            release.countDown()
+            await("Verified getui click did not reach current task") { m.notificationOpenTarget?.id == task }
+            assertEquals(delivery, f.saved().pendingRemoteOpen?.deliveryId)
+            assertTrue(f.wire.targetReads() >= 2) // ingress verification and normal recovery each reauthorize
+        } finally { release.countDown() }
+    }
+
+    @Test fun disabledPeriodicChannelDoesNotRetireRealtimeBindingOnResume() {
+        val f = Seed(opened = false)
+        val m = f.model()
+        GetuiPush.createChannel(app)
+        app.getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(
+            android.app.NotificationChannel(ServiceReminders.channel, "Periodic", android.app.NotificationManager.IMPORTANCE_NONE))
+        m.resumeNativePushRecovery()
+        idle(m)
+        assertEquals(f.installation.binding, f.saved().currentBinding)
+        assertEquals(0, f.saved().pendingRevocationCount)
+    }
+
+    @Test fun turningOffRememberLoginRetiresPushAndClearsGetuiConsent() {
+        val f = Seed(opened = false)
+        val m = f.model()
+        consentForGetuiFixture()
+        assertTrue(m.nativePushConsented)
+        m.changeRememberLogin(false)
+        idle(m)
+        assertFalse(m.nativePushConsented)
+        assertNull(f.saved().currentBinding)
+        assertEquals(1, f.saved().pendingRevocationCount)
+    }
+
+    @Test fun oldEmployeeGetuiCallbackCannotStageAfterIdentityChangesDuringTargetRead() {
+        val f = Seed(opened = false)
+        val m = f.model()
+        consentForGetuiFixture()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        f.wire.target = { entered.countDown(); assertTrue(release.await(5, TimeUnit.SECONDS)); response(f.wire.targetData()) }
+        try {
+            m.receiveGetuiPayload(JSONObject().put("mbox", payload()).toString(), true)
+            await("Getui target query did not begin") { entered.count == 0L }
+            identity(m, m.identity!!.copy(employeeId = otherOwner.employeeId, sessionId = otherOwner.staffSessionId))
+            release.countDown()
+            idle(m)
+            assertNull(f.saved().pendingRemoteOpen)
+            assertEquals(0, f.saved().pendingObservationCount)
+            assertNull(m.notificationOpenTarget)
+            assertEquals(0, f.wire.taskReads())
+        } finally { release.countDown() }
+    }
+
     @Test fun explicitClosedTaskRoutePreservesRemoteClickUntilSameSessionRouteReturns() {
         for (restoredRoute in listOf("explicit", "legacy-omitted")) {
             val f = Seed(opened = false)
@@ -801,6 +877,7 @@ class AppModelNativePushTest {
 
     @Before fun prepare() {
         app = RuntimeEnvironment.getApplication()
+        app.getSharedPreferences("getui-employee-consent-v1", 0).edit().clear().commit()
         app.filesDir.listFiles()?.forEach { it.deleteRecursively() }
         app.noBackupFilesDir.listFiles()?.forEach { it.deleteRecursively() }
     }

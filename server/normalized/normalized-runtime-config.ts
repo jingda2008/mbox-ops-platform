@@ -1,4 +1,4 @@
-import { readNativePushConfig, type NativePushConfig } from './native-push-config.js'
+import { readNativePushConfig, readGetuiPushConfig, type GetuiPushConfig, type NativePushConfig } from './native-push-config.js'
 import type {WechatServiceAccountSubscribeConfig} from './wechat-service-account-subscribe.js'
 import { isAbsolute } from 'node:path'
 import type { GuestCheckoutPaymentMode } from './guest-commerce-service-api.js'
@@ -92,6 +92,7 @@ export interface NormalizedRuntimeConfig {
   trustProxyHops: number
   staticDir: string | null
   nativePush?: NativePushConfig | null
+  getuiPush?: GetuiPushConfig | null
   nativeUpdatesDir?: string | null
   startWorkers: boolean
   reservationReceptionCreateEnabled?: boolean
@@ -242,6 +243,8 @@ export function loadNormalizedRuntimeConfig(
 
   let nativePush: NativePushConfig | null = null
   try { nativePush = readNativePushConfig(environment) } catch { errors.push('MBOX_NATIVE_PUSH_CONFIGURATION') }
+  let getuiPush: GetuiPushConfig | null = null
+  try { getuiPush = readGetuiPushConfig(environment) } catch { errors.push('MBOX_GETUI_CONFIGURATION') }
   if (errors.length > 0) throw new NormalizedRuntimeConfigurationError([...new Set(errors)])
   return Object.freeze({
     nodeEnv,
@@ -276,6 +279,7 @@ export function loadNormalizedRuntimeConfig(
     staticDir,
     nativeUpdatesDir,
     nativePush,
+    getuiPush,
     startWorkers,
     reservationReceptionCreateEnabled,
     kitchenBatchBoardEnabled,

@@ -4,11 +4,11 @@ import { StaffAccessRepository } from './staff-access-repository.js'
 import { lockStaffAccessConfiguration } from './staff-access-version.js'
 import { readNativePushTaskTarget } from './operations-query-service.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
-import type { NativePushConfig } from './native-push-config.js'
+import type { NativePushConfig, GetuiPushConfig } from './native-push-config.js'
 import { NativePushProtection, revocationHash } from './native-push-protection.js'
 import { NativePushError, NATIVE_PUSH_PERMISSIONS, nativePushIdentity, type NativePushActor, type NativePushInstallationReceipt, type NativePushInstallationState, type NativePushRegistration } from './native-push-contracts.js'
 
-type Installation = Record<string, unknown> & { id: string; revision: string; status: 'active'|'revoked'|'invalid_token'; employee_id: string; staff_session_id: string; device_access_lease_id: string; device_key_hash: string; expires_at: Date; last_request_key: string; revocation_hash: string; expired: boolean }
+type Installation = Record<string, unknown> & { platform: string; provider: string; id: string; revision: string; status: 'active'|'revoked'|'invalid_token'; employee_id: string; staff_session_id: string; device_access_lease_id: string; device_key_hash: string; expires_at: Date; last_request_key: string; revocation_hash: string; expired: boolean }
 const codec = <T>(): JsonCodec<T> => ({ encode: value => JSON.parse(JSON.stringify(value)) as JsonObject, decode: value => value as T })
 export async function lockNativePushInstallation(tx: ScopedTransaction, id: string) {
   await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('native-push:'||$1::text||':'||$2::text||':'||$3::text,0))", [tx.scope.tenantId, tx.scope.storeId, id])
@@ -47,15 +47,15 @@ async function tombstone(tx: ScopedTransaction, id: string, revision: number, ha
 export class NativePushRepository {
   readonly protection: NativePushProtection | null
   private readonly commands: NormalizedCommandExecutor
-  constructor(readonly transactions: Pick<ScopedPostgresTransactionRunner,'run'>, readonly config: NativePushConfig | null, private readonly hashSecret: string) {
+  constructor(readonly transactions: Pick<ScopedPostgresTransactionRunner,'run'>, readonly config: NativePushConfig | null, private readonly hashSecret: string, readonly getuiConfig: GetuiPushConfig | null = null) {
     this.protection = config ? new NativePushProtection(config.tokenKey, config.tokenKeyId, hashSecret) : null
     this.commands = new NormalizedCommandExecutor(transactions)
   }
   async capabilities(actor: NativePushActor) {
     await this.transactions.run(actor.scope,tx=>authorizeNativePush(tx,actor),{readOnly:true})
-    return { ...nativePushIdentity(actor), enabled: !!this.config, reasonCode: this.config ? null : 'PUSH_DISABLED', platforms: {
+    return { ...nativePushIdentity(actor), enabled: !!(this.config || this.getuiConfig), reasonCode: (this.config || this.getuiConfig) ? null : 'PUSH_DISABLED', platforms: {
       ios: { provider:'apns', configured:!!this.config, environment:this.config?.environment ?? null },
-      android: { provider:null, configured:false, reasonCode:'PROVIDER_NOT_SELECTED' } } }
+      android: { provider:this.getuiConfig?'getui':null, configured:!!this.getuiConfig, reasonCode:this.getuiConfig?null:'PROVIDER_NOT_SELECTED' } } }
   }
   get(actor: NativePushActor,id: string) { return this.transactions.run(actor.scope,async tx=>{
     const device=await authorizeNativePush(tx,actor), row=await installation(tx,id)
@@ -66,21 +66,22 @@ export class NativePushRepository {
     const secretHash=revocationHash(body.revocationSecret)
     const fingerprint=JSON.stringify({id,...nativePushIdentity(actor),device:actor.deviceAccessLeaseId,...body,token:this.tokenFingerprint(body.token),revocationSecret:secretHash})
     return this.commands.execute<NativePushInstallationReceipt>({scope:actor.scope,operationScope:'native.push.register',idempotencyKey:key,requestFingerprint:fingerprint,retainReceipt:true,resultCodec:codec()},async tx=>{
-      const cfg=this.config, protection=this.protection
+      const cfg=body.provider==='apns'&&body.platform==='ios'?this.config:body.provider==='getui'&&body.platform==='android'?this.getuiConfig:null
+      const protection=cfg?new NativePushProtection(cfg.tokenKey,cfg.tokenKeyId,this.hashSecret):null
       if (!cfg || !protection) throw new NativePushError('PUSH_NOT_CONFIGURED',503,true)
       const device=await authorizeNativePush(tx,actor), current=await installation(tx,id)
-      if (current && current.device_key_hash!==device.device_key_hash) throw new NativePushError('PUSH_NOT_FOUND',404)
+      if (current && (current.device_key_hash!==device.device_key_hash || current.platform!==body.platform || current.provider!==body.provider)) throw new NativePushError('PUSH_NOT_FOUND',404)
       if ((current ? Number(current.revision) : 0)!==body.expectedRevision || body.expectedRevision===Number.MAX_SAFE_INTEGER) throw new NativePushError('PUSH_REVISION_CONFLICT',409,true)
       if (current?.revocation_hash===secretHash) throw new NativePushError('PUSH_INVALID_REQUEST',400,true)
       const revision=body.expectedRevision+1, tokenHash=protection.hash(body.token)
       // Release only expired ownership; an active different installation cannot silently steal a token.
-      await tx.query("UPDATE mbox.native_push_installations SET status='revoked',updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND token_hash=$3 AND status='active' AND expires_at<=clock_timestamp()",[actor.scope.tenantId,actor.scope.storeId,tokenHash])
-      const conflict=await tx.query("SELECT id FROM mbox.native_push_installations WHERE tenant_id=$1 AND store_id=$2 AND token_hash=$3 AND provider='apns' AND environment=$4 AND topic=$5 AND status='active' AND id<>$6",[actor.scope.tenantId,actor.scope.storeId,tokenHash,cfg.environment,cfg.topic,id])
+      await tx.query("UPDATE mbox.native_push_installations SET status='revoked',updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND token_hash=$3 AND provider=$4 AND environment=$5 AND topic=$6 AND status='active' AND expires_at<=clock_timestamp()",[actor.scope.tenantId,actor.scope.storeId,tokenHash,body.provider,cfg.environment,cfg.topic])
+      const conflict=await tx.query("SELECT id FROM mbox.native_push_installations WHERE tenant_id=$1 AND store_id=$2 AND token_hash=$3 AND provider=$7 AND environment=$4 AND topic=$5 AND status='active' AND id<>$6",[actor.scope.tenantId,actor.scope.storeId,tokenHash,cfg.environment,cfg.topic,id,body.provider])
       if(conflict.rowCount)throw new NativePushError('PUSH_TOKEN_CONFLICT',409,true)
       await tx.query(`INSERT INTO mbox.native_push_installations(tenant_id,store_id,id,employee_id,staff_session_id,device_access_lease_id,device_key_hash,revision,platform,provider,environment,topic,token_ciphertext,token_key_id,token_hash,revocation_hash,permission,app_version,status,expires_at,last_request_key,event_ttl_seconds)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'ios','apns',$9,$10,$11,$12,$13,$14,$15,$16,'active',$17,$18,$19)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$20,$21,$9,$10,$11,$12,$13,$14,$15,$16,'active',$17,$18,$19)
         ON CONFLICT(tenant_id,store_id,id) DO UPDATE SET employee_id=EXCLUDED.employee_id,staff_session_id=EXCLUDED.staff_session_id,device_access_lease_id=EXCLUDED.device_access_lease_id,revision=EXCLUDED.revision,environment=EXCLUDED.environment,topic=EXCLUDED.topic,token_ciphertext=EXCLUDED.token_ciphertext,token_key_id=EXCLUDED.token_key_id,token_hash=EXCLUDED.token_hash,revocation_hash=EXCLUDED.revocation_hash,permission=EXCLUDED.permission,app_version=EXCLUDED.app_version,status='active',registered_at=clock_timestamp(),expires_at=EXCLUDED.expires_at,last_request_key=EXCLUDED.last_request_key,event_ttl_seconds=EXCLUDED.event_ttl_seconds,updated_at=clock_timestamp()`,
-      [actor.scope.tenantId,actor.scope.storeId,id,actor.employeeId,actor.staffSessionId,actor.deviceAccessLeaseId,device.device_key_hash,revision,cfg.environment,cfg.topic,protection.protect(body.token,actor.scope,id,revision),protection.keyId,tokenHash,secretHash,body.permission,body.appVersion,device.expires_at,key,cfg.eventTtlSeconds])
+      [actor.scope.tenantId,actor.scope.storeId,id,actor.employeeId,actor.staffSessionId,actor.deviceAccessLeaseId,device.device_key_hash,revision,cfg.environment,cfg.topic,protection.protect(body.token,actor.scope,id,revision),protection.keyId,tokenHash,secretHash,body.permission,body.appVersion,device.expires_at,key,cfg.eventTtlSeconds,body.platform,body.provider])
       await this.cancelPending(tx,id)
       const result={...nativePushIdentity(actor),requestKey:key,installation:state((await installation(tx,id))!,actor)}
       return this.outcome(actor,id,'registered',result)

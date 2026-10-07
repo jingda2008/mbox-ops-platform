@@ -10,22 +10,23 @@ import { ScopedPostgresTransactionRunner,type PostgresPool } from './transaction
 import type { NativePushActor,NativePushRegistration } from './native-push-contracts.js'
 import { NativePushWorker } from './native-push-worker.js'
 import type { NativePushSender,NativePushSendRequest } from './native-push-apns.js'
-import type { NativePushConfig } from './native-push-config.js'
+import type { NativePushConfig, GetuiPushConfig } from './native-push-config.js'
 const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeDatabase=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
 const suite=database&&runtimeDatabase?describe:describe.skip
-suite('native push scoped installation and irreversible revocation contract',()=>{
+suite.each(['apns','getui'] as const)('native push %s scoped installation and irreversible revocation contract',(provider)=>{
  const tenant=randomUUID(),store=randomUUID(),employee=randomUUID(),otherEmployee=randomUUID(),role=randomUUID(),credential=randomUUID(),lease=randomUUID(),otherLease=randomUUID(),staff=randomUUID(),otherStaff=randomUUID(),foreignStaff=randomUUID()
  const scope={tenantId:tenant,storeId:store},deviceHash='d'.repeat(64),hashSecret='s'.repeat(64)
  let owner:Pool,runtime:Pool,tx:ScopedPostgresTransactionRunner,repo:NativePushRepository,app:FastifyInstance,disabled:FastifyInstance
  const actor:NativePushActor={scope,employeeId:employee,staffSessionId:staff,deviceAccessLeaseId:lease,businessDate:'2026-10-05'}
  const cfg:NativePushConfig={environment:'sandbox',topic:'com.mbox.staff',teamId:'ABCDEFGHIJ',keyId:'KLMNOPQRST',privateKey:'test transport only',tokenKey:randomBytes(32),tokenKeyId:'test-1',eventTtlSeconds:300}
- const body=(revision=0):NativePushRegistration=>({expectedRevision:revision,platform:'ios',provider:'apns',token:randomBytes(32).toString('hex'),permission:'authorized',appVersion:'1.0',revocationSecret:randomBytes(32).toString('base64url')})
+ const getuiCfg:GetuiPushConfig={appId:'test-app-id',appKey:'test-app-key',masterSecret:'test-master-secret',environment:'production',topic:'test-app-id',tokenKey:cfg.tokenKey,tokenKeyId:cfg.tokenKeyId,eventTtlSeconds:300}
+ const body=(revision=0):NativePushRegistration=>({expectedRevision:revision,platform:provider==='apns'?'ios':'android',provider,token:randomBytes(provider==='apns'?32:16).toString('hex'),permission:'authorized',appVersion:'1.0',revocationSecret:randomBytes(32).toString('base64url')})
  const headers=(who:NativePushActor=actor)=>({'x-mbox-staff-employee-id':who.employeeId,'x-mbox-staff-session-id':who.staffSessionId,'idempotency-key':'native-push-'+randomUUID()})
  const url=(id:string)=>'/api/native/push/installations/'+id
  const put=(id:string,payload=body(),head=headers(),target=app)=>target.inject({method:'PUT',url:url(id),payload,headers:head})
  const revoke=(id:string,revision:number,revocationSecret:string,ip='127.0.0.1')=>app.inject({method:'POST',url:url(id)+'/revoke-capability',payload:{revision,revocationSecret},remoteAddress:ip})
  beforeAll(async()=>{
-  await runNormalizedMigrations(database!);owner=new Pool({connectionString:database});runtime=new Pool({connectionString:runtimeDatabase});tx=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);repo=new NativePushRepository(tx,cfg,hashSecret)
+  await runNormalizedMigrations(database!);owner=new Pool({connectionString:database});runtime=new Pool({connectionString:runtimeDatabase});tx=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool);repo=new NativePushRepository(tx,cfg,hashSecret,getuiCfg)
   await owner.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Native push test')",[tenant,'push-'+tenant]);await owner.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'push','Push')",[store,tenant])
   await owner.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$3,$4,'first','First'),($2,$3,$4,'second','Second')",[employee,otherEmployee,tenant,store])
   await owner.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'PUSH','Push')",[role,tenant,store]);await owner.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$5,'2020-01-01'),($1,$2,$4,$5,'2020-01-01')",[tenant,store,employee,otherEmployee,role])
@@ -38,6 +39,42 @@ suite('native push scoped installation and irreversible revocation contract',()=
   disabled=Fastify();await disabled.register(nativePushApiPlugin,{prefix:'/api/native/push',repository:new NativePushRepository(tx,null,hashSecret),scope,resolveContext:resolve})
  })
  afterAll(async()=>{await app?.close();await disabled?.close();await runtime?.end();await owner?.end()})
+
+ it('advertises Android-only configuration without APNs and rejects invalid CID and platform pairs',async()=>{
+  const repository=new NativePushRepository(tx,null,hashSecret,getuiCfg)
+  expect(await repository.capabilities(actor)).toMatchObject({enabled:true,reasonCode:null,platforms:{ios:{provider:'apns',configured:false,environment:null},android:{provider:'getui',configured:true,reasonCode:null}}})
+  for(const token of ['A'.repeat(32),'a'.repeat(31),'a'.repeat(33),'x'.repeat(32),' '+ 'a'.repeat(32)]) {
+   const response=await put(randomUUID(),{...body(),platform:'android',provider:'getui',token})
+   expect(response.statusCode,response.body).toBe(400)
+  }
+  expect((await put(randomUUID(),{...body(),platform:'android',provider:'apns'})).json().error.code).toBe('PUSH_PROVIDER_UNSUPPORTED')
+  expect((await put(randomUUID(),{...body(),platform:'android',provider:'getui',token:'a'.repeat(32),permission:'provisional'})).statusCode).toBe(400)
+ })
+ it('keeps platform/provider immutable across a valid next revision in repository and database',async()=>{
+  const id=randomUUID();expect((await put(id)).statusCode).toBe(201)
+  const other=provider==='apns'?{platform:'android' as const,provider:'getui' as const,token:'b'.repeat(32)}:{platform:'ios' as const,provider:'apns' as const,token:'b'.repeat(64)}
+  expect((await put(id,{...body(1),...other})).json().error.code).toBe('PUSH_NOT_FOUND')
+  await expect(tx.run(scope,t=>t.query("UPDATE mbox.native_push_installations SET revision=revision+1,platform=$2,provider=$3,environment='production',revocation_hash=$4 WHERE id=$1",[id,other.platform,other.provider,'f'.repeat(64)]))).rejects.toThrow('provider identity is immutable')
+ })
+ it('projects one source event to both providers exactly once with original ownership and token isolation',async()=>{
+  const work=await pushWork(),otherId=randomUUID(),other=provider==='apns'?{platform:'android' as const,provider:'getui' as const,token:work.payload.token.slice(0,32)}:{platform:'ios' as const,provider:'apns' as const,token:work.payload.token}
+  const otherPayload={...body(),...other}
+  expect((await put(otherId,otherPayload)).statusCode).toBe(201)
+  // A fresh event occurs after both registrations. The earlier event must not go to the late binding.
+  const event=randomUUID()
+  await owner.query("INSERT INTO mbox.service_task_events(id,tenant_id,store_id,service_task_id,event_type,to_status,actor_type,actor_employee_id) VALUES($1,$2,$3,$4,'task.reminded','pending','employee',$5)",[event,tenant,store,work.task,employee])
+  const sent:{provider:string;token:string}[]=[]
+  const sender=(p:string):NativePushSender=>({send:async r=>{sent.push({provider:p,token:r.token});return {status:'provider_accepted'}}})
+  const mixed=new NativePushWorker(tx,cfg,hashSecret,sender('apns'),getuiCfg,sender('getui'))
+  expect((await mixed.runBatch(scope,'mixed')).accepted).toBe(3)
+  expect(sent.filter(s=>s.provider===provider)).toHaveLength(2)
+  expect(sent.filter(s=>s.provider!==provider)).toEqual([{provider:other.provider,token:other.token}])
+  expect((await mixed.runBatch(scope,'mixed-again')).accepted).toBe(0)
+  const row=(await deliveries(otherId))[0]
+  expect((await app.inject({url:'/api/native/push/deliveries/'+row.id+'/target',headers:headers({...actor,employeeId:otherEmployee,staffSessionId:otherStaff})})).statusCode).toBe(404)
+  await revoke(otherId,1,otherPayload.revocationSecret)
+  expect((await app.inject({url:'/api/native/push/deliveries/'+row.id+'/target',headers:headers()})).statusCode).toBe(404)
+ })
  it('uses a real restricted LOGIN and tenant/store RLS including unknown scope',async()=>{
   const user=(await runtime.query('SELECT rolcanlogin,rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];expect(user).toEqual({rolcanlogin:true,rolsuper:false,rolbypassrls:false})
   const installation=randomUUID();expect((await put(installation)).statusCode).toBe(201)
@@ -60,7 +97,7 @@ suite('native push scoped installation and irreversible revocation contract',()=
   const again=await put(id,payload,head);expect(again.json().meta.replayed).toBe(true);expect(again.json().data).toEqual(first.json().data)
   expect((await put(id,{...payload,appVersion:'different'},head)).json().error).toMatchObject({code:'PUSH_RECEIPT_CONFLICT'});expect((await put(id,{...payload,appVersion:'different'},head)).json().error.commitDisposition).toBeUndefined()
   const row=(await owner.query('SELECT token_ciphertext,token_key_id,revocation_hash FROM mbox.native_push_installations WHERE id=$1',[id])).rows[0]
-  expect(row.token_ciphertext.includes(Buffer.from(payload.token))).toBe(false);expect(row.revocation_hash).toBe(revocationHash(payload.revocationSecret));expect(repo.protection!.reveal(row.token_ciphertext,row.token_key_id,scope,id,1)).toBe(payload.token)
+  expect(row.token_ciphertext.includes(Buffer.from(payload.token))).toBe(false);expect(row.revocation_hash).toBe(revocationHash(payload.revocationSecret));expect(new NativePushProtection(cfg.tokenKey,cfg.tokenKeyId,hashSecret).reveal(row.token_ciphertext,row.token_key_id,scope,id,1)).toBe(payload.token)
   const receipts=await owner.query('SELECT request_sha256,response_snapshot,expires_at::text FROM mbox.idempotency_records WHERE idempotency_key=$1',[head['idempotency-key']]);expect(receipts.rows[0].expires_at).toBe('infinity');expect(JSON.stringify(receipts.rows)).not.toContain(payload.token);expect(JSON.stringify(receipts.rows)).not.toContain(payload.revocationSecret)
   const audit=await owner.query('SELECT * FROM mbox.audit_events WHERE object_id=$1',[id]);expect(JSON.stringify(audit.rows)).not.toContain(payload.token);expect(JSON.stringify(audit.rows)).not.toContain(payload.revocationSecret)
  })
@@ -140,7 +177,7 @@ suite('native push scoped installation and irreversible revocation contract',()=
   return {installationId,payload,task,session,event}
  }
  const deliveries=async(id:string)=>(await owner.query('SELECT * FROM mbox.native_push_deliveries WHERE installation_id=$1',[id])).rows
- const worker=(sender:NativePushSender)=>new NativePushWorker(tx,cfg,hashSecret,sender)
+ const worker=(sender:NativePushSender,overrides:Partial<Pick<NativePushConfig,'eventTtlSeconds'|'tokenKey'|'tokenKeyId'>>={})=>provider==='apns'?new NativePushWorker(tx,{...cfg,...overrides},hashSecret,sender):new NativePushWorker(tx,null,hashSecret,null,{...getuiCfg,...overrides},sender)
  it('captures only future source events in the same transaction, with no disabled-installation backlog',async()=>{
   const absent=await pushWork('guest.water',false);expect((await owner.query('SELECT * FROM mbox.native_push_events WHERE source_event_id=$1',[absent.event])).rowCount).toBe(0)
   const work=await pushWork(),event=(await owner.query('SELECT * FROM mbox.native_push_events WHERE source_event_id=$1',[work.event])).rows[0];expect(event.expires_at.getTime()-event.occurred_at.getTime()).toBe(300_000)
@@ -196,8 +233,8 @@ suite('native push scoped installation and irreversible revocation contract',()=
   expect(takeover.statusCode,takeover.body).toBe(201);expect(rotation.statusCode,rotation.body).toBe(200)
  })
  it('expiry before transmission and unreadable old encryption keys close the binding without sending',async()=>{
-  const expired=await pushWork();let calls=0;const w=new NativePushWorker(tx,{...cfg,eventTtlSeconds:1},hashSecret,{send:async()=>{calls++;return {status:'provider_accepted'}}});await w['project'](scope);await new Promise(resolve=>setTimeout(resolve,1100));await w.runBatch(scope,'test:ttl');expect(calls).toBe(0);expect((await deliveries(expired.installationId))[0].status).toBe('expired')
-  const oldKey=await pushWork(),rotated=new NativePushWorker(tx,{...cfg,tokenKey:randomBytes(32),tokenKeyId:'rotated'},hashSecret,{send:async()=>{calls++;return {status:'provider_accepted'}}});await rotated.runBatch(scope,'test:key');expect(calls).toBe(0);expect((await owner.query('SELECT status FROM mbox.native_push_installations WHERE id=$1',[oldKey.installationId])).rows[0].status).toBe('revoked');expect((await deliveries(oldKey.installationId))[0].failure_code).toBe('TOKEN_KEY_UNAVAILABLE')
+  const expired=await pushWork();let calls=0;const w=worker({send:async()=>{calls++;return {status:'provider_accepted'}}},{eventTtlSeconds:1});await w['project'](scope);await new Promise(resolve=>setTimeout(resolve,1100));await w.runBatch(scope,'test:ttl');expect(calls).toBe(0);expect((await deliveries(expired.installationId))[0].status).toBe('expired')
+  const oldKey=await pushWork(),rotated=worker({send:async()=>{calls++;return {status:'provider_accepted'}}},{tokenKey:randomBytes(32),tokenKeyId:'rotated'});await rotated.runBatch(scope,'test:key');expect(calls).toBe(0);expect((await owner.query('SELECT status FROM mbox.native_push_installations WHERE id=$1',[oldKey.installationId])).rows[0].status).toBe('revoked');expect((await deliveries(oldKey.installationId))[0].failure_code).toBe('TOKEN_KEY_UNAVAILABLE')
  })
 
  it('persists an APNs configuration rejection while returning a nonfatal independent channel failure count',async()=>{

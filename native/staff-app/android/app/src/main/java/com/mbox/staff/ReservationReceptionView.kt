@@ -35,8 +35,7 @@ fun ReservationReceptionView(m: AppModel, reservationId: String, token: Long, cl
     val detail = m.receptionDetail?.takeIf { viewCurrent() && it.reservation.id == reservationId }
     val board = m.receptionSessions?.takeIf { viewCurrent() && it.reservationId == reservationId }
     val canRead = viewCurrent() && !m.businessRequestInFlight && m.identity?.allows("reservation.view") == true
-    val supported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
-        m.reservationCapabilities?.opt("receptionSeatV1") == true
+    val supported = m.receptionSeatingSupported
     val canEdit = viewCurrent() && !m.businessRequestInFlight && m.livePending == null && m.liveOrderPending == null
     fun loadDetail() {
         if (!viewCurrent()) return
@@ -119,7 +118,7 @@ fun ReservationReceptionView(m: AppModel, reservationId: String, token: Long, cl
                         } else {
                             Text("核对整组实际桌位", style = MaterialTheme.typography.titleMedium)
                             Text("在桌台页面完成开台后，选择本组全部已开桌次，一次关联 1—20 桌；不能分批追加。", fontSize = 12.sp)
-                            if (!supported) Text("后台尚未启用新版到店接待，请联系管理员升级后刷新。", color = MaterialTheme.colorScheme.error)
+                            if (!supported) Text("门店暂未开放确认入座，请刷新或联系管理员。", color = MaterialTheme.colorScheme.error)
                             val hasPermission = m.identity?.allows("reservation.manage") == true && m.identity?.allows("table.open") == true
                             if (!hasPermission) Text("确认入座需要预约管理和开台权限，请由有权限的员工处理。", fontSize = 12.sp)
                             SecondaryAction(onClick = ::loadSessions,

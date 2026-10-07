@@ -47,10 +47,17 @@ jobs:
         run: |
           mkdir -p ci-reports
           python3 ../scripts/test-prepare-update.py -v 2>&1 | tee ci-reports/publisher-tests.log
-      - name: Test, lint and assemble the debug app
+      - name: Test, lint and assemble without the optional push SDK
         # Deliberately no release tasks or signing credentials in pull-request CI.
         run: |
-          ./gradlew --no-daemon --console=plain --stacktrace --max-workers=2 --continue testDebugUnitTest lintDebug assembleDebug 2>&1 | tee ci-reports/gradle-checks.log
+          ./gradlew --no-daemon --console=plain --stacktrace --max-workers=2 --continue -PgetuiSdk=false testDebugUnitTest lintDebug assembleDebug 2>&1 | tee ci-reports/gradle-no-getui.log
+          mkdir -p ci-reports/no-getui
+          cp -R app/build/test-results/testDebugUnitTest ci-reports/no-getui/
+          cp app/build/reports/lint-results-debug.* ci-reports/no-getui/
+      - name: Verify the actual optional push SDK without platform credentials
+        # Empty App ID keeps SDK runtime disabled; compile the real adapter and manifest.
+        run: |
+          ./gradlew --no-daemon --console=plain --stacktrace --max-workers=2 --continue -PgetuiSdk=true testDebugUnitTest lintDebug assembleDebug 2>&1 | tee ci-reports/gradle-getui.log
       - name: Preserve Android test and lint evidence
         if: always()
         uses: actions/upload-artifact@v4

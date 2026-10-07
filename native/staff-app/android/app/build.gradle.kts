@@ -8,7 +8,7 @@ val getuiConfigured = getuiSdk && getuiAppId.isNotEmpty()
 android {
  namespace = "com.mbox.staff"
  compileSdk = 36
- defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("10").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.5").get() }
+ defaultConfig { applicationId = "com.mbox.staff.nativeapp"; minSdk = 26; targetSdk = 36; versionCode = providers.gradleProperty("nativeVersionCode").orElse("12").get().toInt(); versionName = providers.gradleProperty("nativeVersionName").orElse("0.4.0-rc.7").get() }
  sourceSets.getByName("main").java.srcDir(if (getuiSdk) "src/getui/java" else "src/noGetui/java")
  if (getuiSdk) listOf("debug", "release").forEach { sourceSets.getByName(it).manifest.srcFile("src/getui/AndroidManifest.xml") }
  sourceSets.getByName("test").resources.srcDir("../../shared/fixtures")

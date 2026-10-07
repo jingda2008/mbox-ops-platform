@@ -55,8 +55,7 @@ fun ReservationCreateView(m: AppModel, token: Long, close: () -> Unit) {
             m.closeReceptionView(token)
         }
     }
-    val supported = m.reservationCapabilities?.opt("admissionCreateV1") == true &&
-        m.reservationCapabilities?.opt("receptionSeatV1") == true
+    val supported = m.receptionCreationSupported
     val editable = viewCurrent() && !m.businessRequestInFlight && m.livePending == null && m.liveOrderPending == null
     val options = m.receptionOptions?.takeIf { viewCurrent() && it.arrival == draft.arrival && it.end == draft.end }
     fun loadOptions() {
@@ -108,7 +107,7 @@ fun ReservationCreateView(m: AppModel, token: Long, close: () -> Unit) {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("先登记人数、时段和位置偏好；到店后核对实际桌位。预约不预占具体桌台。", fontSize = 12.sp)
                     if (!supported) {
-                        Text("后台尚未启用新版预约，请联系管理员升级后刷新。", color = MaterialTheme.colorScheme.error)
+                        Text("门店暂未开放新预约登记，请刷新或联系管理员。", color = MaterialTheme.colorScheme.error)
                         Text("当前不能新建预约；原有未决请求仍可在预约列表核对。", fontSize = 12.sp)
                     }
                     OutlinedTextField(draft.name, { draft = draft.copy(name = it) },
@@ -138,6 +137,7 @@ fun ReservationCreateView(m: AppModel, token: Long, close: () -> Unit) {
                         Text("提交前须读取与所选时段一致的预约政策和容量。", fontSize = 12.sp)
                     } else {
                         Panel {
+                            if (!options.creationEnabled) Text("新预约登记已暂停，不能提交；填写内容仍保留。", color = MaterialTheme.colorScheme.error)
                             Text("可预约 ${options.remainingGuests} 人 / 总容量 ${options.totalGuests} 人",
                                 style = MaterialTheme.typography.titleMedium)
                             Text("此时段已预约 ${options.committedGuests} 人", fontSize = 12.sp)

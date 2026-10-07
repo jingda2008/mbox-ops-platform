@@ -45,6 +45,9 @@ private fun receptionKeys(source: JSONObject, allowed: Set<String>) { require(so
 
 class ReservationReceptionOptions(val source: JSONObject) {
     init { receptionProtocol(source); receptionFalse(source, "physicalTablesPreassigned") }
+    // A capability read can race with the store switching new admissions off.
+    // Missing or non-boolean flags never authorize a new intent.
+    val creationEnabled = source.opt("creationEnabled") == true
     val arrival: Instant = serverInstant(receptionText(source, "arrivalAt"))
     val end: Instant = serverInstant(receptionText(source, "expectedEndAt"))
     private val policy = source.getJSONObject("policy")
@@ -77,6 +80,7 @@ data class ReservationReceptionDraft(
 ) {
     fun command(actor: StaffIdentity, options: ReservationReceptionOptions, now: Instant = Instant.now()): LiveCommand {
         require(actor.allows("reservation.manage")) { "当前员工无预约登记权限" }
+        require(options.creationEnabled) { "门店已暂停新预约登记，请刷新后核对" }
         require(arrival.isAfter(now) && end.isAfter(arrival) && options.arrival == arrival && options.end == end) { "请按当前到店与结束时间重新读取接待名额" }
         require(!arrival.isAfter(now.plusSeconds(options.maxAdvanceDays.toLong() * 86400))) { "最多可提前${options.maxAdvanceDays}天预约，请重新核对到店时间" }
         require(people <= options.remainingGuests) { "当前时段接待名额不足，请重新读取后核对" }

@@ -287,7 +287,7 @@ class ReservationReceptionRecoveryTest {
     }
 
     @Test fun onlyExplicitRollbackDispositionCanReleaseAnUnconfirmedReceptionIntent() {
-        for (code in listOf("RESERVATION_POLICY_CHANGED", "RESERVATION_CAPACITY_UNAVAILABLE", "RESERVATION_RECEPTION_CHANGED", "RESERVATION_RECEPTION_REQUIRED")) {
+        for (code in listOf("RESERVATION_RECEPTION_CREATE_DISABLED", "RESERVATION_POLICY_CHANGED", "RESERVATION_CAPACITY_UNAVAILABLE", "RESERVATION_RECEPTION_CHANGED", "RESERVATION_RECEPTION_REQUIRED")) {
             assertTrue(reservationReceptionDefinitivelyRejected(StaffAPIError(409, code, "changed", "not_committed")))
             assertFalse(reservationReceptionDefinitivelyRejected(StaffAPIError(409, code, "unknown")))
         }

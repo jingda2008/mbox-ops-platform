@@ -25,7 +25,7 @@ internal object ReceptionFixtures {
         setOf("reservation.view", "reservation.manage", "table.open"), emptySet())
 
     fun optionsJson() = JSONObject().put("protocol", 1).put("arrivalAt", arrival.toString())
-        .put("expectedEndAt", end.toString()).put("physicalTablesPreassigned", false)
+        .put("expectedEndAt", end.toString()).put("physicalTablesPreassigned", false).put("creationEnabled", true)
         .put("policy", JSONObject().put("version", 7).put("maxAdvanceDays", 30)
             .put("defaultDurationMinutes", 120).put("arrivalGraceMinutes", 10))
         .put("capacity", JSONObject().put("totalGuests", 40).put("committedGuests", 12))
@@ -80,6 +80,18 @@ internal object ReceptionFixtures {
 
 class ReservationReceptionTest {
     private val f = ReceptionFixtures
+
+    @Test fun creationOptionsMustExplicitlyEnableNewIntents() {
+        for (value in listOf(false, "true", 1, JSONObject.NULL)) {
+            val options = ReservationReceptionOptions(f.optionsJson().put("creationEnabled", value))
+            assertThrows(Exception::class.java) { f.draft().command(f.actor, options, f.now) }
+        }
+        val absent = f.optionsJson().also { it.remove("creationEnabled") }
+        assertThrows(Exception::class.java) { f.draft().command(f.actor, ReservationReceptionOptions(absent), f.now) }
+        val body = JSONObject(f.create().steps.single().body)
+        assertFalse(body.has("tableIds"))
+        assertFalse(body.has("tableSessionId"))
+    }
 
     @Test fun admissionCreateContainsNoTableOrCustomerAssignmentAndKeepsOriginalIntent() {
         val command = f.create()

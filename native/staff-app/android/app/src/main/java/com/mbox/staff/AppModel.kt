@@ -1657,10 +1657,13 @@ class AppModel @JvmOverloads constructor(
     private val receptionReady get() = live && !busy && !heartbeatBusy && !liveStorageDamaged &&
         livePending == null && liveOrderPending == null && identity?.allows("reservation.manage") == true &&
         receptionActor == identity?.employeeId &&
-        identity?.onlineLeaseUntil?.let(::assignmentDate)?.isAfter(java.time.Instant.now()) == true &&
-        reservationCapabilities?.opt("admissionCreateV1") == true && reservationCapabilities?.opt("receptionSeatV1") == true
-    val canCreateReception get() = receptionReady && receptionTarget == "create" && receptionOptions != null && freshReception(receptionOptionsUpdated)
-    val canSeatReception get() = receptionReady && identity?.allows("table.open") == true &&
+        identity?.onlineLeaseUntil?.let(::assignmentDate)?.isAfter(java.time.Instant.now()) == true
+    val receptionCreationSupported get() = reservationCapabilities?.opt("admissionCreateV1") == true &&
+        reservationCapabilities?.opt("receptionSeatV1") == true
+    val receptionSeatingSupported get() = reservationCapabilities?.opt("receptionSeatV1") == true
+    val canCreateReception get() = receptionReady && receptionCreationSupported && receptionTarget == "create" &&
+        receptionOptions?.creationEnabled == true && freshReception(receptionOptionsUpdated)
+    val canSeatReception get() = receptionReady && receptionSeatingSupported && identity?.allows("table.open") == true &&
         receptionSessions?.status == "arrived" && receptionTarget == receptionSessions?.reservationId &&
         receptionDetail?.reservation?.id == receptionSessions?.reservationId &&
         freshReception(receptionSessionsUpdated)
@@ -4177,9 +4180,10 @@ class AppModel @JvmOverloads constructor(
         return actor
     }
 
-    private fun requireReceptionCapabilities() {
-        require(reservationCapabilities?.opt("admissionCreateV1") == true && reservationCapabilities?.opt("receptionSeatV1") == true) {
-            "后台尚未启用新版预约接待，请更新后台；原未决请求仍可核对"
+    private fun requireReceptionCapabilities(creating: Boolean) {
+        require(if (creating) receptionCreationSupported else receptionSeatingSupported) {
+            if (creating) "门店暂未开放新预约登记；已有预约和原未决请求仍可核对"
+            else "门店暂未开放确认入座，请刷新或联系管理员；原未决请求仍可核对"
         }
     }
 
@@ -4200,12 +4204,13 @@ class AppModel @JvmOverloads constructor(
             try {
                 val actor = refreshReceptionIdentity(token)
                 require(actor.allows("reservation.manage")) { "当前员工没有预约管理权限" }
-                requireReceptionCapabilities()
+                requireReceptionCapabilities(creating = true)
                 val options = withContext(Dispatchers.IO) { ReservationReceptionOptions(api.data(ReservationReceptionOptions.path(arrival, end))) }
                 requireReceptionRead(token)
                 require(options.arrival == arrival && options.end == end) { "预约时段已变化，请重新读取" }
                 receptionOptions = options; receptionOptionsUpdated = java.time.Instant.now()
-                receptionState = "名额已读取；最终名额以提交时核验为准"
+                receptionState = if (options.creationEnabled) "名额已读取；最终名额以提交时核验为准"
+                else "门店已暂停新预约登记；填写内容保留，已有预约仍可核对"
             } catch(e: CancellationException) { throw e
             } catch(e: Exception) { if (receptionReadCurrent(token)) { receptionState = e.message ?: "名额读取失败"; handleLiveError(e) } }
             finally { busy = false }
@@ -4234,7 +4239,7 @@ class AppModel @JvmOverloads constructor(
             try {
                 val actor = refreshReceptionIdentity(token)
                 require(actor.allows("reservation.manage") && actor.allows("table.open")) { "请由具有预约管理和开台权限的员工核对" }
-                requireReceptionCapabilities()
+                requireReceptionCapabilities(creating = false)
                 val detail = withContext(Dispatchers.IO) { ReservationReceptionDetail(api.data(ReservationReceptionDetail.path(id))) }
                 requireReceptionRead(token)
                 val board = withContext(Dispatchers.IO) { ReservationReceptionSessions(api.data(ReservationReceptionSessions.path(id))) }

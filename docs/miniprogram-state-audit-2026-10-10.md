@@ -107,3 +107,9 @@
 | 交付边界 | 本地未提交工作树；无本轮新合并/部署/上传/审核发布/真机操作 | `repair-source-identity.json`记录基线SHA和变更文件/日志摘要；线上和已上传rc252仍是此前版本 |
 
 以上日志均位于工作区父目录 `outputs/miniprogram-state-audit-20261010/`。首轮审计的`reproductions.json`和`source-identity.json`保留为历史证据；原`reproduce.cjs`断言错误行为，不应用于修复验收。后续回归运行仓库内`node --test scripts/miniprogram-state-recovery.test.cjs`或`npm run release:miniprogram:test`。
+
+## 发布交付更新（2026-10-11 01:15 CST）
+
+上述00:08本地状态作为历史保留。MINI-AUDIT-20261010-01—08已随PR #355合并，固定版本`v1.0.0-rc.253`/`18eb81b7491929a670d7aa04bf530ef8b1c4790a`完成标准后台部署和微信开发版上传；PR/主线/标签CI及Release全部成功。线上schema265、readiness/workers、四个公网及Chromium入口通过，微信上传回执与上传前后源码完整性核对通过。
+
+这关闭的是源码修复、自动化检查与本次指定交付步骤；微信提审/正式发布、支付宝上传、原生多尺寸和真机/W20现场验收仍未执行。完整身份、备份/回滚、首次SSH超时重试及合并规则风险见[rc253交付记录](release-1.0.0-rc.253.md)。新增86项覆盖8类问题，不把68个修前失败数当作68类缺陷，不推断历史资金影响。

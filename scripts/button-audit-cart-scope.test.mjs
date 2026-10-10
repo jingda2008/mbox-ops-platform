@@ -17,7 +17,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     })
     const {createTableRequestGuard}=loadMiniModule(new URL(`../${platform}/utils/table-request-scope.js`,import.meta.url))
     const guard=createTableRequestGuard(()=>scope);guard.begin(scope)
-    page.data=structuredClone(page.data);page.setData=value=>Object.assign(page.data,value)
+    page.data={...structuredClone(page.data),orderReady:true};page.setData=value=>Object.assign(page.data,value)
     Object.assign(page.data,{cart:[{productId:'A-drink'}],cartGeneration:1,cartVersion:2,cartSyncing:false,clearingCart:false,busy:false,checkoutLocked:false,cartWritesFrozen:false})
     page.currentTableRequest=()=>guard.current();page.isCurrentTableRequest=value=>guard.isCurrent(value)
     page.ensureTableRequestGuard=()=>guard;page.updateCart=()=>{}

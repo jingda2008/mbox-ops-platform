@@ -130,20 +130,13 @@ Page({
     const execution = abandonGuestCheckout(record.orderPublicId, record.idempotencyKey)
       .then((result) => {
         if (result && result.operationalState === 'cancelled') {
-          const stored = runtime.getStorageSync(PENDING_PAYMENT_KEY)
-          if (stored && stored.orderPublicId === record.orderPublicId
-            && stored.tableScope === record.tableScope) runtime.removeStorageSync(PENDING_PAYMENT_KEY)
-          const persisted = runtime.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-          if (persisted && persisted.idempotencyKey === record.idempotencyKey) {
-            runtime.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-          }
+          this.clearCompletedGuestPaymentAbandonment(record)
         }
         return result || null
       })
       .catch((error) => {
         if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
-          runtime.removeStorageSync(PENDING_PAYMENT_KEY)
-          runtime.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+          this.clearCompletedGuestPaymentAbandonment(record)
         }
         return null
       })
@@ -154,6 +147,17 @@ Page({
         this._guestPaymentAbandonmentInFlight = null
         this._guestPaymentAbandonmentPromise = null
       }
+    }
+  },
+
+  clearCompletedGuestPaymentAbandonment(record) {
+    const stored = runtime.getStorageSync(PENDING_PAYMENT_KEY)
+    if (stored && stored.orderPublicId === record.orderPublicId
+      && stored.tableScope === record.tableScope) runtime.removeStorageSync(PENDING_PAYMENT_KEY)
+    const persisted = runtime.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
+    if (persisted && persisted.idempotencyKey === record.idempotencyKey
+      && persisted.orderPublicId === record.orderPublicId && persisted.tableScope === record.tableScope) {
+      runtime.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
     }
   },
 
@@ -168,11 +172,13 @@ Page({
     const paymentScope = tableSessionCacheScope(session)
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
+    if (scopeChanged) this.batchPaymentOperation = null
     if (!this.historyMode) this.clearForeignPendingPayment(paymentScope)
     this.setData(Object.assign({
       loading: true, error: '', tableCode: session.tableCode || '',
     }, scopeChanged ? {
       orders: [], outstandingText: '¥0.00', settlementReviewCount: 0, busyOrderId: '',
+      payingBatch: false, selectedPublicIds: [], selectedTotalText: '¥0.00',
     } : {}, preserveMessage ? {} : { success: '' }))
     try {
       const rawOrders = await (this.historyMode ? getCustomerOrderHistory(before) : getTableOrders())
@@ -255,16 +261,18 @@ Page({
     let attempt=runtime.getStorageSync(storageKey)
     if(!attempt||JSON.stringify(attempt.ids)!==JSON.stringify(ids))attempt={ids,key:randomId('table-batch')}
     runtime.setStorageSync(storageKey,attempt)
+    const operation = this.batchPaymentOperation = {}
+    const ownsOperation = () => this.batchPaymentOperation === operation && scope === tableSessionCacheScope()
     this.setData({payingBatch:true,error:'',success:''})
     try{
       const action=await payTableOrders(ids,attempt.key)
-      if(scope!==tableSessionCacheScope())return
+      if(!ownsOperation())return
       // A received action completes this request. A later deliberate payment uses a new attempt.
       runtime.removeStorageSync(storageKey)
       if(action && action.status==='resolved'){
         this.setData({selectedPublicIds:[],selectedTotalText:money(0),success:'已恢复原付款结果，请核对最新桌账。'})
         try { await this.loadData(true) } catch (_error) {
-          if(scope===tableSessionCacheScope())this.setData({error:'原付款结果已找到，最新桌账暂未读到，请刷新核对。'})
+          if(ownsOperation())this.setData({error:'原付款结果已找到，最新桌账暂未读到，请刷新核对。'})
         }
         return
       }
@@ -273,9 +281,11 @@ Page({
         return
       }
       await new Promise((resolve,reject)=>runtime.requestPayment(Object.assign({},action.payload,{success:resolve,fail:reject})))
-      if(scope===tableSessionCacheScope()){this.setData({success:'支付操作已完成，金额以到账核对结果为准。'});await this.loadData(true)}
-    }catch(error){if(scope===tableSessionCacheScope())this.setData({error:error&&/cancel/i.test(error.errMsg||'')?'已取消本次支付，原订单保留。':customerErrorMessage(error,'本次结果未确认，请重试同次请求或联系员工收款')})}
-    finally{if(scope===tableSessionCacheScope())this.setData({payingBatch:false})}
+      if(ownsOperation()){this.setData({success:'支付操作已完成，金额以到账核对结果为准。'});await this.loadData(true)}
+    }catch(error){if(ownsOperation())this.setData({error:error&&/cancel/i.test(error.errMsg||'')?'已取消本次支付，原订单保留。':customerErrorMessage(error,'本次结果未确认，请重试同次请求或联系员工收款')})}
+    finally{
+      if(this.batchPaymentOperation === operation){this.batchPaymentOperation = null;this.setData({payingBatch:false})}
+    }
   },
 
   paymentHint(access, outstanding) {

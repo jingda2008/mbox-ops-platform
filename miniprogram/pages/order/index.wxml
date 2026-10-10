@@ -211,8 +211,8 @@
     </view>
   </view>
 
-  <view wx:if="{{connectionState === 'active' && cart.length}}" class="cart-dock">
-    <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" bindtap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{!orderReady || cartSyncing || cartWritesFrozen}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>
+  <view wx:if="{{connectionState === 'active' && (cart.length || checkoutLocked)}}" class="cart-dock">
+    <view class="cart-summary"><button class="cart-overview" aria-label="查看本桌购物车，已选{{cartCount}}件商品" hover-class="cart-overview--pressed" bindtap="openCartDetails"><view class="cart-overview__mark"><view class="cart-overview__mark-icon"></view><text class="cart-overview__badge">{{cartCount}}</text></view><view class="cart-overview__copy"><text>购物车 · {{cartCount}} 件</text><text>{{cartWritesFrozen ? '当前选择已保留' : checkoutLocked ? '上次提交待确认，可继续确认或查看桌账' : cartSyncing ? '正在同步同桌选择' : '点击查看商品与金额'}}</text></view></button><button class="checkout-button" bindtap="openCheckout" loading="{{busy}}" disabled="{{!orderReady || cartSyncing || (cartWritesFrozen && !checkoutLocked)}}">{{checkoutLocked ? '继续确认' : '提交订单'}}</button></view>
   </view>
 
   <view wx:if="{{checkoutConfirmVisible}}" class="checkout-confirm sheet-mask">

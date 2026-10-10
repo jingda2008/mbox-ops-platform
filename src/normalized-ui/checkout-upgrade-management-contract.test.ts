@@ -39,7 +39,7 @@ describe('checkout upgrade operational management contract', () => {
     expect(api).toContain('recordCheckoutUpgradeEvent')
     expect(api).toContain('/events`')
     expect(order).toContain('async confirmCheckout()')
-    expect(order).toContain('await this.submitOrder(null, true, null, tableRequest)')
+    expect(order).toContain('await this.submitOrder(null, true, null, tableRequest, reviewedDraft)')
     expect(order).not.toContain('prepareCheckoutUpgrade')
     expect(order).not.toContain('recordCheckoutUpgradeEvent(offer.publicId')
   })

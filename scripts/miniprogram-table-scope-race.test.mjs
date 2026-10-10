@@ -880,7 +880,7 @@ test('guest cart opens a review sheet before it creates an order or starts payme
   let noticeCalls = 0
   let submitCalls = 0
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.offerOrderNotifications = async () => { noticeCalls += 1 }
   page.submitOrder = async () => { submitCalls += 1 }
   page.setData({
@@ -911,7 +911,7 @@ test('a prior payment confirmation never freezes cart edits and a new cart still
   const request = { scope: scope(state.session), generation: 1 }
   let cartAdjustments = 0
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.adjustSharedCart = async () => { cartAdjustments += 1; return true }
   page.setData({
     products: [{ productId: 'product-001', available: true }],
@@ -959,7 +959,7 @@ test('shared cart checkout launches WeChat payment immediately after the single 
   let notificationPromptCalls = 0
   const request = { scope: scope(state.session), generation: 1 }
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.offerOrderNotifications = async (context) => {
     assert.equal(calls.requestPayment.length, 1)
     assert.equal(context, 'order_checkout')
@@ -1072,7 +1072,7 @@ test('definite pre-order checkout rejection unlocks the cart and explains that n
   const { page, calls } = await loadOrderPage(state)
   const request = { scope: scope(state.session), generation: 1 }
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
 
   await page.submitOrder(null, false, null, request)
@@ -1097,7 +1097,7 @@ test('the previous online-payment-unavailable response also unlocks without crea
   const { page, calls } = await loadOrderPage(state)
   const request = { scope: scope(state.session), generation: 1 }
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
 
   await page.submitOrder(null, false, null, request)
@@ -1118,7 +1118,7 @@ for (const code of ['CHECKOUT_COUPON_RECONFIRM_REQUIRED', 'COUPON_UPGRADE_REQUOT
     const { page, calls } = await loadOrderPage(state)
     const request = { scope: scope(state.session), generation: 1 }
     page.currentTableRequest = () => request
-    page.isCurrentTableRequest = (value) => value === request
+    page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
     page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
     await page.submitOrder(null, false, null, request)
     assert.equal(page.data.checkoutLocked, false)
@@ -1139,7 +1139,7 @@ test('unknown checkout result preserves and retries the same idempotent attempt 
   const { page, calls } = await loadOrderPage(state)
   const request = { scope: scope(state.session), generation: 1 }
   page.currentTableRequest = () => request
-  page.isCurrentTableRequest = (value) => value === request
+  page.isCurrentTableRequest = (value) => Boolean(value && value.scope === request.scope && value.generation === request.generation && value.scope === scope(state.session))
   page.setData({ cart: [{ productId: 'product-001', quantity: 1, available: true }], cartGeneration: 1, cartVersion: 1 })
 
   await page.submitOrder(null, false, null, request)

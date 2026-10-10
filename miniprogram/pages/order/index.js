@@ -1969,6 +1969,7 @@ Page({
   },
 
   async confirmCheckout() {
+    if (this.data.orderReady === false) return
     if (!await this.checkoutUpgradeReady()) return
     if (!this.couponCheckoutReady()) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
@@ -2092,11 +2093,18 @@ Page({
       if (!this.isCurrentTableRequest(tableRequest)) return
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
         wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        await this.refreshSharedCart(true, tableRequest)
+        // A definite conflict did not submit this attempt. Release its lock
+        // before refreshing: refreshSharedCart skips locked checkouts.
+        this.setData({ checkoutLocked: false, orderReady: false, checkoutConfirmVisible: false })
+        const refreshed = await this.refreshSharedCart(true, tableRequest)
+        if (!this.isCurrentTableRequest(tableRequest)) return
         this.setData({
-          error: '同桌购物车已经更新，原结账请求没有提交。请确认最新商品后再结账。',
-          checkoutLocked: false,
+          error: refreshed
+            ? '本桌购物车已更新，请先核对最新商品和桌账，再决定是否加单。'
+            : '购物车暂未刷新，请点此重试，核对最新商品和桌账后再提交。',
+          orderReady: refreshed,
         })
+        this.startSharedCartPolling(tableRequest)
         return
       }
       if (error && (error.code === 'CHECKOUT_COUPON_RECONFIRM_REQUIRED' || error.code === 'COUPON_UPGRADE_REQUOTE_REQUIRED')) {

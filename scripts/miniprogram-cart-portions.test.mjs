@@ -13,11 +13,11 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
         randomId:()=> 'test-portion-operation',money:String,customerErrorMessage:()=> '请刷新购物车',
       },
     })
-    page.data=structuredClone(page.data)
+    page.data={...structuredClone(page.data),orderReady:true}
     page.setData=value=>Object.assign(page.data,value)
     const scope={};page.currentTableRequest=()=>({scope});page.isCurrentTableRequest=()=>true
     page.ensureTableRequestGuard=()=>({beginWrite:()=>({}),isCurrentWrite:()=>true,finishWrite:()=>true})
-    page.updateCart=()=>{};page.refreshSharedCart=async()=>{}
+    page.startSharedCartPolling=()=>{};page.updateCart=()=>{};page.refreshSharedCart=async()=>{}
     page.data.products=[{productId:'bundle',productKind:'bundle',bundleChoiceGroups:[{
       id:'group',selectionCount:1,options:[{productId:'drink',name:'鸡尾酒',available:true}],
     }]}]

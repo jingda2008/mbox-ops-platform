@@ -78,6 +78,7 @@ function checkoutUpgradeMethods({ prepare, decide, randomId, scope, money }) {
         return
       }
       const selections = this.data.couponSelections.map(selection => ({ ...selection }))
+      const operation = this.checkoutOperation = {}
       this.setData({ busy: true, checkoutUpgradeMessage: '', checkoutUpgradeNeedsRefresh: true })
       let accepted = null
       try {
@@ -98,7 +99,10 @@ function checkoutUpgradeMethods({ prepare, decide, randomId, scope, money }) {
         if (identity === scope() && this.isCurrentTableRequest(request)) this.setData({
           checkoutUpgradeNeedsRefresh: !refreshed, checkoutUpgradeMessage: '升级结果需重新核对。请刷新购物车查看实际菜品和金额；尚未发起付款。' })
       } finally {
-        if (identity === scope() && this.isCurrentTableRequest(request)) this.setData({ busy: false })
+        if (this.checkoutOperation === operation) {
+          this.checkoutOperation = null
+          this.setData({ busy: false })
+        }
       }
       if (accepted && selections.length && identity === scope() && this.isCurrentTableRequest(request)) await this.quoteCheckoutCoupons()
     },

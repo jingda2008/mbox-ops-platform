@@ -124,7 +124,8 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 const wechatPolicyTemplateDivergences = {
   'pages/member-center/index': { wechat: '8b8d5d05b2906778ea2d95b0ed48bf625f95e3a08affab528d07647824cd511e', alipay: '5afe636e2c9af6d55cedb46b42366e8e112b4bcb7f9fd9bffd0686bc8e687a57', wechatStyle: 'c3d7ec9e9ee19eae360de1bc551c0e5f184555761979a539244939cdbab635cf', alipayStyle: '157828f7389db7d329e85c40d7e6903508ad7571aae2f48cb3509447f4f7aa29' },
   'pages/home/index': {"wechat": "8b80b0ffe480a6b5bd27b9a2a28343a5c3e3fe0895a8dcaa4255e98559776960", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
-  'pages/order/index': {"wechat": "6fe80eba47b215d81b90d00eeedffd1631be93af8b2cd3852f62f97d2995e0a1", "alipay": "546b3d9ca186fcf10a1ccf24170bb203fd0ef21775422ac38168333f5bb1ef07"},
+  // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
+  'pages/order/index': {"wechat": "fc3f5f083570af1f377753b7f1c370ceec6692efd59d87c848509daece6014e4", "alipay": "eb514c85c8015cd86fadea3f3e05f43c9dfd28cfe3839a89faba7293f38bf1da"},
   'pages/profile/index': {"wechat": "e5f41736e60d97a70656cab7a39866f311c4aa2bb2ca3a3f33c17a59c6fe2dba", "alipay": "d201aaa6b4afef2375e261e8fe498b9cd3855fad075cb23b32eb249b5fb15031", "wechatStyle": "e76f5064443057e0ef4399ce4cb1fc4f187e512cf7e6815e5ab0c66bc9752902", "alipayStyle": "84354389b7d14cd38cae1d65e306055254fdfe264c940824bda1db9fae602e21"},
   'pages/community/index': {"wechat": "94a74035ef9f9b5602985232e32432dde0e1765e2a366b7e8d4a3819e85f2316", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "908065ef64649b8b306e1edb21a49914b0389b723f248bc016f345c307173c68", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},

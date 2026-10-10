@@ -8,7 +8,7 @@ function harness(platform, mode = 'confirm') {
   const source = readFileSync(new URL(`../${platform}/pages/order/index.js`, import.meta.url), 'utf8')
   const tree = ts.createSourceFile('index.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
   const page = tree.statements.find(n => ts.isExpressionStatement(n) && ts.isCallExpression(n.expression) && n.expression.expression.getText(tree) === 'Page').expression.arguments[0]
-  const methods = page.properties.filter(n => ['submitOrder', 'confirmDuplicateCheckout'].includes(n.name?.getText(tree)))
+  const methods = page.properties.filter(n => ['checkoutDraft', 'checkoutDraftMatches', 'submitOrder', 'confirmDuplicateCheckout'].includes(n.name?.getText(tree)))
   const rejected = tree.statements.find(n => ts.isVariableStatement(n) && n.declarationList.declarations.some(d => d.name.getText(tree) === 'CHECKOUT_REJECTED_BEFORE_ORDER')).getText(tree)
   const storage = new Map(), calls = [], modals = []
   let seq = 0, scope = 'table-one', generation = 1, instance
@@ -38,7 +38,7 @@ function harness(platform, mode = 'confirm') {
   })
   instance = { ...actions, data: { paymentStateReady: true, busy: false, cartGeneration: 2, cartVersion: 1 },
     currentTableRequest: () => request, isCurrentTableRequest: r => r.scope === scope && r.generation === generation,
-    setData(v) { Object.assign(this.data, v) }, recordOrderTiming() {}, updateCart() {}, async handlePaymentAction() {},
+    setData(v) { Object.assign(this.data, v) }, recordOrderTiming() {}, updateCart() {}, async handlePaymentAction() {}, couponCheckoutReady: () => true,
   }
   return { instance, calls, modals, storage, request }
 }
@@ -93,12 +93,12 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
       } } }
       return { status: 201, data: { data: { order: { publicId: 'continued-order' }, payment: { publicId: 'payment' }, sharedCart: {} } } }
     })
-    const p = h.page('order', ['submitOrder', 'confirmDuplicateCheckout'], {
+    const p = h.page('order', ['checkoutDraft', 'checkoutDraftMatches', 'submitOrder', 'confirmDuplicateCheckout'], {
       alipayOnlinePaymentEnabled: () => true, checkoutRecommendationAttribution: () => null,
       CHECKOUT_ATTEMPT_KEY: 'checkout-attempt', PENDING_PAYMENT_KEY: 'pending-payment', CHECKOUT_REJECTED_BEFORE_ORDER: new Set(),
     })
     const request = { scope: 'table-one' }
-    Object.assign(p, { currentTableRequest: () => request, isCurrentTableRequest: () => true, recordOrderTiming() {}, updateCart() {}, async handlePaymentAction() {} })
+    Object.assign(p, { currentTableRequest: () => request, isCurrentTableRequest: () => true, recordOrderTiming() {}, updateCart() {}, async handlePaymentAction() {}, couponCheckoutReady: () => true })
     p.data = { paymentStateReady: true, cartVersion: 1, cartGeneration: 2, busy: false }
     await p.submitOrder(null, false, null, request)
     assert.equal(h.modals.length, 1); assert.match(h.modals[0].content, /er-123/)

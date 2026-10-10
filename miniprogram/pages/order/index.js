@@ -854,12 +854,16 @@ Page({
     this.setData({ orderReady: false, paymentStateReady: false })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
+    this.cartRecovery = null
     if (scopeChanged) {
+      this.checkoutOperation = null
+      this.recommendationOperation = null
       this.stopShakeRecommendation()
       this.initialRecommendationRequested = false
       this.recommendationFeatureDisabled = false
       this.setData({
-        busy: false, cartSyncing: false, clearingCart: false, quickServiceBusy: '',
+        busy: false, recommendationBusy: false, checkoutUpgradeNeedsRefresh: false,
+        cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
         cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
         detailProduct: null,
@@ -1047,7 +1051,8 @@ Page({
   refreshOrderPaymentState(request, ordersPromise) {
     const expected = request || this.currentTableRequest()
     if (!expected || !this.isCurrentTableRequest(expected)) return Promise.resolve(false)
-    if (this.orderPaymentRead && this.orderPaymentRead.request === expected) {
+    if (this.orderPaymentRead && this.orderPaymentRead.request.scope === expected.scope
+      && this.orderPaymentRead.request.generation === expected.generation) {
       return this.orderPaymentRead.promise
     }
     const read = { request: expected, promise: null }
@@ -1388,6 +1393,7 @@ Page({
     if (!expected || !this.isCurrentTableRequest(expected)) return
     if (this.data.recommendationBusy) return
     const recommendationIntent = ['initial', 'guided', 'shake'].includes(intent) ? intent : 'guided'
+    const operation = this.recommendationOperation = {}
     this.setData({ recommendationBusy: true, recommendationError: '' })
     try {
       const result = await recommendExperience(recommendationRequest(recommendationIntent, this.data.recommendationAnswers))
@@ -1435,7 +1441,12 @@ Page({
         recommendationError: customerErrorMessage(error, '今夜推荐正在更新'),
       })
     }
-    finally { if (this.isCurrentTableRequest(expected)) this.setData({ recommendationBusy: false }) }
+    finally {
+      if (this.recommendationOperation === operation) {
+        this.recommendationOperation = null
+        this.setData({ recommendationBusy: false })
+      }
+    }
   },
 
   onShakeRecommendation() {
@@ -1585,6 +1596,7 @@ Page({
   },
 
   async replaceBundleUnitSelection(productId,unitIndex,bundleSelection){
+    if (this.data.orderReady === false || this.data.busy || this.data.checkoutLocked || this.data.cartWritesFrozen) return false
     const tableRequest=this.currentTableRequest()
     if(!tableRequest||!this.isCurrentTableRequest(tableRequest)||this.data.cartSyncing)return false
     const writeGuard = this.ensureTableRequestGuard()
@@ -1600,8 +1612,8 @@ Page({
       return true
     }catch(error){
       if(writeGuard.isCurrentWrite(write)){
-        await this.refreshSharedCart(true,this.currentTableRequest())
-        this.setData({ error:customerErrorMessage(error,'套餐选择暂时没有更新，请重试') })
+        await this.recoverSharedCart(customerErrorMessage(error,'套餐选择暂时没有更新，请核对后重试'),
+          () => writeGuard.isCurrentWrite(write))
       }
       return false
     }finally{
@@ -1751,6 +1763,13 @@ Page({
   },
   updateCart(cart, sharedCart) {
     const couponScope = tableSessionCacheScope()
+    // A delayed poll/write response cannot undo an accepted revision. A new
+    // table session has its own independent generation/version sequence.
+    if (sharedCart && this.cartSnapshotScope === couponScope
+      && (Number(sharedCart.generation) < this.data.cartGeneration
+        || (Number(sharedCart.generation) === this.data.cartGeneration
+          && Number(sharedCart.version) < this.data.cartVersion))) return false
+    this.cartSnapshotScope = couponScope
     const noteScope = couponScope + ':' + (sharedCart ? sharedCart.generation : this.data.cartGeneration)
     if (noteScope !== this.checkoutNoteScope || !cart.length) {
       this.checkoutNoteScope = noteScope
@@ -1787,16 +1806,23 @@ Page({
         ? attribution
         : null,
     })
+    return true
   },
 
   async refreshSharedCart(silent, request) {
     const expected = request || this.currentTableRequest()
     if (!expected || !this.isCurrentTableRequest(expected)
       || this.data.connectionState !== 'active' || this.data.checkoutLocked) return false
+    const recovery = this.cartRecovery
     try {
       const sharedCart = await getSharedCart()
-      if (!this.isCurrentTableRequest(expected)) return false
-      this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart)
+      if (!this.isCurrentTableRequest(expected) || this.data.checkoutLocked) return false
+      if (this.updateCart(sharedCartView(sharedCart, this.data.products), sharedCart) === false) return false
+      // Only a read started after the conflict can restore checkout readiness.
+      if (recovery && this.cartRecovery === recovery) {
+        this.cartRecovery = null
+        this.setData({ orderReady: recovery.orderReady, error: '本桌购物车已刷新，请核对后再操作。' })
+      }
       return true
     } catch (error) {
       if (!silent && this.isCurrentTableRequest(expected)) this.setData({ error: customerErrorMessage(error, '购物车暂时无法同步，请稍后重试') })
@@ -1804,8 +1830,21 @@ Page({
     }
   },
 
+  async recoverSharedCart(message, ownsOperation) {
+    const request = this.currentTableRequest()
+    if (!request || !this.isCurrentTableRequest(request) || !ownsOperation()) return false
+    const orderReady = this.cartRecovery ? this.cartRecovery.orderReady : this.data.orderReady !== false
+    this.cartRecovery = { orderReady }
+    this.setData({ orderReady: false, checkoutConfirmVisible: false })
+    const refreshed = await this.refreshSharedCart(true, request)
+    if (!this.isCurrentTableRequest(request) || !ownsOperation()) return false
+    this.setData({ error: refreshed ? message : '购物车暂未刷新，请点此重试，核对最新商品和桌账后再提交。' })
+    this.startSharedCartPolling(request)
+    return refreshed
+  },
+
   async adjustSharedCart(productId, delta,bundleSelections=[]) {
-    if (this.data.orderReady === false) return false
+    if (this.data.orderReady === false || this.data.busy || this.data.checkoutLocked) return false
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return false
     if (this.data.cartSyncing) return false
@@ -1829,8 +1868,8 @@ Page({
       this.recordOrderTiming('add', feedbackStartedAt, false)
       if (!writeGuard.isCurrentWrite(write)) return false
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true, this.currentTableRequest())
-        this.setData({ error: '同桌购物车已经更新，已为你刷新，请确认后再操作。' })
+        await this.recoverSharedCart('同桌购物车已经更新，已为你刷新，请确认后再操作。',
+          () => writeGuard.isCurrentWrite(write))
       } else {
         this.setData({ error: customerErrorMessage(error, '购物车暂时无法更新，请稍后重试') })
       }
@@ -1839,6 +1878,7 @@ Page({
   },
 
   async clearCart() {
+    if (this.data.orderReady === false || this.data.busy) return
     if (!this.data.cart.length || this.data.cartSyncing || this.data.clearingCart
       || this.data.checkoutLocked || this.data.cartWritesFrozen) return
     const currentRequest = this.currentTableRequest()
@@ -1883,8 +1923,8 @@ Page({
         return
       }
       if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true, this.currentTableRequest())
-        this.setData({ error: '同桌购物车已经更新，未执行清空，已为你刷新。' })
+        await this.recoverSharedCart('同桌购物车已经更新，未执行清空，已为你刷新。',
+          () => writeGuard.isCurrentWrite(write))
       } else {
         this.setData({ error: customerErrorMessage(error, '购物车暂时无法清空，请稍后重试') })
       }
@@ -1892,6 +1932,7 @@ Page({
   },
 
   async removeCartLine(event) {
+    if (this.data.orderReady === false || this.data.busy) return
     if (this.data.cartSyncing || this.data.checkoutLocked || this.data.cartWritesFrozen) return
     const productId=event.currentTarget.dataset.id
     const item=this.data.cart.find((line)=>line.productId===productId)
@@ -1911,8 +1952,8 @@ Page({
     } catch (error) {
       if (!writeGuard.isCurrentWrite(write)) return
       if (error&&error.code==='SHARED_CART_VERSION_CONFLICT') {
-        await this.refreshSharedCart(true,this.currentTableRequest())
-        this.setData({ error:'同桌购物车已经更新，已为你刷新，请确认后再操作。' })
+        await this.recoverSharedCart('同桌购物车已经更新，已为你刷新，请确认后再操作。',
+          () => writeGuard.isCurrentWrite(write))
       } else {
         this.setData({ error:customerErrorMessage(error,'这件商品暂时没有移除，请稍后重试') })
       }
@@ -1944,15 +1985,17 @@ Page({
 
   async openCheckout() {
     if (this.data.orderReady === false) return false
-    if (!this.data.cart.length || this.data.busy) return
+    if (this.data.busy) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    if (this.data.checkoutLocked) return this.retryCheckout(tableRequest)
+    if (!this.data.cart.length) return
     if (await this.handlePendingPaymentBeforeCheckout()) return
+    if (!this.isCurrentTableRequest(tableRequest)) return
     if (this.data.cartWritesFrozen) {
       this.setData({ error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
     }
-    if (this.data.checkoutLocked) return this.retryCheckout(tableRequest)
     if (this.data.cart.some((item) => !item.available)) {
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
@@ -1968,31 +2011,62 @@ Page({
     this.setData({ checkoutConfirmVisible: false, couponLoading: false })
   },
 
+  checkoutDraft(offerPublicId) {
+    const attribution = checkoutRecommendationAttribution(offerPublicId, this.data.recommendationAttribution)
+    return {
+      note: this.data.checkoutNote || '',
+      lineNotes: Object.entries(this.checkoutLineNotes || {}).filter(([, note]) => note.trim()).map(([portionId, note]) => ({ portionId, note: note.trim() })),
+      expectedGeneration: this.data.cartGeneration,
+      expectedVersion: this.data.cartVersion,
+      offerPublicId: offerPublicId || null,
+      couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
+      recommendationPublicId: attribution ? attribution.recommendationPublicId : null,
+      selectedRecommendationProductId: attribution ? attribution.selectedProductId : null,
+      tableScope: tableSessionCacheScope(),
+    }
+  },
+
+  checkoutDraftMatches(attempt) {
+    const current = this.checkoutDraft(attempt.offerPublicId)
+    return Object.keys(current).every(key => JSON.stringify(current[key]) === JSON.stringify(attempt[key]))
+  },
+
   async confirmCheckout() {
-    if (this.data.orderReady === false) return
-    if (!await this.checkoutUpgradeReady()) return
-    if (!this.couponCheckoutReady()) return
+    if (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
-    const tableRequest = this.currentTableRequest()
-    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
-    if (await this.handlePendingPaymentBeforeCheckout()) return
-    if (this.data.cartWritesFrozen) {
-      this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
-      return
-    }
-    if (this.data.cart.some((item) => !item.available)) {
-      this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
-      return
-    }
-    // The final confirmation must lead straight to the order and WeChat
-    // payment. Subscription prompts belong to the earlier selection action;
-    // putting one here would create an unexpected third checkout step.
-    this.setData({ busy: true, error: '', checkoutConfirmVisible: false })
-    this.invalidateCheckoutUpgrade()
+    const tableRequest = Object.assign({}, this.currentTableRequest())
+    if (!this.isCurrentTableRequest(tableRequest)) return
+    // Snapshot the final click before a prerequisite can yield to a cart poll,
+    // coupon refresh or new table scan. The submitted draft stays immutable.
+    const reviewedDraft = this.checkoutDraft(null)
+    const operation = this.checkoutOperation = {}
+    this.setData({ busy: true, error: '' })
     try {
-      await this.submitOrder(null, true, null, tableRequest)
-    } catch (error) { if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '订单暂时无法提交，请稍后重试。') }) }
-    finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
+      if (!await this.checkoutUpgradeReady()) return
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (!this.couponCheckoutReady()) return
+      if (await this.handlePendingPaymentBeforeCheckout()) return
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (this.data.cartWritesFrozen) {
+        this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
+        return
+      }
+      if (this.data.cart.some((item) => !item.available)) {
+        this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
+        return
+      }
+      // Subscription prompts stay outside the final confirm -> payment flow.
+      this.setData({ checkoutConfirmVisible: false })
+      this.invalidateCheckoutUpgrade()
+      await this.submitOrder(null, true, null, tableRequest, reviewedDraft)
+    } catch (error) {
+      if (this.isCurrentTableRequest(tableRequest)) this.setData({ error: customerErrorMessage(error, '订单暂时无法提交，请稍后重试。') })
+    } finally {
+      if (this.checkoutOperation === operation) {
+        this.checkoutOperation = null
+        this.setData({ busy: false })
+      }
+    }
   },
 
   async retryCheckout(request) {
@@ -2009,138 +2083,133 @@ Page({
     await this.submitOrder(attempt.offerPublicId || null, false, attempt, tableRequest)
   },
 
-  async submitOrder(offerPublicId, allowBusy, previousAttempt, request) {
-    if (!previousAttempt && this.data.paymentStateReady === false) {
-      const expected = request || this.currentTableRequest()
-      const confirmed = await this.refreshOrderPaymentState(expected)
-      if (!this.isCurrentTableRequest(expected)) return
-      if (!confirmed) {
-        this.setData({ error: '付款状态暂未确认，请稍后重试；购物车已保留。' })
-        return
-      }
-    }
-    const tableRequest = request || this.currentTableRequest()
-    if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+  async submitOrder(offerPublicId, allowBusy, previousAttempt, request, reviewedDraft) {
+    const tableRequest = Object.assign({}, request || this.currentTableRequest())
+    if (!this.isCurrentTableRequest(tableRequest)) return
     if (this.data.busy && !allowBusy) return
-    const currentAttribution = checkoutRecommendationAttribution(
-      offerPublicId,
-      this.data.recommendationAttribution,
-    )
-    const attempt = previousAttempt || {
-      note: this.data.checkoutNote || '',
-      lineNotes: Object.entries(this.checkoutLineNotes || {}).filter(([, note]) => note.trim()).map(([portionId, note]) => ({ portionId, note: note.trim() })),
-      idempotencyKey: randomId('guest-order'),
-      expectedGeneration: this.data.cartGeneration,
-      expectedVersion: this.data.cartVersion,
-      offerPublicId: offerPublicId || null,
-      couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
-      recommendationPublicId: currentAttribution ? currentAttribution.recommendationPublicId : null,
-      selectedRecommendationProductId: currentAttribution ? currentAttribution.selectedProductId : null,
-      tableScope: tableSessionCacheScope(),
-      createdAt: new Date().toISOString(),
-    }
-    if (attempt.tableScope !== tableSessionCacheScope()) return
-    // An in-flight pre-checkout bill must not overwrite the new order's
-    // payment recovery record, including when retrying a persisted checkout.
-    this.orderPaymentRead = null
-    wx.setStorageSync(CHECKOUT_ATTEMPT_KEY, attempt)
-    this.setData({
-      busy: true,
-      checkoutLocked: true,
-      error: '',
-      success: '',
+    if (!previousAttempt && (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked)) return
+    const attempt = previousAttempt || Object.assign({}, reviewedDraft || this.checkoutDraft(offerPublicId), {
+      idempotencyKey: randomId('guest-order'), createdAt: new Date().toISOString(),
     })
-    const submitStartedAt = Date.now()
-    let submitMeasured = false
+    if (attempt.tableScope !== tableSessionCacheScope()) return
+    const operation = this.checkoutOperation = {}
+    this.setData({ busy: true })
     try {
-      const attemptAttribution = checkoutRecommendationAttribution(attempt.offerPublicId, {
-        recommendationPublicId: attempt.recommendationPublicId,
-        selectedProductId: attempt.selectedRecommendationProductId,
-      })
-      const result = await checkoutSharedCart({
-        note: attempt.note || '',
-        lineNotes: attempt.lineNotes || [],
-        expectedGeneration: attempt.expectedGeneration,
-        expectedVersion: attempt.expectedVersion,
-        ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
-        checkoutUpgradeOfferPublicId: attempt.offerPublicId,
-        ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
-        recommendationAttribution: attemptAttribution,
-      }, attempt.idempotencyKey)
-      this.recordOrderTiming('submit', submitStartedAt, true)
-      submitMeasured = true
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      const data = result.data || result
-      const pendingPayment = {
-        orderPublicId: data.order.publicId,
-        paymentPublicId: data.payment && data.payment.publicId,
-        retryIdempotencyKey: randomId(`guest-payment-${data.order.publicId}`),
-        checkoutKind: 'guest_immediate_payment',
-        paymentPresentationState: 'ready_not_presented',
-        paymentPresentationInFlight: false,
-        amountText: money(data.settlement && data.settlement.payableAmountMinor),
-        tableScope: attempt.tableScope,
-        statusText: '订单已备好，请完成付款',
-        canContinue: true,
-      }
-      wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
-      wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-      this.updateCart([], data.sharedCart || null)
-      this.setData({ pendingPayment, checkoutLocked: false })
-      await this.handlePaymentAction(data.payment && data.payment.providerAction, tableRequest)
-    } catch (error) {
-      if (!submitMeasured) this.recordOrderTiming('submit', submitStartedAt, false)
-      if (!this.isCurrentTableRequest(tableRequest)) return
-      if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        // A definite conflict did not submit this attempt. Release its lock
-        // before refreshing: refreshSharedCart skips locked checkouts.
-        this.setData({ checkoutLocked: false, orderReady: false, checkoutConfirmVisible: false })
-        const refreshed = await this.refreshSharedCart(true, tableRequest)
+      if (!previousAttempt && this.data.paymentStateReady === false) {
+        const confirmed = await this.refreshOrderPaymentState(tableRequest)
         if (!this.isCurrentTableRequest(tableRequest)) return
-        this.setData({
-          error: refreshed
-            ? '本桌购物车已更新，请先核对最新商品和桌账，再决定是否加单。'
-            : '购物车暂未刷新，请点此重试，核对最新商品和桌账后再提交。',
-          orderReady: refreshed,
-        })
-        this.startSharedCartPolling(tableRequest)
+        if (!confirmed) {
+          this.setData({ error: '付款状态暂未确认，请稍后重试；购物车已保留。', checkoutConfirmVisible: true })
+          return
+        }
+      }
+      if (!previousAttempt && (!this.checkoutDraftMatches(attempt) || !this.couponCheckoutReady() || this.data.cartWritesFrozen)) {
+        this.setData({ checkoutConfirmVisible: this.data.cart.length > 0,
+          error: '确认期间购物车或优惠已变化，请核对最新商品、备注与金额后再次确认。' })
         return
       }
-      if (error && (error.code === 'CHECKOUT_COUPON_RECONFIRM_REQUIRED' || error.code === 'COUPON_UPGRADE_REQUOTE_REQUIRED')) {
-        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        this.invalidateCheckoutCoupons(false, true)
-        this.setData({ checkoutLocked: false, checkoutConfirmVisible: true, couponPickerOpen: false,
-          error: '优惠条件已变化，本次没有创建订单。请重新选券或不用券继续。' })
-        return
-      }
-      if (String(error && error.code || '').startsWith('CHECKOUT_UPGRADE_')) {
-        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        this.setData({
-          error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
-          checkoutLocked: false,
-        })
-        return
-      }
-      if (error && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
-        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        this.setData({ checkoutLocked: false })
-        await this.confirmDuplicateCheckout(error, attempt, tableRequest)
-        return
-      }
-      if (CHECKOUT_REJECTED_BEFORE_ORDER.has(String(error && error.code || ''))) {
-        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
-        this.setData({
-          error: customerErrorMessage(error, '本次没有创建订单，请确认后重新提交。'),
-          checkoutLocked: false,
-        })
-        return
-      }
+      // An in-flight pre-checkout bill must not overwrite the new order's
+      // payment recovery record, including when retrying a persisted checkout.
+      this.orderPaymentRead = null
+      wx.setStorageSync(CHECKOUT_ATTEMPT_KEY, attempt)
       this.setData({
-        error: '提交结果暂时无法确认。为避免重复订单，请先重试确认或查看桌账，不要重新选商品。',
+        busy: true,
         checkoutLocked: true,
+        error: '',
+        success: '',
       })
-    } finally { if (this.isCurrentTableRequest(tableRequest)) this.setData({ busy: false }) }
+      const submitStartedAt = Date.now()
+      let submitMeasured = false
+      try {
+        const attemptAttribution = checkoutRecommendationAttribution(attempt.offerPublicId, {
+          recommendationPublicId: attempt.recommendationPublicId,
+          selectedProductId: attempt.selectedRecommendationProductId,
+        })
+        const result = await checkoutSharedCart({
+          note: attempt.note || '',
+          lineNotes: attempt.lineNotes || [],
+          expectedGeneration: attempt.expectedGeneration,
+          expectedVersion: attempt.expectedVersion,
+          ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
+          checkoutUpgradeOfferPublicId: attempt.offerPublicId,
+          ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
+          recommendationAttribution: attemptAttribution,
+        }, attempt.idempotencyKey)
+        this.recordOrderTiming('submit', submitStartedAt, true)
+        submitMeasured = true
+        if (!this.isCurrentTableRequest(tableRequest)) return
+        const data = result.data || result
+        const pendingPayment = {
+          orderPublicId: data.order.publicId,
+          paymentPublicId: data.payment && data.payment.publicId,
+          retryIdempotencyKey: randomId(`guest-payment-${data.order.publicId}`),
+          checkoutKind: 'guest_immediate_payment',
+          paymentPresentationState: 'ready_not_presented',
+          paymentPresentationInFlight: false,
+          amountText: money(data.settlement && data.settlement.payableAmountMinor),
+          tableScope: attempt.tableScope,
+          statusText: '订单已备好，请完成付款',
+          canContinue: true,
+        }
+        wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
+        wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+        this.updateCart([], data.sharedCart || null)
+        this.setData({ pendingPayment, checkoutLocked: false })
+        await this.handlePaymentAction(data.payment && data.payment.providerAction, tableRequest)
+      } catch (error) {
+        if (!submitMeasured) this.recordOrderTiming('submit', submitStartedAt, false)
+        if (!this.isCurrentTableRequest(tableRequest)) return
+        if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
+          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          // A definite conflict did not submit this attempt. Release its lock
+          // before refreshing: refreshSharedCart skips locked checkouts.
+          this.setData({ checkoutLocked: false })
+          await this.recoverSharedCart('本桌购物车已更新，请先核对最新商品和桌账，再决定是否加单。',
+            () => this.checkoutOperation === operation && this.isCurrentTableRequest(tableRequest))
+          return
+        }
+        if (error && (error.code === 'CHECKOUT_COUPON_RECONFIRM_REQUIRED' || error.code === 'COUPON_UPGRADE_REQUOTE_REQUIRED')) {
+          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          this.invalidateCheckoutCoupons(false, true)
+          this.setData({ checkoutLocked: false, checkoutConfirmVisible: true, couponPickerOpen: false,
+            error: '优惠条件已变化，本次没有创建订单。请重新选券或不用券继续。' })
+          return
+        }
+        if (String(error && error.code || '').startsWith('CHECKOUT_UPGRADE_')) {
+          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          this.setData({
+            error: customerErrorMessage(error, '升级内容已经变化，请重新确认后再结账。'),
+            checkoutLocked: false,
+          })
+          return
+        }
+        if (error && error.code === 'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED') {
+          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          this.setData({ checkoutLocked: false })
+          await this.confirmDuplicateCheckout(error, attempt, tableRequest)
+          return
+        }
+        if (CHECKOUT_REJECTED_BEFORE_ORDER.has(String(error && error.code || ''))) {
+          wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          this.setData({
+            error: customerErrorMessage(error, '本次没有创建订单，请确认后重新提交。'),
+            checkoutLocked: false,
+          })
+          return
+        }
+        this.setData({
+          error: '提交结果暂时无法确认。为避免重复订单，请先重试确认或查看桌账，不要重新选商品。',
+          checkoutLocked: true,
+        })
+      }
+    } finally {
+      // Write ownership outlives replaceable page reads. A hidden page keeps
+      // its exact persisted request for recovery, but never strands busy.
+      if (this.checkoutOperation === operation) {
+        this.checkoutOperation = null
+        this.setData({ busy: false })
+      }
+    }
   },
 
   async confirmDuplicateCheckout(error, attempt, request) {
@@ -2176,6 +2245,16 @@ Page({
   async handlePaymentAction(action, request) {
     const tableRequest = request || this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
+    const presentedPayment = Object.assign({}, this.data.pendingPayment)
+    const ownsPayment = () => {
+      const stored = wx.getStorageSync(PENDING_PAYMENT_KEY)
+      return presentedPayment.tableScope === tableSessionCacheScope()
+        && [this.data.pendingPayment, stored].every(pending => pending
+          && pending.orderPublicId === presentedPayment.orderPublicId
+          && pending.tableScope === presentedPayment.tableScope
+          && pending.paymentPublicId === presentedPayment.paymentPublicId
+          && pending.retryIdempotencyKey === presentedPayment.retryIdempotencyKey)
+    }
     if (action && action.status === 'resolved') {
       await this.restoreResolvedPayment(action, tableRequest)
       return
@@ -2233,7 +2312,7 @@ Page({
       wx.setStorageSync(PENDING_PAYMENT_KEY, presentingPayment)
       this.setData({ pendingPayment: presentingPayment })
       await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
-      if (!this.data.pendingPayment || this.data.pendingPayment.tableScope !== tableSessionCacheScope()) return
+      if (!ownsPayment()) return
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: '微信支付已完成，正在确认到账',
         canContinue: false,
@@ -2251,7 +2330,7 @@ Page({
       await this.offerOrderNotifications('order_checkout', activeRequest).catch(() => {})
       await this.confirmPaymentOutcome(pendingPayment, activeRequest)
     } catch (error) {
-      if (!this.data.pendingPayment || this.data.pendingPayment.tableScope !== tableSessionCacheScope()) return
+      if (!ownsPayment()) return
       const cancelled = isWechatCancellation(error)
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: cancelled ? '付款已取消，正在释放本次付款' : '付款结果确认中，请勿重复付款',

@@ -275,7 +275,12 @@ async function loadOrderPage(state) {
           if (state.checkoutError) throw state.checkoutError
           return state.checkoutResult || null
         },
-        getSharedCart: async () => ({ lines: [], version: 0, generation: 0 }),
+        getSharedCart: async () => {
+          state.sharedCartReads = (state.sharedCartReads || 0) + 1
+          if (state.sharedCartError) throw state.sharedCartError
+          if (state.sharedCartDeferred) return state.sharedCartDeferred.promise
+          return state.sharedCart || { lines: [], version: 0, generation: 0 }
+        },
         adjustSharedCart: async () => null, removeSharedCartLine: async () => null, clearSharedCart: async () => null,
         getTableOrders: async () => {
           if (Array.isArray(state.tableOrders)) return state.tableOrders
@@ -371,7 +376,7 @@ async function loadOrderPage(state) {
   page.startSharedCartPolling = () => undefined
   page.startServicePolling = () => undefined
   page.ensureInitialRecommendations = () => undefined
-  return { page, calls }
+  return { page, calls, updateCart: definition.updateCart }
 }
 
 async function loadAccountPage(state, platform = 'miniprogram') {
@@ -979,6 +984,79 @@ test('shared cart checkout launches WeChat payment immediately after the single 
   assert.equal(page.data.pendingPayment, null)
   assert.equal(page.data.paymentResult.title, '付款成功')
   assert.equal(state.storage.get(CHECKOUT_ATTEMPT_KEY), undefined)
+})
+
+function conflictState() {
+  return {
+    session: { tableCode: 'W20', tableToken: 'test-token', cartScope: 'test-cart-scope' },
+    storage: new Map(),
+    checkoutError: Object.assign(new Error('cart changed'), { code: 'SHARED_CART_VERSION_CONFLICT' }),
+    sharedCart: { lines: [], generation: 2, version: 0, totalAmountMinor: 0 },
+  }
+}
+
+async function conflictPage(state) {
+  const result = await loadOrderPage(state)
+  const { page, updateCart } = result
+  page.updateCart = updateCart
+  const request = page.beginTableRequest(state.session)
+  page.setData({ connectionState: 'active', cart: [{ productId: 'old-product', quantity: 5, available: true }],
+    cartCount: 5, cartGeneration: 1, cartVersion: 7, paymentStateReady: true })
+  return { ...result, request }
+}
+
+test('checkout conflict reads the actual next cart instead of retaining already-submitted items', async () => {
+  const state = conflictState()
+  const { page, calls, request } = await conflictPage(state)
+  let polls = 0
+  page.startSharedCartPolling = () => { polls++ }
+  await page.submitOrder(null, false, null, request)
+  assert.equal(state.sharedCartReads, 1)
+  assert.equal(page.data.cart.length, 0)
+  assert.equal(page.data.cartCount, 0)
+  assert.equal(page.data.cartGeneration, 2)
+  assert.equal(page.data.cartVersion, 0)
+  assert.equal(page.data.checkoutLocked, false)
+  assert.equal(page.data.orderReady, true)
+  assert.equal(state.storage.has(CHECKOUT_ATTEMPT_KEY), false)
+  assert.equal(calls.checkoutSharedCart.length, 1)
+  assert.equal(calls.requestPayment.length, 0)
+  assert.equal(polls, 1)
+})
+
+test('checkout conflict with a failed refresh prevents another submission of the stale cart', async () => {
+  const state = conflictState()
+  state.sharedCartError = new Error('offline')
+  const { page, calls, request } = await conflictPage(state)
+  await page.submitOrder(null, false, null, request)
+  assert.equal(state.sharedCartReads, 1)
+  assert.equal(page.data.orderReady, false)
+  assert.equal(page.data.checkoutLocked, false)
+  assert.match(page.data.error, /未刷新/)
+  await page.openCheckout()
+  assert.equal(page.data.checkoutConfirmVisible, false)
+  page.setData({ checkoutConfirmVisible: true })
+  await page.confirmCheckout()
+  assert.equal(calls.checkoutSharedCart.length, 1)
+  assert.equal(calls.requestPayment.length, 0)
+})
+
+test('late checkout conflict refresh cannot change a newly selected table', async () => {
+  const state = conflictState()
+  state.sharedCartDeferred = deferred()
+  const { page, request } = await conflictPage(state)
+  const work = page.submitOrder(null, false, null, request)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(state.sharedCartReads, 1)
+  state.session = { tableCode: 'W21', tableToken: 'other-token', cartScope: 'other-cart' }
+  page.beginTableRequest(state.session)
+  page.setData({ error: 'new table state', orderReady: false, checkoutLocked: true, cartGeneration: 9 })
+  state.sharedCartDeferred.resolve(state.sharedCart)
+  await work
+  assert.equal(page.data.error, 'new table state')
+  assert.equal(page.data.orderReady, false)
+  assert.equal(page.data.checkoutLocked, true)
+  assert.equal(page.data.cartGeneration, 9)
 })
 
 test('definite pre-order checkout rejection unlocks the cart and explains that no order was created', async () => {

@@ -183,10 +183,19 @@ it.each(['paid','refunded','partially_refunded'])('hides the stale payment actio
   const tableOrder={paymentStatus:status,paymentAccess:'not_required'} as GuestTableOrder
   const html=renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,onClose(){},onRetryPayment(){}}))
   expect(html).not.toContain('继续微信支付');expect(html).not.toContain('重新发起付款')
+  expect(html).not.toContain('等待扫码支付');expect(html).not.toContain('等待微信支付')
+  if(status!=='paid')expect(html).toContain('退款')
 })
 it('disables payment while verifying and does not offer payment during settlement review',()=>{
   const result={order:{publicId:'order'},settlement:{payableAmountMinor:100,currency:'CNY'},payment:{status:'pending',simulated:false,providerAction:{status:'pending',payload:{}}}} as GuestOrderResult
   const render=(tableOrder:GuestTableOrder|null)=>renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,busy:true,onClose(){},onRetryPayment(){}}))
   expect(render(null)).toContain('disabled=""');expect(render(null)).toContain('正在核对付款')
   expect(render({paymentStatus:'pending',paymentAccess:'status_review'} as GuestTableOrder)).not.toContain('guest-primary')
+})
+
+it('uses the authoritative zero balance instead of an old pending payment snapshot',()=>{
+  const result={order:{publicId:'order'},settlement:{payableAmountMinor:31600,currency:'CNY'},payment:{status:'pending',simulated:false,providerAction:{status:'pending',payload:{}}}} as GuestOrderResult
+  const tableOrder={status:'completed',paymentStatus:'unpaid',paymentAccess:'not_required',payableAmountMinor:0} as GuestTableOrder
+  const html=renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,onClose(){},onRetryPayment(){}}))
+  expect(html).toContain('本单无需付款');expect(html).not.toContain('316');expect(html).not.toContain('guest-primary')
 })

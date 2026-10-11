@@ -1084,7 +1084,7 @@ export function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose, bus
     <span className="guest-checkout-icon"><Check /></span><small>订单 {shortPublicReference(result.order.publicId)}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
     <small>付款状态每 2 秒自动核对，以支付通道和本桌账单为准</small>
     {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
-    <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
+    <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(tableOrder?.payableAmountMinor ?? result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
     {canPay && <button type="button" className="guest-primary" disabled={busy} onClick={onRetryPayment}>
       {busy?'正在核对付款…':result.payment.providerAction.status==='failed'?'重新发起付款':'继续微信支付'}
     </button>}
@@ -1118,6 +1118,9 @@ async function presentOnlinePayment(action: OnlinePaymentAction): Promise<void> 
 }
 
 export function paymentStatusCopy(result: GuestOrderResult, tableOrder: GuestTableOrder | null): { title: string; detail: string } {
+  if (tableOrder?.paymentStatus === 'refunded') return { title: '本单款项已退款', detail: '请查看原付款渠道的退款记录，无需再次付款。' }
+  if (tableOrder?.paymentStatus === 'partially_refunded') return { title: '本单部分款项已退款', detail: '退款情况以本桌账单和原付款渠道记录为准，请勿重复付款。' }
+  if (tableOrder?.paymentAccess === 'not_required' && tableOrder.paymentStatus === 'unpaid') return { title: '本单无需付款', detail: '当前账单已不需要付款，请查看本桌订单的处理记录。' }
   if (tableOrder?.paymentStatus === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (tableOrder?.paymentAccess === 'status_review') return { title: '订单已建立，付款状态待核对', detail: '系统正在向支付机构核对结果，请勿重复付款。' }
   if (result.payment.providerAction.status === 'resolved') {

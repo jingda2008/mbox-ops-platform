@@ -17,6 +17,7 @@ const integration = databaseUrl ? describe : describe.skip
 const tenantId = 'd7000000-0000-4000-8000-000000000001'
 const storeId = 'd7000000-0000-4000-8000-000000000002'
 const secret = 'normalized-rate-limit-test-secret-32-bytes-minimum'
+let databaseClock = new Date('2026-10-11T00:01:00.000Z')
 
 integration('normalized staff login rate limiter', () => {
   let pool: Pool
@@ -42,6 +43,7 @@ integration('normalized staff login rate limiter', () => {
   })
 
   beforeEach(async () => {
+    databaseClock = new Date('2026-10-11T00:01:00.000Z')
     await pool.query(`
       DELETE FROM mbox.staff_login_rate_limits
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
@@ -92,6 +94,13 @@ integration('normalized staff login rate limiter', () => {
     await expect(limiter.consume({ ...attemptFor(41), sourceKey: '203.0.113.8' })).resolves.toBeUndefined()
   })
 
+  it('starts a new source window when attempts cross the fixed-window boundary', async () => {
+    for (let index = 0; index < 40; index++) await limiter.consume(attemptFor(index))
+    await expect(limiter.consume(attemptFor(40))).rejects.toBeInstanceOf(StaffLoginRateLimitError)
+    databaseClock = new Date('2026-10-11T00:10:00.000Z')
+    await expect(limiter.consume(attemptFor(41))).resolves.toBeUndefined()
+  })
+
   it('bounds daily credentials despite device rotation and normalizes mapped IPv4', async () => {
     for (let index = 0; index < 40; index++) await limiter.consume(attemptFor(index, 'daily_store_credential'))
     await expect(limiter.consume({ ...attemptFor(41, 'daily_store_credential'), sourceKey: '::ffff:203.0.113.7' }))
@@ -132,7 +141,7 @@ integration('normalized staff login rate limiter', () => {
     const attempt = attemptFor(1)
     for (let index = 0; index < 8; index++) await limiter.consume(attempt)
     await expect(limiter.consume(attempt)).rejects.toBeInstanceOf(StaffLoginRateLimitError)
-    await pool.query("UPDATE mbox.staff_login_rate_limits SET window_started_at=clock_timestamp()-interval '20 minutes', expires_at=clock_timestamp()-interval '10 minutes' WHERE store_id=$1", [storeId])
+    await pool.query("UPDATE mbox.staff_login_rate_limits SET window_started_at=$2::timestamptz-interval '20 minutes', expires_at=$2::timestamptz-interval '10 minutes' WHERE store_id=$1", [storeId, databaseClock.toISOString()])
     await expect(limiter.consume(attempt)).resolves.toBeUndefined()
   })
 
@@ -156,7 +165,11 @@ function asPool(pool: Pool): PostgresPool {
 
 function asPoolClient(client: PoolClient): PostgresPoolClient {
   return {
-    query: (text, values) => client.query(text, values),
+    // Freeze PostgreSQL's wall clock for these window assertions; JS fake timers
+    // cannot control clock_timestamp() and would interfere with the pg driver.
+    query: (text, values) => client.query(
+      text.replaceAll('clock_timestamp()', `TIMESTAMPTZ '${databaseClock.toISOString()}'`), values,
+    ),
     release: (error) => client.release(error),
   }
 }

@@ -35,3 +35,9 @@
 | 29 支付宝小程序23页面 | [app.json](../alipay-miniprogram/app.json) | [guest-commerce-service-api.ts](../server/normalized/guest-commerce-service-api.ts) | [alipay-phone-authorization.ts](../server/normalized/alipay-phone-authorization.ts) | 共同接口、平台差异、能力默认关闭 | 本轮静态及13平台用例通过；存酒2专页在允许差异名单 |
 | 30 Android原生员工App | [AppModel.kt](../native/staff-app/android/app/src/main/java/com/mbox/staff/AppModel.kt) | [native-physical-command.ts](../server/normalized/native-physical-command.ts) | [native-physical-command.ts](../server/normalized/native-physical-command.ts) | 本地未决记录、员工绑定、服务端长期收据、更新 | 代码静态纳入；stable build9，build12候选，未做新实体机验收 |
 | 31 iOS、旧网页与旧服务、历史迁移 | [legacy-e2e-main.tsx](../src/legacy-e2e-main.tsx) | [normalized-app.ts](../server/normalized/normalized-app.ts) | [transaction-runner.ts](../server/normalized/transaction-runner.ts) | 当前入口、兼容类型、实际产物、历史测试入口 | 发现07；iOS历史排除保留，未把其历史单测当现行交付 |
+
+## 2026-10-11 12:53 CST 当前修复状态
+
+上表保留rc253审计基线。01/02/03/04/05/06/07及两项原运维风险的rc255生产回读见[审计报告第8节](system-closure-audit-2026-10-11.md)；以报告第8节为当前交付状态，不再将基线中的“待修”理解为尚未实施。另修复登录限流测试时钟，PR #358仅改变测试及记录。
+
+未配置的通用外送通道和既有营销外部发送仍需真实通道实施/验收；历史已标送达事件未自动补偿。小程序仍沿用此前rc253官方开发版上传证据，本轮没有新增上传、审核或正式发布；W20真机、真实资金、纸票、Android实体机/平台验收均未由源码或网页通过替代。

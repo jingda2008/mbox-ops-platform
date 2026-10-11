@@ -12,7 +12,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-11 11:52 CST`
+最后更新：`2026-10-11 12:53 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -6299,3 +6299,31 @@ rc254标准部署exit1发生在服务激活前；生产独立回读仍为rc253/S
 | 时间 | 变更 | 负责人 | 证据 |
 |---|---|---|---|
 | 2026-10-11 11:52 CST | 记录部署前置校验遗漏，修正实际激活与回滚并升级rc255；继续完成标准发布 | Codex | deploy-rc254.log、ready-after-deploy-failure.json、manifest-guard-repro-before.log、manifest-guard-fixed.log、REL-026 |
+
+### 2026-10-11 12:53 CST rc255全系统审计修复生产交付
+
+发布源码为 `51c97ad49711ae7dca83da242b68962fc17ac81f`，不可变标签 `v1.0.0-rc.255`，[PR #357](https://github.com/jingda2008/mbox-ops-platform/pull/357) 完成7项修复，[PR #359](https://github.com/jingda2008/mbox-ops-platform/pull/359) 补齐部署校验并合并。rc254制品成功但激活前退出，未切换生产；本次由rc255完成实际交付。对应[PR CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38109791673)、[主线 CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110772668)、[标签 CI](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110779622)及[Release](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110779633)成功。rc255固定标签数据库3256通过，另有130项专项；浏览器138通过/36条件跳过、三屏18通过、会员8通过；真实接口、基础与性能检查全部通过；套件有重叠，不相加为独立功能数。Linux发布锁与部署系统测试通过；rc255新增实际激活/回滚校验执行回归。本地浏览器首次404因并发构建覆盖静态目录，已保存日志；无并发重跑138通过/36条件跳过，最终CI再次通过。
+
+rc255首次标准部署在备份证据中继SSH握手时超时（exit255），独立回读仍为健康rc253；连接复测成功后保留日志并用同一标签标准重试。发布清单中的17项部署文件包含脚本及适配器，不是整个发布目录的文件总数。标准部署最终exit0、`deployment=complete`，部署清单时间 `2026-10-11T04:47:21Z`，schema265不变，生产SHA/镜像/核心worker与公网及Chromium四入口通过。镜像 `sha256:1b3b858085762f594b1771e287bd5744452267a8924f2aea2bdffcc0284084c2`；平台镜像 `sha256:624dc27fbbdd3ea00c5c3f2ba7a4276ff275f4d2562b52ddd39a49f92bd591ff`。备份、OSS证据回读及rc253回滚容器 `mbox-app-rollback-51c97ad-20261011-124719` 保留；适配器改用本次包内文件，生产哈希 `2d35d95a1479ece7406e49fa951a30f38d30bf9ed9e47a8646395d1eaaa4aad8` 已逐字节核对。
+
+| 项目 | 交付状态 | 证据与边界 |
+|---|---|---|
+| SYS-AUDIT-20261011-01 | 虚假交付已修复并上线 | 协议v2和严格回执；生产通用能力列表为空，4个未配置通道明确列为不可用；专用支付/微信/PrintBridge独立保留。历史事件未自动重放，真实外送能力不因此视为完成。 |
+| SYS-AUDIT-20261011-02 | 原请求恢复修复已上线 | 认证、权限、业务拒绝及存储异常保留原操作；费用/报损/协助点单真实事务回放、制作真实撤销会话后恢复已通过，不据此宣称曾发生生产重复账。 |
+| SYS-AUDIT-20261011-03 | H5购物车时序修复已上线 | 会话/版本/写入世代接纳、旧读取失效、冲突刷新失败真实提示；真实浏览器延迟读取与后端写入回归通过。 |
+| SYS-AUDIT-20261011-04 | 支付面板终态修复已上线 | 以最新账单状态和金额控制按钮，退款/无需付款文案一致；慢网轮询不会因下一次读取开始而永久丢弃响应。真实资金验收独立。 |
+| SYS-AUDIT-20261011-05 | 身份错误映射已上线 | 生产10条匿名读取入口均返回401；缺少/过期会话矩阵及恢复联验通过，权限不足保持403。 |
+| SYS-AUDIT-20261011-06 | 依赖闭包门禁已上线 | 按TS配置解析扩展名/别名/目录/动态导入，缺少本地运行依赖失败退出，负例门禁通过。 |
+| SYS-AUDIT-20261011-07 | 生产旧产物已清理 | 实际容器已无24个旧服务实现，顶层服务JS由36降为12；9个现行服务与运维入口均保留，历史迁移和历史证据保留。 |
+| OPS-SLS-20261010-01 | 主机与云端验证关闭 | 两个主机脚本哈希一致；64条原积压成功处理，队列回读为空；数字字段云端回读成功；服务90秒超时、control-group，隔离超时证明锁可重新取得。 |
+| OPS-CI-MERGE-20261011-01 | 主线保护验证关闭 | main要求官方GitHub Actions verify和最新分支，管理员同受约束；已回读待完成CI时BLOCKED及完成后正常合并。 |
+| OPS-RELEASE-CONTRACT-20261011-01 | 激活与回滚校验已修复并上线 | rc254的部署文件项数17/16不一致导致激活前退出，生产保持rc253；rc255两处校验修正，实际shell函数合同回归先失败后通过，完整包/缺件/多件/哈希篡改全部覆盖，REL-026永久登记。 |
+| OPS-CI-CLOCK-20261011-01 | 确定性测试修复已合并 | PR #358仅修改测试时钟与清单；10项受控数据库验证和完整PR CI通过。保留标签第一次3254通过/1失败证据，原标签重试成功；生产限流规则与不可变标签未修改。 |
+
+未配置的通用外送通道和既有营销外部发送仍需真实通道实施/验收；历史已标送达事件未自动补偿。小程序仍沿用此前rc253官方开发版上传证据，本轮没有新增上传、审核或正式发布；W20真机、真实资金、纸票、Android实体机/平台验收均未由源码或网页通过替代。
+
+最终发布证据目录：`outputs/system-closure-fix-20261011/rc255/`；前期修复、rc254失败及SLS证据保留在其上级目录。包括pr-final-ci/main-ci-success/tag-ci-attempt1/release-ci-success、tag-database-attempt1、rate-window-clock-test、clock-pr-ci-success、deploy-rc254、deployment-manifest、ready-after、production-artifact-after、anonymous-auth-after、production-queues-after、sls-install/sls-cloud-readback/sls-independent-readback/collector-timeout-proof。可携带摘要见[rc255核对记录](evidence/rc255-system-audit-readback.json)。
+
+| 时间 | 变更 | 负责人 | 证据 |
+|---|---|---|---|
+| 2026-10-11 12:53 CST | 7项审计修复由rc255上线；SLS、合并保护、限流测试时钟及激活/回滚契约全部逐项关闭；保留平台/现场及未配置外送边界 | Codex | rc255固定版本CI、标准部署和审计第8节 |

@@ -13,8 +13,8 @@ export class DurableStaffCommand<B,R>{
     this.storageKey=`mbox.staff-command.v1:${namespace}`
   }
   pending():StoredAttempt<B,R>|null{
-    try{const text=this.storage?.getItem(this.storageKey);if(text){const value=JSON.parse(text);if(value&&typeof value.key==='string'&&'body' in value)return value}}
-    catch{/* Same-tab memory remains available. */}
+    try{const text=this.storage?.getItem(this.storageKey);if(text){const value=JSON.parse(text);if(value&&typeof value.key==='string'&&value.key.length>0&&'body' in value)return value;if(this.requirePersistent)throw new Error('操作记录损坏')}}
+    catch{if(this.requirePersistent)throw new Error('操作记录暂时无法读取，请恢复浏览器存储后再试')}
     return memory.get(this.storageKey) as StoredAttempt<B,R>??null
   }
   async submit(body:B):Promise<R>{
@@ -26,14 +26,15 @@ export class DurableStaffCommand<B,R>{
     this.save(attempt)
     const request=this.send(attempt.body,attempt.key).then(result=>{this.save({...attempt,result});return result}).catch((error:unknown)=>{
       const details=error as {status?:number;code?:string}|null
-      if(details&&([400,403,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
+      // A later refusal cannot establish that the first attempt never committed.
+      if(!previous&&details&&([400,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
       throw error
     }).finally(()=>flights.delete(this.storageKey))
     flights.set(this.storageKey,request);return request
   }
   recover(){const previous=this.pending();if(!previous)throw new Error('没有待恢复的操作');return this.submit(previous.body)}
   async refresh(read:()=>Promise<void>){const previous=this.pending();if(!previous||!('result' in previous))throw new Error('请先恢复原操作结果');await read();if(this.pending()?.key===previous.key)this.clear()}
-  private save(value:StoredAttempt<B,R>){if(this.requirePersistent){if(!this.storage)throw new Error('此设备无法保留操作记录，请恢复浏览器存储后再制作');this.storage.setItem(this.storageKey,JSON.stringify(value));memory.set(this.storageKey,value);return}memory.set(this.storageKey,value);try{this.storage?.setItem(this.storageKey,JSON.stringify(value))}catch{/* Memory protects retries when storage is unavailable. */}}
+  private save(value:StoredAttempt<B,R>){if(this.requirePersistent){if(!this.storage)throw new Error('此设备无法保留操作记录，请恢复浏览器存储后再制作');const serialized=JSON.stringify(value);this.storage.setItem(this.storageKey,serialized);if(this.storage.getItem(this.storageKey)!==serialized)throw new Error('操作记录未能保存，请恢复浏览器存储后再试');memory.set(this.storageKey,value);return}memory.set(this.storageKey,value);try{this.storage?.setItem(this.storageKey,JSON.stringify(value))}catch{/* Memory protects retries when storage is unavailable. */}}
   private clear(){if(this.requirePersistent){this.storage?.removeItem(this.storageKey);memory.delete(this.storageKey);return}memory.delete(this.storageKey);try{this.storage?.removeItem(this.storageKey)}catch{/* Cleared in memory. */}}
 }
 // Keep an unresolved stock or publication intent when a staff member closes

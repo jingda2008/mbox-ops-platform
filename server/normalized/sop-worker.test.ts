@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { SopRepository } from './sop-repository.js'
-import { AiScheduledExecutionWorker, SopWorker, type SopActionPort } from './sop-worker.js'
+import { AiScheduledExecutionWorker, SopWorker, assertSopActionResult, type SopActionPort } from './sop-worker.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL
@@ -13,6 +13,9 @@ const employeeId = '92400000-0000-4000-8000-000000000003'
 const scope = { tenantId, storeId }
 
 describe('SOP worker validation', () => {
+  it.each([undefined,{skipped:true},{state:'unknown'},{state:'waiting'},{state:'waiting',externalReference:''}])('rejects malformed action results before recording completion',result=>{
+    expect(()=>assertSopActionResult(result)).toThrow('sop_action_result_invalid')
+  })
   it('rejects an unbounded batch before accessing PostgreSQL', () => {
     const transactions = { run: vi.fn() } as unknown as ScopedPostgresTransactionRunner
     const worker = new SopWorker(transactions, { execute: vi.fn() })

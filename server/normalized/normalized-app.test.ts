@@ -18,7 +18,7 @@ import {
   NormalizedRuntimeConfigurationError,
   type NormalizedRuntimeConfig,
 } from './normalized-runtime-config.js'
-import { DEVICE_ACCESS_COOKIE } from './normalized-request-context.js'
+import { DEVICE_ACCESS_COOKIE, STAFF_SESSION_COOKIE } from './normalized-request-context.js'
 import type {
   PostgresPool,
   PostgresPoolClient,
@@ -63,6 +63,20 @@ const productionConfig = {...config, deploymentTier: 'production' as const,
 }
 
 describe('createNormalizedApp', () => {
+  it('returns 401 for missing or expired staff credentials on every audited read route',async()=>{
+    const runtime=await createNormalizedApp({config,pool:fakePool({deviceLeaseValid:true,businessClockAvailable:true}),logger:false})
+    try{
+      for(const path of ['/api/native/commercial-ops/native-capabilities','/api/native/commercial-ops/owner-finance',
+        '/api/staff/native-waitlist-capabilities','/api/staff/reservation-intake','/api/commercial-ops/profit',
+        '/api/commercial-ops/costs','/api/commercial-ops/cash-handovers','/api/commercial-ops/employee-sales',
+        '/api/commercial-ops/vouchers','/api/commercial-ops/owner-finance']){
+        for(const cookie of ['', `${DEVICE_ACCESS_COOKIE}=${'d'.repeat(48)}; ${STAFF_SESSION_COOKIE}=${'s'.repeat(48)}`]){
+          const response=await runtime.app.inject({url:path+'?startDate=2026-10-01&endDate=2026-10-11',headers:cookie?{cookie}:{}})
+          expect(response.statusCode,path+' '+cookie).toBe(401)
+        }
+      }
+    }finally{await runtime.app.close()}
+  })
   it('rejects an unsafe production login before registering routes and closes its pool',async()=>{
     const pool=fakePool({databaseIdentity:{session_user:'postgres',current_user:'postgres',login:true,runtime_member:true,
       row_security:true,unsafe_attributes:true,unexpected_membership:true,owns_objects:true,can_create:true,unsafe_definer:true}})
@@ -695,6 +709,7 @@ interface FakePoolOptions {
   ready?: { schema_flavor: string; schema_version: string; store_active: boolean }
   failure?: Error
   events?: string[]
+  businessClockAvailable?: boolean
   deviceLeaseValid?: boolean
   queryDelayMs?: number
 }
@@ -708,6 +723,7 @@ function fakePool(options: FakePoolOptions = {}): InspectablePool {
       text: string,
     ): Promise<PostgresQueryResult<Row>> {
       queries.push(text)
+      if(options.businessClockAvailable && text.includes('mbox.current_operating_business_date(tenant_id,id)'))return {rows:[{business_date:'2026-10-11',timezone:'Asia/Shanghai',cutoff:'06:00:00'} as unknown as Row],rowCount:1}
       if(text.includes('WITH reachable AS MATERIALIZED'))return {rows:options.databaseIdentity?[options.databaseIdentity as Row]:[],rowCount:options.databaseIdentity?1:0}
       if (options.queryDelayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, options.queryDelayMs))
       if (text.includes('normalized_schema_metadata')) {

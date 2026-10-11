@@ -76,6 +76,13 @@ describe('OutboxDispatcher', () => {
     expect(transactions.calls[1]?.sql).toContain('available_at = clock_timestamp()')
   })
 
+  it('never acknowledges a JavaScript no-op response as delivered',async()=>{
+    const id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const transactions=new ScriptedTransactions([response([messageRow(id)]),response([],1)])
+    const result=await new OutboxDispatcher(transactions).runBatch(scope,'worker',async()=>({skipped:true}) as unknown as void)
+    expect(result.delivered).toEqual([]);expect(result.failed).toEqual([id])
+    expect(transactions.calls[1]?.sql).not.toContain('delivered_at = clock_timestamp()')
+  })
   it('rejects unsafe batch sizes before touching the database', async () => {
     const transactions = new ScriptedTransactions([])
     await expect(new OutboxDispatcher(transactions).runBatch(

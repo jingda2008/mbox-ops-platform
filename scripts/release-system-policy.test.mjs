@@ -184,7 +184,7 @@ test('database maintenance credentials stay root-only and the frozen backup pres
   assert.doesNotMatch(`${legacyBackup}\n${legacyRestore}\n${runbook}`, /pg_restore[^\n]*--clean/)
 })
 
-test('production worker adapters are inherited as immutable read-only release evidence', async () => {
+test('production worker adapters come from the signed release bundle with immutable read-only evidence', async () => {
   const activate = await read('../deploy/aliyun/activate-release.sh')
   const prepare = activate.indexOf('prepare_worker_adapter_mount()')
   const invoke = activate.indexOf('prepare_worker_adapter_mount', prepare + 1)
@@ -200,6 +200,7 @@ test('production worker adapters are inherited as immutable read-only release ev
   assert.match(activate, /hash_worker_adapter_tree\(\)[\s\S]*find \. -mindepth 1 -print0[\s\S]*LC_ALL=C sort -z/)
   assert.match(activate, /printf 'file\\0%s\\0%s\\0%s\\0'/)
   assert.doesNotMatch(activate, /tar --sort=name/)
+  assert.match(activate, /install -m 0444.*commercial-worker-adapters\.mjs/)
   assert.match(activate, /worker_adapter_mount_args\[@\]/)
   assert.match(activate, /workerAdapterTreeSha256[\s\S]*readOnly:true/)
   assert.doesNotMatch(activate, /\[ "\$\{health\}" = unhealthy \] && exit 1/)

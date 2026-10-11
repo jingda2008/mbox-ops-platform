@@ -696,7 +696,11 @@ prepare_worker_adapter_mount() {
   worker_adapter_directory=${release_dir}/worker-adapters
   rm -rf "${worker_adapter_directory}"
   install -d -m 0700 "${worker_adapter_directory}"
-  cp -a "${active_mount_source}/." "${worker_adapter_directory}/"
+  # Replace the inherited placeholder with this immutable release's reviewed module.
+  # The old directory is only read to preserve the rollback identity.
+  test "${relative_module}" = commercial.mjs
+  test -f "${release_dir}/commercial-worker-adapters.mjs"
+  install -m 0444 "${release_dir}/commercial-worker-adapters.mjs" "${worker_adapter_directory}/commercial.mjs"
   test -z "$(find "${worker_adapter_directory}" -type l -print -quit)"
   # The application runs as a non-root user. Adapter code is not secret, but
   # only root may change it; every runtime user needs read/traverse access.
@@ -704,7 +708,7 @@ prepare_worker_adapter_mount() {
   test -f "${worker_adapter_directory}/${relative_module}"
   test $(( 8#$(stat -c '%a' "${worker_adapter_directory}/${relative_module}") & 8#444 )) = $(( 8#444 ))
   test $(( 8#$(stat -c '%a' "${worker_adapter_directory}/${relative_module}") & 8#022 )) = 0
-  worker_adapter_source=${active_mount_source}
+  worker_adapter_source=${release_dir}/commercial-worker-adapters.mjs
   worker_adapter_sha=$(sha256sum "${worker_adapter_directory}/${relative_module}" | awk '{print $1}')
   worker_adapter_tree_sha=$(hash_worker_adapter_tree "${worker_adapter_directory}")
   [[ "${worker_adapter_sha}" =~ ^[0-9a-f]{64}$ ]]
@@ -1472,7 +1476,7 @@ jq -n \
     configuration: {storeSha256:$storeConfigSha256,catalogSha256:$catalogConfigSha256},
     workerAdapter: (if $workerAdapterModule == "" then null else {
       module:$workerAdapterModule,
-      inheritedFrom:$workerAdapterSource,
+      source:$workerAdapterSource,
       sha256:$workerAdapterSha256,
       treeSha256:$workerAdapterTreeSha256,
       mount:"/app/worker-adapters",

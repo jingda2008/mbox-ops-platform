@@ -79,6 +79,11 @@ describe('PrintWorker', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('holds a no-op JavaScript response for review instead of printing or resending',async()=>{
+    const transactions=new ScriptedTransactions([response([jobRow()]),response([],1),response([],1)])
+    const result=await new PrintWorker(transactions).runBatch(scope,'no-op',{print:async()=>({skipped:true}) as unknown as void})
+    expect(result.printed).toEqual([]);expect(result.retrying).toEqual([]);expect(result.dead).toHaveLength(1)
+  })
   it('does not automatically resend after an unclassified adapter exception', async () => {
     const transactions = new ScriptedTransactions([response([jobRow()]), response([],1), response([],1)])
     const print = vi.fn().mockRejectedValue(new Error('ack lost after spool submission'))

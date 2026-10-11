@@ -18,6 +18,7 @@ export async function executeRecoverableCommand<T>(
         && 'key' in parsed && typeof parsed.key === 'string') attempt = { fingerprint, key: parsed.key }
     }
   } catch { /* In-memory protection remains available when storage is restricted. */ }
+  const recovering = attempt !== undefined
   if (!attempt) attempt = { fingerprint, key: proposedKey }
   memory.set(storageKey, attempt)
   try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(storageKey, JSON.stringify(attempt)) } catch { /* Same-tab retry remains protected. */ }
@@ -29,7 +30,10 @@ export async function executeRecoverableCommand<T>(
   }
   const execution = send(attempt.key).then((result) => { clear(); return result }).catch((error: unknown) => {
     const status = error && typeof error === 'object' && 'status' in error ? error.status : null
-    if (typeof status === 'number' && status >= 400 && status < 500 && ![408, 409, 429].includes(status)) clear()
+    // A refusal of a retry says nothing about an earlier committed request.
+    // Authentication recovery must retain the original key even on first use.
+    if (!recovering && typeof status === 'number' && status >= 400 && status < 500
+      && ![401, 403, 408, 409, 429].includes(status)) clear()
     throw error
   }).finally(() => { flights.delete(storageKey) })
   flights.set(storageKey, execution)

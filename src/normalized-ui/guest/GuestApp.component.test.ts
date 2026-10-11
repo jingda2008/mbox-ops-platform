@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { rankMenuRecommendations } from '../../shared/menu-recommendation'
-import { GuestApp, GuestGate, TableOrdersPanel, paymentStatusCopy } from './GuestApp'
+import { GuestApp, GuestGate, CheckoutPanel, TableOrdersPanel, paymentStatusCopy } from './GuestApp'
 import type { GuestOrderResult, GuestTableOrder } from './guest-api'
 import { guestGatePresentation } from './guest-gate-model'
 import { guestMenuProductToMenuProduct } from './menu-product-adapter'
@@ -176,4 +176,17 @@ it('renders actual item and bundle progress while leaving unresolved stopped amo
   expect(payable).toContain('退菜减额'); expect(payable).toContain('微信支付')
   const stopped = render({ ...base, settlementReviewRequired: false, paymentAccess: 'not_required', receivableReductionMinor: 4000 })
   expect(stopped).toContain('无需再付款'); expect(stopped).not.toContain('等待付款'); expect(stopped).not.toContain('微信支付')
+})
+
+it.each(['paid','refunded','partially_refunded'])('hides the stale payment action for latest %s orders',status=>{
+  const result={order:{publicId:'order'},settlement:{payableAmountMinor:100,currency:'CNY'},payment:{status:'pending',simulated:false,providerAction:{status:'pending',payload:{}}}} as GuestOrderResult
+  const tableOrder={paymentStatus:status,paymentAccess:'not_required'} as GuestTableOrder
+  const html=renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,onClose(){},onRetryPayment(){}}))
+  expect(html).not.toContain('继续微信支付');expect(html).not.toContain('重新发起付款')
+})
+it('disables payment while verifying and does not offer payment during settlement review',()=>{
+  const result={order:{publicId:'order'},settlement:{payableAmountMinor:100,currency:'CNY'},payment:{status:'pending',simulated:false,providerAction:{status:'pending',payload:{}}}} as GuestOrderResult
+  const render=(tableOrder:GuestTableOrder|null)=>renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,busy:true,onClose(){},onRetryPayment(){}}))
+  expect(render(null)).toContain('disabled=""');expect(render(null)).toContain('正在核对付款')
+  expect(render({paymentStatus:'pending',paymentAccess:'status_review'} as GuestTableOrder)).not.toContain('guest-primary')
 })

@@ -1,3 +1,4 @@
+import {recoverCommittedStaffCommand} from './staff-recovery.test-helper.js'
 import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -51,9 +52,9 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
   afterAll(async () => { await runtime?.end(); await pool?.end() })
 
   it('writes a cost, audit and outbox atomically and allows only one immutable correction', async () => {
-    const created = await commands.execute({
+    const {first:created,recovered} = await recoverCommittedStaffCommand(idempotencyKey=>commands.execute({
       scope: { tenantId, storeId }, operationScope: 'commercial.test.cost',
-      idempotencyKey: 'commercial-cost-create-test-0001', requestFingerprint: 'cost-v1',
+      idempotencyKey, requestFingerprint: 'cost-v1',
       resultCodec: stringCodec,
     }, async (transaction) => {
       const cost = await new CommercialOpsRepository(transaction).createCost(costInput('base'))
@@ -69,7 +70,8 @@ integration('CommercialOpsRepository PostgreSQL integrity', () => {
           eventType: 'commercial.test.cost_created.v1', payload: { amountMinor: cost.grossAmountMinor },
         }],
       }
-    })
+    }))
+    expect(recovered).toEqual({value:created.value,replayed:true})
     const correction = (suffix: string) => transactions.run({ tenantId, storeId }, async (transaction) => (
       new CommercialOpsRepository(transaction).correctCost(
         created.value,

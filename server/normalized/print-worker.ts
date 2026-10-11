@@ -237,8 +237,9 @@ function integer(value: number, minimum: number, maximum: number, field: string)
 async function boundedPrint(adapter: PrintAdapter, request: PrintAdapterRequest, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([adapter.print(request), new Promise<never>((_, reject) => {
+    const receipt=await Promise.race([adapter.print(request), new Promise<never>((_, reject) => {
       timer=setTimeout(() => reject(new PrintAdapterError('print_result_unknown')), timeoutMs)
     })])
+    if(receipt!==undefined)throw new PrintAdapterError('print_result_unknown')
   } finally { if (timer !== undefined) clearTimeout(timer) }
 }

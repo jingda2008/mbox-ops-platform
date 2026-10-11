@@ -60,7 +60,7 @@ export class OutboxDispatcher {
     const result: OutboxBatchResult = { claimed: claimed.length, delivered: [], failed: [] }
     for (const message of claimed) {
       try {
-        await deliver(message)
+        if(await deliver(message)!==undefined)throw new Error('outbox_delivery_receipt_invalid')
         const marked = await this.transactions.run(scope, (transaction) => (
           markDelivered(transaction, message.id, workerId)
         ))

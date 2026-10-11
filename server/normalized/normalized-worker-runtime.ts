@@ -22,7 +22,7 @@ import { ActivityRegistrationExpiryWorker } from './activity-registration-expiry
 import { ActivityWaitlistPromotionWorker } from './activity-waitlist-promotion-worker.js'
 import { ExperienceCueDispatchWorker } from './experience-cue-dispatch-worker.js'
 import { ServiceTaskSlaWorker } from './service-task-sla-worker.js'
-import { AiScheduledExecutionWorker, SopWorker, type SopActionPort } from './sop-worker.js'
+import { AiScheduledExecutionWorker, SopWorker, assertSopActionResult, type SopActionPort } from './sop-worker.js'
 import { PostgresStaffLoginRateLimiter } from './staff-login-rate-limiter.js'
 import { LoyaltyPointsExpiryWorker } from './loyalty-points-expiry-worker.js'
 import { LoyaltyAccrualDeferredWorker } from './loyalty-accrual-deferred-worker.js'
@@ -60,17 +60,15 @@ export interface NormalizedWorkerAdapters {
   sop: SopActionPort
 }
 
-export const REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES = Object.freeze([
+export const NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES = Object.freeze([
   'outbox.deliver',
   'notification.deliver',
   'print.deliver',
   'sop.execute',
-  'payment.create.postar',
-  'refund.execute.postar',
 ] as const)
 
 export type NormalizedWorkerAdapterCapability =
-  (typeof REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES)[number]
+  (typeof NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES)[number]
 
 export interface NormalizedWorkerAdapterFactoryContext {
   scope: Readonly<StoreScope>
@@ -102,6 +100,7 @@ export interface NormalizedWorkerRuntimeOptions {
   }> | null
   staleGuestImmediatePaymentReconciliation?: Readonly<StaleGuestImmediatePaymentWorkerDeps> | null
   marketingDelivery?: MarketingDeliveryAdapter | null
+  paymentProviderConfigured?: boolean
   onError?: (worker: NormalizedWorkerName, error: unknown) => void
   onCycle?: (result: Readonly<NormalizedWorkerCycleResult>) => void
 }
@@ -148,7 +147,7 @@ export function createNormalizedWorkerRuntime(
     activityRegistrationExpiry: new ActivityRegistrationExpiryWorker(transactions),
     activityWaitlistPromotion: new ActivityWaitlistPromotionWorker(
       transactions,
-      adapters?.capabilities.includes('payment.create.postar') ?? false,
+      options.paymentProviderConfigured === true,
     ),
     experienceCueDispatch: new ExperienceCueDispatchWorker(transactions),
     loyaltyPointsExpiry: new LoyaltyPointsExpiryWorker(transactions),
@@ -194,15 +193,13 @@ export function createNormalizedWorkerRuntime(
         transactions,
       ),
     }),
-    ...(adapters === null ? {} : { sop: new SopWorker(transactions, adapters.sop) }),
+    ...(adapters?.capabilities.includes('sop.execute') ? { sop: new SopWorker(transactions, adapters.sop) } : {}),
     aiScheduled: new AiScheduledExecutionWorker(transactions, options.aiExecutions),
     personalContactDisposition:new PersonalContactDispositionWorker(transactions),
     complimentaryBenefitFulfillment:new ComplimentaryBenefitFulfillmentWorker(transactions),
-    ...(adapters === null ? {} : {
-      print: new PrintWorker(transactions),
-      outbox: new OutboxDispatcher(transactions),
-      notification: new NotificationWorker(transactions),
-    }),
+    ...(adapters?.capabilities.includes('print.deliver') ? {print:new PrintWorker(transactions)} : {}),
+    ...(adapters?.capabilities.includes('outbox.deliver') ? {outbox:new OutboxDispatcher(transactions)} : {}),
+    ...(adapters?.capabilities.includes('notification.deliver') ? {notification:new NotificationWorker(transactions)} : {}),
   }, {
     ...(adapters === null ? {} : {
       outbox: adapters.outbox,
@@ -224,6 +221,7 @@ export interface NormalizedWorkerHealthSnapshot {
   failures: readonly NormalizedWorkerName[]
   integrationWorkersEnabled: boolean
   adapterCapabilities: readonly NormalizedWorkerAdapterCapability[]
+  unavailableAdapterCapabilities: readonly NormalizedWorkerAdapterCapability[]
   nativePush?: {status:'idle'|'healthy'|'degraded';lastConfigurationFailureAt:string|null;lastProviderAcceptedAt:string|null;lastErrorCode:string|null}
 }
 
@@ -257,6 +255,7 @@ export class NormalizedWorkerHealthTracker {
         status: 'starting', lastCompletedAt: null, failures: [],
         integrationWorkersEnabled: this.integrationWorkersEnabled,
         adapterCapabilities: [...this.adapterCapabilities],
+        unavailableAdapterCapabilities: NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES.filter(capability=>!this.adapterCapabilities.includes(capability)),
         ...this.pushSnapshot(),
       }
     }
@@ -270,6 +269,7 @@ export class NormalizedWorkerHealthTracker {
       failures,
       integrationWorkersEnabled: this.integrationWorkersEnabled,
       adapterCapabilities: [...this.adapterCapabilities],
+        unavailableAdapterCapabilities: NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES.filter(capability=>!this.adapterCapabilities.includes(capability)),
       ...this.pushSnapshot(),
     }
   }
@@ -302,46 +302,55 @@ export async function loadNormalizedWorkerAdapters(
     throw new NormalizedWorkerAdapterConfigurationError('factory_failed')
   }
   assertAdapters(candidate)
-  try {
-    await candidate.preflight()
-  } catch {
-    throw new NormalizedWorkerAdapterConfigurationError('preflight_failed')
+  // Mounted JavaScript does not receive TypeScript's contract checking.
+  if (!('protocolVersion' in candidate) || candidate.protocolVersion !== 2) {
+    throw new NormalizedWorkerAdapterConfigurationError('protocol_version_required')
   }
-  const print: PrintAdapter = {
-    print: (request) => candidate.print.print(request),
+  async function preflight() {
+    let receipt:unknown
+    try { receipt=await (candidate as NormalizedWorkerAdapters).preflight() }
+    catch { throw new NormalizedWorkerAdapterConfigurationError('preflight_failed') }
+    if(!isRecord(receipt)||receipt.protocolVersion!==2||!Array.isArray(receipt.capabilities)
+      ||JSON.stringify([...receipt.capabilities].sort())!==JSON.stringify([...(candidate as NormalizedWorkerAdapters).capabilities].sort())) {
+      throw new NormalizedWorkerAdapterConfigurationError('preflight_receipt_invalid')
+    }
   }
-  const sop: SopActionPort = {
-    execute: (request) => candidate.sop.execute(request),
+  await preflight()
+  const verified=candidate
+  async function deliver(capability:NormalizedWorkerAdapterCapability,send:()=>Promise<unknown>) {
+    if(!verified.capabilities.includes(capability))throw new NormalizedWorkerAdapterConfigurationError('channel_not_configured')
+    const result=await send()
+    const expectedStatus=capability==='print.deliver'?'printed':'accepted'
+    if(!isRecord(result)||result.status!==expectedStatus||typeof result.providerReference!=='string'
+      ||result.providerReference.trim().length<1||result.providerReference.length>256) {
+      throw new NormalizedWorkerAdapterConfigurationError('delivery_receipt_invalid')
+    }
   }
-  const adapters: NormalizedWorkerAdapters = {
-    capabilities: Object.freeze([...candidate.capabilities]),
-    preflight: () => candidate.preflight(),
-    outbox: (message) => candidate.outbox(message),
-    notification: (request) => candidate.notification(request),
-    print: Object.freeze(print),
-    sop: Object.freeze(sop),
-  }
-  return Object.freeze(adapters)
+  return Object.freeze({
+    capabilities:Object.freeze([...verified.capabilities]),preflight,
+    outbox:(message)=>deliver('outbox.deliver',()=>verified.outbox(message)),
+    notification:(request)=>deliver('notification.deliver',()=>verified.notification(request)),
+    print:Object.freeze({print:(request:Parameters<PrintAdapter['print']>[0])=>deliver('print.deliver',()=>verified.print.print(request))}),
+    sop:Object.freeze({execute:async(request:Parameters<SopActionPort['execute']>[0])=>{
+      if(!verified.capabilities.includes('sop.execute'))throw new NormalizedWorkerAdapterConfigurationError('channel_not_configured')
+      const result=await verified.sop.execute(request)
+      assertSopActionResult(result)
+      return result
+    }}),
+  } satisfies NormalizedWorkerAdapters)
 }
 
 function assertAdapters(value: unknown): asserts value is NormalizedWorkerAdapters {
-  if (!isRecord(value)
-    || !hasRequiredCapabilities(value.capabilities)
-    || typeof value.preflight !== 'function'
-    || typeof value.outbox !== 'function'
-    || typeof value.notification !== 'function'
-    || !isRecord(value.print)
-    || typeof value.print.print !== 'function'
-    || !isRecord(value.sop)
-    || typeof value.sop.execute !== 'function') {
+  if (!isRecord(value) || !validCapabilities(value.capabilities)
+    || typeof value.preflight !== 'function' || typeof value.outbox !== 'function'
+    || typeof value.notification !== 'function' || !isRecord(value.print) || typeof value.print.print !== 'function'
+    || !isRecord(value.sop) || typeof value.sop.execute !== 'function') {
     throw new NormalizedWorkerAdapterConfigurationError('invalid_contract')
   }
 }
-
-function hasRequiredCapabilities(value: unknown): value is readonly NormalizedWorkerAdapterCapability[] {
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) return false
-  const configured = new Set(value)
-  return REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES.every((capability) => configured.has(capability))
+function validCapabilities(value:unknown):value is readonly NormalizedWorkerAdapterCapability[]{
+  return Array.isArray(value)&&new Set(value).size===value.length
+    &&value.every(capability=>NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES.includes(capability))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

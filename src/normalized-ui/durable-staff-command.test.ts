@@ -36,7 +36,7 @@ describe('durable staff command recovery',()=>{
     const one=a.submit({reason:'破损'}),two=same.submit({reason:'破损'});expect(send).toHaveBeenCalledTimes(1);expect(b.pending()).toBeNull()
     finish({ok:true});await Promise.all([one,two]);expect(a.pending()?.result).toEqual({ok:true})
   })
-  it.each([[403,'INVENTORY_PERMISSION_DENIED',false],[409,'INVENTORY_INSUFFICIENT',false],[409,'IDEMPOTENCY_IN_PROGRESS',true],[500,'INVENTORY_INTERNAL_ERROR',true]])('handles refusal %s/%s without confusing it with an unknown result',async(status,code,retained)=>{
+  it.each([[403,'INVENTORY_PERMISSION_DENIED',true],[409,'INVENTORY_INSUFFICIENT',false],[409,'IDEMPOTENCY_IN_PROGRESS',true],[500,'INVENTORY_INTERNAL_ERROR',true]])('handles refusal %s/%s without confusing it with an unknown result',async(status,code,retained)=>{
     const command=new DurableStaffCommand(crypto.randomUUID(),async()=>{throw Object.assign(new Error(code),{status,code})},storage())
     await expect(command.submit({quantity:1})).rejects.toThrow(code);expect(command.pending()!==null).toBe(retained)
   })
@@ -51,4 +51,24 @@ it('requires persistent storage before issuing a kitchen command and keeps the o
     {...saved,setItem:(key,value)=>{if(++writes===2)throw new Error('quota');saved.setItem(key,value)}},true)
   await expect(command.submit({quantity:2})).rejects.toThrow('quota')
   expect(command.pending()?.body).toEqual({quantity:2});await command.recover();expect(keys[0]).toBe(keys[1])
+})
+
+it.each([400,401,403,404,409,422])('retains a previous unknown intent after refusal %s and a module reload',async status=>{
+  const saved=storage(),namespace=crypto.randomUUID(),keys:string[]=[],ledger=new Set<string>()
+  const first=new DurableStaffCommand(namespace,async(body:{quantity:number},key:string)=>{void body;keys.push(key);ledger.add(key);throw Error('lost')},saved)
+  await expect(first.submit({quantity:2})).rejects.toThrow('lost')
+  vi.resetModules();const {DurableStaffCommand:Restored}=await import('./durable-staff-command')
+  const denied=new Restored(namespace,async(_body:{quantity:number},key:string)=>{keys.push(key);throw {status,code:'QUANTITY_UNAVAILABLE'}},saved)
+  await expect(denied.recover()).rejects.toEqual({status,code:'QUANTITY_UNAVAILABLE'})
+  const allowed=new Restored(namespace,async(_body:{quantity:number},key:string)=>{keys.push(key);ledger.add(key);return {ok:true}},saved)
+  await allowed.recover();expect(new Set(keys).size).toBe(1);expect(ledger.size).toBe(1)
+})
+
+it('blocks persistent commands on corrupt journals or silently discarded writes',async()=>{
+  for(const saved of [{getItem:()=>'{broken',setItem(){},removeItem(){}},{getItem:()=>null,setItem(){},removeItem(){}}]){
+    const send=vi.fn(async()=>({ok:true}))
+    const command=new DurableStaffCommand(crypto.randomUUID(),send,saved,true)
+    await expect(command.submit({quantity:1})).rejects.toThrow('操作记录')
+    expect(send).not.toHaveBeenCalled()
+  }
 })

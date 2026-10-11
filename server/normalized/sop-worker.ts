@@ -28,6 +28,11 @@ export type SopActionResult =
   | { state: 'completed'; output?: JsonObject; externalReference?: string | null }
   | { state: 'waiting'; output?: JsonObject; externalReference: string }
 
+export function assertSopActionResult(value:unknown):asserts value is SopActionResult {
+  if(!value||typeof value!=='object'||!('state' in value)||!['completed','waiting'].includes(String(value.state))
+    ||(value.state==='waiting'&&(!('externalReference' in value)||typeof value.externalReference!=='string'||!value.externalReference.trim())))throw new Error('sop_action_result_invalid')
+}
+
 export interface SopActionPort {
   execute(request: Readonly<SopActionRequest>): Promise<SopActionResult>
 }
@@ -261,6 +266,7 @@ async function processStep(
           },
       idempotencyKey: `sop:${row.execution_id}:${phase}`,
     })
+    assertSopActionResult(result)
     if (result.state === 'waiting') {
       const waitMs = row.escalation_after_ms === null ? retryDelayMs : Number(row.escalation_after_ms)
       await updateExecution(transaction, row.execution_id, 'waiting', {

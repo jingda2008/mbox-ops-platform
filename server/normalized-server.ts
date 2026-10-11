@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const workerHealth = config.startWorkers
     ? new NormalizedWorkerHealthTracker(
         config.workerIntervalMs,
-        adapters !== null,
+        (adapters?.capabilities.length ?? 0) > 0,
         adapters?.capabilities ?? [],
         !!(config.nativePush||config.getuiPush),
       )
@@ -120,6 +120,7 @@ async function main(): Promise<void> {
         transactions: workerTransactions,
         aiExecutions: runtime.services.ai,
         adapters,
+        paymentProviderConfigured: config.guestPaymentMode === 'simulation' || config.payment !== null,
         wechatLoyaltyNotification,
         wechatMemberServiceNotification: wechatLoyaltyNotification,
         reservationPerformanceNotification: wechatLoyaltyNotification,

@@ -5,7 +5,7 @@ import {assertRuntimeDatabaseConnection,assertRuntimeDatabasePool,runtimeDatabas
 import {verifySeparateMaintenanceDatabase} from './database-maintenance-connection.js'
 import {loadNormalizedRuntimeConfig} from './normalized-runtime-config.js'
 import {createNormalizedApp} from './normalized-app.js'
-import {createNormalizedWorkerRuntime,REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES} from './normalized-worker-runtime.js'
+import {createNormalizedWorkerRuntime,NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES} from './normalized-worker-runtime.js'
 import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
 import {verifyNormalizedMigrationCompatibility} from '../verify-normalized-migration-compatibility.js'
 
@@ -97,7 +97,7 @@ integration('actual restricted PostgreSQL LOGIN integration',()=>{
       const worker=createNormalizedWorkerRuntime({scope,workerId:'security-integration-worker',intervalMs:1000,
         hashSecret:config.secret,transactions:new ScopedPostgresTransactionRunner(workerPool),
         aiExecutions:{executeClaimedScheduled:async()=>{throw new Error('No external calls allowed')}},
-        adapters:{capabilities:REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES,preflight:async()=>{},
+        adapters:{capabilities:NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES,preflight:async()=>{},
           outbox:async()=>{},notification:async()=>{},print:{print:async()=>{}},sop:{execute:async()=>({state:'completed'})}},
         onError:(name,error)=>errors.push({name,error:String(error)}),
       })

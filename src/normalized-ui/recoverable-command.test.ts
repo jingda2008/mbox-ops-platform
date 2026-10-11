@@ -32,8 +32,16 @@ describe('recoverable command intent ownership', () => {
 
   it('releases a definitely rejected command so corrected input can be submitted', async () => {
     const namespace = crypto.randomUUID()
-    await expect(executeRecoverableCommand(namespace, {}, 'rejected', async () => { throw { status: 403 } })).rejects.toEqual({ status: 403 })
+    await expect(executeRecoverableCommand(namespace, {}, 'rejected', async () => { throw { status: 400 } })).rejects.toEqual({ status: 400 })
     const key = await executeRecoverableCommand(namespace, {}, 'fresh', async (value) => value)
     expect(key).toBe('fresh')
   })
+})
+
+it.each([400,401,403,404,422])('keeps the committed original key after a lost reply followed by %s',async status=>{
+  const namespace=crypto.randomUUID(),ledger=new Set<string>(),keys:string[]=[]
+  await expect(executeRecoverableCommand(namespace,{amount:100},'original',async key=>{keys.push(key);ledger.add(key);throw new Error('reply lost')})).rejects.toThrow('reply lost')
+  await expect(executeRecoverableCommand(namespace,{amount:100},'replacement',async key=>{keys.push(key);throw {status}})).rejects.toEqual({status})
+  await executeRecoverableCommand(namespace,{amount:100},'after-login',async key=>{keys.push(key);ledger.add(key)})
+  expect(keys).toEqual(['original','original','original']);expect(ledger.size).toBe(1)
 })

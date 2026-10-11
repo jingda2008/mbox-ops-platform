@@ -89,7 +89,7 @@ export class NotificationWorker {
 
     for (const notification of batch.claimed) {
       try {
-        await deliver({ ...notification, idempotencyKey: notification.businessKey })
+        if(await deliver({ ...notification, idempotencyKey: notification.businessKey })!==undefined)throw new NotificationDeliveryError('delivery_receipt_invalid')
         const delivered = await this.transactions.run(scope, (transaction) => markDelivered(
           transaction, notification.id, workerId,
         ))

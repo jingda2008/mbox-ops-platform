@@ -1,3 +1,4 @@
+import {DurableStaffCommand} from '../../src/normalized-ui/durable-staff-command'
 import {createHash,randomUUID} from 'node:crypto'
 import Fastify from 'fastify'
 import {Pool} from 'pg'
@@ -175,6 +176,26 @@ integration('kitchen production real transaction boundary',()=>{
     expect(response.statusCode).toBe(403)
     await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
     expect((await command(body,key)).statusCode).toBe(403)
+  })
+  it('recovers a committed kitchen batch after actual session revocation without producing twice',async()=>{
+    // The preceding revocation test intentionally leaves this fixture session revoked.
+    await pool.query('UPDATE mbox.staff_sessions SET revoked_at=NULL WHERE id=$1',[staffSessionId])
+    const row=await item(),body=await start([row],null,2,'quick-ready'),keys:string[]=[]
+    let lose=true,original:any
+    const saved=new Map<string,string>(),storage={getItem:(k:string)=>saved.get(k)??null,setItem:(k:string,v:string)=>{saved.set(k,v)},removeItem:(k:string)=>{saved.delete(k)}}
+    const namespace=randomUUID(),send=async(payload:KitchenCommand,key:string)=>{
+      keys.push(key);const response=await command(payload,key)
+      if(response.statusCode>=400)throw Object.assign(new Error('denied'),{status:response.statusCode})
+      if(lose){lose=false;original=response.json().data;throw new Error('lost')}
+      return response.json().data
+    }
+    await expect(new DurableStaffCommand(namespace,send,storage,true).submit(body)).rejects.toThrow('lost')
+    await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])
+    await expect(new DurableStaffCommand(namespace,send,storage,true).recover()).rejects.toMatchObject({status:403})
+    await pool.query('UPDATE mbox.staff_sessions SET revoked_at=NULL WHERE id=$1',[staffSessionId])
+    expect(await new DurableStaffCommand(namespace,send,storage,true).recover()).toEqual(original)
+    expect(new Set(keys).size).toBe(1)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.kitchen_production_batches WHERE id=$1',[original.batchId])).rows[0].n).toBe(1)
   })
   it('bounds kitchen source lookups for a 120-order burst under RLS and preserves station/scope isolation',async()=>{
     const rows=[]

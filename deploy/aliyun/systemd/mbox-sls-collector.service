@@ -5,6 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=90
+TimeoutStopSec=10
+KillMode=control-group
 User=root
 Environment=MBOX_SLS_ENDPOINT=cn-shanghai-internal.log.aliyuncs.com
 Environment=MBOX_SLS_PROJECT=mbox-validation-139224254060

@@ -66,3 +66,11 @@ ready 均通过；失败则恢复原库名并继续展示维护页，禁止只�
 ## 关店
 
 值班经理关闭开放桌次，处理未完成KDS、服务任务、预约订金、存酒动作和权益锁定，完成支付/退款/POS日对账；未解决差异必须交班并指定负责人和截止时间。
+
+## 通用外送适配器与采集故障（rc254起）
+
+发布包内`commercial-worker-adapters.mjs`是受哈希校验的运行配置来源，部署时复制为只读挂载`commercial.mjs`。协议v2的preflight须返回相同的capabilities；Outbox/通知回执要求`status: accepted`和非空`providerReference`，云打印要求`status: printed`及回执编号，不能将“已入打印池”冒充打印完成；SOP仅接受completed/waiting，waiting须有外部引用。
+
+当前通用Outbox、通知、云打印、SOP未配置外部通道，能力列表为空，队列保持待处理。查看`/api/ready`的workers.unavailableAdapterCapabilities判断缺少什么，不能仅以workers healthy认定这些通道可用。支付/退款、专用微信通知、PrintBridge属于独立链路。不得为清积压将未交付任务改成成功；历史已送达Outbox需要先确认消费者和原回执，再另行制定有限补偿方案。
+
+SLS在主机`/opt/mbox/bin/send-sls-events.sh`执行，生产采集经固定身份中继到证据主机，两个主机的发送脚本都需核对版本。更新前备份脚本、service、游标及待发送队列，停止timer/service后安装，再恢复并检查Result=success、队列和云端原事件。采集service总时限90秒，超时终止整个进程组，保留未确认队列；不得清空队列或只依据进程启动宣称投递成功。

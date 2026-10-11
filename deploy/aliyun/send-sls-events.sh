@@ -91,7 +91,7 @@ for logstore in runtime-errors payment-audit release-audit; do
   mapfile -t payloads < <(
     jq -c \
       --arg logstore "${logstore}" \
-      'select(.logstore == $logstore) | del(.logstore) + {__time__: ((.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor | tostring)}' \
+      'select(.logstore == $logstore) | del(.logstore) + {__time__: ((.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor | tostring)} | with_entries(.value |= tostring)' \
       "${sanitized_input}"
   )
   [ "${#payloads[@]}" -gt 0 ] || continue

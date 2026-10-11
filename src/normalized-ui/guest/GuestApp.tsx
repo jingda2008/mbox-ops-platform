@@ -1,3 +1,4 @@
+import {GuestCartState,GuestReadSequence} from './guest-cart-state'
 import { sameGuestTableCode } from './table-code-alias'
 import {
   AlertCircle,
@@ -121,6 +122,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const waitingCredentialRef = useRef<string | null>(null)
   const nextTableRetryRef = useRef(0)
   const menuRequest = useRef(0)
+  const cartState = useRef(new GuestCartState())
+  const tableOrdersRequest = useRef(new GuestReadSequence())
+  const [paymentBusyIds,setPaymentBusyIds]=useState<readonly string[]>([])
   const sharedCartInFlight = useRef<Promise<GuestSharedCart | null> | null>(null)
   const sharedCartPollFailures = useRef(0)
   const sharedCartNextPollAt = useRef(0)
@@ -179,10 +183,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const loadTableOrders = useCallback(async (quiet = false) => {
     const api = apiRef.current
     if (api === null) return
+    const scope=cartState.current.scope,reads=tableOrdersRequest.current,request=reads.start()
     if (!quiet) setTableOrdersLoading(true)
     try {
-      setTableOrders(await api.loadTableOrders())
+      const orders=await api.loadTableOrders()
+      if(cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current&&reads.accept(request))setTableOrders(orders)
     } catch (error) {
+      if(!cartState.current.isCurrent(scope)||reads!==tableOrdersRequest.current||!reads.isLatest(request))return
       if (!blockForSession(error)) {
         notify(
           errorMessage(error, quiet ? '本桌历史订单刚才没有更新，点击右上角可重试。' : '本桌历史订单暂时没有更新，请再试一次。'),
@@ -190,7 +197,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         )
       }
     } finally {
-      if (!quiet) setTableOrdersLoading(false)
+      if (!quiet&&cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current) setTableOrdersLoading(false)
     }
   }, [blockForSession, notify])
 
@@ -198,15 +205,18 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     const api = apiRef.current
     if (api === null) return null
     if (sharedCartInFlight.current !== null) return sharedCartInFlight.current
+    const token=cartState.current.readToken()
     const request = (async () => {
       try {
         const cart = await api.loadSharedCart()
+        if(!cartState.current.accept(cart,token.scope,token))return null
         sharedCartPollFailures.current = 0
         sharedCartNextPollAt.current = 0
         setSharedCart(cart)
         setSharedCartError(null)
         return cart
       } catch (error) {
+        if(!cartState.current.isCurrentRead(token))return null
         if (!blockForSession(error)) {
           sharedCartPollFailures.current += 1
           sharedCartNextPollAt.current = Date.now() + Math.min(
@@ -247,12 +257,15 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const payTableOrder = useCallback(async (orderPublicId: string) => {
     const api = apiRef.current
     if (api === null || paymentSubmittingRef.current.has(orderPublicId)) return
+    const scope=cartState.current.scope
     paymentSubmittingRef.current.add(orderPublicId)
+    setPaymentBusyIds([...paymentSubmittingRef.current])
     haptic(8)
     try {
       const action = await api.payTableOrder(orderPublicId, {
         idempotencyKey: safeIdempotencyKey(`guest-pay-${orderPublicId}`),
       })
+      if(!cartState.current.isCurrent(scope))return
       if (action.status === 'resolved') {
         notify('已找回原付款记录，正在刷新本桌订单，无需重复支付。', 'info')
         await loadTableOrders(true)
@@ -278,18 +291,23 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         return
       }
       await presentOnlinePayment(action)
+      if(!cartState.current.isCurrent(scope))return
+      void loadTableOrders(true)
       notify(action.presentation === 'qr' ? '正在打开微信收银台。' : '付款已发起，请按微信页面完成。', 'success')
     } catch (error) {
+      if(!cartState.current.isCurrent(scope))return
       if (error instanceof GuestApiError && error.code === 'PAYMENT_CANCELLED') {
         try {
           await api.abandonCheckout(orderPublicId, {
             idempotencyKey: safeIdempotencyKey(`guest-abandon-${orderPublicId}`),
           })
+          if(!cartState.current.isCurrent(scope))return
           setPanel(null)
           setOrderResult(null)
           await Promise.all([loadTableOrders(true), cartProtocolVersion === 2 ? loadSharedCart(true) : Promise.resolve()])
           notify('本次付款已取消，订单和占用已安全释放；如仍需要可重新选择商品下单。', 'info')
         } catch (abandonError) {
+          if(!cartState.current.isCurrent(scope))return
           if (!blockForSession(abandonError)) {
             notify(errorMessage(abandonError, '付款已取消，但释放状态尚未确认，请让收银核对后再付款。'), 'error')
           }
@@ -298,7 +316,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         notify(errorMessage(error, '付款暂时没有发起，请稍后再试。'), 'error')
       }
     } finally {
-      paymentSubmittingRef.current.delete(orderPublicId)
+      if(cartState.current.isCurrent(scope)){paymentSubmittingRef.current.delete(orderPublicId);setPaymentBusyIds([...paymentSubmittingRef.current])}
     }
   }, [blockForSession, cartProtocolVersion, loadSharedCart, loadTableOrders, notify])
 
@@ -309,6 +327,18 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       setGateMessage('当前会话与桌号不一致，请重新扫描所在桌面的二维码。')
       return false
     }
+    cartState.current.reset()
+    sharedCartInFlight.current=null
+    sharedCartPollFailures.current=0
+    sharedCartNextPollAt.current=0
+    menuRequest.current++
+    tableOrdersRequest.current=new GuestReadSequence()
+    setTableOrders([])
+    setTableOrdersLoading(false)
+    orderSubmittingRef.current=false
+    setSubmittingOrder(false)
+    paymentSubmittingRef.current.clear()
+    setPaymentBusyIds([])
     setTable(session.table)
     checkoutRecoveryRef.current = null
     setCheckoutIntent(null)
@@ -414,7 +444,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     serviceDeviceRef.current = deviceKey
     apiRef.current = apiFactory?.(deviceKey) ?? new GuestApiClient(deviceKey)
     void connectTable()
-    return () => { menuRequest.current += 1 }
+    return () => { menuRequest.current += 1; cartState.current.reset(); sharedCartInFlight.current=null }
   }, [apiFactory, connectTable])
 
   useEffect(() => {
@@ -518,6 +548,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     if (api === null || sharedCart === null) throw new Error('同桌购物车正在同步，请稍后再试。')
     if (sharedCart.guestWritesFrozen) throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
     if (!sharedCart.allowedActions.includes('adjust')) throw new Error('本桌购物车当前不能修改，请刷新后再试。')
+    const scope=cartState.current.beginWrite()
+    sharedCartInFlight.current=null
     try {
       const cart = await api.adjustSharedCart({
         productId,
@@ -526,12 +558,15 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         expectedVersion: sharedCart.version,
         ...(bundleSelections.length>0?{ bundleSelections }:{}),
       }, { idempotencyKey: safeIdempotencyKey('guest-shared-cart-adjust') })
+      if(!cartState.current.accept(cart,scope))return
       setSharedCart(cart)
       setSharedCartError(null)
     } catch (error) {
+      if(!cartState.current.isCurrent(scope))return
       if (error instanceof GuestApiError && error.code === 'SHARED_CART_VERSION_CONFLICT') {
-        await loadSharedCart(true)
-        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+        const refreshed=await loadSharedCart(true)
+        if(!cartState.current.isCurrent(scope))return
+        throw new Error(refreshed?'同桌购物车已经更新，已为您刷新，请确认后再操作。':'同桌购物车已变化，但刷新失败，请重试同步后再操作。')
       }
       if (blockForSession(error)) throw new Error('桌次已失效，请重新扫码后继续。')
       throw new Error(errorMessage(error, '同桌购物车暂时没有更新，请稍后再试。'))
@@ -543,15 +578,20 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     if (api===null||sharedCart===null) throw new Error('同桌购物车正在同步，请稍后再试。')
     if (sharedCart.guestWritesFrozen) throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
     if (!sharedCart.allowedActions.includes('remove')) throw new Error('这件商品当前不能移除，请刷新后再试。')
+    const scope=cartState.current.beginWrite()
+    sharedCartInFlight.current=null
     try {
       const cart=await api.removeSharedCartLine({
         productId,expectedGeneration:sharedCart.generation,expectedVersion:sharedCart.version,
       },{ idempotencyKey:safeIdempotencyKey('guest-shared-cart-remove') })
+      if(!cartState.current.accept(cart,scope))return
       setSharedCart(cart);setSharedCartError(null)
     } catch (error) {
+      if(!cartState.current.isCurrent(scope))return
       if (error instanceof GuestApiError&&error.code==='SHARED_CART_VERSION_CONFLICT') {
-        await loadSharedCart(true)
-        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+        const refreshed=await loadSharedCart(true)
+        if(!cartState.current.isCurrent(scope))return
+        throw new Error(refreshed?'同桌购物车已经更新，已为您刷新，请确认后再操作。':'同桌购物车已变化，但刷新失败，请重试同步后再操作。')
       }
       if (blockForSession(error)) throw new Error('桌次已失效，请重新扫码后继续。')
       throw new Error(errorMessage(error,'这件商品暂时没有移除，请稍后再试。'))
@@ -565,16 +605,21 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     if(api===null||sharedCart===null)throw new Error('同桌购物车正在同步，请稍后再试。')
     if(sharedCart.guestWritesFrozen)throw new Error('服务人员正在核对本桌点单，暂时只能查看购物车。')
     if(!sharedCart.allowedActions.includes('replace_selection'))throw new Error('套餐选择当前不能修改，请刷新后再试。')
+    const scope=cartState.current.beginWrite()
+    sharedCartInFlight.current=null
     try{
       const cart=await api.replaceSharedCartBundleSelection({
         productId,unitIndex,bundleSelection,
         expectedGeneration:sharedCart.generation,expectedVersion:sharedCart.version,
       },{ idempotencyKey:safeIdempotencyKey('guest-shared-cart-choice') })
+      if(!cartState.current.accept(cart,scope))return
       setSharedCart(cart);setSharedCartError(null)
     }catch(error){
+      if(!cartState.current.isCurrent(scope))return
       if(error instanceof GuestApiError&&error.code==='SHARED_CART_VERSION_CONFLICT'){
-        await loadSharedCart(true)
-        throw new Error('同桌购物车已经更新，已为您刷新，请确认后再操作。')
+        const refreshed=await loadSharedCart(true)
+        if(!cartState.current.isCurrent(scope))return
+        throw new Error(refreshed?'同桌购物车已经更新，已为您刷新，请确认后再操作。':'同桌购物车已变化，但刷新失败，请重试同步后再操作。')
       }
       if(blockForSession(error))throw new Error('桌次已失效，请重新扫码后继续。')
       throw new Error(errorMessage(error,'套餐选择暂时没有更新，请稍后再试。'))
@@ -619,6 +664,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           } }
         } else input = { protocol: 1, body: { ...common, items } }
       }
+      const checkoutScope = cartState.current.beginWrite()
+      sharedCartInFlight.current = null
       const result = await recovery.execute(input, intent => {
         setCheckoutIntent(intent)
         return intent.input.protocol === 2
@@ -626,6 +673,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           : api.submitOrder(intent.input.body, { idempotencyKey: intent.key })
       })
       if (checkoutRecoveryRef.current !== recovery || apiRef.current !== api) return
+      if ('sharedCart' in result && result.sharedCart && cartState.current.accept(result.sharedCart as GuestSharedCart, checkoutScope)) {
+        setSharedCart(result.sharedCart as GuestSharedCart)
+      }
       setCheckoutIntent(null)
       setCheckoutRecoveryError(null)
       if (!items && cartProtocolVersion === 1) {
@@ -643,17 +693,22 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         && result.payment.providerAction.payload !== null) {
         try {
           await presentOnlinePayment(result.payment.providerAction)
+          if(checkoutRecoveryRef.current!==recovery)return
+          void loadTableOrders(true)
         } catch (paymentError) {
+          if(checkoutRecoveryRef.current!==recovery)return
           if (paymentError instanceof GuestApiError && paymentError.code === 'PAYMENT_CANCELLED') {
             try {
               await api.abandonCheckout(result.order.publicId, {
                 idempotencyKey: safeIdempotencyKey(`guest-abandon-${result.order.publicId}`),
               })
+              if(checkoutRecoveryRef.current!==recovery)return
               setPanel(null)
               setOrderResult(null)
               await Promise.all([loadTableOrders(true), cartProtocolVersion === 2 ? loadSharedCart(true) : Promise.resolve()])
               notify('本次付款已取消，订单和占用已安全释放；需要时可重新下单。', 'info')
             } catch (abandonError) {
+              if(checkoutRecoveryRef.current!==recovery)return
               notify(errorMessage(abandonError, '付款已取消，但释放状态尚未确认，请让收银核对。'), 'error')
             }
           } else {
@@ -678,9 +733,9 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       }
       throw error
     } finally {
-      orderSubmittingRef.current = false
-      setSubmittingOrder(false)
       if (checkoutRecoveryRef.current === recovery) {
+        orderSubmittingRef.current = false
+        setSubmittingOrder(false)
         try { setCheckoutIntent(recovery.pending()) }
         catch { setCheckoutRecoveryError('原下单记录暂时无法读取，请联系服务员核对。') }
       }
@@ -799,6 +854,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         />}
         {panel === 'checkout' && orderResult !== null && <CheckoutPanel
           result={orderResult}
+          busy={submittingOrder||paymentBusyIds.includes(orderResult.order.publicId)}
           tableOrder={tableOrders.find((order) => order.publicId === orderResult.order.publicId) ?? null}
           onRetryPayment={() => void payTableOrder(orderResult.order.publicId)}
           onClose={() => setPanel(null)}
@@ -1013,23 +1069,24 @@ function ServicePanel({ kind, detail, pending, onDetailChange, onSubmit }: {
   </div>
 }
 
-function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose }: {
+export function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose, busy=false }: {
+  busy?:boolean
   result: GuestOrderResult
   tableOrder: GuestTableOrder | null
   onRetryPayment: () => void
   onClose: () => void
 }) {
   const paymentCopy = paymentStatusCopy(result, tableOrder)
+  const canPay=!result.payment.simulated && (tableOrder
+    ? ['unpaid','pending','partially_paid'].includes(tableOrder.paymentStatus)&&['available','payment_in_progress'].includes(tableOrder.paymentAccess)
+    : result.payment.status!=='paid'&&['pending','failed'].includes(result.payment.providerAction.status))
   return <div className="guest-checkout-result">
     <span className="guest-checkout-icon"><Check /></span><small>订单 {shortPublicReference(result.order.publicId)}</small><h3>{paymentCopy.title}</h3><p>{paymentCopy.detail}</p>
     <small>付款状态每 2 秒自动核对，以支付通道和本桌账单为准</small>
     {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
-    <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
-    {!result.payment.simulated && result.payment.providerAction.status === 'pending' && result.payment.providerAction.payload !== null && <button type="button" className="guest-primary" onClick={() => void presentOnlinePayment(result.payment.providerAction)}>
-      {result.payment.providerAction.presentation === 'jsapi' ? '打开微信支付' : '去微信支付'}
-    </button>}
-    {!result.payment.simulated && result.payment.providerAction.status === 'failed' && <button type="button" className="guest-primary" onClick={onRetryPayment}>
-      重新发起付款
+    <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(tableOrder?.payableAmountMinor ?? result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
+    {canPay && <button type="button" className="guest-primary" disabled={busy} onClick={onRetryPayment}>
+      {busy?'正在核对付款…':result.payment.providerAction.status==='failed'?'重新发起付款':'继续微信支付'}
     </button>}
     <button type="button" className="guest-secondary" onClick={onClose}>返回菜单</button>
   </div>
@@ -1061,6 +1118,9 @@ async function presentOnlinePayment(action: OnlinePaymentAction): Promise<void> 
 }
 
 export function paymentStatusCopy(result: GuestOrderResult, tableOrder: GuestTableOrder | null): { title: string; detail: string } {
+  if (tableOrder?.paymentStatus === 'refunded') return { title: '本单款项已退款', detail: '请查看原付款渠道的退款记录，无需再次付款。' }
+  if (tableOrder?.paymentStatus === 'partially_refunded') return { title: '本单部分款项已退款', detail: '退款情况以本桌账单和原付款渠道记录为准，请勿重复付款。' }
+  if (tableOrder?.paymentAccess === 'not_required' && tableOrder.paymentStatus === 'unpaid') return { title: '本单无需付款', detail: '当前账单已不需要付款，请查看本桌订单的处理记录。' }
   if (tableOrder?.paymentStatus === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (tableOrder?.paymentAccess === 'status_review') return { title: '订单已建立，付款状态待核对', detail: '系统正在向支付机构核对结果，请勿重复付款。' }
   if (result.payment.providerAction.status === 'resolved') {

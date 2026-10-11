@@ -1,3 +1,4 @@
+import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import { CommercialApiRequestError, readCostInput, toCostResult } from "./commercial-ops-api.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -1273,6 +1274,7 @@ async function handle(
   try {
     return await operation();
   } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
     if(error instanceof NativeCommandNotCommittedError) return reply.code(409).send({error:{code:"NATIVE_BUSINESS_NOT_COMMITTED",message:error.original instanceof OwnerFinanceRequestError?error.original.message:"本次费用或工资操作未提交，请刷新核对输入和状态",commitDisposition:"not_committed"}});
     if (error instanceof StaffAccessDeniedError)
       return reply

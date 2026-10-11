@@ -1,3 +1,4 @@
+import {recoverCommittedStaffCommand} from './staff-recovery.test-helper.js'
 import {nativeProductPhaseApiPlugin} from './native-product-phase-api.js';
 import {CustomerExperienceService} from './customer-experience-service.js';
 import {catalogApiPlugin} from './catalog-api.js';
@@ -179,7 +180,7 @@ integration("normalized inventory API PostgreSQL integration", () => {
     const fresh=await read();const fractional=await app.inject(make(fresh,'native-count-fractional','0.5'));expect(fractional.statusCode).toBe(409);
     const pending=await app.inject(make(fresh,'native-count-submit-0002','9'));expect(pending.statusCode).toBe(201);
     const waste={method:'POST' as const,url:`/api/native/inventory/items/${item.id}/waste`,headers:headers(managerId,'native-waste-submit-0001'),payload:{quantity:'2',reason:'实物损耗',wasteType:'discarded',requestApproval:true}};
-    const w=await app.inject(waste);expect(w.statusCode,w.body).toBe(200);expect(w.json().data.status).toBe('pending');const wasteId=w.json().data.id;
+    const {first:w,recovered:wr}=await recoverCommittedStaffCommand(key=>{waste.headers=headers(managerId,key);return app.inject(waste)},true);expect(wr.json().data.id).toBe(w.json().data.id);expect(w.statusCode,w.body).toBe(200);expect(w.json().data.status).toBe('pending');const wasteId=w.json().data.id;
     const wa={method:'POST' as const,url:`/api/native/inventory/waste-requests/${wasteId}/approve`,headers:headers(approverId,'native-waste-approve-0001'),payload:{reason:'现场核实'}};
     expect((await app.inject({...wa,headers:headers(managerId,'native-waste-self-0001')})).statusCode).toBe(409);
     expect((await app.inject(wa)).json().data.status).toBe('approved');

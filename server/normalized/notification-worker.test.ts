@@ -62,6 +62,12 @@ describe('NotificationWorker', () => {
     expect(transactions.calls[1]?.sql).toContain("status = 'sending'")
   })
 
+  it('never marks a no-op JavaScript response delivered',async()=>{
+    const transactions=new ScriptedTransactions([response([]),response([notificationRow()]),response([],1)])
+    const result=await new NotificationWorker(transactions).runBatch(scope,'no-op',async()=>({skipped:true}) as unknown as void)
+    expect(result.delivered).toEqual([]);expect(result.retrying).toHaveLength(1)
+    expect(transactions.calls[2]?.values).toContain('delivery_receipt_invalid')
+  })
   it('stores only a stable failure code and applies exponential retry delay', async () => {
     const transactions = new ScriptedTransactions([
       response([]),

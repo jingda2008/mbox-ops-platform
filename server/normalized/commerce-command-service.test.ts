@@ -1,3 +1,5 @@
+import {AssistedOrderContextRepository} from './assisted-order-context.js'
+import {recoverCommittedStaffCommand} from './staff-recovery.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -372,9 +374,18 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   })
 
   it('replays the same submitted order without duplicate rows, stock, audit or outbox', async () => {
-    const input = command('integration-idempotent-order', sessionOneId, productAId, 1, 'integration-idempotent-0001')
-    const first = await service.submitOrder(input)
-    const replay = await service.submitOrder(input)
+    const credentialId=randomUUID(),leaseId=randomUUID(),staffSessionId=randomUUID()
+    await pool.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$recovery-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,tenantId,storeId,employeeId])
+    await pool.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat('a',64),repeat('b',64),clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,tenantId,storeId,credentialId])
+    await pool.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,repeat('c',64),statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,tenantId,storeId,employeeId,leaseId])
+    for(const code of ['order.create','table.view_all']){
+      const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
+      await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,kdsRoleId,permission])
+    }
+    const binding={employeeId,staffSessionId,deviceAccessLeaseId:leaseId}
+    const context=await new ScopedPostgresTransactionRunner(asPool(pool)).run({tenantId,storeId},tx=>new AssistedOrderContextRepository(tx).issue({...binding,tableSessionId:sessionOneId}))
+    const input = {...command('integration-idempotent-order', sessionOneId, productAId, 1, 'integration-idempotent-0001'),channel:'staff_assisted' as const,actor:{type:'employee' as const,employeeId},createdByEmployeeId:employeeId,assistedOrderContext:{...binding,token:context.token}}
+    const {first,recovered:replay}=await recoverCommittedStaffCommand(idempotencyKey=>{input.idempotencyKey=idempotencyKey;return service.submitOrder(input)})
     expect(first.replayed).toBe(false)
     expect(replay).toEqual({ value: first.value, replayed: true })
     await expect(service.submitOrder({ ...input, lines: [{ productId: productAId, quantity: 2 }] }))

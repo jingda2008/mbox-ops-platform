@@ -1,3 +1,4 @@
+import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import {CashHandoverService,CashHandoverError,type CashHandoverCommand} from './cash-handover-service.js'
 import {VoucherOperationService,VoucherOperationError} from './voucher-operation-service.js'
 import { randomUUID,createHash } from 'node:crypto'
@@ -898,6 +899,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
   try {
     return await operation()
   } catch (error) {
+    if (isStaffAuthenticationRequiredError(error)) return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
     if (error instanceof StaffAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'COMMERCIAL_FORBIDDEN', message: '当前员工没有执行此操作的权限' } })
     }

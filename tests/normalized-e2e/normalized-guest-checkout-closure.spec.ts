@@ -112,3 +112,34 @@ test('portion splitting requires the same duplicate confirmation as an unsplit c
   expect(confirmed.status()).toBe(201)
   expect((await confirmed.json()).data.cart.items.reduce((n:number,x:any)=>n+x.quantity,0)).toBe(3)
 })
+
+test('a delayed shared cart read cannot undo a later real cart mutation',async({page})=>{
+  const f=await setup(page,1)
+  await page.getByRole('dialog',{name:'购物车明细'}).getByTitle('关闭购物车').click()
+  let release!:()=>void,started!:()=>void
+  const gate=new Promise<void>(resolve=>{release=resolve}),held=new Promise<void>(resolve=>{started=resolve})
+  let captured=false
+  await page.route('**/api/guest/shared-cart',async route=>{
+    if(captured||route.request().method()!=='GET'){await route.continue();return}
+    captured=true
+    const response=await route.fetch()
+    started();await gate;await route.fulfill({response})
+  })
+  await held
+  await page.getByRole('button',{name:`增加${f.orderableProductName}`,exact:true}).click()
+  await expect(page.locator('.menu-cart-summary-copy strong')).toContainText('2')
+  const oldRead=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/guest/shared-cart'&&r.request().method()==='GET')
+  release();await oldRead
+  await page.getByRole('button',{name:'查看已选',exact:true}).click()
+  await expect(page.getByRole('dialog',{name:'购物车明细'}).locator('.menu-cart-heading')).toContainText('2 件')
+})
+
+test('a version conflict followed by failed cart refresh never claims refresh succeeded',async({page})=>{
+  const f=await setup(page,1)
+  await page.getByRole('dialog',{name:'购物车明细'}).getByTitle('关闭购物车').click()
+  await page.route('**/api/guest/shared-cart/lines',route=>route.fulfill({status:409,json:{error:{code:'SHARED_CART_VERSION_CONFLICT',message:'购物车已变化'}}}))
+  await page.route('**/api/guest/shared-cart',route=>route.abort('failed'))
+  await page.getByRole('button',{name:`增加${f.orderableProductName}`,exact:true}).click()
+  await expect(page.getByText('同桌购物车已变化，但刷新失败，请重试同步后再操作。')).toBeVisible()
+  await expect(page.getByText('同桌购物车已经更新，已为您刷新，请确认后再操作。')).toHaveCount(0)
+})

@@ -303,6 +303,8 @@ test('selective collection is outside the request path and only three stores can
   assert.match(installer, /normalized image is missing \$\{filter_path\}/)
   assert.match(installer, /selective observability installation failed:/)
   assert.match(service, /Type=oneshot/)
+  assert.match(service, /TimeoutStartSec=90/)
+  assert.match(service, /KillMode=control-group/)
   assert.match(service, /IOSchedulingClass=idle/)
   assert.match(service, /ProtectHome=read-only/)
   assert.match(collector, /docker exec -i "\$\{container\}" node "\$\{filter\}"/)
@@ -622,7 +624,7 @@ test('SLS sender removes route queries and undeclared fields at the final send b
   await writeFile(input, `${JSON.stringify({
     timestamp: '2026-08-13T00:00:00Z', eventType: 'payment_exception', severity: 'error',
     logstore: 'payment-audit', route: '/api/payments?token=redacted-query-value',
-    code: 'PAYMENT_TIMEOUT', paymentRef: 'Pexample', stage: 'apply_verified_success', errorLocation: '/server/normalized/payment.js:10:2', phoneNumber: '13800138000', arbitrary: 'discard-me',
+    statusCode: 503, code: 'PAYMENT_TIMEOUT', paymentRef: 'Pexample', stage: 'apply_verified_success', errorLocation: '/server/normalized/payment.js:10:2', phoneNumber: '13800138000', arbitrary: 'discard-me',
   })}\n`)
   const environment = {
     ...process.env,
@@ -641,6 +643,8 @@ test('SLS sender removes route queries and undeclared fields at the final send b
     const logs = JSON.parse(args[args.indexOf('--logs') + 1]).map((entry) => JSON.parse(entry))
     assert.equal(logs.length, 1)
     assert.equal(logs[0].route, '/api/payments')
+    assert.equal(logs[0].statusCode, '503')
+    assert.ok(Object.values(logs[0]).every(value => typeof value === 'string'))
     assert.equal(logs[0].paymentRef, 'Pexample')
     assert.equal(logs[0].stage, 'apply_verified_success')
     assert.equal(logs[0].errorLocation, '/server/normalized/payment.js:10:2')
@@ -649,6 +653,19 @@ test('SLS sender removes route queries and undeclared fields at the final send b
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
+})
+
+test('SLS encodes fractional runtime duration and integer status as CLI strings',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'mbox-sls-numeric-'))
+  try{
+    const input=join(directory,'input'),capture=join(directory,'capture')
+    await writeFile(join(directory,'aliyun'),'#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE"\n',{mode:0o700})
+    await writeFile(input,JSON.stringify({timestamp:'2026-10-11T02:00:00Z',eventType:'request_error',severity:'error',logstore:'runtime-errors',route:'/api/test',statusCode:503,durationMs:123.456})+'\n')
+    const result=spawnSync('bash',[new URL('../deploy/aliyun/send-sls-events.sh',import.meta.url).pathname,input],{encoding:'utf8',env:{...process.env,PATH:`${directory}:${process.env.PATH}`,CAPTURE:capture,MBOX_SLS_DRY_RUN:'0'}})
+    assert.equal(result.status,0,result.stderr)
+    const args=(await readFile(capture,'utf8')).trim().split('\n'),payload=JSON.parse(JSON.parse(args[args.indexOf('--logs')+1])[0])
+    assert.equal(payload.statusCode,'503');assert.equal(payload.durationMs,'123.456')
+  }finally{await rm(directory,{recursive:true,force:true})}
 })
 
 test('SLS sender rejects sensitive values without echoing them', async () => {

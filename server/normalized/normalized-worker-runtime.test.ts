@@ -6,7 +6,7 @@ import type { AiScheduledExecutionPort } from './ai-capability-center.js'
 import {
   NormalizedWorkerAdapterConfigurationError,
   NormalizedWorkerHealthTracker,
-  REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES,
+  NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES,
   createNormalizedWorkerRuntime,
   loadNormalizedWorkerAdapters,
   type NormalizedWorkerAdapters,
@@ -235,14 +235,35 @@ describe('NormalizedWorkerHealthTracker', () => {
 })
 
 describe('loadNormalizedWorkerAdapters', () => {
+  it('loads the release module without claiming unconfigured channel work',async()=>{
+    const loaded=await loadNormalizedWorkerAdapters(new URL('../../deploy/aliyun/commercial-worker-adapters.mjs',import.meta.url).pathname,{scope,commitSha:'audit',schemaFlavor:'normalized-core-v1'})
+    expect(loaded.capabilities).toEqual([])
+    const runtime=createNormalizedWorkerRuntime({scope,workerId:'audit',intervalMs:1000,hashSecret:'0123456789abcdef0123456789abcdef',transactions:fakeTransactions(emptyOrStoreClock),aiExecutions:aiExecutions(),adapters:loaded})
+    const result=await runtime.runOnce()
+    for(const name of ['outbox','notification','print','sop'] as const)expect(result.workers[name]).toBeNull()
+    await expect(loaded.outbox({} as never)).rejects.toThrow('channel_not_configured')
+  })
+  it.each(['({skipped:true})','undefined','({status:"accepted",providerReference:""})'])('rejects a fake delivery receipt %s',async receipt=>{
+    const path=await adapterModule(`export async function createNormalizedWorkerAdapters(){return {
+      protocolVersion:2,capabilities:['outbox.deliver','notification.deliver','print.deliver','sop.execute'],
+      preflight:async()=>({protocolVersion:2,capabilities:['outbox.deliver','notification.deliver','print.deliver','sop.execute']}),
+      outbox:async()=>${receipt},notification:async()=>${receipt},print:{print:async()=>${receipt}},sop:{execute:async()=>({skipped:true})}
+    }}`)
+    const loaded=await loadNormalizedWorkerAdapters(path,{scope,commitSha:'audit',schemaFlavor:'normalized-core-v1'})
+    await expect(loaded.outbox({} as never)).rejects.toThrow('delivery_receipt_invalid')
+    await expect(loaded.notification({} as never)).rejects.toThrow('delivery_receipt_invalid')
+    await expect(loaded.print.print({} as never)).rejects.toThrow('delivery_receipt_invalid')
+    await expect(loaded.sop.execute({} as never)).rejects.toThrow()
+  })
   it('loads and preflights an explicitly configured adapter module', async () => {
     const path = await adapterModule(`
       export async function createNormalizedWorkerAdapters(context) {
         if (!context.scope.storeId) throw new Error('scope missing')
         return {
-          capabilities: ['outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute', 'payment.create.postar', 'refund.execute.postar'],
-          preflight: async () => undefined,
-          outbox: async () => undefined,
+          protocolVersion: 2,
+          capabilities: ['outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute'],
+          preflight: async () => ({protocolVersion:2, capabilities:['outbox.deliver','notification.deliver','print.deliver','sop.execute']}),
+          outbox: async () => ({status:'accepted',providerReference:'provider-123'}),
           notification: async () => undefined,
           print: { print: async () => undefined },
           sop: { execute: async () => ({ state: 'completed' }) }
@@ -255,6 +276,7 @@ describe('loadNormalizedWorkerAdapters', () => {
       schemaFlavor: 'normalized-core-v1',
     })
     expect(typeof loaded.outbox).toBe('function')
+    await expect(loaded.outbox({} as never)).resolves.toBeUndefined()
     expect(typeof loaded.print.print).toBe('function')
   })
 
@@ -262,9 +284,10 @@ describe('loadNormalizedWorkerAdapters', () => {
     const path = await adapterModule(`
       export async function createNormalizedWorkerAdapters() {
         return {
-          capabilities: ['outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute', 'payment.create.postar', 'refund.execute.postar'],
+          protocolVersion: 2,
+          capabilities: ['outbox.deliver', 'notification.deliver', 'print.deliver', 'sop.execute'],
           preflight: async () => { throw new Error('provider-secret-detail') },
-          outbox: async () => undefined,
+          outbox: async () => ({status:'accepted',providerReference:'provider-123'}),
           notification: async () => undefined,
           print: { print: async () => undefined },
           sop: { execute: async () => ({ state: 'completed' }) }
@@ -281,7 +304,7 @@ describe('loadNormalizedWorkerAdapters', () => {
     })
   })
 
-  it('rejects an adapter that omits payment or refund execution capabilities', async () => {
+  it('rejects legacy modules without a versioned receipt contract', async () => {
     const path = await adapterModule(`
       export async function createNormalizedWorkerAdapters() {
         return {
@@ -300,14 +323,14 @@ describe('loadNormalizedWorkerAdapters', () => {
       schemaFlavor: 'normalized-core-v1',
     })).rejects.toMatchObject({
       name: 'NormalizedWorkerAdapterConfigurationError',
-      message: expect.stringContaining('invalid_contract'),
+      message: expect.stringContaining('protocol_version_required'),
     })
   })
 })
 
 function adapters(): NormalizedWorkerAdapters {
   return {
-    capabilities: REQUIRED_NORMALIZED_COMMERCIAL_ADAPTER_CAPABILITIES,
+    capabilities: NORMALIZED_EXTERNAL_ADAPTER_CAPABILITIES,
     preflight: vi.fn(async () => undefined),
     outbox: vi.fn(async () => undefined),
     notification: vi.fn(async () => undefined),

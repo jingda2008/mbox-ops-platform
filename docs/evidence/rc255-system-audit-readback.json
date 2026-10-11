@@ -1,0 +1,213 @@
+{
+  "recordedAt": "2026-10-11 12:53 CST",
+  "releaseSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+  "releaseTag": "v1.0.0-rc.255",
+  "releaseCI": [
+    {
+      "conclusion": "success",
+      "databaseId": 38110779622,
+      "headBranch": "v1.0.0-rc.255",
+      "headSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+      "status": "completed",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110779622",
+      "workflowName": "ci"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38110779633,
+      "headBranch": "v1.0.0-rc.255",
+      "headSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+      "status": "completed",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110779633",
+      "workflowName": "release"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38110772668,
+      "headBranch": "main",
+      "headSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+      "status": "completed",
+      "url": "https://github.com/jingda2008/mbox-ops-platform/actions/runs/38110772668",
+      "workflowName": "ci"
+    }
+  ],
+  "deployment": {
+    "deployedAt": "2026-10-11T04:47:21Z",
+    "tier": "production",
+    "publicUrl": "https://mbox.shmbox.com",
+    "releaseSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+    "releaseVersion": "1.0.0-rc.255",
+    "imageDigest": "sha256:1b3b858085762f594b1771e287bd5744452267a8924f2aea2bdffcc0284084c2",
+    "platformImageDigest": "sha256:624dc27fbbdd3ea00c5c3f2ba7a4276ff275f4d2562b52ddd39a49f92bd591ff",
+    "targetSchemaVersion": 265,
+    "previousReleaseSha": "18eb81b7491929a670d7aa04bf530ef8b1c4790a",
+    "rollbackContainer": "mbox-app-rollback-51c97ad-20261011-124719",
+    "configuration": {
+      "storeSha256": "5c42e3cd098a85b6a1da45d05b17b48470b00a947fd7edb4e73a9a064ac56aa0",
+      "catalogSha256": "79d96ee86992b2ca15bd488cfda1206fdcb7eaaf0cd12c3c8075cbc7dea95375"
+    },
+    "workerAdapter": {
+      "module": "/app/worker-adapters/commercial.mjs",
+      "source": "/opt/mbox/releases/51c97ad/commercial-worker-adapters.mjs",
+      "sha256": "2d35d95a1479ece7406e49fa951a30f38d30bf9ed9e47a8646395d1eaaa4aad8",
+      "treeSha256": "d5a5d5786e8e47c62db37d6bc49c3cc127ba100addc12e53a6298ca909adb3ad",
+      "mount": "/app/worker-adapters",
+      "readOnly": true
+    }
+  },
+  "ready": {
+    "status": "ready",
+    "schemaVersion": "265",
+    "workers": {
+      "status": "healthy",
+      "lastCompletedAt": "2026-10-11T04:51:45.453Z",
+      "failures": [],
+      "integrationWorkersEnabled": false,
+      "adapterCapabilities": [],
+      "unavailableAdapterCapabilities": [
+        "outbox.deliver",
+        "notification.deliver",
+        "print.deliver",
+        "sop.execute"
+      ]
+    },
+    "commitSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+    "releaseImageDigest": "sha256:1b3b858085762f594b1771e287bd5744452267a8924f2aea2bdffcc0284084c2",
+    "schemaFlavor": "normalized-core-v1",
+    "deploymentTier": "production",
+    "inventoryEnforcementMode": "strict",
+    "runtimeRole": "normal",
+    "writeEnabled": true
+  },
+  "artifact": {
+    "capturedAt": "2026-10-11T04:51:52.135Z",
+    "adapterSha256": "2d35d95a1479ece7406e49fa951a30f38d30bf9ed9e47a8646395d1eaaa4aad8",
+    "legacyFilesRemoved": 24,
+    "missingEntries": [],
+    "flatServerJsCount": 12,
+    "flatServerJs": [
+      "migrate-normalized.js",
+      "normalized-server.js",
+      "postar-adapter.js",
+      "provision-normalized-catalog.js",
+      "provision-normalized-release.js",
+      "provision-normalized-store.js",
+      "verify-normalized-commercial-readiness.js",
+      "verify-normalized-migration-compatibility.js",
+      "verify-normalized-runtime-config.js",
+      "wechat-api.js",
+      "wechat-identity.js",
+      "wechat-production-adapters.js"
+    ]
+  },
+  "anonymousAuth": [
+    {
+      "route": "/api/native/commercial-ops/native-capabilities",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/native/commercial-ops/owner-finance",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/staff/native-waitlist-capabilities",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/staff/reservation-intake",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/profit",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/costs",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/cash-handovers",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/employee-sales",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/vouchers",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    },
+    {
+      "route": "/api/commercial-ops/owner-finance",
+      "status": 401,
+      "code": "AUTH_REQUIRED"
+    }
+  ],
+  "observability": {
+    "sourceMergeSha": "2fc5bd6d6ad8e08a1736f3fb1e6366a29ec9fa4c",
+    "backupDirectory": "/opt/mbox/observability/repairs/rc254-2fc5bd6d6ad8",
+    "probeMarker": "rc254-numeric-1791687613",
+    "cloudReadback": true,
+    "containsRealPayment": false
+  },
+  "clockTestFix": {
+    "headRefOid": "f69011a3ee67f581e8ed31839c47827f7ccd1641",
+    "mergeCommit": {
+      "oid": "9b81e23778e3d9a82c0d6de85d134c737ba1ca21"
+    },
+    "mergedAt": "2026-10-11T03:35:37Z",
+    "state": "MERGED",
+    "url": "https://github.com/jingda2008/mbox-ops-platform/pull/358"
+  },
+  "releaseIdentity": {
+    "releaseSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+    "releaseTag": "v1.0.0-rc.255",
+    "pullRequest": 359,
+    "prHeadSha": "5825629247af56beb21cb7ef48c56c88903a89a1",
+    "prCiRun": 38109791673,
+    "mainCiRun": 38110772668,
+    "tagCiRun": 38110779622,
+    "releaseRun": 38110779633
+  },
+  "rc254FailedBeforeActivation": true,
+  "acceptanceBoundary": "未配置的通用外送通道和既有营销外部发送仍需真实通道实施/验收；历史已标送达事件未自动补偿。小程序仍沿用此前rc253官方开发版上传证据，本轮没有新增上传、审核或正式发布；W20真机、真实资金、纸票、Android实体机/平台验收均未由源码或网页通过替代。",
+  "postDeploymentReadback": {
+    "releaseSha": "51c97ad49711ae7dca83da242b68962fc17ac81f",
+    "productionIdentity": true,
+    "strictInventory": true,
+    "authRoutes401": 10,
+    "legacyFilesRemoved": 24,
+    "adapterReadonly": true,
+    "unconfiguredCapabilitiesExplicit": 4,
+    "slsHealthy": true,
+    "realBusinessTransactionsCreated": false
+  },
+  "collectorReadback": [
+    "TimeoutStartUSec=1min 30s",
+    "Result=success",
+    "ExecMainStatus=0",
+    "KillMode=control-group",
+    "active",
+    "0 /opt/mbox/observability/pending-events.jsonl",
+    "0 /opt/mbox/observability/pending-release-events.jsonl",
+    "0 total",
+    "68a2ce48e2c19db01c89ee239f073f7aa64f0872984aa41ef79ff69f00695217  /opt/mbox/bin/send-sls-events.sh",
+    "67d57b52f942df462bbc8b28fdbb3116b60920f7be58004c63e54507c8b5558c  /etc/systemd/system/mbox-sls-collector.service"
+  ],
+  "networkRetry": {
+    "firstAttemptExit": 255,
+    "stage": "backup evidence transfer before activation",
+    "relaySshRetestExit": 0,
+    "productionStillRc253": true,
+    "sameImmutableTagRetried": "v1.0.0-rc.255"
+  }
+}

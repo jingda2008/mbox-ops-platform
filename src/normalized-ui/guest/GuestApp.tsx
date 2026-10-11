@@ -1,4 +1,4 @@
-import {GuestCartState} from './guest-cart-state'
+import {GuestCartState,GuestReadSequence} from './guest-cart-state'
 import { sameGuestTableCode } from './table-code-alias'
 import {
   AlertCircle,
@@ -123,7 +123,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const nextTableRetryRef = useRef(0)
   const menuRequest = useRef(0)
   const cartState = useRef(new GuestCartState())
-  const tableOrdersRequest = useRef(0)
+  const tableOrdersRequest = useRef(new GuestReadSequence())
   const [paymentBusyIds,setPaymentBusyIds]=useState<readonly string[]>([])
   const sharedCartInFlight = useRef<Promise<GuestSharedCart | null> | null>(null)
   const sharedCartPollFailures = useRef(0)
@@ -183,13 +183,13 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const loadTableOrders = useCallback(async (quiet = false) => {
     const api = apiRef.current
     if (api === null) return
-    const scope=cartState.current.scope,request=++tableOrdersRequest.current
+    const scope=cartState.current.scope,reads=tableOrdersRequest.current,request=reads.start()
     if (!quiet) setTableOrdersLoading(true)
     try {
       const orders=await api.loadTableOrders()
-      if(cartState.current.isCurrent(scope)&&request===tableOrdersRequest.current)setTableOrders(orders)
+      if(cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current&&reads.accept(request))setTableOrders(orders)
     } catch (error) {
-      if(!cartState.current.isCurrent(scope)||request!==tableOrdersRequest.current)return
+      if(!cartState.current.isCurrent(scope)||reads!==tableOrdersRequest.current||!reads.isLatest(request))return
       if (!blockForSession(error)) {
         notify(
           errorMessage(error, quiet ? '本桌历史订单刚才没有更新，点击右上角可重试。' : '本桌历史订单暂时没有更新，请再试一次。'),
@@ -197,7 +197,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
         )
       }
     } finally {
-      if (!quiet&&cartState.current.isCurrent(scope)&&request===tableOrdersRequest.current) setTableOrdersLoading(false)
+      if (!quiet&&cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current) setTableOrdersLoading(false)
     }
   }, [blockForSession, notify])
 
@@ -332,7 +332,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     sharedCartPollFailures.current=0
     sharedCartNextPollAt.current=0
     menuRequest.current++
-    tableOrdersRequest.current++
+    tableOrdersRequest.current=new GuestReadSequence()
     setTableOrders([])
     setTableOrdersLoading(false)
     orderSubmittingRef.current=false

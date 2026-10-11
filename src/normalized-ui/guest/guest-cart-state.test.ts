@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest'
-import {GuestCartState} from './guest-cart-state'
+import {GuestCartState,GuestReadSequence} from './guest-cart-state'
 import type {GuestSharedCart} from './guest-api'
 const cart=(generation:number,version:number)=>({generation,version}) as GuestSharedCart
 
@@ -23,4 +23,13 @@ describe('guest cart response ordering',()=>{
     expect(state.accept(cart(10,10),write)).toBe(false)
     expect(state.accept(cart(1,0),state.scope)).toBe(true)
   })
+})
+
+it('keeps slow polling productive while rejecting a late response after a newer result was applied',()=>{
+  const reads=new GuestReadSequence(),first=reads.start(),second=reads.start()
+  expect(reads.accept(first)).toBe(true)
+  const third=reads.start()
+  expect(reads.accept(second)).toBe(true)
+  expect(reads.accept(third)).toBe(true)
+  expect(reads.accept(first)).toBe(false)
 })

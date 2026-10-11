@@ -16,3 +16,16 @@ export class GuestCartState {
     this.cart=cart;return true
   }
 }
+
+/** A newer pending read does not invalidate a completed read; only a newer applied response does. */
+export class GuestReadSequence {
+  private issued=0
+  private applied=0
+  start(){return ++this.issued}
+  isLatest(request:number){return request===this.issued}
+  accept(request:number){
+    if(request<this.applied)return false
+    this.applied=request
+    return true
+  }
+}

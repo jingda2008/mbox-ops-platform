@@ -35,7 +35,7 @@ verify_deployment_scripts() {
     test "$(sha256sum "${release_dir}/${script_name}" | awk '{print $1}')" = "${expected_sha}"
     count=$((count + 1))
   done < <(jq -er '.deploymentScripts | to_entries[] | [.value.file,.value.sha256] | @tsv' "${release_dir}/release-manifest.json")
-  test "${count}" = 16
+  test "${count}" = 17
 }
 verify_deployment_scripts
 # shellcheck source=release-state.sh

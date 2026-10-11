@@ -13,7 +13,7 @@ const employeeId = '92400000-0000-4000-8000-000000000003'
 const scope = { tenantId, storeId }
 
 describe('SOP worker validation', () => {
-  it.each([undefined,{skipped:true},{state:'unknown'},{state:'waiting'},{state:'waiting',externalReference:''}])('rejects malformed action results before recording completion',result=>{
+  it.each([undefined,{skipped:true},{state:{toString:()=> 'completed'}},Object.assign([],{state:'completed'}),{state:'unknown'},{state:'waiting'},{state:'waiting',externalReference:''}])('rejects malformed action results before recording completion',result=>{
     expect(()=>assertSopActionResult(result)).toThrow('sop_action_result_invalid')
   })
   it('rejects an unbounded batch before accessing PostgreSQL', () => {

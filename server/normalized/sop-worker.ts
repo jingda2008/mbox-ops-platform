@@ -29,7 +29,7 @@ export type SopActionResult =
   | { state: 'waiting'; output?: JsonObject; externalReference: string }
 
 export function assertSopActionResult(value:unknown):asserts value is SopActionResult {
-  if(!value||typeof value!=='object'||!('state' in value)||!['completed','waiting'].includes(String(value.state))
+  if(!value||typeof value!=='object'||Array.isArray(value)||!('state' in value)||(value.state!=='completed'&&value.state!=='waiting')
     ||(value.state==='waiting'&&(!('externalReference' in value)||typeof value.externalReference!=='string'||!value.externalReference.trim())))throw new Error('sop_action_result_invalid')
 }
 

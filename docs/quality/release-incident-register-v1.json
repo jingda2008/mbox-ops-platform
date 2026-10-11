@@ -251,6 +251,16 @@
       "automaticBlocker": "before any database write, activation requires the current release manifest identity to match the active container revision and its private ready response, including digest, schema, tier, normal runtime role, write availability and healthy workers",
       "fixCommit": "c83db933f84c4a41bbfe22539ac0770573a986a2",
       "status": "covered"
+    },
+    {
+      "id": "REL-026",
+      "category": "deployment-bundle-validator-count-drift",
+      "rootCause": "rc254 added a seventeenth adapter module to the release bundle while activation and rollback still required sixteen files; the activation preflight exited before service or database changes.",
+      "earliestDetectionStage": "local and CI publisher-to-consumer contract test",
+      "regressionTest": "scripts/write-release-bundle-manifest.test.mjs",
+      "automaticBlocker": "execute the real activation and rollback validators with the generated complete bundle, and reject missing, extra or hash-changed adapter entries before image publication",
+      "fixCommit": "1b0dc842b1b8116a958e01d3e6434a7773f5cdf4",
+      "status": "covered"
     }
   ]
 }

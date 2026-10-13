@@ -1033,7 +1033,7 @@ async function requireGuestCartProtocol(
 export async function searchGuestCatalog(
   transaction: ScopedTransaction,
   tableSessionId: string | null,
-  query: Readonly<{ search: string; categoryCode: string | null; limit: number; offset: number; productIds?: readonly string[] }>,
+  query: Readonly<{ search: string; categoryCode: string | null; limit: number; offset: number; productIds?: readonly string[]; includeSoldOut?: boolean }>,
   customerId: string | null = null,
 ): Promise<CatalogMenuRow[]> {
   const searchPattern = `%${escapeLike(query.search)}%`
@@ -1451,7 +1451,7 @@ export async function searchGuestCatalog(
     WHERE product.tenant_id = $1::uuid
       AND product.store_id = $2::uuid
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
-      AND product.status = 'active'
+      AND (product.status = 'active' OR ($11::boolean AND product.status = 'sold_out'))
       AND (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$9::uuid))
       -- Unconfigured legacy codes stay visible until staff explicitly map
       -- them.  Once configured, parent and child visibility is authoritative
@@ -1501,6 +1501,7 @@ export async function searchGuestCatalog(
     query.offset,
     customerId,
     query.productIds??null,
+    query.includeSoldOut === true,
   ])
   return result.rows
 }

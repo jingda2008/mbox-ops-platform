@@ -78,6 +78,7 @@ import { recommendationStaffModificationApiPlugin } from './recommendation-staff
 import { RecommendationStaffModificationService } from './recommendation-staff-modification-service.js'
 import { CustomerCommandService, CustomerRepository } from './customer-repository.js'
 import { FulfillmentQueryService } from './fulfillment-query-service.js'
+import { websiteMenuApiPlugin } from './website-menu-api.js'
 import { guestCommerceServiceApiPlugin } from './guest-commerce-service-api.js'
 import {
   GUEST_DEVICE_HEADER,
@@ -999,6 +1000,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       center: ai,
       resolveContext: staffReservationContext,
     })
+    instance.register(websiteMenuApiPlugin, { prefix: "/api", transactions, scope })
     instance.register(guestCommerceServiceApiPlugin, {
       prefix: '/api',
       transactions,

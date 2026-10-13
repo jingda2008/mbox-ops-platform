@@ -1,3 +1,5 @@
+import {ReservationCancel} from './ReservationCancel'
+import {ReservationContact} from './ReservationContact'
 import {canCompleteReservation} from './reservation-reception'
 import {ReservationReceptionPanel} from './ReservationReceptionPanel'
 import {KitchenProductionBoard} from './KitchenProductionBoard'
@@ -87,6 +89,7 @@ export interface StaffActionsPanelProps {
   initialTab?: StaffActionsTab
   initialTableSessionId?: string | null
   initialFactId?: string | null
+  initialReservationRange?: string | null
   initialFocus?: string | null
   onLoginRequired?: () => void
   onNavigate?: (route: string) => void
@@ -130,6 +133,7 @@ export function StaffActionsPanel({
   initialTableSessionId = null,
   initialFactId = null,
   initialFocus = null,
+  initialReservationRange = null,
   onLoginRequired,
   onNavigate,
 }: StaffActionsPanelProps) {
@@ -153,6 +157,7 @@ export function StaffActionsPanel({
   const [priorityQueue, setPriorityQueue] = useState<StaffReservationIntakeEntry[] | null>(null)
   const [reservationMessage, setReservationMessage] = useState<string | null>(null)
   const [reservationRange, setReservationRange] = useStaffViewState<'current' | 'carryover' | 'history'>('reservations:range', 'current')
+  useEffect(()=>{if(initialReservationRange==='carryover'||initialReservationRange==='current')setReservationRange(initialReservationRange)},[initialReservationRange,setReservationRange])
   const [reservationHistoryFrom, setReservationHistoryFrom] = useStaffViewState('reservations:from', '')
   const [reservationHistoryTo, setReservationHistoryTo] = useStaffViewState('reservations:to', '')
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -754,6 +759,7 @@ export function StaffActionsPanel({
       : item) ?? null)
     try {
       await api.actOnReservation(reservation.id, action)
+      window.dispatchEvent(new Event('mbox:reservations-changed'))
       showNotice({
         kind: 'success',
         message: action === 'confirm'
@@ -1102,7 +1108,7 @@ export function StaffActionsPanel({
         </button>
       </header>
 
-      <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status" data-action-reveal={tab === 'fulfillment' ? 'off' : undefined}>
+      <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status" aria-label="操作结果" data-action-reveal={tab === 'fulfillment' ? 'off' : undefined}>
         {notice?.kind === 'error' || notice?.kind === 'attention' ? <CircleAlert size={18} /> : notice?.kind === 'guidance' ? <AlertTriangle size={18} /> : <Check size={18} />}
         <span>{notice?.message}</span>
         {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => noticeController.clear()}>×</button>}
@@ -1443,6 +1449,7 @@ export function StaffActionsPanel({
           pendingAction={pendingAction} onOverride={(entry, mode) => void overridePriority(entry, mode)} />
         <ReservationList
           reservations={reservations}
+          contactApi={api} canViewContact={permissions.includes('reservation.contact.view')} canOverrideCancel={permissions.includes('reservation.cancel.override')}
           message={reservationMessage}
           pendingAction={pendingAction}
           canManage={permissions.includes('reservation.manage')}
@@ -1638,10 +1645,13 @@ function PriorityQueue({ entries, canManage, pendingAction, onOverride }: {
 }
 
 function ReservationList({
-  reservations, message, pendingAction, canManage, range, historyFrom, historyTo,
+  reservations, message, pendingAction, canManage, range, historyFrom, historyTo, contactApi, canViewContact, canOverrideCancel,
   onRangeChange, onHistoryFromChange, onHistoryToChange, onAction, onRefresh, onReception,
 }: {
   reservations: StaffReservation[] | null
+  contactApi: StaffActionsApiPort
+  canViewContact: boolean
+  canOverrideCancel: boolean
   message: string | null
   pendingAction: string | null
   canManage: boolean
@@ -1663,7 +1673,7 @@ function ReservationList({
     .sort((left, right) => Date.parse(left.arrivalAt) - Date.parse(right.arrivalAt))
   return <section className="staff-reservations" aria-label="预约工作台">
     <header>
-      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>{range === 'carryover' ? '跨日仍未闭环的预约' : range === 'history' ? '按原日期查询历史预约' : '待确认预约和当日到店安排'}</small></span></div>
+      <div><CalendarDays size={20} /><span><strong>预约与到店</strong><small>{range === 'carryover' ? '跨日仍未闭环的预约' : range === 'history' ? '按原日期查询历史预约' : '待确认预约和未来到店安排'}</small></span></div>
       <button type="button" onClick={onRefresh}><RefreshCw size={17} /> 刷新</button>
     </header>
     <div className="staff-reservation-ranges" aria-label="预约范围">
@@ -1690,7 +1700,7 @@ function ReservationList({
         </div>
         <div className="staff-reservation-copy">
           <strong>{reservation.customerName}</strong>
-          <span>{reservation.contactToken ?? (reservation.contactAvailable ? '联系方式已保护' : '未留联系方式')}</span>
+          <ReservationContact key={reservation.id+String(canViewContact)} id={reservation.id} allowed={canViewContact} available={reservation.contactAvailable||!!reservation.contactToken} api={contactApi}/>
           <small>位置偏好：{staffSeatPreferenceLabel(reservation.seatPreference)}</small>
           {reservation.note !== null && <small>备注：{reservation.note}</small>}
         </div>
@@ -1700,6 +1710,7 @@ function ReservationList({
             {pending ? '确认中…' : '确认预约'}
           </button>
         )}
+        {canManage && ['pending','confirmed'].includes(reservation.status) && <ReservationCancel key={reservation.id} id={reservation.id} canOverride={canOverrideCancel} api={contactApi} onChanged={onRefresh}/>}
         {canManage && reservation.status === 'confirmed' && (
           <button type="button" disabled={pending} onClick={() => onAction(reservation, 'arrive')}>
             {pending ? '登记中…' : '客人到店'}

@@ -1,3 +1,4 @@
+import {StaffReservationNotice} from './staff-actions/StaffReservationNotice'
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
 import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
 import { StaffObjectFocus } from './StaffObjectFocus'
@@ -220,6 +221,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
             initialTableSessionId={new URLSearchParams(window.location.search).get('tableSessionId')}
             initialFactId={new URLSearchParams(window.location.search).get('factId')}
             initialFocus={new URLSearchParams(window.location.search).get('focus')}
+            initialReservationRange={new URLSearchParams(window.location.search).get('range')}
             onLoginRequired={loginRequired}
             onNavigate={navigate}
           /></Suspense>
@@ -243,6 +245,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   return <StaffViewStateProvider key={staffWorkspaceIdentityKey(auth)}>
     <StaffRouteRestoration route={staffLocation} />
     {!dedicatedScreen&&<StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>}
+    {!dedicatedScreen&&<StaffReservationNotice key={staffWorkspaceIdentityKey(auth)} sessionId={auth.session.id} enabled={auth.permissions.includes('reservation.view')} onNavigate={navigate}/>}
     {content}
     {staffNavigation !== null && !dedicatedScreen && <StaffBottomNavigation
       entries={staffNavigation}

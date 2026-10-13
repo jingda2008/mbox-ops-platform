@@ -1108,7 +1108,7 @@ export function StaffActionsPanel({
         </button>
       </header>
 
-      <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status" data-action-reveal={tab === 'fulfillment' ? 'off' : undefined}>
+      <div ref={noticeRef} className={`staff-actions-notice ${notice === null ? 'is-hidden' : `is-${notice.kind}`}`} role="status" aria-label="操作结果" data-action-reveal={tab === 'fulfillment' ? 'off' : undefined}>
         {notice?.kind === 'error' || notice?.kind === 'attention' ? <CircleAlert size={18} /> : notice?.kind === 'guidance' ? <AlertTriangle size={18} /> : <Check size={18} />}
         <span>{notice?.message}</span>
         {notice !== null && <button type="button" aria-label="关闭提示" onClick={() => noticeController.clear()}>×</button>}

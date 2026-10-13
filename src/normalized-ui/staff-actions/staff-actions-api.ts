@@ -269,6 +269,8 @@ export interface StaffActionsApiPort {
   redeemDailySnack?(claimCode: string): Promise<void>
   cancelDailySnack?(claimCode: string, reason: string): Promise<void>
   readonly reservationReception?: ReservationReception
+  readReservationContact?(id: string, reason: string): Promise<{contact: string}>
+  cancelReservation?(id: string, reason: string, overridePolicy: boolean): Promise<unknown>
   loadReservations(options?: StaffReservationListOptions, signal?: AbortSignal): Promise<StaffReservation[]>
   loadReservationIntake?(signal?: AbortSignal): Promise<StaffReservationIntakeEntry[]>
   overrideReservationPriority?(input: Readonly<{ kind: 'reservation' | 'waitlist'; publicId: string; mode: 'promote' | 'demote' | 'clear'; reason: string }>): Promise<void>
@@ -409,6 +411,7 @@ export interface StaffActionsApiPort {
 }
 
 export interface StaffReservationListOptions {
+  status?: 'pending'
   range?: 'current' | 'carryover' | 'history'
   from?: string
   to?: string
@@ -569,8 +572,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     await this.command(`/api/staff/annual-daily-snack-claims/${encodeURIComponent(claimCode)}/cancel`, { reason }, 'idempotency-key')
   }
 
+  async readReservationContact(id: string, reason: string): Promise<{contact: string}> {
+    return this.postData(`/api/staff/reservations/${encodeURIComponent(id)}/contact`, {reason}, 'idempotency-key')
+  }
+
+  async cancelReservation(id: string, reason: string, overridePolicy: boolean): Promise<unknown> {
+    return this.command(`/api/staff/reservations/${encodeURIComponent(id)}/cancel`, {reason, overridePolicy}, 'idempotency-key')
+  }
+
   loadReservations(options: StaffReservationListOptions = {}, signal?: AbortSignal): Promise<StaffReservation[]> {
     const query = new URLSearchParams()
+    if (options.status) query.set('status', options.status)
     if (options.range !== undefined && options.range !== 'current') query.set('range', options.range)
     if (options.from !== undefined) query.set('from', options.from)
     if (options.to !== undefined) query.set('to', options.to)

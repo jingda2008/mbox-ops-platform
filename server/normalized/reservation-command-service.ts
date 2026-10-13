@@ -218,7 +218,7 @@ export class ReservationCommandService {
           payload,
         }],
       }
-    }, input.nativeReceipt ? input.authorizeNative : undefined)
+    }, input.authorizeNative)
   }
 }
 

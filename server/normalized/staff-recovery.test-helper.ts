@@ -1,6 +1,6 @@
 import {expect} from 'vitest'
-import {executeRecoverableCommand} from '../../src/normalized-ui/recoverable-command'
-import {DurableStaffCommand} from '../../src/normalized-ui/durable-staff-command'
+import {executeRecoverableCommand} from '../../src/normalized-ui/recoverable-command.js'
+import {DurableStaffCommand} from '../../src/normalized-ui/durable-staff-command.js'
 
 /** Real database send; transport loss and temporary authentication refusals are injected. */
 export async function recoverCommittedStaffCommand<R>(send:(key:string)=>Promise<R>,durable=false){

@@ -896,6 +896,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     })
     instance.register(reservationReceptionApiPlugin,{prefix:'/api',reservationReceptionCreateEnabled:options.config.reservationReceptionCreateEnabled,transactions,commands:commandExecutor,resolveStaffContext:staffReservationContext,protectContact:value=>activityContactProtection.protect(value)})
     instance.register(reservationPerformanceApiPlugin, {
+      contactProtection: activityContactProtection,
       reservationReceptionCreateEnabled:options.config.reservationReceptionCreateEnabled,
       prefix: '/api',
       transactions,

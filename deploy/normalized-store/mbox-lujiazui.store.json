@@ -1,5 +1,5 @@
 {
-  "version": "2026.09.25-v27",
+  "version": "2026.10.13-v28",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -998,7 +998,8 @@
         "order.history.view",
         "order.history.all",
         "order.bill.print",
-        "refund.request"
+        "refund.request",
+        "reservation.contact.view"
       ],
       "navigation": [
         {
@@ -1180,7 +1181,8 @@
         "order.history.view",
         "order.history.all",
         "order.bill.print",
-        "refund.request"
+        "refund.request",
+        "reservation.contact.view"
       ],
       "navigation": [
         {
@@ -1282,7 +1284,8 @@
         "product.observation.analytics.view",
         "order.history.view",
         "order.history.all",
-        "refund.request"
+        "refund.request",
+        "reservation.contact.view"
       ],
       "navigation": [
         {
@@ -1406,7 +1409,8 @@
         "product.observation.analytics.view",
         "order.history.view",
         "order.history.all",
-        "order.bill.print"
+        "order.bill.print",
+        "reservation.contact.view"
       ],
       "navigation": [
         {
@@ -1554,7 +1558,8 @@
         "product.observation.analytics.view",
         "order.history.view",
         "order.history.all",
-        "refund.request"
+        "refund.request",
+        "reservation.contact.view"
       ],
       "navigation": [
         {
@@ -1717,7 +1722,8 @@
         "reservation.manage",
         "service.view",
         "order.history.view",
-        "refund.request"
+        "refund.request",
+        "reservation.contact.view"
       ],
       "navigation": [
         {

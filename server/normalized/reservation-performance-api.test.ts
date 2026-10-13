@@ -1,3 +1,4 @@
+import {createActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -542,7 +543,7 @@ describe('reservationPerformanceApiPlugin staff reservation permissions', () => 
     expect(response.json().data[0]).not.toHaveProperty('contactToken')
     expect(response.json().data[0]).toMatchObject({ contactAvailable: true })
     const scopedCall = value.query.mock.calls.find(([sql]) => sql.includes('FROM mbox.reservations AS reservation'))
-    expect(scopedCall?.[0]).toContain("reservation.status = 'pending'")
+    expect(scopedCall?.[0]).toContain("reservation.status IN ('pending','confirmed')")
     expect(scopedCall?.[0]).toContain("($9::date + 1)::timestamp + reservation_store.business_day_cutoff")
     expect(scopedCall?.[1]).toEqual([
       tenantId, storeId, null, null, null, false, [employeeId], [areaId], '2026-08-11', 'current',
@@ -816,6 +817,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
   let app: FastifyInstance
   let staffAccess: EffectiveStaffAccess
   const reservationIds: string[] = []
+  const protection=createActivityContactProtectionKeyring(null,'test-reservation-contact-secret')
 
   beforeAll(async () => {
     await runNormalizedMigrations(integrationDatabaseUrl!)
@@ -875,6 +877,7 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
     app.register(reservationPerformanceApiPlugin, {
       prefix: '/api',
       transactions: runner,
+      contactProtection: protection,
       reservations,
       performance,
       resolveGuestContext: async () => ({
@@ -959,6 +962,22 @@ postgresIntegration('reservationPerformanceApiPlugin PostgreSQL privacy and data
     expect(manager.json().data.every((value: Record<string, unknown>) => (
       typeof value.contactToken === 'string' && value.contactToken.startsWith('private-contact-')
     ))).toBe(true)
+  })
+  it('decrypts a stored contact only inside the employee scope and audits without plaintext',async()=>{
+    const id=reservationIds[0]!,secret='test-contact@example.invalid',protectedValue=protection.protect(secret)
+    await pool.query('INSERT INTO mbox.reservation_private_contacts (tenant_id,store_id,reservation_id,contact_hash,encrypted_contact,encryption_key_id,masked_contact) VALUES($1,$2,$3,$4,$5,$6,$7)',[scope.tenantId,scope.storeId,id,protectedValue.hash,Buffer.from(protectedValue.encryptedBase64,'base64'),protectedValue.keyId,protectedValue.masked])
+    staffAccess=scopedAccess({employeeId:scopedEmployeeId,roleCodes:['GREETER'],permissions:['reservation.view','reservation.contact.view'],dataScopes:[]})
+    const r=await app.inject({method:'POST',url:`/api/staff/reservations/${id}/contact`,payload:{reason:'核实此次预约联系方式'}})
+    expect(r.statusCode).toBe(200);expect(r.json().data.contact).toBe(secret)
+    const audit=await pool.query("SELECT after_snapshot,metadata,reason FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND object_id=$3 AND action='reservation.contact.viewed'",[scope.tenantId,scope.storeId,id])
+    expect(audit.rowCount).toBe(1);expect(JSON.stringify(audit.rows)).not.toContain(secret)
+    const outside=await app.inject({method:'POST',url:`/api/staff/reservations/${reservationIds[2]}/contact`,payload:{reason:'核实此次预约联系方式'}})
+    expect(outside.statusCode).toBe(404)
+    staffAccess=scopedAccess({employeeId:scopedEmployeeId,roleCodes:['SERVER'],permissions:['reservation.manage'],dataScopes:[]})
+    const unauthorized=await app.inject({method:'POST',url:`/api/staff/reservations/${reservationIds[2]}/arrive`,headers:{'idempotency-key':'scope-deny-'+randomUUID()},payload:{}})
+    expect(unauthorized.statusCode).toBe(404)
+    const row=await pool.query('SELECT status FROM mbox.reservations WHERE id=$1',[reservationIds[2]])
+    expect(row.rows[0].status).toBe('confirmed')
   })
   it('reads native table catalog and atomically rejects conflicts and insufficient capacity',async()=>{
     staffAccess=scopedAccess({employeeId:scopedEmployeeId,roleCodes:['MANAGER'],permissions:['reservation.view','reservation.manage'],dataScopes:[]})
@@ -1071,3 +1090,42 @@ async function seedApiScope(pool: Pool, input: {
     ) VALUES ($1, $2, $3, 'anonymous', $4)
   `, [input.tenantId, input.storeId, input.customerId, 'b'.repeat(64)])
 }
+
+describe('staff reservation contact privacy', () => {
+  it('reveals only the scoped encrypted contact and audits purpose without storing plaintext', async () => {
+    const reveal = vi.fn(()=>'website-test@example.invalid')
+    const value = fixture({contactProtection:{reveal}})
+    const original=value.query.getMockImplementation()!
+    value.query.mockImplementation(async sql=>sql.includes('INSERT INTO mbox.audit_events')?{rows:[],rowCount:1}:sql.includes('reservation_private_contacts')?{rows:[{encrypted_contact:Buffer.from('ciphertext'),contact_hash:'hash',encryption_key_id:'test-key'}] as never,rowCount:1}:original(sql))
+    const r=await value.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/contact`,payload:{reason:'核对本次到店安排'}})
+    expect(r.statusCode).toBe(200);expect(r.json().data.contact).toBe('website-test@example.invalid');expect(r.headers['cache-control']).toBe('no-store')
+    expect(value.assertPermission).toHaveBeenCalledWith(employeeId,'reservation.contact.view')
+    expect(reveal).toHaveBeenCalledOnce()
+    const calls=JSON.stringify(value.query.mock.calls)
+    expect(calls).toContain('audit_events');expect(calls).not.toContain('website-test@example.invalid')
+  })
+  it('rejects missing permission and out-of-scope records before decrypting', async () => {
+    const reveal=vi.fn(()=> 'secret')
+    const denied=fixture({contactProtection:{reveal},createStaffAccessRepository:()=>({assertPermission:async()=>{throw new StaffAccessDeniedError('denied')}})})
+    expect((await denied.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/contact`,payload:{reason:'核对预约联系'}})).statusCode).toBe(403)
+    const scoped=fixture({contactProtection:{reveal}});scoped.query.mockResolvedValue({rows:[],rowCount:0})
+    expect((await scoped.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/contact`,payload:{reason:'核对预约联系'}})).statusCode).toBe(404)
+    expect(reveal).not.toHaveBeenCalled()
+  })
+  it('requires an explicit purpose and denies decryption failures without leaking details', async()=>{
+    const value=fixture({contactProtection:{reveal:()=>{throw Error('private-ciphertext-secret')}}})
+    expect((await value.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/contact`,payload:{}})).statusCode).toBe(400)
+    const original=value.query.getMockImplementation()!
+    value.query.mockImplementation(async sql=>sql.includes('INSERT INTO mbox.audit_events')?{rows:[],rowCount:1}:sql.includes('reservation_private_contacts')?{rows:[{encrypted_contact:Buffer.from('ciphertext'),contact_hash:'hash',encryption_key_id:'test'}] as never,rowCount:1}:original(sql))
+    const r=await value.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/contact`,payload:{reason:'核对预约联系'}})
+    expect(r.statusCode).toBe(500);expect(r.body).not.toContain('private-ciphertext-secret')
+  })
+  it('passes object authorization to web mutations as well as native mutations',async()=>{
+    const value=fixture()
+    for(const action of ['confirm','arrive','complete','cancel'] as const){
+      const r=await value.app.inject({method:'POST',url:`/api/staff/reservations/${reservationId}/${action}`,headers:{'idempotency-key':'web-object-scope-'+action},payload:{reason:'核对预约操作'}})
+      expect(r.statusCode).toBe(200)
+      expect(value.reservations[action]).toHaveBeenLastCalledWith(expect.objectContaining({authorizeNative:expect.any(Function)}))
+    }
+  })
+})

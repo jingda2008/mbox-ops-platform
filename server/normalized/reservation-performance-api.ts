@@ -1,3 +1,5 @@
+import { appendAuditEvent } from './command-executor.js'
+import type { ActivityContactProtectionKeyring } from './personal-contact-protection.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
 import { capacityAccepts, readReservationCapacity } from './public-reservation-api.js'
 import {readMonthlySchedule,previewMonthlySchedule} from './monthly-schedule.js'
@@ -120,6 +122,7 @@ type ScheduleRepositoryPort = Pick<ScheduleRepository, 'getDailyView'>
 type SongRequestRepositoryPort = Pick<SongRequestRepository, 'findById'>
 
 export interface ReservationPerformanceApiOptions {
+  contactProtection?: Pick<ActivityContactProtectionKeyring, 'reveal'>
   transactions: Pick<ScopedPostgresTransactionRunner, 'run'>
   reservations: ReservationCommands
   performance: PerformanceCommands & Partial<Pick<PerformanceCommandService, 'publishMonthly' | 'nativeSong'>>
@@ -454,7 +457,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
                       AT TIME ZONE reservation_store.timezone)
                   )
                   OR (
-                    reservation.status = 'pending'
+                    reservation.status IN ('pending','confirmed')
                     AND reservation.arrival_at >= ((($9::date + 1)::timestamp + reservation_store.business_day_cutoff)
                       AT TIME ZONE reservation_store.timezone)
                   )
@@ -504,6 +507,28 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     }, { readOnly: true })
     const canViewContact = context.access.permissions.includes('reservation.contact.view')
     return reply.send({ data: reservations.map((reservation) => staffReservation(reservation, canViewContact)) })
+  }))
+
+  app.post<{ Params: { reservationId: string } }>('/staff/reservations/:reservationId/contact', async (request, reply) => handleRoute(reply, async () => {
+    reply.header('cache-control', 'no-store')
+    const context = await authorizedStaff(options, request, 'reservation.contact.view', createAccess)
+    requireAccessPermission(context.access, 'reservation.view')
+    const id = readUuid(request.params.reservationId, 'reservationId')
+    const body = readObject(request.body)
+    rejectClaims(body, ['employeeId', 'actor', 'scope'])
+    const reason = readString(body.reason, '查看用途', 200, 4)
+    const contact = await options.transactions.run(context.scope, async transaction => {
+      await nativeReservationAuthorization(context, id, false, createAccess, 'reservation.contact.view')(transaction)
+      const row = (await transaction.query<{ encrypted_contact: Buffer; contact_hash: string; encryption_key_id: string }>(
+        'SELECT encrypted_contact, contact_hash, encryption_key_id FROM mbox.reservation_private_contacts WHERE tenant_id=$1 AND store_id=$2 AND reservation_id=$3',
+        [context.scope.tenantId, context.scope.storeId, id],
+      )).rows[0]
+      if (!row || !options.contactProtection) throw new ApiRequestError('此预约的联系方式暂不可读取，请联系门店负责人核对')
+      const value = options.contactProtection.reveal({ encryptedContact: row.encrypted_contact, contactHash: row.contact_hash, encryptionKeyId: row.encryption_key_id })
+      await appendAuditEvent(transaction, {actor: employeeActor(context.employeeId), action:'reservation.contact.viewed', objectType:'reservation', objectId:id, businessDate:context.businessDate, reason})
+      return value
+    })
+    return reply.send({ data: { contact } })
   }))
 
   app.post('/staff/reservations', async (request, reply) => handleRoute(reply, async () => {
@@ -559,7 +584,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         if (nativeReceipt && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey)) throw new ApiRequestError('原请求编号无效')
         const execution = await options.reservations[transition]({
           nativeReceipt,
-          authorizeNative: nativeReceipt ? nativeReservationAuthorization(context,reservationId,false,createAccess) : undefined,
+          authorizeNative: nativeReservationAuthorization(context,reservationId,false,createAccess),
           scope: context.scope,
           actor: employeeActor(context.employeeId),
           businessDate: context.businessDate,
@@ -568,7 +593,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
           idempotencyKey,
           requestFingerprint: fingerprint(request, context, { reservationId, transition, reason }),
         })
-        return reply.send({ data: nativeReceipt ? staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')) : execution.value, meta: { replayed: execution.replayed } })
+        return reply.send({ data: staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')), meta: { replayed: execution.replayed } })
       }),
     )
   }
@@ -593,7 +618,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       if (nativeReceipt && !/^native-business-[a-f0-9-]{36}$/.test(idempotencyKey)) throw new ApiRequestError('原请求编号无效')
       const execution = await options.reservations.cancel({
         nativeReceipt,
-        authorizeNative: nativeReceipt ? nativeReservationAuthorization(context,reservationId,overridePolicy,createAccess) : undefined,
+        authorizeNative: nativeReservationAuthorization(context,reservationId,overridePolicy,createAccess),
         scope: context.scope,
         actor: employeeActor(context.employeeId),
         businessDate: context.businessDate,
@@ -603,7 +628,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
         idempotencyKey,
         requestFingerprint: fingerprint(request, context, { reservationId, reason, overridePolicy }),
       })
-      return reply.send({ data: nativeReceipt ? staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')) : execution.value, meta: { replayed: execution.replayed } })
+      return reply.send({ data: staffReservation(execution.value,context.access.permissions.includes('reservation.contact.view')), meta: { replayed: execution.replayed } })
     }),
   )
 
@@ -1123,9 +1148,10 @@ function publicSongRequestSubmission(submission: {
   }
 }
 
-function nativeReservationAuthorization(context: AuthorizedStaffContext, reservationId:string, override:boolean, createAccess:(transaction:ScopedTransaction)=>StaffAccessPort) {
+function nativeReservationAuthorization(context: AuthorizedStaffContext, reservationId:string, override:boolean, createAccess:(transaction:ScopedTransaction)=>StaffAccessPort, permission='reservation.manage') {
   return async(transaction:ScopedTransaction):Promise<void> => {
-    const access=await createAccess(transaction).assertPermission(context.employeeId,'reservation.manage')
+    const access=await createAccess(transaction).assertPermission(context.employeeId,permission)
+    if(permission==='reservation.contact.view') requireAccessPermission(access,'reservation.view')
     if(override) requireAccessPermission(access,'reservation.cancel.override')
     const visibility=reservationVisibility({...context,access})
     const visible=await transaction.query(`SELECT reservation.id FROM mbox.reservations AS reservation

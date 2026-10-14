@@ -1,12 +1,13 @@
 {
-  "sourceCommit": "d40ce60b36e005d65f6dcc09115331a104f63e62",
-  "siteVersion": 13,
+  "sourceCommit": "69fe1fcb614e58b260463db0dc43e639279e0521",
+  "siteVersion": 14,
   "excludedTrackedPaths": [
     ".vinext/dev/lock.json"
   ],
   "handoffModifiedPaths": [
     "README.md",
-    ".gitignore"
+    ".gitignore",
+    "aliyun/"
   ],
   "files": [
     {
@@ -28,6 +29,70 @@
     {
       "path": "README.md",
       "sha256": "5fb5bd583e3934a989147d648c0c2540995c4f704fb57efd9315fa8e7539e70c"
+    },
+    {
+      "path": "aliyun/README.md",
+      "sha256": "75bc1a5dfd82433fa43585d5c143300239c8d5641328a45d55787c22af62ee80"
+    },
+    {
+      "path": "aliyun/gateway.js",
+      "sha256": "4dabbed137ae04caa0a55184c716495280b27f69f319740d24121481e4a40e68"
+    },
+    {
+      "path": "aliyun/package-lock.json",
+      "sha256": "513d04611a95050b2226b5af40952a08951258003fdfa34ec74a44952e5208aa"
+    },
+    {
+      "path": "aliyun/package.json",
+      "sha256": "5090c3d0f8bf674731b526ebb5af261df280d6df6d848fa7ec8afe5086695ed3"
+    },
+    {
+      "path": "aliyun/prepare-runtime.mjs",
+      "sha256": "e6bca5361f709675870f3e7fa10495e091a6f4510267aff1aa250259a9567bd9"
+    },
+    {
+      "path": "aliyun/public-overrides/de/reserve/index.html",
+      "sha256": "58552eaa8657e97e0327c6aee4524da89570bc8592f04d3ea6f87aa575140614"
+    },
+    {
+      "path": "aliyun/public-overrides/en/reserve/index.html",
+      "sha256": "4b7d7fd5d6229f66ab75d4ad39cd3292a25084dcce5f4d1cc968be1b5311f8ad"
+    },
+    {
+      "path": "aliyun/public-overrides/fr/reserve/index.html",
+      "sha256": "a797a0da7e3fcdce596a121adac710697d5fd79eb597939d98f9ce5829c7e3b5"
+    },
+    {
+      "path": "aliyun/public-overrides/index.html",
+      "sha256": "623c9c870128e2c84bbd497e9afa51936a362a21ada9403c0ccf223ffd44e331"
+    },
+    {
+      "path": "aliyun/public-overrides/ja/reserve/index.html",
+      "sha256": "7973690bb515b0983dc9ae6578e05ea78b014a945cc24b2a785e7825bb3b896f"
+    },
+    {
+      "path": "aliyun/public-overrides/ko/reserve/index.html",
+      "sha256": "6c9eca0168f18e709349b7c4cad8f6e21139141bf3d1af0105ed0367f78cdc24"
+    },
+    {
+      "path": "aliyun/public-overrides/ru/reserve/index.html",
+      "sha256": "b674d00856052753655ef268e42d405b73db3eb0f415e4876bce5a2b64ea1a85"
+    },
+    {
+      "path": "aliyun/public-overrides/sitemap.xml",
+      "sha256": "155667a3c78b86d0ddd07a89556a481e949b95dfeebc46c497cb350d27e7cc54"
+    },
+    {
+      "path": "aliyun/public-overrides/zh/reserve/index.html",
+      "sha256": "13bbf638c807ba32e6bc1048fb631d2e8c2235931407c0f0674373bfebdc8dc5"
+    },
+    {
+      "path": "aliyun/server.mjs",
+      "sha256": "008e0af59b866b2dfb020f2bd19c901d17718853fe45a9806574ba145f38698d"
+    },
+    {
+      "path": "aliyun/server.test.mjs",
+      "sha256": "592ccbae8f49ff16b00df66862505695c2e9cb5f07e227132678b8e286f199ca"
     },
     {
       "path": "app/chatgpt-auth.ts",
@@ -67,7 +132,7 @@
     },
     {
       "path": "build/sites-worker.ts",
-      "sha256": "b889920b3ca2ee073fc10d36573905c6aff5f0423c86e45061a8bb2acddd5da4"
+      "sha256": "b5878300b2f9f200f4bf145a310e0c51ce4ffda087f4e462072658928081fa52"
     },
     {
       "path": "cloudflare-env.d.ts",
@@ -124,6 +189,10 @@
     {
       "path": "lib/connectors.ts",
       "sha256": "1c93d747e384c8e17e3e3dd5361b24412babf5eba2a11d2ae7a75f4e0924112c"
+    },
+    {
+      "path": "lib/mbox/canonical-domain.js",
+      "sha256": "a7e75fcddf1061082e0a9cb52850663e39a1f8a5c826e94df23b6a415a572478"
     },
     {
       "path": "lib/mbox/content-cache.js",
@@ -967,7 +1036,7 @@
     },
     {
       "path": "public/de/reserve/index.html",
-      "sha256": "d6c4844cb138749bfc7b337dd3e7a24491614d2b77edb69ab7d153e14878c421"
+      "sha256": "842ddf3c4a8eed7b4006e32091473d6ad2940ca2e271797db5d8fd18904c175c"
     },
     {
       "path": "public/ef57949f0b71f7a27c10fbedcc4edd1e.txt",
@@ -975,27 +1044,23 @@
     },
     {
       "path": "public/en/reserve/index.html",
-      "sha256": "28433d1f053df04e1cb2321e8b1dc2fd7e7fba4de2b45c3fc81d8c6569f4a8c2"
+      "sha256": "8d3b7258ce1392bc2060489ebac6cc2400eaeb649131add6241b2fbf258d3a20"
     },
     {
       "path": "public/fr/reserve/index.html",
-      "sha256": "70b82233a89be72d7cb2f9e17fefce0e2f50b308f378cdb23b731fb2366682a3"
+      "sha256": "891e63678a38e125e06670a516f82715865076badd56d6eb0748d280eaecd532"
     },
     {
       "path": "public/google36ed88fe21ff92bc.html",
       "sha256": "7a9b3fe9e928fc807aecbdb85a26d2c7b0a585a4c33a17668766462eaa24e4fd"
     },
     {
-      "path": "public/index.html",
-      "sha256": "96888f25491e12790363a8801bc2389a44b7aa0f50e8bfbddbe54f1b959269c6"
-    },
-    {
       "path": "public/ja/reserve/index.html",
-      "sha256": "5d419d6180d9ba7e68bc2f22374e6b7eedb2c981d78bb8dcf7b8dba3fa4af7d9"
+      "sha256": "ea302d5aebd55351e62402d7b6f844058e2247063596a0472303ff1400928ba2"
     },
     {
       "path": "public/ko/reserve/index.html",
-      "sha256": "9acffaf7493b41e4728b5cb5233f07218f3834ee22c7d1ce7a4cf6d90dbbf519"
+      "sha256": "4a27ee18fc311cf66ebcbb95cd58d974b8fd01629a1f82fc001d3313ee3b53ae"
     },
     {
       "path": "public/language.js",
@@ -1023,15 +1088,11 @@
     },
     {
       "path": "public/robots.txt",
-      "sha256": "b1e8d18ab1c9d687a2097fdbbac5d3c2effb2586884aee9b3d49fedfaf42e725"
+      "sha256": "b114fd5d6e7214b8fca35bb04c7862804ac78c5a20ab73bb2f129bdb21742761"
     },
     {
       "path": "public/ru/reserve/index.html",
-      "sha256": "96d5fc3d418f0abf9ab881545df024e42ef0c7ff20d2b96260e2a3d1fe32d1a0"
-    },
-    {
-      "path": "public/sitemap.xml",
-      "sha256": "0efab4acd983965c8cbc96a4a58ec41af124ce1947a11d0797e7f5f47a0c748a"
+      "sha256": "44077d5ae1fd61b9bbcce1621657aed1276b318f41121c3eb50c456b051f2a22"
     },
     {
       "path": "public/style.css",
@@ -1039,7 +1100,7 @@
     },
     {
       "path": "public/zh/reserve/index.html",
-      "sha256": "960872bfead5ea32c0bd50573b23acb567670145995578fdf6b280f6e308bc1c"
+      "sha256": "3c438978878d2cd69455ae73bfa81c016ff49be0670eb6a920361e974a79f25d"
     },
     {
       "path": "refresh_content.py",
@@ -1118,6 +1179,10 @@
       "sha256": "48f29a4e3006957ce2bcb3309edca09ddf1617c55b64bb075b266d0ee767aa28"
     },
     {
+      "path": "tests/canonical-domain.test.mjs",
+      "sha256": "162251553aad742d5c624269a9bd20108b5dae8fda784a184eb34db2901a1670"
+    },
+    {
       "path": "tests/gateway.test.mjs",
       "sha256": "ef061c60476ad58da91ca7beb3e564b5d88124f35befcba9b4323f0a76b44758"
     },
@@ -1161,5 +1226,6 @@
       "path": "vite.config.ts",
       "sha256": "6f6d890794fbe23f3e35cceb327f49d5977432a5aaf715e040a6408932da395b"
     }
-  ]
+  ],
+  "public_origin": "https://www.shmbox.com"
 }

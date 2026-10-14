@@ -1,0 +1,12 @@
+{
+  "name": "mbox-public-site-aliyun",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test server.test.mjs"
+  },
+  "dependencies": {
+    "geoip-lite": "2.0.3"
+  }
+}

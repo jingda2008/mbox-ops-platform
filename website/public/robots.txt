@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 Disallow: /api/
-Sitemap: https://mbox-shanghai-preview-20261013.jingda2008.chatgpt.site/sitemap.xml
+Sitemap: https://www.shmbox.com/sitemap.xml

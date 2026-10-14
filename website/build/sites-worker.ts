@@ -1,3 +1,4 @@
+import { canonicalDomain } from "../lib/mbox/canonical-domain.js";
 import { websiteContent } from "../lib/mbox/website-content.js";
 import { gateway } from "../lib/mbox/gateway.js";
 import handler from "vinext/server/fetch-handler";
@@ -6,6 +7,8 @@ import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    const canonical = canonicalDomain(request);
+    if (canonical) return canonical;
     const content = await websiteContent(request, (env as unknown as { WEBSITE_MENU_SYNC_ENABLED?: string }).WEBSITE_MENU_SYNC_ENABLED === "true");
     if (content) return content;
     const response = await gateway(request);

@@ -28,6 +28,9 @@ integration('SIM120 guest recovery and complete table bill', () => {
   const tenantId = randomUUID(), storeId = randomUUID(), tableId = randomUUID()
   const areaId = randomUUID(), customerId = randomUUID(), tableSessionId = randomUUID()
 
+  // Keep the limiter's minute bucket fixed even when slow CI crosses a wall-clock minute.
+  // A future bucket also keeps its retry deadline pending until explicitly advanced below.
+  const rateWindowTime = new Date(Date.now() + 86_400_000).toISOString()
   let actorRef = '', contextCustomerId = customerId, deviceFingerprint = '120-guest-service-device-a'
 
   beforeAll(async () => {
@@ -37,7 +40,14 @@ integration('SIM120 guest recovery and complete table bill', () => {
     const wrapped: PostgresPool = {
       connect: async () => {
         const client = await businessPool.connect()
-        return { query: (sql, values) => client.query(sql, values ? [...values] : undefined), release: error => client.release(error) }
+        return { query: (sql, values) => {
+          const parameters = values ? [...values] : []
+          if (sql.includes('INSERT INTO mbox.guest_request_rate_limits')) {
+            parameters.push(rateWindowTime)
+            return client.query(sql.replaceAll('clock_timestamp()', `$${parameters.length}::timestamptz`), parameters)
+          }
+          return client.query(sql, parameters)
+        }, release: error => client.release(error) }
       }, end: () => businessPool.end(),
     }
     transactions = new ScopedPostgresTransactionRunner(wrapped)
@@ -101,6 +111,8 @@ integration('SIM120 guest recovery and complete table bill', () => {
       const first=await createApi().createServiceTask(complaint).catch((error:any)=>error)
       expect(first).toMatchObject({statusCode:429,code:'GUEST_SERVICE_RATE_LIMITED'})
       expect(Number.isFinite(Date.parse(first.retryAt))).toBe(true)
+      const windows=await pool.query('SELECT count(DISTINCT window_started_at)::int AS buckets FROM mbox.guest_request_rate_limits WHERE tenant_id=$1 AND store_id=$2',[tenantId,storeId])
+      expect(windows.rows[0].buckets).toBe(1)
       expect(calls[0]!.body.data.message).toContain('尚未受理')
       const key=calls[0]!.key
       const early=await createApi().createServiceTask(complaint).catch((error:any)=>error)

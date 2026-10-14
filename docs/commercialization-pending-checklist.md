@@ -12,7 +12,7 @@
 
 历史版本说明（2026-09-08阶段，后续发布见分时记录；非当前部署结论）：当时最近一次已留存生产发布证据为 `1.0.0-rc.178`（提交 `90d3cfb077c1bb3b22236abcbba595eb9f2a65e6`）、schema `158`、门店配置 `2026.09.07-v20`；当前远端主线已包含自选套餐 schema `159`、老板经营费用与工资 schema `160`及门店配置候选 `2026.09.08-v21`，本地发布候选在其上新增支付/退款持久化退避和运营反馈修复 schema `161`。本轮尚未提交、合并、部署或上传小程序。真实资金、工资发放、退款、对账与门店岗位验收未完成，商业发布继续为`DENY`
 形成日期：`2026-07-27`
-最后更新：`2026-10-14 13:03 CST`
+最后更新：`2026-10-14 13:46 CST`
 
 适用范围：上海 M-BOX 陆家嘴店验证环境、门店试运行和商业生产发布
 清单负责人：乌鸦（系统管理员）
@@ -6488,3 +6488,18 @@ SYS-COMPLETE-20261013-01/02/03/07：本地候选最终PostgreSQL全量3263通过
 | 时间 | 变更 | 负责人 | 证据 |
 |---|---|---|---|
 | 2026-10-14 13:03 CST | 登记CI-TIMING-20261014-01/02并修复可重现的测试时序前提，保留失败回执，继续完成最新提交的全部CI；不部署 | Codex | GitHub Actions 38512849958、38512849870；PR362；outputs/points-checkout-20261014 |
+
+
+### 2026-10-14 13:46 CST PR362合并与主分支CI通过（未部署）
+
+用户授权“合并PR #362，完成合并后的CI检查，先不要部署”。[PR #362](https://github.com/jingda2008/mbox-ops-platform/pull/362)于2026-10-14 13:26:29 CST合并，锁定已通过PR检查的`da389b7d43bf490fe2be4714e14420205ced3060`；主分支合并提交为`ba6eb3ff8d15db2b2e0188cf55db8cd391eb347b`。
+
+该合并提交的[主CI 38516651698](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38516651698)及[Android CI 38516651639](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38516651639)均成功。quality、normalized_database（含隔离数据库HTTP验收）、normalized_browser、performance、verify通过；常规2530项通过，浏览器基础138项、三屏18项、会员8项通过，Android两种getuiSdk配置单测/lint/Debug构建通过。fast_quality/docs因完整检查范围跳过，image因无发布标签跳过。
+
+CI-TIMING-20261014-01/02的测试时序修复已在PR及合并后完整CI验证通过，关闭这两项测试缺陷；历史失败回执保留。POINTS-CHECKOUT-20261014-01仅完成代码集成与CI门禁，生产发布、经营规则审批启用、小程序平台上传与发布、真机/资金/打印/现场验收继续开放。没有创建发布标签、部署后台、上传小程序、分发APK或修改生产余额和规则。此记录是合并证据，不是线上生效声明。
+
+#### 变更记录
+
+| 时间 | 变更 | 负责人 | 证据 |
+|---|---|---|---|
+| 2026-10-14 13:46 CST | PR362合并后主CI和Android CI通过，关闭两项测试时序缺陷；积分结账保留生产发布与现场验收门禁 | Codex | 合并ba6eb3ff；Actions 38516651698、38516651639；outputs/points-checkout-20261014/merge-ci-success.json及merge-android-ci-success.json |

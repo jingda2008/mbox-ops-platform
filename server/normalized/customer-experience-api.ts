@@ -1372,6 +1372,8 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     const body = objectBody(request.body)
     const result = await options.service.draftLoyaltyPolicy(context, {
       policyCode: enumValue(body.policyCode ?? 'BASE', '规则代码', ['BASE'] as const),
+      cashRedemptionEnabled: body.cashRedemptionEnabled === undefined ? false : booleanValue(body.cashRedemptionEnabled, '允许积分抵扣现金应付'),
+      pointsRoundingScope: enumValue(body.pointsRoundingScope ?? 'cumulative', '积分零头处理', ['cumulative', 'order'] as const),
       pointsNumerator: integer(body.pointsNumerator, '积分比例分子', 0, 1_000_000),
       pointsDenominatorMinor: integer(body.pointsDenominatorMinor, '积分比例分母', 1, 1_000_000),
       growthNumerator: integer(body.growthNumerator, '成长值比例分子', 0, 1_000_000),

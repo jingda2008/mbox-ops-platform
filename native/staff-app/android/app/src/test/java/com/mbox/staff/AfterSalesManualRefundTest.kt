@@ -35,6 +35,20 @@ class AfterSalesManualRefundTest {
     }
 
     @Test
+    fun zeroCashPointsReturnRequiresFinancialApprovalPermission() {
+        val source = fixture().getJSONObject("afterSales")
+        source.getJSONArray("cases").getJSONObject(0).put("status", "requested")
+            .put("kind", "unpaid_stop").put("canApprove", true).put("requiresFundingChoice", false)
+            .put("pointsReturn", JSONObject().put("approvalAmountMinor", 1000))
+        val pointsBoard = LiveAfterSales(source)
+        val command = pointsBoard.command(actor(), "approved", "case-original", reason = "独立审核积分返还")
+        assertEquals("refund.approve", command.permission)
+        assertThrows(IllegalArgumentException::class.java) {
+            pointsBoard.command(actor().copy(denied = setOf("refund.approve")), "approved", "case-original", reason = "不能以停止商品权限替代返分审核")
+        }
+    }
+
+    @Test
     fun approvedCashBeginsExecutionBeforeRecordingActualPayout() {
         val command = command()
         assertEquals(2, command.steps.size)

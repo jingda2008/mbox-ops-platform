@@ -12,6 +12,7 @@ describe('PrintTicketSourceRepository', () => {
     const repository = new PrintTicketSourceRepository({
       scope,
       query: async (text) => {
+        if(text.includes('to_regclass'))return {rows:[{present:false}],rowCount:1}
         queries.push(text)
         if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.orders AS ordering')) {
@@ -59,6 +60,7 @@ describe('PrintTicketSourceRepository', () => {
     const repository = new PrintTicketSourceRepository({
       scope,
       query: async (text) => {
+        if(text.includes('to_regclass'))return {rows:[{present:false}],rowCount:1}
         queries.push(text)
         if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.payments AS payment')) {
@@ -98,6 +100,7 @@ describe('PrintTicketSourceRepository', () => {
     const repository = new PrintTicketSourceRepository({
       scope,
       query: async (text) => {
+        if(text.includes('to_regclass'))return {rows:[{present:false}],rowCount:1}
         queries.push(text)
         if(text.includes('FROM mbox.item_receivable_adjustment_facts'))return {rowCount:1,rows:[{amount:'0'}]}
         if (text.includes('FROM mbox.payments payment') && text.includes('community_activity_registrations')) {

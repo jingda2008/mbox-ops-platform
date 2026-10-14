@@ -1068,7 +1068,7 @@ function validatePricingAuthorization(
   if (authorization.amountMinor > subtotalAmountMinor) {
     throw new TypeError('Authorized pricing adjustment exceeds the order subtotal')
   }
-  if (authorization.kind === 'discount' && authorization.amountMinor === subtotalAmountMinor) {
+  if (authorization.kind === 'discount' && authorization.amountMinor === subtotalAmountMinor && authorization.sourceType !== 'checkout_quote') {
     throw new TypeError('A zero-total order requires an explicit gift authorization')
   }
 }

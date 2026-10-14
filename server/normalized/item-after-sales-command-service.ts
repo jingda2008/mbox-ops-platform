@@ -1,3 +1,4 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {NormalizedCommandExecutor,type JsonCodec,type JsonValue} from './command-executor.js'
 import type {ScopedTransaction,StoreScope} from './transaction-runner.js'
 import {assertEmployeeEffectivePermission} from './employee-table-access.js'
@@ -45,18 +46,19 @@ export class ItemAfterSalesCommandService {
       // A bundle header must not pause only its accounting line. Individual
       // operational children may pause, with their amount remaining unknown.
       if(facts.inactive||facts.bundle)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','此单涉及待付款激活或套餐组成，请保留原处理入口，当前数量链路尚未接管')
+      const pointsSettled=await new CheckoutPointsRepository(tx).fullySettled(orderId)
       const kind=facts.uncertain?'payment_review':facts.captured?'paid_return':'unpaid_stop'
       // Normal unmade item stops belong to the all-staff after-sales entry.
       // Whole-order cancellation and made-goods exceptions keep their own permissions.
       const created=await new ItemQuantityRepository(tx).hold({orderItemId:input.orderItemId,quantity:input.quantity,kind,employeeId:input.employeeId,businessDate:input.businessDate,reason:input.reason,preferredUnitIds,allowMadeUnpaidHold:true})
       const pricedUnpaid=kind==='unpaid_stop'?(await tx.query<{quote:Record<string,unknown>|null}>('SELECT mbox.prepare_after_sales_price($1) AS quote',[created.caseId])).rows[0]?.quote:null
-      if(pricedUnpaid){
+      if(pricedUnpaid&&!pointsSettled){
         const units=await new ItemQuantityRepository(tx).readUnits(input.orderItemId)
         if(created.madeReview===0&&units.filter(unit=>created.unitIds.includes(unit.id)).every(unit=>unit.inventory_evidence_state!=='unresolved')){
           await tx.query(`UPDATE mbox.item_after_sales_cases SET status='approved',decided_by_employee_id=$4,decision_reason=$5,decided_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,created.caseId,input.employeeId,'未付未制作，按已确认套餐单点规则停止'])
           await new ItemUnitInventoryRepository(tx).disposeUnmadeUnits({itemId:input.orderItemId,unitIds:created.unitIds,employeeId:input.employeeId,caseId:created.caseId})
         }
-      }else if(kind==='unpaid_stop'&&created.amountMinor!==null&&created.madeReview===0){
+      }else if(!pointsSettled&&kind==='unpaid_stop'&&created.amountMinor!==null&&created.madeReview===0){
         const units=await new ItemQuantityRepository(tx).readUnits(input.orderItemId)
         if(units.filter(unit=>created.unitIds.includes(unit.id)).every(unit=>unit.inventory_evidence_state!=='unresolved')){
           await new ItemUnitInventoryRepository(tx).disposeUnmadeUnits({itemId:input.orderItemId,unitIds:created.unitIds,employeeId:input.employeeId,caseId:created.caseId})
@@ -105,6 +107,7 @@ export class ItemAfterSalesCommandService {
         await new ItemQuantityRefundRepository(tx).prepare(input.caseId,input.funding)
         current=await new ItemAfterSalesProgressRepository(tx).read(input.caseId)
       }
+      const casePoints=await new CheckoutPointsRepository(tx).casePoints(input.caseId)
       if(input.decision==='withdrawn')await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request')
       else if(current.kind==='unpaid_stop')await assertUnpaidMadeStopPermission(tx,input.caseId,input.employeeId)
       else{
@@ -112,7 +115,7 @@ export class ItemAfterSalesCommandService {
         // The limit applies to the complete case, not each split payment.
         const access=await new StaffAccessRepository(tx).resolve(input.employeeId)
         const limits=access.approvalLimits.filter(limit=>limit.code==='refund.approve'&&limit.currency==='CNY'&&limit.amountMinor!==null).map(limit=>limit.amountMinor!)
-        if(input.decision==='approved'&&(!limits.length||current.amountMinor===null||current.amountMinor>Math.max(...limits)))throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','所选原成交金额尚未确认或超过当前审核额度')
+        if(input.decision==='approved'&&(!limits.length||current.amountMinor===null||(current.amountMinor+(casePoints?.approvalAmountMinor??0))>Math.max(...limits)))throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','所选原成交金额尚未确认或超过当前审核额度')
       }
       if(current.kind==='unpaid_stop'){
         if(input.decision==='approved'){
@@ -220,6 +223,7 @@ export class ItemAfterSalesCommandService {
       requestFingerprint:JSON.stringify({employeeId:input.employeeId,action,...selection,reason:input.reason.trim()}),resultCodec:progressCodec},async tx=>{
       const caseId=await handler(tx)
       if(action!=='notice_ack'&&action!=='refund_retry')await this.effects.apply(tx,{caseId,employeeId:input.employeeId,action:action==='revision'?'request':action,eventKey:input.idempotencyKey,unitIds,reason:input.reason.trim()})
+      await new CheckoutPointsRepository(tx).restoreStoppedCase(caseId)
       const result=await new ItemAfterSalesProgressRepository(tx).synchronize(caseId)
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:input.employeeId},action:`item_after_sales.${action}`,objectType:'item_after_sales_case',objectId:caseId,businessDate:input.businessDate,reason:input.reason.trim(),metadata:{orderId:result.orderId,quantity:result.selectedQuantity,...(action==='refund_retry'?{previousRefundId:selection.refundId!}:action==='revision'?{previousCaseId:selection.caseId!}:{})}}],outboxMessages:[]}
     })

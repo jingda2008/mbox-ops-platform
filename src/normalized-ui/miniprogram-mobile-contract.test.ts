@@ -153,7 +153,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(points).toContain('processing: (ledger.processing || []).slice(0, 5)')
     expect(points).toContain('item.description')
     expect(points).toContain('item.sourceReference')
-    expect(pointsView).toContain('积分只兑换指定商品或权益，不抵现金')
+    expect(pointsView).toContain('门店发布抵扣规则后，每积分抵1元')
     expect(pointsView).toContain('如对积分有疑问，请联系门店协助核对')
     expect(pointsView).toContain('积分与成长值进展')
     expect(pointsView).toContain('仅显示你的记录')
@@ -182,7 +182,8 @@ describe('mini-program mobile business flow contract', () => {
     expect(center).toContain("{ value: 'available', name: '可使用' }")
     expect(center).toContain("{ value: 'redeemed', name: '已核销' }")
     expect(center).toContain("continuous_qualification")
-    expect(center).toContain('item.qualificationGrowth !== null')
+    // Null, empty, invalid and real-zero values are exercised by miniprogram-member-progress.test.mjs.
+    expect(center).toContain('progressNumber(item.qualificationGrowth)')
     expect(center).toContain('item.estimatedSpendToNextTierMinor !== null')
     expect(center).toContain('memberCodeQrDataUrl')
     expect(center).toContain('claimCodeQrDataUrl')

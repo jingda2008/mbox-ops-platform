@@ -1,3 +1,4 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
 import { hashRequestFingerprint, IdempotencyConflictError, NativeCommandNotCommittedError } from './command-executor.js'
 import {assertStandaloneRefundDecision} from './refund-case-decision.js'
@@ -1023,6 +1024,7 @@ export class PaymentCommandService {
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
           const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          await new CheckoutPointsRepository(transaction).restoreRefund(refund.orderId,refund.id)
           await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
             refundId: refund.id,
             paymentId: refund.paymentId,
@@ -1102,6 +1104,7 @@ export class PaymentCommandService {
         if (refund.orderId === null) await payments.syncActivityRegistrationRefundStatus(refund.paymentId)
         else {
           const orderPaymentStatus = await payments.syncOrderPaymentStatus(refund.orderId)
+          await new CheckoutPointsRepository(transaction).restoreRefund(refund.orderId,refund.id)
           await new LoyaltyAccrualRepository(transaction).reverseSucceededRefund({
             refundId: refund.id,
             paymentId: refund.paymentId,

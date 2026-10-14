@@ -172,6 +172,7 @@ export interface CashierClosableUnpresentedPayment {
 }
 
 export interface CashierWorkbenchOrder {
+  points?:{used:number;restored:number;credited:number;state:'held'|'consumed'|'released'}
   /** Closed sessions retain their original table/day; only proven old debt may be collected. */
   closedDebtRecovery?: {
     status:'available'|'authorization_required'|'pending_payment'|'permission_required'|'ineligible'|'settled'

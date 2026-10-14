@@ -17,8 +17,8 @@
       </view>
       <view class="profile-member-card__progress">
         <view class="profile-member-card__progress-copy"><text>{{membership.cardGrowthText}}</text><text>{{membership.cardDifferenceText}}</text></view>
-        <view wx:if="{{membership.cardProgressAvailable}}" class="profile-member-card__track"><view style="width: {{membership.cardProgressPercent}}%;"></view></view>
-        <view class="profile-member-card__foot"><view wx:if="{{membership.cardProgressAvailable}}"><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><button bindtap="openCoupons">{{membership.cardBenefitText}}</button></view>
+        <view class="profile-member-card__track" aria-label="{{membership.cardGrowthText}}，{{membership.cardDifferenceText}}"><view wx:if="{{membership.cardProgressAvailable}}" style="width: {{membership.cardProgressPercent}}%;"></view></view><button wx:if="{{membership.cardProgressRetry}}" class="profile-member-card__retry" bindtap="load">重新读取进度</button>
+        <view class="profile-member-card__foot"><view><text>{{membership.cardCurrentTierText}}</text><text>{{membership.cardNextTierText}}</text></view><button bindtap="openCoupons">{{membership.cardBenefitText}}</button></view>
       </view>
     </view>
 

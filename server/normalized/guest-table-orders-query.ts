@@ -1,3 +1,4 @@
+import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -15,6 +16,7 @@ export interface GuestTableOrderItemView {
 }
 
 export interface GuestTableOrderView {
+  points?:CheckoutPointsView
   receivableReductionMinor?:number
   receivableIncreaseMinor?:number
   settlementReviewRequired?:boolean
@@ -272,6 +274,8 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       status: row.item_status,
     })
   }
+  const points=await readCheckoutPoints(transaction,[...orders.keys()],true)
+  for(const [key,value] of points){const order=orders.get(key);if(order){order.points=value;order.pricingLabel='积分抵扣 '+value.used+' 分'+(value.credited?'，已返 '+value.credited+' 分':'')}}
   return [...orders.values()]
 }
 

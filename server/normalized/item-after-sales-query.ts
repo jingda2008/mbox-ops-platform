@@ -1,3 +1,4 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import {hasActiveKdsSession} from './kds-authorization-policy.js'
 import {resolveFulfillmentAllowedStations} from './fulfillment-query-service.js'
@@ -39,6 +40,8 @@ export class ItemAfterSalesQuery {
         FROM mbox.item_after_sales_cases target JOIN mbox.item_after_sales_case_units selected ON selected.tenant_id=target.tenant_id AND selected.store_id=target.store_id AND selected.case_id=target.id
         JOIN mbox.order_item_quantity_units unit ON unit.tenant_id=selected.tenant_id AND unit.store_id=selected.store_id AND unit.id=selected.unit_id
         WHERE target.tenant_id=$1 AND target.store_id=$2 AND unit.order_item_id=$3 ORDER BY target.created_at::text,target.id`,[...scope,input.itemId])).rows
+      const pointsCases=new Map<string,Awaited<ReturnType<CheckoutPointsRepository['casePoints']>>>()
+      for(const c of cases)pointsCases.set(c.id,await new CheckoutPointsRepository(tx).casePoints(c.id))
       const progress=[]
       for(let offset=0;offset<cases.length;offset+=100)progress.push(...await new ItemAfterSalesProgressRepository(tx).readMany(cases.slice(offset,offset+100).map(value=>value.id)))
       const payments=(await tx.query<{id:string;provider:string;amount:string;available:string}>(`SELECT payment.id,payment.provider,payment.amount_minor::text AS amount,
@@ -125,13 +128,15 @@ export class ItemAfterSalesQuery {
         canExecuteRefund:permissions.includes('refund.execute'),canAcknowledgeNotices:permissions.includes('refund.request'),
         canReceive:permissions.includes('refund.request')&&permissions.includes('inventory.receive'),canRecordUsed:permissions.includes('refund.request')&&permissions.includes('inventory.waste'),
         units:unitsWithReturn,cases:progress.map(record=>{const original=cases.find(value=>value.id===record.caseId)!
-          const current={...record,amountMinor:original.pricing?.refundAmountMinor??record.amountMinor}
-          const unpaidMadeDecision=current.kind==='unpaid_stop'&&current.madeQuantity>0&&permissions.includes(original.delivered?'order.settle_exception':'order.cancel_unpaid')
+          const points=pointsCases.get(record.caseId)
+          const pointsDecision=!!points&&original.requester!==input.employeeId&&permissions.includes('refund.approve')&&limits.length>0&&points.approvalAmountMinor<=Math.max(...limits)
+          const current={...record,pointsReturn:points?{approvalAmountMinor:points.approvalAmountMinor}:undefined,amountMinor:original.pricing?.refundAmountMinor??record.amountMinor}
+          const unpaidMadeDecision=current.kind==='unpaid_stop'&&(points?pointsDecision:current.madeQuantity>0&&permissions.includes(original.delivered?'order.settle_exception':'order.cancel_unpaid'))
           const requiresFundingChoice=current.kind!=='unpaid_stop'&&current.refunds.length===0&&current.amountMinor!==null&&current.amountMinor>0&&(fundingState||Boolean(original.pricing))&&payments.length>1&&payments.reduce((sum,value)=>sum+Number(value.available),0)>=current.amountMinor
           const canPrepareSinglePayment=current.kind!=='unpaid_stop'&&current.refunds.length===0&&current.amountMinor!==null&&current.amountMinor>0&&(fundingState||Boolean(original.pricing))&&payments.length===1&&Number(payments[0]!.available)>=current.amountMinor
           return {...current,pricing:original.pricing??undefined,unpaidPaymentChanged:current.kind==='unpaid_stop'&&current.status==='requested'&&!current.moneyComplete&&!fundingFacts.no_money,refunds:current.refunds.map(refund=>({...refund,canRetry:refund.canRetry&&permissions.includes('refund.execute')})),canResolveUnpaid:current.kind==='payment_review'&&current.status==='requested'&&(current.amountMinor!==null||item.has_order_cancellation)&&current.madeQuantity===0&&current.inventoryReviewQuantity===0&&current.refunds.length===0&&fundingFacts.no_money&&permissions.includes('refund.request'),notices:notices.filter(notice=>notice.case_id===current.caseId).map(notice=>({id:notice.id,stationCode:notice.station_code,instruction:notice.instruction,phase:notice.phase,createdAt:notice.created_at,
               printState:notice.print_failed||['dead','skipped'].includes(notice.source_status??'')?'attention':notice.printed?'printed':'pending'})),requiresFundingChoice,paymentAllocationReview:current.kind!=='unpaid_stop'&&current.amountMinor!==null&&current.amountMinor>0&&current.refunds.length===0,reason:original.reason,createdAt:original.created_at,
-            canApprove:current.status==='requested'&&unpaidMadeDecision&&current.amountMinor!==null&&current.inventoryReviewQuantity===0&&(!item.bundle||Boolean(original.pricing))&&fundingFacts.no_money||current.status==='requested'&&current.kind!=='unpaid_stop'&&!(current.kind==='payment_review'&&fundingFacts.no_money)&&original.requester!==input.employeeId&&permissions.includes('refund.approve')&&current.amountMinor!==null&&(current.amountMinor===0||current.refunds.length>0||requiresFundingChoice||canPrepareSinglePayment)&&limits.length>0&&current.amountMinor<=Math.max(...limits),
+            canApprove:current.status==='requested'&&unpaidMadeDecision&&current.amountMinor!==null&&current.inventoryReviewQuantity===0&&(!item.bundle||Boolean(original.pricing))&&fundingFacts.no_money||current.status==='requested'&&current.kind!=='unpaid_stop'&&!(current.kind==='payment_review'&&fundingFacts.no_money)&&original.requester!==input.employeeId&&permissions.includes('refund.approve')&&current.amountMinor!==null&&(current.amountMinor===0||current.refunds.length>0||requiresFundingChoice||canPrepareSinglePayment)&&limits.length>0&&(current.amountMinor+(points?.approvalAmountMinor??0))<=Math.max(...limits),
             canReject:current.status==='requested'&&(unpaidMadeDecision||current.kind!=='unpaid_stop'&&!(current.kind==='payment_review'&&fundingFacts.no_money)&&original.requester!==input.employeeId&&permissions.includes('refund.approve')),
             canWithdraw:current.status==='requested'&&original.requester===input.employeeId&&permissions.includes('refund.request'),
             canReplace:this.acceptNewRequests&&item.session_status==='open'&&permissions.includes('order.create')&&permissions.includes('refund.request')&&(!current.replacementOrder||current.replacementOrder.status==='cancelled')&&!current.revisedByCaseId&&['requested','approved','completed'].includes(current.status)&&current.heldQuantity+current.stoppedQuantity>0,

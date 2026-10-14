@@ -48,6 +48,8 @@ interface LoyaltyPolicyView {
   policyCode: string
   version: number
   status: string
+  cashRedemptionEnabled?: boolean
+  pointsRoundingScope?: string
   pointsNumerator: number
   pointsDenominatorMinor: number
   growthNumerator: number
@@ -974,7 +976,7 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
   const [form, setForm] = useState({
-    pointsNumerator: '1', pointsDenominatorMinor: '100',
+    cashRedemptionEnabled: false, pointsRoundingScope: 'order', pointsNumerator: '1', pointsDenominatorMinor: '1000',
     growthNumerator: '1', growthDenominatorMinor: '100',
     roundingMode: 'floor', pointsValidityMonths: '18', reason: '',
   })
@@ -1008,6 +1010,7 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
     try {
       await api.postEndpoint('/api/staff/loyalty/policies', {
         policyCode: 'BASE',
+        cashRedemptionEnabled: form.cashRedemptionEnabled, pointsRoundingScope: form.pointsRoundingScope,
         pointsNumerator: nonNegativeIntegerText(form.pointsNumerator, '积分比例分子'),
         pointsDenominatorMinor: positiveInteger(form.pointsDenominatorMinor, '积分比例分母'),
         growthNumerator: nonNegativeIntegerText(form.growthNumerator, '成长值比例分子'),
@@ -1100,14 +1103,15 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
       {canManage && <form className="staff-module-form" onSubmit={(event) => void draft(event)}>
         <BusinessRatioFields content={{pointsNumerator:Number(form.pointsNumerator),pointsDenominatorMinor:Number(form.pointsDenominatorMinor),growthNumerator:Number(form.growthNumerator),growthDenominatorMinor:Number(form.growthDenominatorMinor)}} onChange={next=>setForm(current=>({...current,pointsNumerator:String(next.pointsNumerator),pointsDenominatorMinor:String(next.pointsDenominatorMinor),growthNumerator:String(next.growthNumerator),growthDenominatorMinor:String(next.growthDenominatorMinor)}))}/>
 
-        <label>取整方式<select value={form.roundingMode} onChange={(event) => setForm({ ...form, roundingMode: event.target.value })}><option value="floor">向下取整</option><option value="nearest">四舍五入</option></select></label>
+        <label><input type="checkbox" checked={form.cashRedemptionEnabled} onChange={event=>setForm({...form,cashRedemptionEnabled:event.target.checked,pointsRoundingScope:'order',pointsNumerator:'1',pointsDenominatorMinor:'1000',roundingMode:'floor'})}/>发布后启用每积分抵1元，可抵至0元，不叠加优惠券；本单新积分下次使用</label>
+        <label>积分零头处理<select value={form.pointsRoundingScope} onChange={event=>setForm({...form,pointsRoundingScope:event.target.value,...(event.target.value==='order'?{pointsNumerator:'1',pointsDenominatorMinor:'1000',roundingMode:'floor'}:{})})}><option value="order">每笔满10元积1分，零头不累计，不加等级倍数</option><option value="cumulative">历史规则：跨订单累计零头</option></select></label><label>取整方式<select value={form.roundingMode} onChange={(event) => setForm({ ...form, roundingMode: event.target.value })}><option value="floor">向下取整</option><option value="nearest">四舍五入</option></select></label>
         <label>积分有效期（月）<input type="number" min="1" max="120" value={form.pointsValidityMonths} onChange={(event) => setForm({ ...form, pointsValidityMonths: event.target.value })} /></label>
         <label>配置原因<input required minLength={2} maxLength={500} value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></label>
         <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '正在保存' : '保存新版本草稿'}</button>
       </form>}
       <div className="activity-admin-list">
         {policies.filter(policy=>viewMode!=='overview'||policy.status==='published').map((policy) => <article key={policy.id}>
-          <div><strong>版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{money(policy.pointsDenominatorMinor)}消费得{policy.pointsNumerator}积分；{money(policy.growthDenominatorMinor)}消费得{policy.growthNumerator}成长值；有效{policy.pointsValidityMonths}个月</small><small>{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div>
+          <div><strong>版本 {policy.version} · {releaseStatusLabel(policy.status)}</strong><small>{money(policy.pointsDenominatorMinor)}消费得{policy.pointsNumerator}积分（{policy.pointsRoundingScope==='order'?'逐单取整，零头不累计':'跨单累计'}）；{money(policy.growthDenominatorMinor)}消费得{policy.growthNumerator}成长值；有效{policy.pointsValidityMonths}个月</small><small>{policy.cashRedemptionEnabled?'已配置积分抵扣：1分抵1元，可抵至0元，不叠加优惠券；':''}{policy.effectiveFrom ? `生效 ${new Date(policy.effectiveFrom).toLocaleString('zh-CN')} · ` : ''}{policy.reason}</small></div>
           <div className="staff-inline-actions">{policy.status === 'draft' && canApprove && policy.draftedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void approve(policy)}>前往配置中心审批</button>}{policy.status === 'approved' && canPublish && policy.draftedByEmployeeId !== auth.employee.id && policy.approvedByEmployeeId !== auth.employee.id && <button type="button" disabled={Boolean(busy)} onClick={() => void publish(policy)}>排期发布</button>}</div>
         </article>)}
       </div>

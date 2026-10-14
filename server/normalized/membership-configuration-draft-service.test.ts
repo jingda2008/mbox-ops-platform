@@ -41,6 +41,13 @@ const baseSnapshot: MembershipImpactSnapshot = {
 }
 
 describe('membership configuration draft impact', () => {
+  it('floors each order separately and prices every enabled cash point at one yuan',()=>{
+    const content={domain:'base_points' as const,pointsNumerator:1,pointsDenominatorMinor:1000,growthNumerator:1,growthDenominatorMinor:100,roundingMode:'floor' as const,pointsValidityMonths:18,pointsRoundingScope:'order' as const,cashRedemptionEnabled:true}
+    const input={publicId:'MCIP0001',draft:draftFor(content),snapshot:{...baseSnapshot,eligibleOrderAmountsMinor:[900,900,10900,999,1000]},generatedByEmployeeId:'employee-reviewer',now:new Date('2026-08-16T09:35:00.000Z')}
+    const preview=buildMembershipConfigurationImpactPreview(input)
+    expect(preview.estimatedPointsIssued).toBe(11);expect(preview.estimatedPointsCostAmountMinor).toBe(1100)
+    expect(()=>buildMembershipConfigurationImpactPreview({...input,snapshot:baseSnapshot})).toThrow('逐单成交金额')
+  })
   it('calculates server-owned points cost and preserves the historical member distribution', () => {
     const preview = previewFor({
       domain: 'base_points', pointsNumerator: 1, pointsDenominatorMinor: 100,

@@ -13,6 +13,61 @@ const customerId = '89000000-0000-4000-8000-000000000003'
 const membershipId = '89000000-0000-4000-8000-000000000004'
 
 describe('public loyalty projection', () => {
+  const zeroMember = {
+    id: membershipId, customer_id: customerId, member_no: '100001', level: 'member',
+    lifecycle_stage: 'new', points_balance: 0, growth_value: 0, pending_recovery_points: 0,
+    redemption_status: 'active', visit_count: 0, joined_at: '2026-10-13T00:00:00Z',
+    evaluation_window_months: 12, silver_upgrade_growth: 2000, silver_retain_growth: 1000,
+    gold_upgrade_growth: 5000, gold_retain_growth: 3000, rolling_growth: 0,
+    period_status: null, period_ends_at: null, grace_ends_at: null,
+    expiring_points_30_days: null, next_expiry_at: null,
+  }
+
+  it.each([
+    { fields: {}, status: 'ready', growth: 0 },
+    { fields: { evaluation_window_months: null, rolling_growth: null }, status: 'rules_unavailable', growth: null },
+    { fields: { rolling_growth: null }, status: 'unavailable', growth: null },
+  ])('distinguishes zero growth from $status', async ({ fields, status, growth }) => {
+    const transaction: ScopedTransaction = {
+      scope,
+      async query<Row extends Record<string, unknown>>(sql: string) {
+        return result<Row>(sql.includes('FROM mbox.customer_memberships membership')
+          ? [{ ...zeroMember, ...fields }] as unknown as Row[] : [])
+      },
+    }
+    const snapshot = await new CustomerExperienceRepository(transaction).publicLoyalty(customerId)
+    expect(snapshot.membership).toMatchObject({ tierProgressStatus: status, qualificationGrowth: growth })
+    if (status === 'ready') {
+      expect(snapshot.membership?.tierProgress).toMatchObject({ rollingGrowth: 0, upgradeThreshold: 2000, upgradeRemaining: 2000, nextTier: 'silver' })
+    } else {
+      expect(snapshot.membership?.tierProgress).toBeNull()
+    }
+  })
+
+  it('new enrollment rereads the effective tier policy before returning zero progress', async () => {
+    let membershipReads = 0
+    const transaction: ScopedTransaction = {
+      scope,
+      async query<Row extends Record<string, unknown>>(sql: string) {
+        if (sql.includes('FROM mbox.customer_memberships membership')) {
+          membershipReads++
+          return result<Row>(membershipReads === 1 ? [] : [zeroMember] as unknown as Row[])
+        }
+        if (sql.includes('FROM membership JOIN account')) {
+          return result<Row>([{ ...zeroMember, evaluation_window_months: null, rolling_growth: null }] as unknown as Row[])
+        }
+        return result<Row>([])
+      },
+    }
+    const enrolled = await new CustomerExperienceRepository(transaction).enrollMembership(customerId, '100001')
+    expect(enrolled.created).toBe(true)
+    expect(membershipReads).toBe(2)
+    expect(enrolled.membership).toMatchObject({
+      tierProgressStatus: 'ready',
+      tierProgress: { rollingGrowth: 0, upgradeThreshold: 2000, upgradeRemaining: 2000 },
+    })
+  })
+
   it('estimates only eligible spend with the published rounding rule and exact carry',()=>{
     expect(minimumEligibleSpendMinorForGrowth({remainingGrowth:10,numeratorPerMinor:2,denominator:100,
       roundingMode:'floor',carryDenominator:100,carryRemainder:0})).toBe(500)

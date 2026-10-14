@@ -1,3 +1,4 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {randomUUID} from 'node:crypto'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {PricingAuthorizationDeniedError,type PricingAuthorityContext,type PricingAuthorityDecision} from './pricing-authorization-policy.js'
@@ -27,6 +28,7 @@ export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:
   const allocations=verifyPricingLineAllocations(quote.lines.map(line=>({requestIndex:line.requestIndex,productId:line.productId,quantity:1,unitPriceMinor:line.standardMinor,discountAmountMinor:line.discountMinor,lineFingerprint:line.lineFingerprint})),context.lines,quote.discountMinor)
   const standard=await new OrderRepository(tx,row.customer_id).quoteCurrent(context.lines,context.channel,false)
   if(standard.currency!==quote.currency||standard.items.length!==allocations.length||standard.items.some((item,index)=>item.unitPriceMinor!==allocations[index]!.unitPriceMinor||item.quantity!==1))throw new PricingAuthorizationDeniedError('商品价格已变化，请重新确认报价')
+  if(quote.payableMinor===0 && quote.pointsUsed===0)throw new PricingAuthorizationDeniedError('零元结算须具有完整积分抵扣凭证')
   const benefits=[...new Set(quote.lines.flatMap(line=>line.benefitId?[line.benefitId]:[]))].sort()
   for(const benefitId of benefits){
     const reservation=await new BenefitRepository(tx).reserve({benefitId,customerId:quote.customerId,tableSessionId:context.tableSessionId,
@@ -34,6 +36,7 @@ export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:
       reservationIdempotencyKey:`checkout-quote:${quote.id}:${benefitId}`,reservationFingerprint:quote.id},context.actor.ref)
     await tx.query('INSERT INTO mbox.checkout_coupon_quote_reservations(tenant_id,store_id,quote_id,benefit_id,reservation_id) VALUES($1,$2,$3,$4,$5)',[...scope,quote.id,benefitId,reservation.id])
   }
+  if(quote.pointsUsed>0)await new CheckoutPointsRepository(tx).reserve(quote.id,row.customer_id)
   const authorizationId=randomUUID()
   await tx.query(`INSERT INTO mbox.pricing_authorizations(id,tenant_id,store_id,table_session_id,source_type,source_id,checkout_quote_id,kind,amount_minor,maximum_amount_minor,currency,expires_at)
     VALUES($1,$2,$3,$4,'checkout_quote',$5,$5,'discount',$6,$6,$7,$8)`,[authorizationId,...scope,context.tableSessionId,quote.id,quote.discountMinor,quote.currency,quote.expiresAt])

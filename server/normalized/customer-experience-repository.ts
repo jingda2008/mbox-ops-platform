@@ -79,6 +79,7 @@ export interface PublicMembership {
   }
   updatedAt: string
   responseVersion: string
+  tierProgressStatus?: 'ready' | 'rules_unavailable' | 'unavailable'
   tierProgress: {
     evaluationWindowMonths: number
     rollingGrowth: number
@@ -1516,7 +1517,7 @@ export class CustomerExperienceRepository {
         account.updated_at::text AS updated_at
       FROM membership JOIN account ON account.membership_id=membership.id
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, activeCustomerId, memberNo])
-    const row = requiredRow(inserted.rows[0], 'membership')
+    requiredRow(inserted.rows[0], 'membership')
     await this.transaction.query(`
       INSERT INTO mbox.customer_events (
         tenant_id, store_id, customer_id, event_type, event_data
@@ -1527,6 +1528,9 @@ export class CustomerExperienceRepository {
       activeCustomerId,
       JSON.stringify({ memberNo }),
     ])
+    // The insert projection has no tier policy. Read the same authoritative
+    // projection as returning members so new members immediately see zero progress.
+    const row = requiredRow((await this.findMembership(activeCustomerId)) ?? undefined, 'membership')
     return { membership: membershipView(row), created: true }
   }
 
@@ -5362,6 +5366,8 @@ function membershipView(
   const tierProgress = row.evaluation_window_months === null || rollingGrowth === null
     ? null
     : publicTierProgress(row, rollingGrowth)
+  const tierProgressStatus = row.evaluation_window_months === null
+    ? 'rules_unavailable' : tierProgress === null ? 'unavailable' : 'ready'
   const expiringPoints = row.expiring_points_30_days === null
     ? 0
     : integer(row.expiring_points_30_days, 'expiring membership points')
@@ -5418,12 +5424,14 @@ function membershipView(
       joinedAt: row.joined_at,
       estimatedSpendToNextTierMinor,
       annualBenefitCounts,
+      tierProgressStatus,
       tierProgress,
       pointsExpiry: expiringPoints > 0 && row.next_expiry_at !== null
         ? { expiringWithin30Days: expiringPoints, nextExpiryAt: row.next_expiry_at }
         : null,
       updatedAt,
     })).digest('hex').slice(0,24),
+    tierProgressStatus,
     tierProgress,
     pointsExpiry: expiringPoints > 0 && row.next_expiry_at !== null
       ? { expiringWithin30Days: expiringPoints, nextExpiryAt: row.next_expiry_at }

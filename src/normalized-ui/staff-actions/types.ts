@@ -352,7 +352,7 @@ export interface StaffReservation {
   arrivalAt: string
   expectedEndAt: string
   status: StaffReservationStatus
-  source: 'wechat' | 'phone' | 'walk_in' | 'employee' | 'integration'
+  source: 'wechat' | 'online' | 'phone' | 'walk_in' | 'employee' | 'integration'
   note: string | null
   seatPreference: 'no_preference' | 'stage_atmosphere' | 'quiet_chat' | 'comfortable_booth' | 'outdoor_view'
   tableLocks: Array<{

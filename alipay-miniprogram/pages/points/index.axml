@@ -2,7 +2,7 @@
   <view class="points-head">
     <text class="eyebrow">M-BOX 会员</text>
     <text class="points-title">积分与成长值</text>
-    <text class="points-copy">积分只兑换指定商品或权益，不抵现金；成长值仅用于会员等级。</text>
+    <text class="points-copy">门店发布抵扣规则后，每积分抵1元，可抵至0元，不叠加优惠券。每笔实付满10元积1分，零头不累计，新积分下次使用；成长值用于会员等级。</text>
   </view>
 
   <state-panel a:if="{{loading}}" type="loading" title="正在读取明细" />

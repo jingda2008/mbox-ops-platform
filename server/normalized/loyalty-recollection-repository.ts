@@ -1,3 +1,4 @@
+import { orderPointsDelta } from './loyalty-order-points.js'
 import type { JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
@@ -25,6 +26,7 @@ interface Context extends Record<string,unknown> {
   reversed_amount_minor:string;reversed_points:number;reversed_growth:number;restored_amount_minor:string;restored_points:number;restored_growth:number
   available_points:number;pending_recovery_points:number;growth_value:number;expires_at:string|null
   points_numerator_per_minor:string|null;points_denominator:string|null;growth_numerator_per_minor:string|null;growth_denominator:string|null
+  points_rounding_scope:'cumulative'|'order'
   rounding_mode:'floor'|'nearest';awarded_at:string
 }
 interface Application extends Record<string,unknown> {
@@ -69,7 +71,7 @@ export class LoyaltyRecollectionRepository {
       if(!settlement)throw new Error('Loyalty restoration settlement fact is missing')
       let points=plan.points,growthDelta=plan.growth
       if(context.calculation_model==='exact_carry'){
-        points=await accrual.applyExactCarry({membershipId:context.membership_id,policyVersionId:context.policy_version_id,currency:context.currency,rewardKind:'points',denominator:BigInt(context.points_denominator!),roundingMode:context.rounding_mode,numeratorDelta:BigInt(application.eligible_refund_amount_minor)*BigInt(context.points_numerator_per_minor!)})
+        if(context.points_rounding_scope!=='order')points=await accrual.applyExactCarry({membershipId:context.membership_id,policyVersionId:context.policy_version_id,currency:context.currency,rewardKind:'points',denominator:BigInt(context.points_denominator!),roundingMode:context.rounding_mode,numeratorDelta:BigInt(application.eligible_refund_amount_minor)*BigInt(context.points_numerator_per_minor!)})
         growthDelta=await accrual.applyExactCarry({membershipId:context.membership_id,policyVersionId:context.policy_version_id,currency:context.currency,rewardKind:'growth',denominator:BigInt(context.growth_denominator!),roundingMode:context.rounding_mode,numeratorDelta:BigInt(application.eligible_refund_amount_minor)*BigInt(context.growth_numerator_per_minor!)})
         if(points!==plan.points||growthDelta!==plan.growth)throw new Error('Loyalty carry changed after its locked recovery preview')
       }
@@ -119,7 +121,7 @@ export class LoyaltyRecollectionRepository {
       award.reversed_points,award.reversed_growth,award.restored_amount_minor::text,award.restored_points,award.restored_growth,award.awarded_at::text,
       account.available_points,account.pending_recovery_points,account.growth_value,
       contribution.points_numerator_per_minor::text,contribution.points_denominator::text,contribution.growth_numerator_per_minor::text,contribution.growth_denominator::text,
-      policy.rounding_mode,COALESCE((SELECT min(ledger.expires_at) FROM mbox.loyalty_point_ledger ledger
+      COALESCE(to_jsonb(award)->>'points_rounding_scope','cumulative') AS points_rounding_scope,policy.rounding_mode,COALESCE((SELECT min(ledger.expires_at) FROM mbox.loyalty_point_ledger ledger
         WHERE ledger.tenant_id=award.tenant_id AND ledger.store_id=award.store_id AND ledger.order_id=award.order_id AND ledger.entry_type IN ('earn','supplement') AND ledger.refund_id IS NULL),award.awarded_at+make_interval(months=>policy.points_validity_months))::text expires_at
       FROM mbox.loyalty_order_awards award JOIN mbox.loyalty_accounts account
         ON (account.tenant_id,account.store_id,account.membership_id)=(award.tenant_id,award.store_id,award.membership_id)
@@ -175,7 +177,7 @@ export class LoyaltyRecollectionRepository {
     for(const application of eligible){
       const amount=Number(application.eligible_refund_amount_minor)
       if(amount>netAmount)throw new Error('Loyalty recollection exceeds the remaining reversed contribution')
-      const points=context.calculation_model==='exact_carry'?carryDelta(carries,'points',context.points_denominator!,context.points_numerator_per_minor!,amount,context.rounding_mode):netPoints-proportion(context.awarded_points,netAmount-amount,Number(context.eligible_amount_minor))
+      const points=context.points_rounding_scope==='order'?orderPointsDelta(Number(context.eligible_amount_minor)-netAmount,Number(context.eligible_amount_minor)-netAmount+amount,1n,1000n):context.calculation_model==='exact_carry'?carryDelta(carries,'points',context.points_denominator!,context.points_numerator_per_minor!,amount,context.rounding_mode):netPoints-proportion(context.awarded_points,netAmount-amount,Number(context.eligible_amount_minor))
       const growth=context.calculation_model==='exact_carry'?carryDelta(carries,'growth',context.growth_denominator!,context.growth_numerator_per_minor!,amount,context.rounding_mode):netGrowth-proportion(context.awarded_growth,netAmount-amount,Number(context.eligible_amount_minor))
       netAmount-=amount;netPoints-=points;netGrowth-=growth
       if(application.debt_points<0)throw new Error('Original loyalty refund movements exceed its point reversal')

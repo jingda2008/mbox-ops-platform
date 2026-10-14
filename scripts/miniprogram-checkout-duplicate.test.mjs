@@ -129,3 +129,25 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(p.data.selectedPublicIds.length, 0); assert.match(p.data.success, /已恢复原付款结果/); assert.equal(p.data.error, '')
   })
 }
+
+for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+  test(`${platform}: zero-cash points checkout retries the original request and never presents payment`, async () => {
+    let attempts=0,paymentActions=0
+    const h=liveMiniHarness(platform,()=>++attempts===1?{networkError:true}:{status:200,data:{data:{order:{publicId:'points-order'},pointsSettlement:true,pointsUsed:10,payment:null,settlement:{payableAmountMinor:0},sharedCart:{version:0}}}})
+    const p=h.page('order',['submitOrder'],{alipayOnlinePaymentEnabled:()=>true,checkoutRecommendationAttribution:()=>null,CHECKOUT_ATTEMPT_KEY:'checkout-attempt',PENDING_PAYMENT_KEY:'pending-payment',CHECKOUT_REJECTED_BEFORE_ORDER:new Set()})
+    Object.assign(p,{isCurrentTableRequest:()=>true,recordOrderTiming(){},updateCart(){},invalidateCheckoutCoupons(){},couponCheckoutReady:()=>true,checkoutDraftMatches:()=>true,handlePaymentAction:async()=>{paymentActions++}})
+    p.data={paymentStateReady:true,busy:false,cart:[]}
+    const reviewed={tableScope:'table-one',pointsOnly:true,couponQuoteId:'original-points-quote',expectedGeneration:2,expectedVersion:3,note:'积分结账',lineNotes:[]}
+    await p.submitOrder(null,false,null,{},reviewed)
+    const saved=h.storage.get('checkout-attempt')
+    assert.equal(saved.pointsOnly,true);assert.equal(p.data.checkoutLocked,true)
+    await p.submitOrder(null,false,saved,{})
+    assert.equal(h.calls.length,2)
+    assert.equal(h.calls[0].path,'/api/guest/shared-cart/points-settlement')
+    assert.deepEqual(h.calls[1],h.calls[0])
+    assert.equal(h.nativePayments.length,0);assert.equal(paymentActions,0)
+    assert.equal(h.storage.has('checkout-attempt'),false);assert.equal(h.storage.has('pending-payment'),false)
+    assert.equal(p.data.checkoutLocked,false);assert.equal(p.data.pendingPayment,null)
+    assert.match(p.data.success,/积分结账成功/)
+  })
+}

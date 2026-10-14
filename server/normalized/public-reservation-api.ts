@@ -53,6 +53,7 @@ export interface PublicReservationGuestContext {
   actorRef: string
   businessDate: string
   capabilities: readonly string[]
+  identityProvider?: 'anonymous' | 'wechat'
 }
 
 export interface PublicReservationStaffContext {
@@ -358,11 +359,13 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
         guestCount,
         arrivalAt,
         expectedEndAt,
-        source: 'wechat',
+        source: context.identityProvider === 'wechat' ? 'wechat' : 'online',
         note,
         reservationSnapshot: {
           ...(options.reservationReceptionCreateEnabled === true ? { receptionProtocol: 1 } : {}),
           requestFingerprint,
+          intakeChannel: 'public_online',
+          identityProvider: context.identityProvider === 'wechat' ? 'wechat' : 'anonymous',
           bookingMode: mode,
           depositRule: deposit,
           priorityBooking: annualPriority === null ? null : {
@@ -661,7 +664,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
       contact,
       guestCount: readInteger(body.guestCount, '人数', 1, 200),
       desiredArrivalAt: readTimestamp(body.desiredArrivalAt, '预计到店时间'),
-      source: 'wechat',
+      source: context.identityProvider === 'wechat' ? 'wechat' : 'online',
       note: readOptionalString(body.note, '备注', 1000),
       annualPriorityRuleId: annualPriority?.rule_id ?? null,
       annualPriorityHoldMinutes: annualPriority?.reservation_hold_minutes ?? null,
@@ -928,7 +931,7 @@ export const publicReservationApiPlugin: FastifyPluginAsync<PublicReservationApi
     return reply.send({
       data: rows.rows.map((row) => ({
         kind: row.kind,
-        channel: row.kind === 'waitlist' ? 'waitlist' : row.source === 'wechat' ? 'online' : row.source,
+        channel: row.kind === 'waitlist' ? 'waitlist' : ['wechat', 'online'].includes(row.source) ? 'online' : row.source,
         publicId: row.public_id,
         customerName: row.customer_name,
         maskedContact: row.masked_contact,
@@ -1201,7 +1204,7 @@ export async function readReservationCapacity(
             OR (
               reservation.status = 'pending'
               AND (
-                (reservation.source <> 'wechat' AND (
+                (reservation.source NOT IN ('wechat', 'online') AND (
                   -- Legacy native pending bookings lose their capacity claim when
                   -- every physical hold expires. Keep unassigned admissions counted.
                   NOT EXISTS (SELECT 1 FROM mbox.reservation_table_locks physical
@@ -1212,7 +1215,7 @@ export async function readReservationCapacity(
                       AND physical.reservation_id=reservation.id
                       AND (physical.status='confirmed' OR (physical.status='held' AND physical.hold_expires_at>clock_timestamp())))
                 ))
-                OR (reservation.source = 'wechat' AND reservation.request_hold_expires_at > clock_timestamp())
+                OR (reservation.source IN ('wechat', 'online') AND reservation.request_hold_expires_at > clock_timestamp())
               )
             )
           )

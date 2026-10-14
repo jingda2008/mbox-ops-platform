@@ -69,6 +69,16 @@ integration('WeChat login with the production runtime column permissions', () =>
     expect(await repository.resolveMiniProgramNotificationRecipient(randomUUID(), identity.id)).toBeNull()
   })
 
+  it('consumes within the creation millisecond without violating database timestamp precision', async () => {
+    const challenge = await app.inject({method:'POST',url:'/api/wechat/challenges',payload:{...scope,idempotencyKey:randomUUID()}})
+    expect(challenge.statusCode).toBe(201)
+    const row=(await admin.query("SELECT id,extract(epoch FROM date_trunc('milliseconds',created_at))*1000 AS millis,extract(epoch FROM expires_at)*1000 AS expires FROM mbox.wechat_auth_challenges WHERE tenant_id=$1 AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",[scope.tenantId])).rows[0]
+    const challenges=new PostgresWechatChallengeRepository({...scope,pool:runtime,activeKeyVersion:1,encryptionKeys:new Map([[1,Buffer.alloc(32,9)]])})
+    expect(await challenges.consume(row.id,Number(row.expires),Number(row.millis))).toBe(true)
+    expect(await challenges.consume(row.id,Number(row.expires),Number(row.millis))).toBe(false)
+    expect((await admin.query('SELECT consumed_at>=created_at AS valid FROM mbox.wechat_auth_challenges WHERE id=$1',[row.id])).rows[0].valid).toBe(true)
+  })
+
   it('does not grant runtime permission to reassign or delete an identity', async () => {
     const result = await runtime.query("SELECT has_column_privilege(current_user,'mbox.wechat_identities','principal_id','UPDATE') AS reassign, has_table_privilege(current_user,'mbox.wechat_identities','DELETE') AS remove")
     expect(result.rows[0]).toEqual({ reassign: false, remove: false })

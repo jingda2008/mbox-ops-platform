@@ -1,3 +1,4 @@
+import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import { settlementDisplayNumber } from './settlement-display-number.js'
 import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import {orderReceivableSql} from './order-collection-sql.js'
@@ -22,6 +23,7 @@ import {
 import type { ScopedTransaction } from './transaction-runner.js'
 
 interface OrderContextRow extends Record<string, unknown> {
+  points?:CheckoutPointsView
   original_amount_minor?: number
   stopped_amount_minor?: number
   settlement_mode: string
@@ -186,7 +188,7 @@ export class PrintTicketSourceRepository {
     }
     const lines:PrintTicketLine[]=[{name:'消费时间',quantity:1,note:consumedAt},...items.map(toCashierLine),...packageComparisons,
       {name:'优惠前应付（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
-      {name:'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
+      {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
       ...receivableAdjustmentLines(context),
       {name:'订单应付金额',quantity:1,totalAmountMinor:total},
       {name:'已确认实际收款',quantity:1,totalAmountMinor:received},
@@ -220,7 +222,7 @@ export class PrintTicketSourceRepository {
     }
     snapshot.lines = [...snapshot.lines,
       {name:'优惠前应付合计（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
-      {name:'优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')}]
+      {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')}]
     const jobs = await this.materializeDocument(sourceId, `${context.order_public_id}:summary`, snapshot)
     // A tab order needs a pre-bill before any collection has been initiated.
     // Immediate checkout does not grant this path permission to produce food.
@@ -659,7 +661,8 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源订单不存在或不可打印')
-    return this.withEffectiveReceivable(row)
+    const points=(await readCheckoutPoints(this.transaction,[row.order_id])).get(row.order_id)
+    return this.withEffectiveReceivable({...row,...(points?{points}:{})})
   }
 
   private async loadPaymentContext(paymentId: string): Promise<PaymentContextRow> {
@@ -695,7 +698,8 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源支付不存在')
-    return this.withEffectiveReceivable(row)
+    const points=(await readCheckoutPoints(this.transaction,[row.order_id])).get(row.order_id)
+    return this.withEffectiveReceivable({...row,...(points?{points}:{})})
   }
 
   private async loadRefundContext(refundId: string): Promise<RefundContextRow> {
@@ -726,7 +730,8 @@ export class PrintTicketSourceRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, refundId])
     const row = result.rows[0]
     if (!row) throw new Error('打印源退款不存在')
-    return this.withEffectiveReceivable(row)
+    const points=(await readCheckoutPoints(this.transaction,[row.order_id])).get(row.order_id)
+    return this.withEffectiveReceivable({...row,...(points?{points}:{})})
   }
 
   private async loadActivityPaymentContext(paymentId: string): Promise<ActivityPaymentContextRow> {

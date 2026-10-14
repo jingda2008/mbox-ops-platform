@@ -96,6 +96,8 @@ integration('reservation guest sessions with PostgreSQL', () => {
     expect(first.replayed).toBe(false)
     expect(replay.replayed).toBe(true)
     expect(replay.value.sessionToken).toBe(token)
+    expect(first.value.session.identityProvider).toBe('wechat')
+    expect(replay.value.session.identityProvider).toBe('wechat')
     expect(Date.parse(first.value.session.expiresAt) - fixedNow.getTime()).toBe(30 * 60_000)
 
     const stored = await pool.query<{
@@ -137,12 +139,22 @@ integration('reservation guest sessions with PostgreSQL', () => {
       scope: { tenantId, storeId },
       sessionToken: token,
       deviceFingerprint: device,
-    })).resolves.toMatchObject({ customerId })
+    })).resolves.toMatchObject({ customerId, identityProvider: 'wechat' })
     await expect(service.authenticate({
       scope: { tenantId, storeId },
       sessionToken: token,
       deviceFingerprint: 'different-reservation-device',
     })).rejects.toBeInstanceOf(ReservationGuestSessionInvalidError)
+  })
+  it('retains anonymous provenance through issue, replay and authentication', async () => {
+    const anonymous = new ReservationGuestSessionService(transactions, new NormalizedCommandExecutor(transactions), {
+      resolve: async () => ({customerId,actorRef:'anonymous-test'}),
+    })
+    const input = {scope:{tenantId,storeId},provider:'anonymous' as const,providerAssertion:'anonymous-platform-unverified',deviceFingerprint:'anonymous-device-001',businessDate:'2026-08-11',idempotencyKey:'anonymous-source-001',requestFingerprint:'anonymous-source-fingerprint'}
+    const first = await anonymous.issue(input)
+    expect(first.value.session.identityProvider).toBe('anonymous')
+    expect((await anonymous.issue(input)).value.session.identityProvider).toBe('anonymous')
+    expect(await anonymous.authenticate({scope:{tenantId,storeId},sessionToken:first.value.sessionToken,deviceFingerprint:input.deviceFingerprint})).toMatchObject({identityProvider:'anonymous'})
   })
 })
 

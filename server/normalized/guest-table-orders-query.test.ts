@@ -18,6 +18,7 @@ describe('loadGuestTableOrders', () => {
     const transaction = {
       scope: { tenantId, storeId },
       query: async (sql: string, values: readonly unknown[]) => {
+        if(sql.includes('to_regclass'))return {rows:[{present:false}],rowCount:1}
         capturedSql = sql
         capturedValues = values
         return { rows: [{

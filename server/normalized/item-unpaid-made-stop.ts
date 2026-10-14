@@ -1,3 +1,5 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {assertEmployeeEffectivePermission} from './employee-table-access.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
@@ -5,6 +7,15 @@ import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 /** Stopping unpaid goods is an operating decision, never a fabricated refund.
  * Delivered goods retain the existing settlement-exception permission. */
 export async function assertUnpaidMadeStopPermission(tx:ScopedTransaction,caseId:string,employeeId:string){
+  const points=await new CheckoutPointsRepository(tx).casePoints(caseId)
+  if(points){
+    await assertEmployeeEffectivePermission(tx,employeeId,'refund.approve')
+    if(points.requester===employeeId)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','积分返还须由另一位有退款审核权限的员工审核')
+    const access=await new StaffAccessRepository(tx).resolve(employeeId)
+    const limits=access.approvalLimits.filter(l=>l.code==='refund.approve'&&l.currency==='CNY'&&l.amountMinor!==null).map(l=>l.amountMinor!)
+    if(!limits.length||points.approvalAmountMinor>Math.max(...limits))throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','原积分抵扣金额超过当前审核额度')
+    return
+  }
   const facts=(await tx.query<{made:boolean;delivered:boolean}>(`SELECT
     COALESCE(bool_or(unit.production_state<>'unmade'),false) AS made,
     COALESCE(bool_or(mbox.quantity_unit_has_delivery(unit.tenant_id,unit.store_id,unit.id)),false) AS delivered

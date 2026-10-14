@@ -1,3 +1,4 @@
+import {readCheckoutPoints} from './checkout-points-view.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { randomUUID } from 'node:crypto'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -65,6 +66,7 @@ export class RecollectionAuthorizationRepository {
     const reason = requireReason(input.reason)
     const ttlMinutes = boundedTtl(input.ttlMinutes ?? 30)
     const balance = await this.lockBalance(input.orderId)
+    await this.assertPointsNotReturned(input.orderId)
     const outstandingMinor = balance.collection_due_minor
     if (balance.status === 'draft' || balance.status === 'cancelled' || balance.refunded_minor <= 0 || outstandingMinor <= 0) {
       throw new RecollectionAuthorizationConflictError('当前订单没有可授权的退款后重新收款余额')
@@ -116,6 +118,7 @@ export class RecollectionAuthorizationRepository {
     currency: string
   }>): Promise<{ authorizationId: string | null }> {
     if (input.outstandingMinor <= 0 || input.refundedMinor <= 0) return { authorizationId: null }
+    await this.assertPointsNotReturned(input.orderId)
     const selected = await this.transaction.query<AuthorizationRow>(`
       SELECT id,public_id,order_id,amount_minor,currency,reason,authorized_by_employee_id,
         expires_at::text,created_at::text
@@ -141,6 +144,11 @@ export class RecollectionAuthorizationRepository {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='active' AND expires_at>clock_timestamp()
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, authorizationId, paymentId])
     if (updated.rowCount !== 1) throw new RecollectionAuthorizationRequiredError()
+  }
+
+  private async assertPointsNotReturned(orderId:string){
+    const points=(await readCheckoutPoints(this.transaction,[orderId])).get(orderId)
+    if(points&&points.restored>0)throw new RecollectionAuthorizationConflictError('原积分已返还，不能沿原优惠重新收款；请保留原售后记录，经顾客确认后创建新订单')
   }
 
   private async lockBalance(orderId: string): Promise<{

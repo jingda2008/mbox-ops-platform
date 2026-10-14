@@ -32,6 +32,8 @@ export interface ReservationGuestSession {
   id: string
   customerId: string
   actorRef: string
+  /** Established by the server identity verifier, never a client channel header. */
+  identityProvider?: 'anonymous' | 'wechat'
   scopes: string[]
   expiresAt: string
 }
@@ -44,6 +46,7 @@ export interface ReservationGuestSessionIssueResult {
 interface SessionRow extends Record<string, unknown> {
   id: string
   customer_id: string
+  identity_provider: 'anonymous' | 'wechat'
   scopes: string[]
   expires_at: string
   revoked_at: string | null
@@ -144,7 +147,7 @@ export class ReservationGuestSessionService {
         ) VALUES (
           $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::text[], $9::timestamptz, $10::timestamptz
         )
-        RETURNING id, customer_id, scopes, expires_at::text, revoked_at::text
+        RETURNING id, customer_id, identity_provider, scopes, expires_at::text, revoked_at::text
       `, [
         transaction.scope.tenantId,
         transaction.scope.storeId,
@@ -164,6 +167,7 @@ export class ReservationGuestSessionService {
           id: row.id,
           customerId: row.customer_id,
           actorRef: identity.actorRef,
+          identityProvider: row.identity_provider,
           scopes: row.scopes,
           expiresAt: row.expires_at,
         },
@@ -198,7 +202,7 @@ export class ReservationGuestSessionService {
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid
           AND token_hash = $3 AND device_hash = $4
           AND revoked_at IS NULL AND expires_at > clock_timestamp()
-        RETURNING id, customer_id, scopes, expires_at::text, revoked_at::text
+        RETURNING id, customer_id, identity_provider, scopes, expires_at::text, revoked_at::text
       `, [transaction.scope.tenantId, transaction.scope.storeId, tokenHash, deviceHash])
       const row = selected.rows[0]
       if (!row) throw new ReservationGuestSessionInvalidError()
@@ -206,6 +210,7 @@ export class ReservationGuestSessionService {
         id: row.id,
         customerId: row.customer_id,
         actorRef: `reservation-session:${row.id}`,
+        identityProvider: row.identity_provider,
         scopes: row.scopes,
         expiresAt: row.expires_at,
       }
@@ -254,6 +259,7 @@ const sessionIssueCodec: JsonCodec<ReservationGuestSessionIssueResult> = {
       id: value.session.id,
       customerId: value.session.customerId,
       actorRef: value.session.actorRef,
+      identityProvider: value.session.identityProvider ?? 'anonymous',
       scopes: value.session.scopes,
       expiresAt: value.session.expiresAt,
     },
@@ -277,6 +283,8 @@ const sessionIssueCodec: JsonCodec<ReservationGuestSessionIssueResult> = {
         id: session.id,
         customerId: session.customerId,
         actorRef: session.actorRef,
+        // Old command receipts lack provider metadata; never upgrade them to verified WeChat.
+        identityProvider: session.identityProvider === 'wechat' ? 'wechat' : 'anonymous',
         scopes: session.scopes,
         expiresAt: session.expiresAt,
       },

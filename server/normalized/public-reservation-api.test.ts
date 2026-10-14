@@ -29,6 +29,7 @@ integration('public reservation API with PostgreSQL', () => {
   let tableId: string
   let scheduleId: string
   let staffEmployeeId: string
+  let guestIdentityProvider: 'wechat' | 'anonymous' | undefined = 'wechat'
   let publicSequence = 0
   let staffPermissions = ['reservation.view', 'reservation.view.all', 'reservation.manage']
   const fixedNow = new Date()
@@ -116,6 +117,7 @@ integration('public reservation API with PostgreSQL', () => {
       resolveGuest: () => ({
         scope: { tenantId, storeId },
         sessionId: 'reservation-session-test',
+        identityProvider: guestIdentityProvider,
         customerId,
         actorRef: 'reservation-session:test',
         businessDate: '2026-08-11',
@@ -621,6 +623,51 @@ integration('public reservation API with PostgreSQL', () => {
       staffPermissions = ['reservation.view', 'reservation.manage']
       expect((await send()).statusCode).toBe(404)
     } finally { staffPermissions = permissions }
+  })
+
+
+  it.each(['anonymous', 'wechat', undefined] as const)('derives reservation and waitlist source from verified session %s, preserves replay and online hold expiry', async (provider) => {
+    guestIdentityProvider = provider
+    const index = provider === 'wechat' ? 5 : provider === 'anonymous' ? 4 : 6
+    const arrivalAt = new Date(fixedNow.getTime() + index * 86400000).toISOString()
+    const expectedEndAt = new Date(Date.parse(arrivalAt) + 7200000).toISOString()
+    const key = `source-reservation-${randomUUID()}`
+    const headers = { 'idempotency-key': key, 'x-mbox-client-platform': 'wechat' }
+    const payload = { mode: 'direct', customerName: '来源隔离顾客', contact: rawContact,
+      guestCount: 6, arrivalAt, expectedEndAt, seatPreference: 'no_preference', reservationPolicyVersion: 2 }
+    const expectedSource = provider === 'wechat' ? 'wechat' : 'online'
+    try {
+      await pool.query('DELETE FROM mbox.public_reservation_rate_limits WHERE tenant_id=$1 AND store_id=$2', [tenantId, storeId])
+      const created = await app.inject({ method: 'POST', url: '/public/reservations', headers, payload })
+      expect(created.statusCode, created.body).toBe(201)
+      const publicId = created.json().data.publicId
+      const stored = await pool.query('SELECT source,reservation_snapshot FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3', [tenantId,storeId,publicId])
+      expect(stored.rows[0]).toMatchObject({source: expectedSource, reservation_snapshot: {intakeChannel:'public_online',identityProvider:provider === 'wechat' ? 'wechat' : 'anonymous'}})
+      const replay = await app.inject({method:'POST',url:'/public/reservations',headers:{...headers,'x-mbox-client-platform':'alipay'},payload})
+      expect(replay.statusCode, replay.body).toBe(200)
+      expect(replay.json().data.publicId).toBe(publicId)
+      expect(replay.json().meta.replayed).toBe(true)
+      const availabilityUrl = `/public/reservation/availability?arrivalAt=${encodeURIComponent(arrivalAt)}&expectedEndAt=${encodeURIComponent(expectedEndAt)}&guestCount=1`
+      expect((await app.inject({method:'GET',url:availabilityUrl})).json().data.acceptingReservations).toBe(false)
+      await pool.query("UPDATE mbox.reservations SET request_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3", [tenantId,storeId,publicId])
+      expect((await app.inject({method:'GET',url:availabilityUrl})).json().data.acceptingReservations).toBe(true)
+      const intake = await app.inject({method:'GET',url:`/staff/reservation-intake?from=${encodeURIComponent(arrivalAt)}&to=${encodeURIComponent(expectedEndAt)}`})
+      expect(intake.statusCode, intake.body).toBe(200)
+      expect(intake.json().data.find((row: {publicId:string})=>row.publicId===publicId)).toMatchObject({channel:'online'})
+      const waitlistKey = `source-waitlist-${randomUUID()}`
+      const waitlistPayload = {customerName:'来源候位顾客',contact:`1380013800${index}`,guestCount:2,desiredArrivalAt:arrivalAt}
+      const waitlist = await app.inject({method:'POST',url:'/public/waitlist',headers:{...headers,'idempotency-key':waitlistKey},payload:waitlistPayload})
+      expect(waitlist.statusCode, waitlist.body).toBe(201)
+      const waitlistId = waitlist.json().data.publicId
+      const waitlistStored = await pool.query('SELECT source FROM mbox.waitlist_entries WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3',[tenantId,storeId,waitlistId])
+      expect(waitlistStored.rows[0].source).toBe(expectedSource)
+      const waitlistReplay = await app.inject({method:'POST',url:'/public/waitlist',headers:{'idempotency-key':waitlistKey,'x-mbox-client-platform':'alipay'},payload:waitlistPayload})
+      expect(waitlistReplay.statusCode, waitlistReplay.body).toBe(200)
+      expect(waitlistReplay.json().data.publicId).toBe(waitlistId)
+      expect(waitlistReplay.json().meta.replayed).toBe(true)
+      const forged = await app.inject({method:'POST',url:'/public/waitlist',headers:{'idempotency-key':`source-forged-${randomUUID()}`},payload:{...waitlistPayload,source:'wechat'}})
+      expect(forged.statusCode).toBe(400)
+    } finally { guestIdentityProvider = 'wechat' }
   })
 
 })

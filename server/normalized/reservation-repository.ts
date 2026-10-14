@@ -10,7 +10,7 @@ export type ReservationStatus =
   | 'completed'
   | 'cancelled'
   | 'no_show'
-export type ReservationSource = 'wechat' | 'phone' | 'walk_in' | 'employee' | 'integration'
+export type ReservationSource = 'wechat' | 'online' | 'phone' | 'walk_in' | 'employee' | 'integration'
 export type ReservationLockStatus = 'held' | 'confirmed' | 'released' | 'expired' | 'cancelled'
 export type ReservationSeatPreference =
   | 'no_preference'

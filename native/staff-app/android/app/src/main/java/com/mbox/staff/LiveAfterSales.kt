@@ -131,7 +131,8 @@ class LiveAfterSales(val source: JSONObject) {
                 require(row?.optBoolean(flag) == true) { "当前岗位或原申请状态不允许此决定" }
                 permission =
                     if (action == "withdrawn") "refund.request"
-                    else if (row!!.getString("kind") == "unpaid_stop") {
+                    else if (row!!.optJSONObject("pointsReturn") != null) "refund.approve"
+                    else if (row.getString("kind") == "unpaid_stop") {
                         if (actor.allows("order.settle_exception")) "order.settle_exception"
                         else "order.cancel_unpaid"
                     } else "refund.approve"

@@ -14,6 +14,8 @@ export type PromotionTriggerKind = 'activity_payment' | 'activity_check_in' | 'a
 export type MembershipConfigurationContent =
   | Readonly<{
       domain: 'base_points'
+      cashRedemptionEnabled?: boolean
+      pointsRoundingScope?: 'cumulative' | 'order'
       pointsNumerator: number
       pointsDenominatorMinor: number
       growthNumerator: number
@@ -145,6 +147,7 @@ export interface MembershipImpactSnapshot {
   membersByTier: Readonly<Record<MembershipTier, number>>
   availablePointsLiability: number
   eligiblePaidAmountMinor: number
+  eligibleOrderAmountsMinor?: readonly number[]
   expectedTierEntries: Readonly<Record<MembershipTier, number>>
   expectedTierRetentions: Readonly<Record<MembershipTier, number>>
   growthBucketsByTier: Readonly<Record<MembershipTier,
@@ -437,14 +440,14 @@ function compute(content: MembershipConfigurationContent, snapshot: MembershipIm
     warnings: [] as MembershipConfigurationImpactPreview['warnings'],
   }
   if (content.domain === 'base_points') {
-    const points = ratio(snapshot.eligiblePaidAmountMinor, content.pointsNumerator,
-      content.pointsDenominatorMinor, content.roundingMode)
-    const pointCost = pointsCost(points, snapshot.pointCostMicrosPerPoint)
+    if(content.pointsRoundingScope==='order'&&!snapshot.eligibleOrderAmountsMinor)throw configurationError('MEMBERSHIP_CONFIGURATION_IMPACT_SOURCE_INVALID','逐单积分预览需要逐单成交金额，不能用汇总金额取整')
+    const points = content.pointsRoundingScope==='order'?snapshot.eligibleOrderAmountsMinor!.reduce((total,amount)=>total+Math.floor(amount/1000),0):ratio(snapshot.eligiblePaidAmountMinor, content.pointsNumerator,content.pointsDenominatorMinor, content.roundingMode)
+    const pointCost = content.cashRedemptionEnabled?points*100:pointsCost(points, snapshot.pointCostMicrosPerPoint)
     return result({ ...empty, estimatedPointsIssued: points, estimatedPointsCostAmountMinor: pointCost,
       warnings: pointCost > 0 ? ['points_cost_review'] : [] }, [
       content.pointsNumerator, content.pointsDenominatorMinor, content.growthNumerator,
-      content.growthDenominatorMinor, content.roundingMode, content.pointsValidityMonths,
-      snapshot.eligiblePaidAmountMinor, snapshot.pointCostMicrosPerPoint,
+      content.growthDenominatorMinor, content.roundingMode, content.pointsValidityMonths, content.pointsRoundingScope ?? 'cumulative', Boolean(content.cashRedemptionEnabled),
+      snapshot.eligiblePaidAmountMinor, snapshot.pointCostMicrosPerPoint, ...(snapshot.eligibleOrderAmountsMinor??[]),
     ])
   }
   if (content.domain === 'tier_policy') {
@@ -644,6 +647,7 @@ function eligibleTierCount(counts: Readonly<Record<MembershipTier, number>>, tie
 }
 export function assertContent(content: MembershipConfigurationContent) {
   if (content.domain === 'base_points') {
+    if ((content.cashRedemptionEnabled && content.pointsRoundingScope !== 'order') || (content.pointsRoundingScope === 'order' && (content.pointsNumerator !== 1 || content.pointsDenominatorMinor !== 1000 || content.roundingMode !== 'floor'))) throw configurationError('MEMBERSHIP_CONFIGURATION_INVALID', '逐单积分固定每10元1分、向下取整；现金抵扣须采用该规则')
     positive(content.pointsDenominatorMinor); positive(content.growthDenominatorMinor)
     nonnegative(content.pointsNumerator); nonnegative(content.growthNumerator)
     if (content.pointsValidityMonths < 1 || content.pointsValidityMonths > 120) throw configurationError(
@@ -738,6 +742,7 @@ export function assertContent(content: MembershipConfigurationContent) {
   }
 }
 function assertSnapshot(snapshot: MembershipImpactSnapshot) {
+  for(const amount of snapshot.eligibleOrderAmountsMinor??[])nonnegative(amount)
   for (const value of [snapshot.activeMembers, snapshot.membersByTier.member, snapshot.membersByTier.silver,
     snapshot.membersByTier.gold, snapshot.availablePointsLiability, snapshot.eligiblePaidAmountMinor,
     snapshot.pointCostMicrosPerPoint, snapshot.currentTermsAcceptances]) nonnegative(value)

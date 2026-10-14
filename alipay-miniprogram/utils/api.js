@@ -787,6 +787,8 @@ async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyK
     data: { expectedGeneration, expectedVersion },
   })).data
 }
+async function getCheckoutPoints() { return (await request('/api/guest/shared-cart/points')).data }
+async function quoteSharedCartPoints(input, idempotencyKey) { return (await request('/api/guest/shared-cart/points-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input })).data }
 async function quoteSharedCartCoupons(input, idempotencyKey) {
   return (await request('/api/guest/shared-cart/coupon-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('coupon-quote') }, data: input })).data
 }
@@ -801,7 +803,7 @@ async function checkoutSharedCart(input, idempotencyKey) {
     input.checkoutUpgradeOfferPublicId,
     input.recommendationAttribution,
   )
-  return request('/api/guest/shared-cart/checkout', {
+  return request(input.pointsOnly ? '/api/guest/shared-cart/points-settlement' : '/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
       note: input.note || null,
@@ -944,7 +946,7 @@ export {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
+  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,

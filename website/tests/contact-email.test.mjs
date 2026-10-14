@@ -18,30 +18,32 @@ const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'ut
 function line(label) {
   return `<p class="contact-email-line"><span class="email-label">${label}</span><a class="contact-email" href="mailto:shmbox@qq.com">shmbox@qq.com</a></p>`;
 }
-function phoneLine(label) {
-  return `<p class="contact-phone-line"><span class="phone-label">${label}</span><a href="tel:+8617621392152">+86 176 2139 2152 ↗</a></p>`;
+function phoneLine(label, {arrow = true, phoneClass = ''} = {}) {
+  const cls = phoneClass ? ` class="${phoneClass}"` : '';
+  const mark = arrow ? ' ↗' : '';
+  return `<p class="contact-phone-line"><span class="phone-label">${label}</span><a${cls} href="tel:+8617621392152">+86 176 2139 2152${mark}</a></p>`;
+}
+function pair(tel, email, options) {
+  return `<div class="contact-pair">${phoneLine(tel, options)}${line(email)}</div>`;
 }
 
 test('labeled contact email sits directly under each displayed phone number', () => {
   for (const lang of langs) {
     const [telLabel, emailLabel] = labels[lang];
     const email = line(emailLabel);
-    const phone = phoneLine(telLabel);
+    const linked = pair(telLabel, emailLabel, {arrow: true});
+    const visit = pair(telLabel, emailLabel, {arrow: false, phoneClass: 'phone'});
     const home = pages['/' + lang + '/'];
     assert.equal(home.split(email).length - 1, 3, lang + ' home');
-    assert.ok(home.includes('<div class="footer-contact">' + phone + email), lang + ' footer');
-    assert.equal(home.split(phone).length - 1, 1, lang + ' footer phone');
-    assert.equal(pages['/' + lang + '/menu/'].split(phone).length - 1, 1, lang + ' menu phone');
-    assert.ok(home.includes('<a class="phone" href="tel:+8617621392152">+86 176 2139 2152</a>' + email), lang + ' visit');
-    assert.match(home, new RegExp('class="button gold event-link" href="tel:\\+8617621392152">[\\s\\S]*?</a>' + email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.equal(pages['/' + lang + '/menu/'].split(email).length - 1, 1, lang + ' menu');
-    assert.equal(home.includes('<a class="contact-email"'), true);
-    assert.equal(home.includes('>shmbox@qq.com</a></p>'), true);
+    assert.equal(home.split(linked).length - 1, 2, lang + ' home linked pairs');
+    assert.equal(home.split(visit).length - 1, 1, lang + ' visit pair');
+    assert.ok(home.includes('<div class="footer-contact">' + linked), lang + ' footer');
+    assert.equal(pages['/' + lang + '/menu/'].split(linked).length - 1, 1, lang + ' menu');
+    assert.match(home, new RegExp('class="button gold event-link" href="tel:\\+8617621392152">[\\s\\S]*?</a>' + linked.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     for (const file of [`public/${lang}/reserve/index.html`, `aliyun/public-overrides/${lang}/reserve/index.html`]) {
       const html = fs.readFileSync(new URL('../' + file, import.meta.url), 'utf8');
-      assert.equal(html.split(email).length - 1, 2, file);
-      assert.equal(html.split(phone).length - 1, 1, file + ' footer phone');
-      assert.match(html, /class="text-link" href="tel:\+8617621392152">[^<]*\+86 176 2139 2152 ↗<\/a><p class="contact-email-line">/);
+      assert.equal(html.split(linked).length - 1, 2, file);
+      assert.equal(html.includes('class="text-link" href="tel:+8617621392152"'), false, file);
     }
   }
 });
@@ -65,12 +67,11 @@ test('every shown venue email carries its localized prefix', () => {
   }
 });
 
-test('contact card email uses the same type size as the phone number', () => {
-  assert.ok(css.includes('.contact-card .phone{display:block;font:clamp(20px,2.5vw,35px)/1.3 var(--serif)'));
-  assert.ok(css.includes('.contact-card .contact-email-line{font:clamp(20px,2.5vw,35px)/1.3 var(--sans);font-weight:400'));
-  assert.ok(css.includes('.contact-card .phone{font-size:27px}'));
-  assert.ok(css.includes('.contact-card .contact-email-line{font-size:27px}'));
-  assert.ok(css.includes('.footer-contact{display:flex;flex-direction:column;align-items:flex-end;gap:8px;font-size:14px}'));
-  assert.ok(css.includes('.footer-contact .contact-phone-line,.footer-contact .contact-email-line{font-family:var(--sans);font-size:14px'));
-  assert.ok(css.includes('.booking-panel .contact-email-line,.events .contact-email-line{font-size:14px'));
+test('phone and email lines share one aligned pair', () => {
+  assert.ok(css.includes('.contact-pair{display:grid;grid-template-columns:max-content max-content'));
+  assert.ok(css.includes('.contact-phone-line,.contact-email-line{display:contents}'));
+  assert.ok(css.includes('.contact-card .contact-pair p,.contact-card .contact-pair .phone-label,.contact-card .contact-pair .email-label,.contact-card .contact-pair a{font:clamp(20px,2.2vw,32px)/1.3 var(--sans)'));
+  assert.ok(css.includes('.contact-card .contact-pair p,.contact-card .contact-pair .phone-label,.contact-card .contact-pair .email-label,.contact-card .contact-pair a{font-size:22px}'));
+  assert.ok(css.includes('.footer-contact .contact-pair{row-gap:8px;justify-self:end}'));
+  assert.ok(css.includes('.footer-contact .contact-pair{justify-self:start}'));
 });

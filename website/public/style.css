@@ -33,3 +33,6 @@ section[id]{scroll-margin-top:100px}.hero-actions{flex-wrap:wrap;gap:20px}.liste
 .why-proof{max-width:64ch;color:var(--muted,#b7c0b8);line-height:1.85;margin:1.5rem 0 0}.schedule-actions{display:flex;flex-wrap:wrap;gap:1rem;margin-top:1.5rem}.performance[data-phase="ended"]{opacity:.65}.performance[data-phase="window"]{border-color:#c6ae74}#overnight-schedule{margin-top:2rem}#overnight-schedule[hidden]{display:none}.schedule-header{flex-wrap:wrap;gap:.75rem}#schedule-status,#schedule-checked{overflow-wrap:anywhere}
 
 .menu-image-placeholder{width:90px;height:90px;display:grid;place-items:center;background:#e5e7de;color:#53604f;font-size:12px}.menu-availability{font-size:12px;color:#766648}.menu-sync-status span{display:block;margin-top:8px}.home-menu-grid{margin-top:24px}.budget-links{display:flex;gap:20px;flex-wrap:wrap;margin-top:24px}.menu-section .catalog-item{background:transparent}.menu-section .catalog-item h2{font-size:20px}.menu-sync-status{line-height:1.8}
+
+.footer-icp{margin:12px 0 0;font-size:9px;letter-spacing:.5px;color:#adbaa3}
+@media(max-width:760px){.footer-icp{font-size:8px}}

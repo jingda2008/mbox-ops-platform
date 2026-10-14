@@ -46,6 +46,25 @@ test('labeled contact email sits directly under each displayed phone number', ()
   }
 });
 
+test('every shown venue email carries its localized prefix', () => {
+  const anchor = '<a class="contact-email" href="mailto:shmbox@qq.com">shmbox@qq.com</a>';
+  for (const lang of langs) {
+    const email = line(labels[lang][1]);
+    const files = [
+      pages['/' + lang + '/'],
+      pages['/' + lang + '/menu/'],
+      fs.readFileSync(new URL(`../public/${lang}/reserve/index.html`, import.meta.url), 'utf8'),
+      fs.readFileSync(new URL(`../aliyun/public-overrides/${lang}/reserve/index.html`, import.meta.url), 'utf8'),
+    ];
+    for (const html of files) {
+      const shown = html.split(anchor).length - 1;
+      assert.ok(shown > 0);
+      assert.equal(html.split(email).length - 1, shown);
+      assert.equal(html.split('shmbox@qq.com').length - 1, shown * 2);
+    }
+  }
+});
+
 test('contact card email uses the same type size as the phone number', () => {
   assert.ok(css.includes('.contact-card .phone{display:block;font:clamp(20px,2.5vw,35px)/1.3 var(--serif)'));
   assert.ok(css.includes('.contact-card .contact-email-line{font:clamp(20px,2.5vw,35px)/1.3 var(--sans);font-weight:400'));

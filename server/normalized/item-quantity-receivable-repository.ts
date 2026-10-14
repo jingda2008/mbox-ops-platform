@@ -1,3 +1,4 @@
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {lockQuantityOrder} from './item-quantity-lock.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
@@ -18,6 +19,7 @@ export class ItemQuantityReceivableRepository {
     const target=(await this.tx.query<{kind:string;status:string;amount_minor:string|null}>(`SELECT COALESCE(resolved_kind,kind) AS kind,status,amount_minor::text FROM mbox.item_after_sales_cases WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...this.scope,input.caseId])).rows[0]!
     if(target.kind!=='unpaid_stop'||!['requested','approved'].includes(target.status))throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','仅原未付款停止申请可直接调整应收')
     if(target.amount_minor===null)throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','所选份数的原成交分摊未确认，不按当前单卖价减少应收')
+    if(target.status!=='approved' && await new CheckoutPointsRepository(this.tx).fullySettled(header.order_id))throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','全积分订单须先经独立审核，再停止商品并返还积分')
     const madeDecision=target.status==='approved'
     if(madeDecision)await assertUnpaidMadeStopPermission(this.tx,input.caseId,input.employeeId)
     const units=(await this.tx.query<{order_item_id:string;production_state:string;stopped_by_case_id:string|null;held_by_case_id:string|null}>(`SELECT unit.order_item_id,unit.production_state,unit.stopped_by_case_id,unit.held_by_case_id FROM mbox.item_after_sales_case_units selected

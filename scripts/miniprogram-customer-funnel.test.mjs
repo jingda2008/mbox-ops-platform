@@ -962,7 +962,7 @@ test('customer surfaces keep neutral browsing, meaningful activity labels, and r
   assert.equal(JSON.parse(homeConfig).navigationBarTitleText, 'M-BOX')
   assert.doesNotMatch(profileLogic, /成长值待核验/)
   assert.doesNotMatch(memberCenterLogic, /成长值待核验/)
-  assert.match(profileLogic, /成长值持续累积/)
+  assert.ok(profileLogic.includes("require('../../utils/member-card-progress')"))
   assert.doesNotMatch(profileLogic, /成长进度暂不可显示/)
   assert.match(profileStyle, /\.profile-member-card__top button, \.profile-member-card__foot button \{[^}]*min-height: 88rpx/)
   assert.match(profileStyle, /\.profile-member-card__foot \{ min-height: 88rpx/)

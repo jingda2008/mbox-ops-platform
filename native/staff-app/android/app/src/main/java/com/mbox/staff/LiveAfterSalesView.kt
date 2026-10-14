@@ -378,9 +378,12 @@ private fun AfterSalesCaseCard(
                 )
             }
         }
+        row.optJSONObject("pointsReturn")?.let { points ->
+            Text("积分订单：所选商品原抵扣 ${historyMoney(points.getLong("approvalAmountMinor"))}，需另一人审核；停止对应商品后按原批次有效期返还；现金退款另按原收款处理。")
+        }
         if (row.getBoolean("canApprove"))
             Primary(
-                if (row.getString("kind") == "unpaid_stop") "确认停止并免收" else "批准原退款",
+                if (row.optJSONObject("pointsReturn") != null) "批准停止并返还积分" else if (row.getString("kind") == "unpaid_stop") "确认停止并免收" else "批准原退款",
                 enabled = m.canUseAfterSales,
                 icon = Icons.Outlined.VerifiedUser,
             ) {

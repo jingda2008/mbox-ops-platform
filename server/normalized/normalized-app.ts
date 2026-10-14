@@ -1106,6 +1106,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
             actorRef: session.actorRef,
             businessDate: day.businessDate,
             capabilities: session.scopes,
+            identityProvider: session.identityProvider,
           }
         },
         resolveStaff: async (request) => {

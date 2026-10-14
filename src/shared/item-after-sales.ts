@@ -3,6 +3,7 @@ export interface ItemAfterSalesPricing {
  components:Array<{itemId:string;retainedQuantity:number;originalSinglePriceMinor:number|null}>
 }
 export interface ItemAfterSalesCase {
+  pointsReturn?:{approvalAmountMinor:number}
   pricing?:ItemAfterSalesPricing
   caseId:string;orderId:string;kind:string;status:string;businessDate:string;amountMinor:number|null
   selectedQuantity:number;heldQuantity:number;stoppedQuantity:number;madeQuantity:number;inventoryReviewQuantity:number

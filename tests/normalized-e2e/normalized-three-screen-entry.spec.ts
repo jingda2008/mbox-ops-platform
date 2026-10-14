@@ -1,6 +1,8 @@
 import {readFile} from 'node:fs/promises'
 import {test,expect,type Page} from '@playwright/test'
 test.use({viewport:{width:1024,height:600},isMobile:false,hasTouch:true})
+// Finish pending route.fetch handlers before Playwright disposes their API responses.
+test.afterEach(async({page})=>{await page.unrouteAll({behavior:'wait'})})
 const fixture=async()=>JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
 async function login(page:Page,code:string){
   const f=await fixture();test.skip(!f.threeScreenFixture,'requires isolated three-screen fixture')

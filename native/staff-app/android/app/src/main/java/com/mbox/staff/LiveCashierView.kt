@@ -174,6 +174,9 @@ fun LiveCashierView(m: AppModel, initialQuery: String? = null) {
                                 "原营业日：${order.source.textOrNull("businessDate") ?: board.date} · 桌次：${order.source.textOrNull("tableSessionId") ?: "未留存"}",
                                 fontSize = 12.sp,
                             )
+                            order.source.optJSONObject("points")?.let { points ->
+                                Text("积分抵扣 ${points.getInt("used")} 分；已返 ${points.getInt("credited")} 分，不计入现金实收。")
+                            }
                             Text(
                                 "当前订单应付 ${historyMoney(order.amount)} · ${historyStatus(order.paymentStatus)}"
                             )

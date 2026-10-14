@@ -4,6 +4,7 @@ import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-
 import { GuestServiceReceiptUnattributedError, readGuestServiceReceipt, saveGuestServiceReceipt } from './guest-service-command-receipt.js'
 import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
 import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
+import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
@@ -441,6 +442,56 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       if(error instanceof CheckoutCartPricingError)throw new GuestApiRequestError('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED',error.message,409)
       throw error
     }
+  }))
+
+  app.get('/guest/shared-cart/points',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const data=await options.transactions.run(context.scope,async tx=>{
+      if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      return new CheckoutPointsRepository(tx).available(context.customerId)
+    })
+    reply.header('cache-control','no-store');return{data}
+  }))
+  app.post('/guest/shared-cart/points-quote',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const body=readStrictObject(request.body,'积分报价',['expectedGeneration','expectedVersion','points'])
+    const requestKey=readIdempotencyKey(request),points=readInteger(body.points,'points',1,2_000_000_000)
+    const expectedGeneration=readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647),expectedVersion=readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647)
+    await recordSharedCartWriteAttempt(options,context,requestKey,'checkout')
+    const q=await options.transactions.run(context.scope,async tx=>{
+      if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      return new CheckoutCouponQuoteRepository(tx).prepare({customerId:context.customerId,tableSessionId:context.tableSessionId,expectedGeneration,expectedVersion,selections:[],points,requestKey})
+    })
+    reply.header('cache-control','no-store')
+    return{data:{id:q.id,generation:q.generation,version:q.version,current:q.current,expiresAt:q.expiresAt,pointsUsed:q.pointsUsed,subtotalMinor:q.subtotalMinor,discountMinor:q.discountMinor,payableMinor:q.payableMinor,currency:q.currency}}
+  }))
+  app.post('/guest/shared-cart/points-settlement',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create'),input=readSharedCartCheckout(request.body)
+    if(!input.couponQuoteId)throw new CheckoutCartPricingError('请先确认积分抵扣报价')
+    if(!options.commerce.submitOrderInTransaction)throw new Error('Shared cart checkout service is unavailable')
+    const submit=options.commerce.submitOrderInTransaction.bind(options.commerce),idempotencyKey=readIdempotencyKey(request)
+    await recordSharedCartWriteAttempt(options,context,idempotencyKey,'checkout')
+    const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.shared-cart.points-settlement',idempotencyKey,
+      requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,...input}),resultCodec:{encode:value=>value,decode:value=>jsonObject(value)}},async tx=>{
+      if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(tx,context.tableSessionId,2)
+      const quote=await new CheckoutCouponQuoteRepository(tx).find(input.couponQuoteId!,context.customerId)
+      if(!quote.current||quote.pointsUsed<1||quote.payableMinor!==0||quote.tableSessionId!==context.tableSessionId||quote.generation!==input.expectedGeneration||quote.version!==input.expectedVersion)throw new CheckoutCartPricingError('全积分报价已失效，请重新核对购物车')
+      const carts=new GuestSharedCartRepository(tx,context.customerId)
+      const cart=await carts.beginCheckout(context.tableSessionId,createSharedCartPublicId(),{expectedGeneration:input.expectedGeneration,expectedVersion:input.expectedVersion,operationId:idempotencyKey,actorSessionRef:context.actorRef})
+      const order=await submit(tx,{scope:context.scope,actor:guestActor(context),businessDate:context.businessDate,idempotencyKey:`points-order-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0,48)}`,publicId:createPublicId('order',`${context.scope.storeId}:${idempotencyKey}`),tableSessionId:context.tableSessionId,channel:'guest_qr',settlementMode:'immediate_payment',lines:checkoutLinesWithNotes(cart.lines,input.lineNotes,true),pricingAuthorization:{sourceType:'checkout_quote',sourceId:quote.id},note:input.note,createdByCustomerId:context.customerId,confirmedDuplicateOrderPublicId:input.confirmedDuplicateOrderId,checkoutUpgradeOfferPublicId:input.checkoutUpgradeOfferPublicId,...(input.recommendationPublicId===null?{}:{recommendationAttribution:{recommendationPublicId:input.recommendationPublicId,selectedProductId:input.selectedRecommendationProductId!}})})
+      const changed=await tx.query("UPDATE mbox.orders SET payment_status='paid' WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND mbox.order_fully_settled_by_points($1,$2,$3)",[context.scope.tenantId,context.scope.storeId,order.result.order.id])
+      if(changed.rowCount!==1)throw new CheckoutCartPricingError('积分扣减尚未确认，未完成结账')
+      const activation=await new PaymentFulfillmentRepository(tx).activatePaidOrder(order.result.order.id)
+      if(!activation.activated)throw new CheckoutCartPricingError('全积分订单未进入出品，请核对原订单')
+      const transition=await carts.completeCheckout(cart,{orderId:order.result.order.id,expectedVersion:input.expectedVersion,operationId:idempotencyKey,actorSessionRef:context.actorRef,nextCartPublicId:createSharedCartPublicId()})
+      const data:JsonObject={order:{publicId:order.result.order.publicId,status:order.result.order.status,paymentStatus:'paid'},payment:null,pointsSettlement:true,pointsUsed:quote.pointsUsed,settlement:{subtotalAmountMinor:quote.subtotalMinor,discountAmountMinor:quote.discountMinor,payableAmountMinor:0,currency:quote.currency},sharedCart:publicSharedCart(transition.nextCart) as JsonObject}
+      const payload={orderId:order.result.order.id,settlementKind:'points',pointsUsed:quote.pointsUsed,inventoryMovementCount:activation.inventoryConsumptions.length,kdsTaskCount:activation.kdsTasks.length}
+      return{result:data,auditEvents:[...order.auditEvents,{actor:guestActor(context),action:'order.points_settled',objectType:'order',objectId:order.result.order.id,businessDate:context.businessDate,afterData:payload}],outboxMessages:[...order.outboxMessages,{businessEventKey:`points-settlement:${order.result.order.id}`,aggregateType:'order',aggregateId:order.result.order.id,aggregateVersion:2,eventType:'order.fulfillment_activated_after_payment.v1',payload},{aggregateType:'guest_shared_cart',aggregateId:cart.id,aggregateVersion:transition.submittedCart.version,eventType:'guest.shared_cart.submitted.v1',payload:publicSharedCart(transition.submittedCart) as JsonObject}]}
+    })
+    const cart=await options.transactions.run(context.scope,tx=>new GuestSharedCartRepository(tx,context.customerId).readOpen(context.tableSessionId,createSharedCartPublicId()))
+    reply.header('cache-control','no-store')
+    return reply.code(execution.replayed?200:201).send({data:{...execution.value,sharedCart:publicSharedCart(cart)},meta:{replayed:execution.replayed}})
   }))
 
   app.post('/guest/shared-cart/coupon-quote',async(request,reply)=>handleRoute(reply,async()=>{

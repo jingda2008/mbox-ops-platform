@@ -1,3 +1,4 @@
+const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const runtime = require('../../utils/platform')
 const { getMiniBootstrap, claimAnnualDailySnack } = require('../../utils/api')
 const { money, dateTime } = require('../../utils/format')
@@ -46,49 +47,20 @@ function memberCardPreviewLevel() {
   }
 }
 
-function formatMemberNumber(value) {
-  const number = Number(value)
-  return Number.isFinite(number) ? String(Math.round(number)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''
-}
-
-function memberCardProgress(level, progress, previewLevel) {
-  const source = previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress
-  const growth = source && Number.isFinite(Number(source.rollingGrowth)) ? Number(source.rollingGrowth) : null
-  const threshold = source && Number.isFinite(Number(source.upgradeThreshold)) && Number(source.upgradeThreshold) > 0
-    ? Number(source.upgradeThreshold) : null
-  const nextTier = source && source.nextTier ? source.nextTier : null
-  const upgradeRemaining = source && Number.isFinite(Number(source.upgradeRemaining))
-    ? Math.max(0, Number(source.upgradeRemaining)) : null
-  const hasProgress = growth !== null
-  const progressPercent = !hasProgress ? 0 : threshold
-    ? Math.max(0, Math.min(100, Math.round((growth / threshold) * 100))) : 100
-  const nextTierName = nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : ''
-  return {
-    cardProgressAvailable: hasProgress,
-    cardGrowthText: threshold
-      ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
-      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值持续累积',
-    cardDifferenceText: nextTier && upgradeRemaining !== null
-      ? upgradeRemaining > 0
-        ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`
-        : `${nextTierName}等级已达成`
-      : level === 'gold' ? '金卡等级已达成' : '下一等级权益，敬请期待',
-    cardProgressPercent: progressPercent,
-    cardCurrentTierText: CARD_LEVEL_NAMES[level] || '普卡',
-    cardNextTierText: nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : '',
-    cardBenefitText: `查看${CARD_LEVEL_NAMES[nextTier || level] || '会员'}权益 ›`,
-  }
+function memberCardProgress(level, progress, previewLevel, status) {
+  return buildMemberCardProgress(level,
+    previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress,
+    previewLevel ? 'ready' : status)
 }
 
 function membershipView(item) {
   const previewLevel = memberCardPreviewLevel()
   const displayLevel = previewLevel || item.level
   const progress = item.tierProgress || null
-  const qualificationGrowth = item.qualificationGrowth !== null && item.qualificationGrowth !== undefined
-    && Number.isFinite(Number(item.qualificationGrowth))
-    ? Number(item.qualificationGrowth) : progress ? number(progress.rollingGrowth) : null
+  const reportedGrowth = progressNumber(item.qualificationGrowth)
+  const qualificationGrowth = reportedGrowth !== null ? reportedGrowth : progressNumber(progress && progress.rollingGrowth)
   const nextLevel = progress && progress.nextTier ? LEVEL_NAMES[progress.nextTier] : ''
-  const nextText = !progress || !nextLevel || progress.upgradeRemaining === null
+  const nextText = !progress || qualificationGrowth === null || !nextLevel || progressNumber(progress.upgradeRemaining) === null
     ? '当前等级权益以页面说明为准'
     : progress.upgradeRemaining > 0
       ? `距离${nextLevel}还差 ${progress.upgradeRemaining} 成长值`
@@ -110,7 +82,7 @@ function membershipView(item) {
       ? null : number(item.tierQualificationGrowth),
     qualificationGrowth,
     qualificationGrowthText: qualificationGrowth === null ? '暂未统计' : String(qualificationGrowth),
-    qualificationText: progress
+    qualificationText: progress && qualificationGrowth !== null
       ? `近${progress.evaluationWindowMonths}个月成长值 ${qualificationGrowth}`
       : '成长记录会在这里持续更新',
     qualificationProgressText: threshold && qualificationGrowth !== null
@@ -124,7 +96,7 @@ function membershipView(item) {
       ? `按当前会员规则估算还需消费 ${money(Number(item.estimatedSpendToNextTierMinor))}` : '',
     annualBenefitCounts: item.annualBenefitCounts || { preview: 0, granted: 0, available: 0 },
     updatedText: item.updatedAt ? `数据更新于 ${dateTime(item.updatedAt)}` : '',
-  }, memberCardProgress(displayLevel, progress, previewLevel))
+  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus))
 }
 
 function benefitView(item) {
@@ -204,17 +176,28 @@ Page({
     dailySnackClaim: null,
   },
 
-  onShow() { this.setData({ identitiesVisible: true }); this.load() },
-  onHide() { this.setData({ identitiesVisible: false }) },
+  onShow() {
+    this._pageHidden = false; this.setData({ identitiesVisible: true }); this.load() },
+  onHide() { this._pageHidden = true; this.invalidateMemberLoad(); this.setData({ identitiesVisible: false }) },
+
+  onUnload() { this._pageHidden = true; this.invalidateMemberLoad() },
+
+  invalidateMemberLoad() { this._memberLoadGeneration = (this._memberLoadGeneration || 0) + 1 },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    if (this._pageHidden) return
+    this.invalidateMemberLoad()
+    const generation = this._memberLoadGeneration
+    const isCurrent = () => !this._pageHidden && generation === this._memberLoadGeneration
+
+    if (isCurrent()) this.setData({ loading: true, error: '' })
     try {
       const bootstrap = await getMiniBootstrap()
+      if (!isCurrent()) return
       const benefits = (bootstrap.benefits || []).map(benefitView)
       const annualCalendar = (bootstrap.annualBenefitCalendar || []).map(annualBenefitView)
       const membership = bootstrap && bootstrap.membership ? membershipView(bootstrap.membership) : null
-      this.setData({
+      if (isCurrent()) this.setData({
         loading: false,
         membership,
         benefits,
@@ -226,7 +209,8 @@ Page({
         calendarItems: calendarItems(annualCalendar, 0),
       })
     } catch (error) {
-      this.setData({ loading: false, error: customerErrorMessage(error, '会员中心暂时无法读取') })
+      if (!isCurrent()) return
+      if (isCurrent()) this.setData({ loading: false, error: customerErrorMessage(error, '会员中心暂时无法读取') })
     }
   },
 

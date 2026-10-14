@@ -19,20 +19,20 @@
 .member-card__identity text:nth-child(2) { margin-top: 5rpx; overflow: hidden; color: rgba(238, 244, 239, .82); font-size: 17rpx; letter-spacing: 1.6rpx; text-overflow: ellipsis; white-space: nowrap; }
 .member-card__identity text:last-child { margin-top: 4rpx; overflow: hidden; color: rgba(255,255,255,.78); font-size: 18rpx; letter-spacing: 1rpx; text-overflow: ellipsis; white-space: nowrap; }
 .member-card__brand { flex: 0 0 auto; align-self: flex-start; margin-top: 4rpx; color: rgba(255,255,255,.68); font-size: 18rpx; font-weight: 700; letter-spacing: 1rpx; }
-.member-card--gold .member-card__identity text:first-child, .member-card--gold .member-card__progress-copy text:last-child, .member-card--gold .member-card__foot > text { color: #f5d991; }
+.member-card--gold .member-card__identity text:first-child, .member-card--gold .member-card__progress-copy text:last-child, .member-card--gold .member-card__foot > .member-card__benefit { color: #f5d991; }
 .member-card__progress { position: relative; z-index: 1; display: grid; gap: 9rpx; margin-top: 14rpx; }
 .member-card__progress-copy { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 20rpx; }
 .member-card__progress-copy text { overflow: hidden; color: rgba(235, 243, 237, .86); font-size: 19rpx; text-overflow: ellipsis; white-space: nowrap; }
 .member-card__progress-copy text:last-child { color: #dce6c2; font-weight: 650; text-align: right; }
 .member-card__track { height: 10rpx; overflow: hidden; border-radius: 999rpx; background: rgba(232, 238, 226, .26); }
-.member-card__track view { height: 100%; min-width: 4rpx; border-radius: inherit; background: linear-gradient(90deg, #b6cf98, #e6d5a1); }
+.member-card__track view { height: 100%; min-width: 0; border-radius: inherit; background: linear-gradient(90deg, #b6cf98, #e6d5a1); }
 .member-card--silver .member-card__track view { background: linear-gradient(90deg, #d8ddd9, #fafaf6); }
 .member-card--gold .member-card__track view { background: linear-gradient(90deg, #f8df8f, #c78e33); }
 .member-card__foot { min-height: 26rpx; }
 .member-card__foot > view { display: flex; min-width: 0; flex: 1; justify-content: space-between; gap: 12rpx; }
 .member-card__foot > view text { color: rgba(238, 243, 235, .76); font-size: 18rpx; }
 .member-card__foot > view text:last-child { text-align: right; }
-.member-card__foot > text { flex: 0 0 auto; color: #e4d3a2; font-size: 18rpx; }
+.member-card__foot > .member-card__benefit { flex: 0 0 auto; color: #e4d3a2; font-size: 18rpx; }
 .member-status { display: grid; gap: 9rpx; margin-top: 18rpx; padding: 21rpx 22rpx; border: 1rpx solid #e3ddd3; border-radius: 19rpx; background: #fffdfa; }
 .member-status text { color: #605950; font-size: 21rpx; line-height: 1.48; }
 .member-status__title { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
@@ -41,7 +41,7 @@
 .member-status > text:nth-child(3) { color: #315d46; font-weight: 650; }
 .qualification-progress { display: grid; gap: 8rpx; margin-top: 2rpx; }
 .qualification-progress > view { height: 10rpx; overflow: hidden; border-radius: 999rpx; background: #e4ece6; }
-.qualification-progress > view view { height: 100%; min-width: 4rpx; border-radius: inherit; background: #315d46; }
+.qualification-progress > view view { height: 100%; min-width: 0; border-radius: inherit; background: #315d46; }
 .qualification-progress text { color: #69746c; font-size: 18rpx; }
 .member-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14rpx; margin-top: 18rpx; }
 .member-actions button.member-action { box-sizing:border-box; width:100%; min-width:0; white-space:normal; line-height:1.4; min-height: 124rpx; margin: 0; padding: 18rpx; text-align: left; border: 1rpx solid #e3ddd3; border-radius: 19rpx; background: #fff; }
@@ -108,3 +108,9 @@
 .member-code-preview__number { display: block; color: #24382c; font-size: 28rpx; overflow-wrap: anywhere; }
 .member-code-preview__hint { display: block; margin-top: 12rpx; color: #6a756d; font-size: 24rpx; }
 .member-code-preview button.member-code-preview__close { margin-top: 28rpx; width: 100%; min-height: 88rpx; border-radius: 16rpx; background: #315d46; color: #fff; font-size: 30rpx; line-height: 88rpx; }
+
+.member-card__retry { width: auto; max-width: 100%; min-width: 0; justify-self: start; min-height: 72rpx; margin: 0; padding: 0 16rpx; border: 1rpx solid rgba(232, 238, 226, .4); border-radius: 12rpx; background: transparent; color: #f2f5eb; font-size: 22rpx; line-height: 72rpx; }
+.member-card__retry::after { border: 0; }
+
+.member-card__benefit { width: auto; max-width: 65%; min-width: 0; white-space: normal; margin: 0; padding: 12rpx 0 12rpx 16rpx; min-height: 72rpx; background: transparent; line-height: 1.4; display: flex; align-items: center; }
+.member-card__benefit::after { border: 0; }

@@ -9,7 +9,7 @@ import { NormalizedCommandExecutor } from './command-executor.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export type WaitlistStatus = 'waiting' | 'notified' | 'arrived' | 'seated' | 'cancelled' | 'expired'
-export type WaitlistSource = 'wechat' | 'phone' | 'walk_in' | 'employee'
+export type WaitlistSource = 'wechat' | 'online' | 'phone' | 'walk_in' | 'employee'
 
 export interface ProtectedContact {
   hash: string

@@ -1,4 +1,5 @@
 const initialCheckoutCoupons = {
+  pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, pointsInput: '',
   couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
   couponQuoteTotal: '', couponNeedsReview: false,
@@ -17,13 +18,49 @@ function couponPortions(cart, coupons, selections, money) {
       optionLabels: options.map(option => option.label), selectedIndex, selectedLabel: options[selectedIndex].label }
   }))
 }
-function checkoutCouponMethods({ getWallet, quote, money, randomId, scope, errorMessage }) {
+function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money, randomId, scope, errorMessage }) {
   return {
+    async openCheckoutPoints() {
+      if (this.data.busy || this.data.couponLoading) return
+      this.invalidateCheckoutCoupons(false, false)
+      const epoch = this.checkoutCouponEpoch, identity = scope()
+      this.setData({ pointsPickerOpen: true, couponPickerOpen: false, pointsLoading: true, pointsError: '', pointsBalance: null })
+      try {
+        const response = await getPoints(), result = response.data || response
+        if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
+        if (!Number.isSafeInteger(result.availablePoints) || result.availablePoints < 0 || result.minorPerPoint !== 100 || result.allowCoupons !== false) throw new Error('积分规则暂不可用')
+        this.setData({ pointsBalance: result.availablePoints, pointsInput: '' })
+      } catch (error) {
+        if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '积分读取失败，请重试或不使用积分。') })
+      } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ pointsLoading: false }) }
+    },
+    onCheckoutPointsInput(event) {
+      if (this.data.busy || this.data.pointsLoading) return
+      this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
+      this.setData({ pointsInput: String(event.detail.value || ''), pointsError: '', couponQuote: null, couponQuoteTotal: '' })
+    },
+    async quoteCheckoutPoints() {
+      if (this.data.busy || this.data.pointsLoading) return
+      if (!/^[1-9][0-9]*$/.test(this.data.pointsInput) || !Number.isSafeInteger(Number(this.data.pointsInput)) || Number(this.data.pointsInput) > this.data.pointsBalance) {
+        this.setData({ pointsError: '请输入不超过可用余额的整数积分。' }); return
+      }
+      const epoch = this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1, identity = scope()
+      const input = { expectedGeneration: this.data.cartGeneration, expectedVersion: this.data.cartVersion, points: Number(this.data.pointsInput) }
+      this.setData({ pointsLoading: true, pointsError: '', couponQuote: null, couponQuoteTotal: '' })
+      try {
+        const response = await quotePoints(input, randomId('points-quote')), result = response.data || response
+        if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy || input.expectedGeneration !== this.data.cartGeneration || input.expectedVersion !== this.data.cartVersion) return
+        if (!result.current || result.generation !== input.expectedGeneration || result.version !== input.expectedVersion || result.currency !== 'CNY' || result.pointsUsed !== input.points || result.discountMinor !== input.points * 100 || !Number.isSafeInteger(result.subtotalMinor) || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(Date.parse(result.expiresAt) > Date.now())) throw new Error('积分报价已失效，请重新核对')
+        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
+      } catch (error) {
+        if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '积分金额核对失败，请减少积分或重新核对。') })
+      } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ pointsLoading: false }) }
+    },
     invalidateCheckoutCoupons(clearWallet, needsReview) {
       if (this.invalidateCheckoutUpgrade) this.invalidateCheckoutUpgrade()
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-      this.setData({ couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
-        couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '购物车或会话已变化，请重新选券，或明确选择不用券。' : '',
+      this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
+        couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '购物车或会话已变化，请重新核对优惠，或明确选择不使用优惠。' : '',
         ...(clearWallet ? { couponItems: [], couponNextCursor: null, couponPickerOpen: false } : {}) })
     },
     async openCheckoutCoupons() {
@@ -32,6 +69,7 @@ function checkoutCouponMethods({ getWallet, quote, money, randomId, scope, error
         this.invalidateCheckoutCoupons(true, false)
         this.checkoutCouponScope = scope()
       }
+      if (this.data.pointsPickerOpen) this.invalidateCheckoutCoupons(false, false)
       this.setData({ couponPickerOpen: true })
       await this.loadCheckoutCoupons(false)
     },
@@ -90,9 +128,9 @@ function checkoutCouponMethods({ getWallet, quote, money, randomId, scope, error
     },
     couponCheckoutReady() {
       const quote = this.data.couponQuote
-      if (this.data.couponNeedsReview || (this.data.couponSelections.length && (!quote || quote.generation !== this.data.cartGeneration
+      if (this.data.couponNeedsReview || ((this.data.couponSelections.length || this.data.pointsInput) && (!quote || quote.generation !== this.data.cartGeneration
         || quote.version !== this.data.cartVersion || !(Date.parse(quote.expiresAt) > Date.now())))) {
-        this.setData({ couponError: '请先确认有效优惠报价，或选择不用券按原价提交。' })
+        this.setData({ couponError: '请先确认有效优惠报价，或选择不使用优惠按原价提交。' })
         return false
       }
       return true

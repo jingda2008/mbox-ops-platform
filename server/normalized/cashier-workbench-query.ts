@@ -1,3 +1,4 @@
+import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import {closedDebtEligibilitySql,localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
 import {historyTableIdSql} from './history-table-filter.js'
@@ -34,6 +35,7 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  points?:CheckoutPointsView
   closed_debt_eligible?:boolean
   closed_debt_pending_payment_ids?:string[]
   closable_unpresented_payments?:CashierClosableUnpresentedPayment[]
@@ -610,7 +612,9 @@ export class PostgresCashierWorkbenchQuery {
         : { rows: [] as ActivityRegistrationRow[] }
       const orderIds = orderResult.rows.map((row) => row.id)
       if (orderIds.length === 0) {
-        return assembleView(
+        const points=await readCheckoutPoints(transaction,orderIds)
+      for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
+      return assembleView(
           input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,
         )
       }
@@ -733,6 +737,8 @@ export class PostgresCashierWorkbenchQuery {
           ORDER BY created_at DESC,id DESC
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
 
+      const points=await readCheckoutPoints(transaction,orderIds)
+      for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
       return assembleView(
         input,
         normalizedQuery,
@@ -865,6 +871,7 @@ function assembleView(
         closableUnpresentedPayments:order.closed_debt_eligible&&['payment.initiate.staff','reconciliation.view','payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?order.closable_unpresented_payments??[]:[],
         pendingPaymentIds:order.closed_debt_pending_payment_ids??[],
       } satisfies NonNullable<CashierWorkbenchOrder['closedDebtRecovery']>}:{}),
+      ...(order.points?{points:order.points}:{}),
       channel: order.channel,
       status: order.status,
       paymentStatus: netCollectedMinor >= totalAmountMinor && order.status !== 'cancelled' ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,

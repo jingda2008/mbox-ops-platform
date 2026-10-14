@@ -495,7 +495,7 @@ export class PostgresWechatChallengeRepository
       const result = await client.query(
         `/* wechat:challenge-consume */
          UPDATE mbox.wechat_auth_challenges
-         SET consumed_at = $4::timestamptz
+         SET consumed_at = GREATEST($4::timestamptz,created_at)
          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
            AND consumed_at IS NULL AND expires_at > $4::timestamptz`,
         [this.tenantId, this.storeId, challengeId, new Date(now)],
@@ -980,7 +980,7 @@ export class PostgresWechatIdentityRepository
       await client.query(
         `/* wechat:member-grant-consume */
          UPDATE mbox.wechat_member_binding_grants
-         SET consumed_at = $4::timestamptz, consumed_by_principal_id = $5
+         SET consumed_at = GREATEST($4::timestamptz,created_at), consumed_by_principal_id = $5
          WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND grant_token_sha256 = $3`,
         [this.tenantId, this.storeId, input.grantTokenHash, new Date(input.now), input.principalId],
       )

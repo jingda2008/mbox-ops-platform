@@ -7,7 +7,7 @@ const {
   getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart,
-  quoteSharedCartCoupons,
+  quoteSharedCartCoupons, getCheckoutPoints, quoteSharedCartPoints,
   prepareSharedCartUpgrade,
   decideSharedCartUpgrade,
   getCustomerBenefitWallet,
@@ -529,13 +529,16 @@ function applyBundleUnitSelection(product,unit){
 const { initialCheckoutCoupons, checkoutCouponMethods } = require('../../utils/checkout-coupons')
 const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
 const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
-const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
+const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
 Page({
   ...checkoutUpgradeActions,
   acceptCheckoutUpgrade() { return checkoutUpgradeActions.acceptCheckoutUpgrade.call(this) },
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
+  openCheckoutPoints() { return checkoutCouponActions.openCheckoutPoints.call(this) },
+  onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
+  quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
   openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
   loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
   chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
@@ -633,7 +636,7 @@ Page({
     })
   },
   onHide() {
-    this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0)
+    this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
@@ -1756,7 +1759,7 @@ Page({
     }) }))
     this.checkoutLineNotes = retainedNotes
     if (this.checkoutCouponScope !== couponScope || (sharedCart && (Number(sharedCart.version) !== this.data.cartVersion || Number(sharedCart.generation) !== this.data.cartGeneration))) {
-      this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || this.data.couponNeedsReview)
+      this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview)
       this.checkoutCouponScope = couponScope
     }
     const serverTotal = sharedCart && Number(sharedCart.totalAmountMinor)
@@ -1980,7 +1983,7 @@ Page({
     if (this.data.busy) return
     this.invalidateCheckoutUpgrade()
     this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-    this.setData({ checkoutConfirmVisible: false, couponLoading: false })
+    this.setData({ checkoutConfirmVisible: false, couponLoading: false, pointsLoading: false })
   },
 
   checkoutDraft(offerPublicId) {
@@ -1991,6 +1994,7 @@ Page({
       expectedGeneration: this.data.cartGeneration,
       expectedVersion: this.data.cartVersion,
       offerPublicId: offerPublicId || null,
+      ...(this.data.couponQuote && this.data.couponQuote.pointsUsed > 0 && this.data.couponQuote.payableMinor === 0 ? { pointsOnly: true } : {}),
       couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
       recommendationPublicId: attribution ? attribution.recommendationPublicId : null,
       selectedRecommendationProductId: attribution ? attribution.selectedProductId : null,
@@ -2118,6 +2122,7 @@ Page({
           expectedVersion: attempt.expectedVersion,
           ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
           checkoutUpgradeOfferPublicId: attempt.offerPublicId,
+          ...(attempt.pointsOnly ? { pointsOnly: true } : {}),
           ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
           recommendationAttribution: attemptAttribution,
         }, attempt.idempotencyKey)
@@ -2125,6 +2130,14 @@ Page({
         submitMeasured = true
         if (!this.isCurrentTableRequest(tableRequest)) return
         const data = result.data || result
+        if (data.pointsSettlement === true && data.payment === null && data.settlement && data.settlement.payableAmountMinor === 0) {
+          runtime.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
+          runtime.removeStorageSync(PENDING_PAYMENT_KEY)
+          this.updateCart([], data.sharedCart || null)
+          this.invalidateCheckoutCoupons(false, false)
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: '积分结账成功', copy: '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
+          return
+        }
         const pendingPayment = {
           orderPublicId: data.order.publicId,
           paymentPublicId: data.payment && data.payment.publicId,
@@ -2158,7 +2171,7 @@ Page({
           runtime.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
           this.invalidateCheckoutCoupons(false, true)
           this.setData({ checkoutLocked: false, checkoutConfirmVisible: true, couponPickerOpen: false,
-            error: '优惠条件已变化，本次没有创建订单。请重新选券或不用券继续。' })
+            error: '优惠条件已变化，本次没有创建订单。请重新核对积分或优惠券，也可取消优惠后继续。' })
           return
         }
         if (String(error && error.code || '').startsWith('CHECKOUT_UPGRADE_')) {

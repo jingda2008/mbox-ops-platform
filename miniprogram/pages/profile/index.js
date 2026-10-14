@@ -1,3 +1,4 @@
+const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const {
   getMiniBootstrap,
   getCustomerBenefits,
@@ -36,7 +37,6 @@ const { rememberPresentationOptions } = require('../../utils/wechat-subscription
 
 const LEVEL_NAMES = { member: '普卡会员', silver: '银卡会员', gold: '金卡会员' }
 const LEVEL_ENGLISH = { member: 'M-BOX MEMBER', silver: 'SILVER MEMBER', gold: 'GOLD MEMBER' }
-const CARD_LEVEL_NAMES = { member: '普卡', silver: '银卡', gold: '金卡' }
 const MEMBER_CARD_PREVIEW_PROGRESS = {
   member: { rollingGrowth: 680, upgradeThreshold: 2000, upgradeRemaining: 1320, nextTier: 'silver' },
   silver: { rollingGrowth: 3680, upgradeThreshold: 5000, upgradeRemaining: 1320, nextTier: 'gold' },
@@ -138,38 +138,10 @@ function memberCardPreviewLevel() {
   }
 }
 
-function formatMemberNumber(value) {
-  const number = Number(value)
-  return Number.isFinite(number) ? String(Math.round(number)).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : ''
-}
-
-function memberCardProgress(level, progress, previewLevel) {
-  const source = previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress
-  const growth = source && Number.isFinite(Number(source.rollingGrowth)) ? Number(source.rollingGrowth) : null
-  const threshold = source && Number.isFinite(Number(source.upgradeThreshold)) && Number(source.upgradeThreshold) > 0
-    ? Number(source.upgradeThreshold) : null
-  const nextTier = source && source.nextTier ? source.nextTier : null
-  const upgradeRemaining = source && Number.isFinite(Number(source.upgradeRemaining))
-    ? Math.max(0, Number(source.upgradeRemaining)) : null
-  const hasProgress = growth !== null
-  const progressPercent = !hasProgress ? 0 : threshold
-    ? Math.max(0, Math.min(100, Math.round((growth / threshold) * 100))) : 100
-  const nextTierName = nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : ''
-  return {
-    cardProgressAvailable: hasProgress,
-    cardGrowthText: threshold
-      ? `成长值 ${formatMemberNumber(growth)} / ${formatMemberNumber(threshold)}`
-      : hasProgress ? `成长值 ${formatMemberNumber(growth)}` : '成长值持续累积',
-    cardDifferenceText: nextTier && upgradeRemaining !== null
-      ? upgradeRemaining > 0
-        ? `距${nextTierName}还差 ${formatMemberNumber(upgradeRemaining)}`
-        : `${nextTierName}等级已达成`
-      : level === 'gold' ? '金卡等级已达成' : '下一等级权益，敬请期待',
-    cardProgressPercent: progressPercent,
-    cardCurrentTierText: CARD_LEVEL_NAMES[level] || '普卡',
-    cardNextTierText: nextTier ? (CARD_LEVEL_NAMES[nextTier] || '') : '',
-    cardBenefitText: `查看${CARD_LEVEL_NAMES[nextTier || level] || '会员'}权益 ›`,
-  }
+function memberCardProgress(level, progress, previewLevel, status) {
+  return buildMemberCardProgress(level,
+    previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress,
+    previewLevel ? 'ready' : status)
 }
 
 function membershipView(item) {
@@ -177,15 +149,14 @@ function membershipView(item) {
   const previewLevel = memberCardPreviewLevel()
   const displayLevel = previewLevel || item.level
   const progress = item.tierProgress
-  const qualificationGrowth = progress && Number.isFinite(Number(progress.rollingGrowth))
-    ? Number(progress.rollingGrowth) : null
+  const qualificationGrowth = progressNumber(progress && progress.rollingGrowth)
   const nextTierName = progress && progress.nextTier ? LEVEL_NAMES[progress.nextTier] : ''
-  const upgradeText = !progress || !nextTierName || progress.upgradeRemaining === null
+  const upgradeText = !progress || qualificationGrowth === null || !nextTierName || progressNumber(progress.upgradeRemaining) === null
     ? ''
     : progress.upgradeRemaining > 0
       ? `距${nextTierName}还差 ${progress.upgradeRemaining} 成长值`
       : `已达到${nextTierName}成长值条件`
-  const retainText = !progress || progress.retainRemaining === null
+  const retainText = !progress || qualificationGrowth === null || progressNumber(progress.retainRemaining) === null
     ? ''
     : progress.retainRemaining > 0
       ? `本周期保级还差 ${progress.retainRemaining} 成长值`
@@ -212,7 +183,7 @@ function membershipView(item) {
     expiryText: expiry
       ? `近30天有 ${expiry.expiringWithin30Days} 积分将到期，最近 ${String(expiry.nextExpiryAt).slice(0, 10)}`
       : '',
-  }, memberCardProgress(displayLevel, progress, previewLevel))
+  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus))
 }
 
 function benefitView(item) {
@@ -332,19 +303,33 @@ Page({
   },
 
   onShow() {
+    this._pageHidden = false
     const shouldOpenLogin = consumeMembershipLoginRedirect()
     this.setData({
       avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
     })
-    this.load().then(() => {
-      if (shouldOpenLogin && !this.data.membership) this.openLoginSheet()
+    const loading = this.load()
+    const generation = this._memberLoadGeneration
+    loading.then(() => {
+      if (!this._pageHidden && generation === this._memberLoadGeneration && shouldOpenLogin && !this.data.membership) this.openLoginSheet()
     })
   },
 
 
 
+  onHide() { this._pageHidden = true; this.invalidateMemberLoad() },
+
+  onUnload() { this._pageHidden = true; this.invalidateMemberLoad() },
+
+  invalidateMemberLoad() { this._memberLoadGeneration = (this._memberLoadGeneration || 0) + 1 },
+
   async load() {
-    this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
+    if (this._pageHidden) return
+    this.invalidateMemberLoad()
+    const generation = this._memberLoadGeneration
+    const isCurrent = () => !this._pageHidden && generation === this._memberLoadGeneration
+
+    if (isCurrent()) this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
     try {
       const soft = (error) => {
         const message = String((error && error.message) || '')
@@ -354,22 +339,23 @@ Page({
       const results = await Promise.all([
         getMiniBootstrap(),
         getCustomerBenefits().catch((error) => {
-          this.setData({ benefitError: soft(error) || '权益暂时不可读取，请重新登录或稍后刷新' })
+          if (isCurrent()) this.setData({ benefitError: soft(error) || '权益暂时不可读取，请重新登录或稍后刷新' })
           return null
         }),
         getReservations().catch(() => ({ reservations: [] })),
-        getActivityRegistrations().catch((error) => { this.setData({ registrationError: soft(error) || '' }); return [] }),
-        getRedemptionCatalog().catch((error) => { this.setData({ redemptionError: soft(error) || '' }); return { items: [] } }),
+        getActivityRegistrations().catch((error) => { if (isCurrent()) this.setData({ registrationError: soft(error) || '' }); return [] }),
+        getRedemptionCatalog().catch((error) => { if (isCurrent()) this.setData({ redemptionError: soft(error) || '' }); return { items: [] } }),
         getRedemptions().catch(() => []),
         getProductRestrictions().catch(() => []),
         getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getWechatNotificationPrompt('coupon_open').catch(() => ({ authorizations: [] })),
         getWechatNotificationPrompt('member_card').catch(() => ({ authorizations: [] })),
         getCustomerPreferenceFacts().catch((error) => {
-          this.setData({ preferenceError: soft(error) || '' })
+          if (isCurrent()) this.setData({ preferenceError: soft(error) || '' })
           return { facts: [], sources: [] }
         }),
       ])
+      if (!isCurrent()) return
       const data = results[0]
       const benefitsAvailable = Array.isArray(results[1])
       const benefits = (results[1] || []).map(benefitView)
@@ -382,6 +368,7 @@ Page({
         publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
       const registrations = await activityRegistrationViews(results[3])
+      if (!isCurrent()) return
       const membership = data.membership ? membershipView(data.membership) : null
       const productRestrictions = (results[6] || []).map((item) => Object.assign({}, item, {
         restrictionText: item.restrictionType === 'allergy_or_cannot_consume'
@@ -400,7 +387,7 @@ Page({
           ? (item.remainingInventory === null ? '数量以页面确认结果为准' : `剩余 ${item.remainingInventory} 份`)
           : `今日剩余 ${item.remainingDailyInventory} 份`
         return Object.assign({}, item, {
-          description: display.description || display.subtitle || '积分兑换完整商品或非现金权益，不抵扣现金',
+          description: display.description || display.subtitle || '积分兑换指定商品或权益；结账抵扣以门店已发布规则为准',
           inventoryText,
           availableUntilText: item.availableUntil ? String(item.availableUntil).slice(0, 10) : '',
           actionText: item.eligible ? `${item.pointsRequired}积分兑换` : (item.ineligibleReason || '暂不可兑换'),
@@ -415,7 +402,7 @@ Page({
         .map(memberContentCardView)
         .sort((left, right) => left.priority - right.priority)
         .slice(0, 3)
-      this.setData({
+      if (isCurrent()) this.setData({
         loading: false,
         membership,
         membershipTerms: data.membershipTerms || null,
@@ -445,9 +432,10 @@ Page({
         avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
         ...preferenceView,
       })
-      rememberPresentationOptions('coupon_open', extractPromptPresentation(results[8]))
-      rememberPresentationOptions('member_card', extractPromptPresentation(results[9]))
+      if (isCurrent()) rememberPresentationOptions('coupon_open', extractPromptPresentation(results[8]))
+      if (isCurrent()) rememberPresentationOptions('member_card', extractPromptPresentation(results[9]))
     } catch (error) {
+      if (!isCurrent()) return
       const message = String((error && error.message) || '')
       const soft = /预约会话已失效|重新进入预约|登录状态已失效|登录或桌边会话已过期/.test(message)
         ? ''
@@ -458,7 +446,7 @@ Page({
       } catch (_termsError) {
         membershipTerms = null
       }
-      this.setData({
+      if (isCurrent()) this.setData({
         loading: false,error:soft,
         membership:null,membershipTerms,supportContact:null,points:[],benefits:[],benefitCount:null,
         reservations:[],registrations:[],redemptionItems:[],redemptions:[],productRestrictions:[],contentCards:[],
@@ -603,6 +591,7 @@ Page({
       fail: () => resolve(false),
     }))
     if (!confirmed) return
+    this.invalidateMemberLoad()
     this.setData({ logoutBusy: true })
     try {
       try {
@@ -610,6 +599,7 @@ Page({
       } catch (_error) {
         // 服务端注销失败时仍清除本地会话，避免卡在半登录态。
       }
+      this.invalidateMemberLoad()
       clearMemberLocalCache()
       this.pendingMembershipAction = ''
       wx.removeStorageSync('mbox.membership.enroll.attempt.v1')
@@ -672,9 +662,11 @@ Page({
       wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
+    this.invalidateMemberLoad()
     this.setData({ busy: true, error: '' })
     try {
       const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
+      this.invalidateMemberLoad()
       const membership = result && result.membership ? membershipView(result.membership) : null
       if (!membership) throw new Error('会员状态暂时未刷新，请再试一次')
       this.setData({ loginSheetVisible: false, error: '', membership })
@@ -742,10 +734,12 @@ Page({
       wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
+    this.invalidateMemberLoad()
     this.setData({ recoveryBusy: true, recoveryMessage: '', error: '' })
     try {
       const challenge = await startMembershipRecovery()
       const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
+      this.invalidateMemberLoad()
       this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
       if (result.status === 'completed') {
         const membership = result.membership ? membershipView(result.membership) : null
@@ -932,7 +926,7 @@ Page({
     }
     const confirmed = await new Promise((resolve) => wx.showModal({
       title: `确认使用 ${item.pointsRequired} 积分`,
-      content: `${item.name}\n${item.description}\n积分只兑换完整商品或权益，不抵扣现金。`,
+      content: `${item.name}\n${item.description}\n此处兑换完整商品或权益；结账抵扣请在确认订单时选择积分。`,
       confirmText: '确认兑换',
       success: (result) => resolve(result.confirm), fail: () => resolve(false),
     }))

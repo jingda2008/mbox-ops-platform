@@ -52,12 +52,12 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
     if (this.domain === 'base_points') {
       const row = (await this.transaction.query<BasePointsRow>(`
         SELECT id,status,draft_revision,updated_at::text,points_numerator,points_denominator_minor,
-          growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months
+          growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,points_rounding_scope,cash_redemption_enabled
         FROM mbox.loyalty_policy_versions
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE
       `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])).rows[0]
       return row ? record(row, 'base_points', makerEmployeeIds, {
-        domain: 'base_points', pointsNumerator: row.points_numerator,
+        domain: 'base_points', cashRedemptionEnabled: row.cash_redemption_enabled, pointsRoundingScope: row.points_rounding_scope, pointsNumerator: row.points_numerator,
         pointsDenominatorMinor: row.points_denominator_minor,
         growthNumerator: row.growth_numerator, growthDenominatorMinor: row.growth_denominator_minor,
         roundingMode: row.rounding_mode, pointsValidityMonths: row.points_validity_months,
@@ -195,6 +195,11 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
     const promotionTriggerParticipants = content.domain === 'promotion_points'
       ? await this.promotionFacts(content) : []
     const notificationFacts = await this.notificationFacts()
+    const orderAmounts=content.domain==='base_points'&&content.pointsRoundingScope==='order'?(await this.transaction.query<{amount:string}>(`
+      SELECT GREATEST(0,COALESCE((SELECT sum(b.amount_minor) FROM mbox.loyalty_order_item_basis b WHERE (b.tenant_id,b.store_id,b.order_id)=(o.tenant_id,o.store_id,o.id) AND b.loyalty_eligible),0)
+        -COALESCE((SELECT sum(ri.amount_minor) FROM mbox.refund_items ri JOIN mbox.refunds r ON (r.tenant_id,r.store_id,r.id)=(ri.tenant_id,ri.store_id,ri.refund_id) JOIN mbox.order_items i ON (i.tenant_id,i.store_id,i.id)=(ri.tenant_id,ri.store_id,ri.order_item_id) WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL AND i.loyalty_eligible_at_submission AND r.status='succeeded' AND r.purpose IS DISTINCT FROM 'service_compensation'),0))::text AS amount
+      FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.created_at>=clock_timestamp()-interval '30 days' AND mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id)
+      ORDER BY o.id`,scope)).rows.map(row=>number(row.amount)):undefined
     const sourceVersion = `impact-v1:${common.measured_at}`
     return {
       sourceVersion, measuredAt: common.measured_at,
@@ -204,6 +209,7 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       },
       availablePointsLiability: number(common.points_liability),
       eligiblePaidAmountMinor: number(common.eligible_paid_minor),
+      ...(orderAmounts?{eligibleOrderAmountsMinor:orderAmounts}:{}),
       expectedTierEntries: tierCounts(events.rows, 'entries'),
       expectedTierRetentions: tierCounts(events.rows, 'retentions'),
       growthBucketsByTier: growthBuckets(growth.rows),
@@ -328,11 +334,11 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
     if (content.domain === 'base_points') {
       await changed(this.transaction, `UPDATE mbox.loyalty_policy_versions SET
         points_numerator=$4,points_denominator_minor=$5,growth_numerator=$6,growth_denominator_minor=$7,
-        rounding_mode=$8,points_validity_months=$9,draft_revision=$10,reason=$11,updated_at=clock_timestamp()
+        rounding_mode=$8,points_validity_months=$9,draft_revision=$10,reason=$11,points_rounding_scope=$13,cash_redemption_enabled=$14,updated_at=clock_timestamp()
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND status='draft' AND draft_revision=$12`,
       [this.transaction.scope.tenantId, this.transaction.scope.storeId, id, content.pointsNumerator,
         content.pointsDenominatorMinor, content.growthNumerator, content.growthDenominatorMinor,
-        content.roundingMode, content.pointsValidityMonths, input.nextRevision, input.reason, input.expectedRevision])
+        content.roundingMode, content.pointsValidityMonths, input.nextRevision, input.reason, input.expectedRevision, content.pointsRoundingScope ?? 'cumulative', content.cashRedemptionEnabled ?? false])
       return
     }
     if (content.domain === 'tier_policy') {
@@ -630,7 +636,7 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
 }
 
 interface VersionRow extends Record<string,unknown>{id:string;status:MembershipConfigurationDraftRecord['status'];draft_revision:number;updated_at:string}
-interface BasePointsRow extends VersionRow{points_numerator:number;points_denominator_minor:number;growth_numerator:number;growth_denominator_minor:number;rounding_mode:'floor'|'nearest';points_validity_months:number}
+interface BasePointsRow extends VersionRow{cash_redemption_enabled:boolean;points_rounding_scope:'cumulative'|'order';points_numerator:number;points_denominator_minor:number;growth_numerator:number;growth_denominator_minor:number;rounding_mode:'floor'|'nearest';points_validity_months:number}
 interface TierPolicyRow extends VersionRow{evaluation_window_months:number;tier_period_months:number;downgrade_grace_days:number;silver_upgrade_growth:number;silver_retain_growth:number;gold_upgrade_growth:number;gold_retain_growth:number;silver_points_multiplier_numerator:number;silver_points_multiplier_denominator:number;gold_points_multiplier_numerator:number;gold_points_multiplier_denominator:number}
 interface MembershipTermsRow extends VersionRow{title:string;summary:string;content:string}
 interface TierBenefitRuleRow extends Record<string,unknown>{rule_code:string;eligible_tier:MembershipTier;inherit_to_higher_tiers:boolean;grant_on_entry:boolean;grant_on_retention:boolean;benefit_definition_id:string;quantity:number;validity_days:number;revocation_policy:'revoke_unreserved'|'protect_until_expiry';enabled:boolean}

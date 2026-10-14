@@ -1,3 +1,4 @@
+import { orderPointsDelta } from './loyalty-order-points.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { WechatLoyaltyNotificationRepository } from './wechat-loyalty-notification-repository.js'
 import { LoyaltyTierBenefitRepository } from './loyalty-tier-benefit-repository.js'
@@ -14,6 +15,7 @@ interface AwardContextRow extends Record<string, unknown> {
   available_points: number | null
   pending_recovery_points: number | null
   growth_value: number | null
+  points_rounding_scope: 'cumulative' | 'order'
   points_numerator: number | null
   points_denominator_minor: number | null
   growth_numerator: number | null
@@ -47,10 +49,13 @@ interface AwardRow extends Record<string, unknown> {
   pending_recovery_points: number
   growth_value: number
   refund_amount_minor: string | number
+  points_rounding_scope: 'cumulative' | 'order'
   calculation_model: 'per_order_rounded' | 'exact_carry'
 }
 
 interface ExactContributionRow extends Record<string, unknown> {
+  points_rounding_scope: 'cumulative' | 'order'
+  restored_eligible_amount_minor: string | number
   points_numerator_per_minor: string | number
   points_denominator: string | number
   growth_numerator_per_minor: string | number
@@ -60,6 +65,7 @@ interface ExactContributionRow extends Record<string, unknown> {
 }
 
 interface SupplementExecutionContextRow extends Record<string, unknown> {
+  points_rounding_scope: 'cumulative' | 'order'
   request_id: string
   public_id: string
   requested_membership_id: string
@@ -161,7 +167,7 @@ export class LoyaltyAccrualRepository {
         account.available_points, account.pending_recovery_points, account.growth_value,
         policy.points_numerator, policy.points_denominator_minor,
         policy.growth_numerator, policy.growth_denominator_minor,
-        policy.rounding_mode, policy.points_validity_months,
+        policy.rounding_mode, COALESCE(to_jsonb(policy)->>'points_rounding_scope','cumulative') AS points_rounding_scope, policy.points_validity_months,
         eligible.amount_minor AS eligible_amount_minor, ordering.currency,
         ordering.loyalty_points_multiplier_numerator AS points_multiplier_numerator,
         ordering.loyalty_points_multiplier_denominator AS points_multiplier_denominator
@@ -219,10 +225,13 @@ export class LoyaltyAccrualRepository {
     const eligibleAmountMinor = money(row.eligible_amount_minor)
     const pointsSpec = exactRewardSpec(
       row.points_numerator, row.points_denominator_minor,
-      row.points_multiplier_numerator, row.points_multiplier_denominator,
+      row.points_rounding_scope === 'order' ? 1 : row.points_multiplier_numerator,
+      row.points_rounding_scope === 'order' ? 1 : row.points_multiplier_denominator,
     )
     const growthSpec = exactRewardSpec(row.growth_numerator, row.growth_denominator_minor, 1, 1)
-    const points = await this.applyExactCarry({
+    const points = row.points_rounding_scope === 'order'
+      ? orderPointsDelta(0, eligibleAmountMinor, pointsSpec.numeratorPerMinor, pointsSpec.denominator)
+      : await this.applyExactCarry({
       membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
       rewardKind: 'points', denominator: pointsSpec.denominator, roundingMode: row.rounding_mode,
       numeratorDelta: BigInt(eligibleAmountMinor) * pointsSpec.numeratorPerMinor,
@@ -240,13 +249,13 @@ export class LoyaltyAccrualRepository {
     const awardInserted = await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.loyalty_order_awards (
         tenant_id, store_id, membership_id, customer_id, order_id, payment_id,
-        policy_version_id, eligible_amount_minor, awarded_points, awarded_growth, currency, awarded_at,calculation_model
-      ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::bigint,$9,$10,$11,$12::timestamptz,'exact_carry')
+        policy_version_id, eligible_amount_minor, awarded_points, awarded_growth, currency, awarded_at,calculation_model${row.points_rounding_scope==='order'?',points_rounding_scope':''}
+      ) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::bigint,$9,$10,$11,$12::timestamptz,'exact_carry'${row.points_rounding_scope==='order'?', $13':''})
       RETURNING id
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId,
       row.membership_id, row.customer_id, row.order_id, row.payment_id,
-      row.policy_version_id, eligibleAmountMinor, points, growth, row.currency, input.occurredAt,
+      row.policy_version_id, eligibleAmountMinor, points, growth, row.currency, input.occurredAt, ...(row.points_rounding_scope==='order'?['order']:[]),
     ])
     const awardId = awardInserted.rows[0]?.id
     if (!awardId) throw new Error('Loyalty order award was not inserted')
@@ -254,16 +263,16 @@ export class LoyaltyAccrualRepository {
       INSERT INTO mbox.loyalty_order_reward_contributions (
         tenant_id,store_id,award_id,membership_id,customer_id,order_id,payment_id,policy_version_id,currency,
         eligible_amount_minor,points_numerator_per_minor,points_denominator,
-        growth_numerator_per_minor,growth_denominator,rounding_mode
+        growth_numerator_per_minor,growth_denominator,rounding_mode${row.points_rounding_scope==='order'?',points_rounding_scope':''}
       ) VALUES (
         $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8::uuid,$9,$10::bigint,
-        $11::bigint,$12::bigint,$13::bigint,$14::bigint,$15
+        $11::bigint,$12::bigint,$13::bigint,$14::bigint,$15${row.points_rounding_scope==='order'?', $16':''}
       )
     `, [
       this.transaction.scope.tenantId, this.transaction.scope.storeId, awardId,
       row.membership_id, row.customer_id, row.order_id, row.payment_id, row.policy_version_id,
       row.currency, eligibleAmountMinor, pointsSpec.numeratorPerMinor.toString(), pointsSpec.denominator.toString(),
-      growthSpec.numeratorPerMinor.toString(), growthSpec.denominator.toString(), row.rounding_mode,
+      growthSpec.numeratorPerMinor.toString(), growthSpec.denominator.toString(), row.rounding_mode, ...(row.points_rounding_scope==='order'?['order']:[]),
     ])
     await this.transaction.query(`
       UPDATE mbox.loyalty_accounts
@@ -420,7 +429,7 @@ export class LoyaltyAccrualRepository {
         award.policy_version_id, award.eligible_amount_minor, award.awarded_points,
         award.awarded_growth, award.reversed_amount_minor, award.reversed_points,
         award.reversed_growth, award.restored_amount_minor, award.restored_points, award.restored_growth,
-        award.currency, award.calculation_model, account.available_points,
+        award.currency, award.calculation_model, COALESCE(to_jsonb(award)->>'points_rounding_scope','cumulative') AS points_rounding_scope, account.available_points,
         account.pending_recovery_points, account.growth_value,
         eligible_refund.amount_minor AS refund_amount_minor
       FROM mbox.loyalty_order_awards award
@@ -456,8 +465,8 @@ export class LoyaltyAccrualRepository {
     if (row.calculation_model === 'exact_carry') {
       const contribution = (await this.transaction.query<ExactContributionRow>(`
         SELECT points_numerator_per_minor,points_denominator,growth_numerator_per_minor,
-          growth_denominator,rounding_mode,reversed_eligible_amount_minor
-        FROM mbox.loyalty_order_reward_contributions
+          growth_denominator,rounding_mode,reversed_eligible_amount_minor,restored_eligible_amount_minor,COALESCE(to_jsonb(contribution)->>'points_rounding_scope','cumulative') AS points_rounding_scope
+        FROM mbox.loyalty_order_reward_contributions contribution
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid AND payment_id=$4::uuid
         FOR UPDATE
       `, [
@@ -467,7 +476,10 @@ export class LoyaltyAccrualRepository {
       if (money(contribution.reversed_eligible_amount_minor) + money(row.refund_amount_minor) !== targetAmount) {
         throw new Error('Exact-carry loyalty contribution refund amount no longer matches its award')
       }
-      const pointsDelta = await this.applyExactCarry({
+      const netBefore = eligible - money(contribution.reversed_eligible_amount_minor) + money(contribution.restored_eligible_amount_minor)
+      const pointsDelta = contribution.points_rounding_scope === 'order'
+        ? orderPointsDelta(netBefore, netBefore - money(row.refund_amount_minor), BigInt(contribution.points_numerator_per_minor), BigInt(contribution.points_denominator))
+        : await this.applyExactCarry({
         membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
         rewardKind: 'points', denominator: bigint(contribution.points_denominator, 'points carry denominator'),
         roundingMode: contribution.rounding_mode,
@@ -494,7 +506,9 @@ export class LoyaltyAccrualRepository {
         this.transaction.scope.tenantId, this.transaction.scope.storeId, row.order_id, targetAmount,
       ])
     } else {
-      targetPoints = row.restored_points + (eligible === 0 ? 0 : proportional(row.awarded_points, netTargetAmount, eligible))
+      targetPoints = row.points_rounding_scope === 'order'
+        ? row.restored_points + row.awarded_points - orderPointsDelta(0, eligible-netTargetAmount)
+        : row.restored_points + (eligible === 0 ? 0 : proportional(row.awarded_points, netTargetAmount, eligible))
       targetGrowth = row.restored_growth + (eligible === 0 ? 0 : proportional(row.awarded_growth, netTargetAmount, eligible))
       pointsToReverse = Math.max(0, targetPoints - row.reversed_points)
       growthToReverse = Math.max(0, targetGrowth - row.reversed_growth)
@@ -825,7 +839,7 @@ export class LoyaltyAccrualRepository {
         membership.id AS membership_id, membership.customer_id AS membership_customer_id,
         policy.points_numerator, policy.points_denominator_minor,
         policy.growth_numerator, policy.growth_denominator_minor,
-        policy.rounding_mode, policy.points_validity_months,
+        policy.rounding_mode, COALESCE(to_jsonb(policy)->>'points_rounding_scope','cumulative') AS points_rounding_scope, policy.points_validity_months,
         ordering.loyalty_points_multiplier_numerator AS points_multiplier_numerator,
         ordering.loyalty_points_multiplier_denominator AS points_multiplier_denominator,
         eligible.amount_minor AS eligible_amount_minor
@@ -919,7 +933,7 @@ export class LoyaltyAccrualRepository {
     const award = existingAward.rows[0]
     if (award && payments.rows.some((payment) => payment.id === award.payment_id)) paymentId = award.payment_id
     const eligibleAmountMinor = money(row.eligible_amount_minor)
-    const expectedPoints = applyMultiplier(calculateReward(
+    const expectedPoints = row.points_rounding_scope === 'order' ? orderPointsDelta(0,eligibleAmountMinor) : applyMultiplier(calculateReward(
       eligibleAmountMinor, row.points_numerator, row.points_denominator_minor, row.rounding_mode,
     ), row.points_multiplier_numerator, row.points_multiplier_denominator, row.rounding_mode)
     const expectedGrowth = calculateReward(
@@ -961,16 +975,16 @@ export class LoyaltyAccrualRepository {
         INSERT INTO mbox.loyalty_order_awards (
           tenant_id, store_id, membership_id, customer_id, order_id, payment_id,
           policy_version_id, eligible_amount_minor, awarded_points, awarded_growth,
-          currency, awarded_at
+          currency, awarded_at${row.points_rounding_scope==='order'?',points_rounding_scope':''}
         ) VALUES (
           $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,
-          $8::bigint,$9,$10,$11,$12::timestamptz
+          $8::bigint,$9,$10,$11,$12::timestamptz${row.points_rounding_scope==='order'?', $13':''}
         ) RETURNING id
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         row.membership_id, row.order_customer_id, row.order_id, paymentId,
         row.policy_version_id, eligibleAmountMinor, expectedPoints, expectedGrowth,
-        row.currency, input.occurredAt,
+        row.currency, input.occurredAt, ...(row.points_rounding_scope==='order'?['order']:[]),
       ])
       awardId = insertedAward.rows[0]?.id
       if (!awardId) throw new Error('Approved loyalty supplement did not create its authoritative award')

@@ -796,6 +796,8 @@ export class CustomerExperienceService {
         policy_code: string
         version: number
         status: string
+        cash_redemption_enabled: boolean
+        points_rounding_scope: 'cumulative' | 'order'
         points_numerator: number
         points_denominator_minor: number
         growth_numerator: number
@@ -812,7 +814,7 @@ export class CustomerExperienceService {
         publication_mode: string
         reason: string
       }>(`
-        SELECT id, policy_code, version, status, points_numerator,
+        SELECT id, policy_code, version, status, points_numerator, points_rounding_scope, cash_redemption_enabled,
           points_denominator_minor, growth_numerator, growth_denominator_minor,
           rounding_mode, points_validity_months, effective_from::text,
           effective_until::text, drafted_by_employee_id, approved_by_employee_id,
@@ -827,6 +829,8 @@ export class CustomerExperienceService {
         policyCode: row.policy_code,
         version: row.version,
         status: row.status,
+        cashRedemptionEnabled: row.cash_redemption_enabled,
+        pointsRoundingScope: row.points_rounding_scope,
         pointsNumerator: row.points_numerator,
         pointsDenominatorMinor: row.points_denominator_minor,
         growthNumerator: row.growth_numerator,
@@ -850,6 +854,8 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{
       policyCode: string
+      cashRedemptionEnabled?: boolean
+      pointsRoundingScope?: 'cumulative' | 'order'
       pointsNumerator: number
       pointsDenominatorMinor: number
       growthNumerator: number
@@ -860,6 +866,10 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
+    if ((input.pointsRoundingScope === 'order' && (input.pointsNumerator !== 1 || input.pointsDenominatorMinor !== 1000 || input.roundingMode !== 'floor'))
+      || (input.cashRedemptionEnabled && (input.pointsRoundingScope !== 'order' || input.policyCode !== 'BASE'))) {
+      throw new CustomerExperienceRequestError('积分抵扣须使用基础规则：每笔实付满10元积1分，零头不累计', 'LOYALTY_POLICY_RULE_INVALID', 400)
+    }
     return this.commands.execute({
       scope: context.scope,
       operationScope: 'loyalty.policy.draft',
@@ -887,15 +897,15 @@ export class CustomerExperienceService {
           tenant_id, store_id, policy_code, version, status,
           points_numerator, points_denominator_minor,
           growth_numerator, growth_denominator_minor,
-          rounding_mode, points_validity_months, drafted_by_employee_id, reason
-        ) SELECT $1::uuid,$2::uuid,$3,version,'draft',$4,$5,$6,$7,$8,$9,$10::uuid,$11
+          rounding_mode, points_validity_months, drafted_by_employee_id, reason, points_rounding_scope, cash_redemption_enabled
+        ) SELECT $1::uuid,$2::uuid,$3,version,'draft',$4,$5,$6,$7,$8,$9,$10::uuid,$11,$12,$13
         FROM next_version
         RETURNING id, policy_code, version, status
       `, [
         transaction.scope.tenantId, transaction.scope.storeId, input.policyCode,
         input.pointsNumerator, input.pointsDenominatorMinor,
         input.growthNumerator, input.growthDenominatorMinor,
-        input.roundingMode, input.pointsValidityMonths, context.employeeId, input.reason,
+        input.roundingMode, input.pointsValidityMonths, context.employeeId, input.reason, input.pointsRoundingScope ?? 'cumulative', input.cashRedemptionEnabled ?? false,
       ])
       const row = result.rows[0]
       if (!row) throw new CustomerExperienceRequestError('会员规则草稿没有保存', 'LOYALTY_POLICY_DRAFT_FAILED', 409)

@@ -36,3 +36,5 @@ section[id]{scroll-margin-top:100px}.hero-actions{flex-wrap:wrap;gap:20px}.liste
 
 .footer-icp{margin:12px 0 0;font-size:9px;letter-spacing:.5px;color:#adbaa3}
 @media(max-width:760px){.footer-icp{font-size:8px}}
+
+.catalog-price,.product-name>span,.order-guide strong,#result-count{font-variant-numeric:lining-nums tabular-nums}

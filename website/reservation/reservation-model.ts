@@ -1,0 +1,2 @@
+import type { ReservationArea, ReservationZone } from './types';
+export function classifyZone(area: Pick<ReservationArea, 'code'|'name'|'type'>): ReservationZone {const text=`${area.code} ${area.name}`.toLowerCase();if(area.type==='outdoor'||/室外|露台|outdoor/.test(text))return 'outdoor';if(area.type==='stage'||area.type==='vip'||/舞台|vip|卡座|stage/.test(text))return 'stage-front';return 'indoor-middle';}

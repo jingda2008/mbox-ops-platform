@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+node_modules/
+dist/
+.wrangler/
+.sites-runtime/
+.next/
+.env*
+
+.vinext/
+.dev.vars*

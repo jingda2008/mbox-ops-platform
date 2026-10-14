@@ -1,0 +1,52 @@
+{
+  "source": "https://mbox.shmbox.com/api/public/reservation/performances?date=2026-10-14",
+  "checkedAt": "2026-10-13T16:12:34.858266+00:00",
+  "timezone": "Asia/Shanghai",
+  "localDate": "2026-10-14",
+  "schedules": [
+    {
+      "performerStageName": "Amo",
+      "performerProfile": {
+        "genres": [
+          "现场演出"
+        ]
+      },
+      "startsAt": "2026-10-14 20:30:00+08",
+      "endsAt": "2026-10-14 21:15:00+08",
+      "status": "scheduled"
+    },
+    {
+      "performerStageName": "阿瑞",
+      "performerProfile": {
+        "genres": [
+          "现场演出"
+        ]
+      },
+      "startsAt": "2026-10-14 21:35:00+08",
+      "endsAt": "2026-10-14 22:20:00+08",
+      "status": "scheduled"
+    },
+    {
+      "performerStageName": "豆子",
+      "performerProfile": {
+        "genres": [
+          "现场演出"
+        ]
+      },
+      "startsAt": "2026-10-14 22:40:00+08",
+      "endsAt": "2026-10-14 23:25:00+08",
+      "status": "scheduled"
+    },
+    {
+      "performerStageName": "Natalie",
+      "performerProfile": {
+        "genres": [
+          "现场演出"
+        ]
+      },
+      "startsAt": "2026-10-14 23:45:00+08",
+      "endsAt": "2026-10-15 00:30:00+08",
+      "status": "scheduled"
+    }
+  ]
+}

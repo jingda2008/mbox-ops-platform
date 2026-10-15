@@ -27,6 +27,9 @@ const ready: CommercialReadinessSnapshot = {
   productsMissingCost: 0,
   bundlesMissingComponents: 0,
   invalidBundleComponents: 0,
+  invalidBundleChoiceGroups: 0,
+  productsMissingRecipes: 0,
+  inventoryCostsUnverified: 0,
   financialRolesMissingLimits: [],
   kdsRolesMissingStationScopes: [],
   operationalRolesMissingPermissions: [],
@@ -140,4 +143,13 @@ it.each(['045','NaN','Infinity','',null])('rejects unavailable or unsupported sc
 })
 it.each([NaN,Infinity,-1,0.5])('rejects corrupt authoritative counts %s',value=>{
  expect(evaluateCommercialReadiness({...ready,productsMissingCost:value},undefined,miniReady,miniTrust).some(i=>i.code==='snapshot.invalid')).toBe(true)
+})
+
+it.each([
+  ['invalidBundleChoiceGroups','catalog.bundle_choice_invalid'],
+  ['productsMissingRecipes','catalog.recipe_missing'],
+  ['inventoryCostsUnverified','inventory.cost_unverified'],
+] as const)('blocks %s and rejects missing observations', (field, code) => {
+  expect(evaluateCommercialReadiness({...ready,[field]:1},undefined,miniReady,miniTrust).map(i=>i.code)).toContain(code)
+  expect(evaluateCommercialReadiness({...ready,[field]:undefined} as unknown as CommercialReadinessSnapshot,undefined,miniReady,miniTrust).map(i=>i.code)).toContain('snapshot.invalid')
 })

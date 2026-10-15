@@ -89,7 +89,11 @@ export function evaluateCommercialReadiness(
     blocker('miniprogram.commit_mismatch', '小程序候选证据提交与应用候选提交不一致')
   }
 
-  if (snapshot.schemaFlavor !== 'normalized-core-v1' || Number(snapshot.schemaVersion ?? 0) < 45) {
+  const counts = ['configurationApplications','catalogApplications','reservationPolicies','activeTables','activeEmployees','activeProducts','guestVisibleProducts','recommendationProducts','productsMissingCurrentPrice','productsMissingCost','bundlesMissingComponents','invalidBundleComponents','tablesMissingMinimumSpend','tablesMissingLayout'] as const
+  if (counts.some(key => !Number.isSafeInteger(snapshot[key]) || snapshot[key] < 0)) {
+    blocker('snapshot.invalid', '经营统计缺失或不是有效非负整数，不能确认商用条件')
+  }
+  if (snapshot.schemaFlavor !== 'normalized-core-v1' || !/^\d+$/.test(snapshot.schemaVersion ?? '') || !Number.isSafeInteger(Number(snapshot.schemaVersion)) || Number(snapshot.schemaVersion) < 46) {
     blocker('schema.unavailable', '规范化数据库版本必须为046或更高')
   }
   if (!snapshot.storeActive) blocker('store.inactive', '目标门店不存在或未启用')

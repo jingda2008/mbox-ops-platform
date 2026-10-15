@@ -1,3 +1,4 @@
+import {ManualPointsPanel} from './ManualPointsPanel'
 import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {openMembershipConfiguration} from './membership-workflow'
 import { LoyaltyRefundReviewPanel } from './LoyaltyRefundReviewPanel'
@@ -10,7 +11,7 @@ import { SocialAccountPanel } from './SocialAccountPanel'
 import { BottleCustodyPanel } from './BottleCustodyPanel'
 import './bottle-custody-panel.css'
 import { MemberNumberPolicyPanel } from './MemberNumberPolicyPanel'
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { loadCompleteActiveCatalog } from './complete-catalog'
@@ -221,6 +222,8 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <section className="customer-experience-publishing-intro"><strong>会员权益异常</strong><small>处理过期、缺货、结果未知和已制作后的补偿；已完成或已取消的记录不能直接恢复使用。</small></section>
     <LoyaltyTierAndRedemptionPanel viewMode="exceptions" api={api} auth={auth} />
     <AnnualBenefitManagementPanel viewMode="exceptions" api={api} auth={auth} />
+    <LoyaltyPolicyPanel key={`${auth.employee.id}:${auth.session.id}`} viewMode="exceptions" api={api} auth={auth} />
+    <ManualPointsPanel api={api} auth={auth} />
     <LoyaltyRefundReviewPanel api={api} auth={auth} />
     <OrderFinancialRecoveryPanel api={api} auth={auth} />
   </div>
@@ -966,7 +969,7 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
   const canManage = (viewMode==='all'||viewMode==='drafts') && auth.permissions.includes('loyalty.policy.manage')
   const canApprove = viewMode==='all' && auth.permissions.includes('loyalty.policy.approve')
   const canPublish = viewMode==='all' && auth.permissions.includes('loyalty.policy.publish')
-  const canRead = canView || canManage || canApprove || canPublish
+  const canRead = viewMode!=='exceptions' && (canView || canManage || canApprove || canPublish)
   const canViewExceptions = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.exception.view')
   const canRequestSupplement = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.request')
   const canApproveSupplement = (viewMode==='all'||viewMode==='exceptions') && auth.permissions.includes('loyalty.accrual.approve')
@@ -975,6 +978,9 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
   const [supplements, setSupplements] = useState<LoyaltySupplementView[]>([])
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
+  const [readNotice, setReadNotice] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const revision = useRef(0)
   const [form, setForm] = useState({
     cashRedemptionEnabled: false, pointsRoundingScope: 'order', pointsNumerator: '1', pointsDenominatorMinor: '1000',
     growthNumerator: '1', growthDenominatorMinor: '100',
@@ -982,6 +988,8 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
   })
 
   const load = useCallback(async () => {
+    const turn=++revision.current
+    setLoaded(false)
     try {
       const [policyResponse, reconciliationResponse, supplementResponse] = await Promise.all([
         canRead
@@ -994,13 +1002,17 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
           ? api.getEndpoint<{ data: LoyaltySupplementView[] }>('/api/staff/loyalty/supplement-requests')
           : Promise.resolve({ data: [] }),
       ])
+      if(turn!==revision.current)return
+      if(!Array.isArray(policyResponse.data)||!Array.isArray(reconciliationResponse.data)||!Array.isArray(supplementResponse.data))throw new Error('积分数据不完整，请重新读取后核对')
+      setLoaded(true)
+      setReadNotice('')
       setPolicies(Array.isArray(policyResponse.data) ? policyResponse.data : [])
       setReconciliation(Array.isArray(reconciliationResponse.data) ? reconciliationResponse.data : [])
       setSupplements(Array.isArray(supplementResponse.data) ? supplementResponse.data : [])
-    } catch (error) { setNotice(error instanceof Error ? error.message : '会员规则读取失败') }
+    } catch (error) { if(turn===revision.current)setReadNotice(error instanceof Error ? error.message : '会员规则读取失败') }
   }, [api, canRead, canViewExceptions])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load(); return()=>{revision.current++} }, [load])
   if (!canView && !canManage && !canApprove && !canPublish && !canViewExceptions) return null
 
   async function draft(event: FormEvent) {
@@ -1097,9 +1109,11 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
 
   return <section className="staff-module-summary loyalty-policy-panel">
     <div>
-      <strong>积分与成长值规则</strong>
-      <small>积分与成长值分账；起草、审批、发布由不同人员完成，未来排期不会让当前规则提前失效。</small>
-      {notice && <p className="staff-module-notice" role="status">{notice}</p>}
+      <strong>{viewMode==='exceptions'?'积分对账与漏发':'积分与成长值规则'}</strong>
+      <small>{viewMode==='exceptions'?'按原订单及原规则核对差额，申请人与复核人必须不同。':'积分与成长值分账；起草、审批、发布由不同人员完成，未来排期不会让当前规则提前失效。'}</small>
+      {!loaded&&<p>积分数据尚未确认，请重新读取后处理。</p>}
+      <button type="button" disabled={Boolean(busy)} onClick={()=>void load()}>重新读取积分对账</button>
+      {(readNotice||notice) && <p className="staff-module-notice" role="status">{readNotice||notice}</p>}
       {canManage && <form className="staff-module-form" onSubmit={(event) => void draft(event)}>
         <BusinessRatioFields content={{pointsNumerator:Number(form.pointsNumerator),pointsDenominatorMinor:Number(form.pointsDenominatorMinor),growthNumerator:Number(form.growthNumerator),growthDenominatorMinor:Number(form.growthDenominatorMinor)}} onChange={next=>setForm(current=>({...current,pointsNumerator:String(next.pointsNumerator),pointsDenominatorMinor:String(next.pointsDenominatorMinor),growthNumerator:String(next.growthNumerator),growthDenominatorMinor:String(next.growthDenominatorMinor)}))}/>
 
@@ -1117,18 +1131,18 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
       </div>
       {canViewExceptions && <div className="activity-admin-list">
         <header><strong>自动积分对账</strong><small>只按已付款订单、冻结计分资格和原规则版本计算</small></header>
-        {reconciliation.filter((item) => item.status !== 'matched').length === 0 && <p>当前没有待补发差异。</p>}
+        {loaded && reconciliation.filter((item) => item.status !== 'matched').length === 0 && <p>当前没有待补发差异。</p>}
         {reconciliation.filter((item) => item.status !== 'matched').map((item) => <article key={item.orderPublicId}>
           <div><strong>{item.memberNo} · {shortPublicReference(item.orderPublicId)}</strong><small>应发 {item.expectedPoints} 积分 / {item.expectedGrowth} 成长值；已发 {item.existingPoints} / {item.existingGrowth}</small>{item.status === 'refund_review_required' && <small>退款分摊待核，积分冲回未自动处理。请由会员与财务负责人在财务对账中核对订单 {item.orderPublicId}、退款 {(item.reviewRefundPublicIds ?? []).join('、')} 及原收款。<a href="/staff/member-exceptions#loyalty-refund-reviews">前往退款积分核对</a>，由财务按真实退货商品申请、另一人复核。</small>}</div>
-          <div>{canRequestSupplement && item.status !== 'refund_review_required' && <button type="button" disabled={busy === `request-${item.orderPublicId}`} onClick={() => void requestSupplement(item)}>申请补发</button>}</div>
+          <div>{canRequestSupplement && item.status !== 'refund_review_required' && <button type="button" disabled={!loaded || Boolean(busy)} onClick={() => void requestSupplement(item)}>申请补发</button>}</div>
         </article>)}
       </div>}
       {canViewExceptions && <div className="activity-admin-list">
         <header><strong>补发审批</strong><small>申请人与复核人必须是不同员工</small></header>
-        {supplements.length === 0 && <p>还没有补发申请。</p>}
+        {loaded && supplements.length === 0 && <p>还没有补发申请。</p>}
         {supplements.map((item) => <article key={item.publicId}>
           <div><strong>{item.memberNo} · {item.status === 'requested' ? '待复核' : item.status === 'executed' ? '已入账' : item.status === 'rejected' ? '已驳回' : item.status}</strong><small>{item.requestedByName}申请：{item.requestedPoints}积分 / {item.requestedGrowth}成长值</small><small>{item.reason}</small></div>
-          <div>{item.status === 'requested' && canApproveSupplement && item.requestedByEmployeeId !== auth.employee.id && <><button type="button" disabled={Boolean(busy)} onClick={() => void decideSupplement(item, 'approve')}>复核通过</button><button type="button" disabled={Boolean(busy)} onClick={() => void decideSupplement(item, 'reject')}>驳回</button></>}</div>
+          <div>{item.status === 'requested' && canApproveSupplement && item.requestedByEmployeeId !== auth.employee.id && <><button type="button" disabled={!loaded || Boolean(busy)} onClick={() => void decideSupplement(item, 'approve')}>复核通过</button><button type="button" disabled={!loaded || Boolean(busy)} onClick={() => void decideSupplement(item, 'reject')}>驳回</button></>}</div>
         </article>)}
       </div>}
     </div>

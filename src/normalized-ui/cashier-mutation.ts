@@ -15,12 +15,13 @@ export interface CashierMutationAttempt {
 
 export class CashierMutationCoordinator {
   private readonly pending = new Map<string, Omit<CashierMutationAttempt, 'signature'>>()
+  private readonly flights = new Map<string, Promise<unknown>>()
 
   prepare(action: string, body: unknown): CashierMutationAttempt {
     const signature = mutationSignature(action, body)
     const attempt = this.pending.get(signature) ?? {
       idempotencyKey: createIdempotencyKey(action),
-      body,
+      body: structuredClone(body),
     }
     this.pending.set(signature, attempt)
     return { signature, ...attempt }
@@ -28,6 +29,21 @@ export class CashierMutationCoordinator {
 
   complete(signature: string): void {
     this.pending.delete(signature)
+  }
+
+  async execute<T>(action: string, body: unknown, send: (attempt: CashierMutationAttempt) => Promise<T>, readback: () => Promise<void>): Promise<T> {
+    const attempt = this.prepare(action, body)
+    const existing = this.flights.get(attempt.signature)
+    if (existing) return existing as Promise<T>
+    // A timeout, permission error or failed read is not proof that money was
+    // untouched. Keep the original body/key until both receipt and read succeed.
+    const operation = Promise.resolve().then(() => send(attempt)).then(async result => {
+      await readback()
+      this.complete(attempt.signature)
+      return result
+    }).finally(() => this.flights.delete(attempt.signature))
+    this.flights.set(attempt.signature, operation)
+    return operation
   }
 
   fail(signature: string, retryable: boolean): void {

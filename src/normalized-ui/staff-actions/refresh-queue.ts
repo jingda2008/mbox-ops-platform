@@ -34,6 +34,12 @@ export class RefreshQueue {
     return flight
   }
 
+  async requestConfirmed(): Promise<void> {
+    const generation = this.generation
+    await this.request(true)
+    if (generation !== this.generation) throw new Error('读取已中断，请核对原操作结果')
+  }
+
   cancel(): void {
     this.generation += 1
     this.again = false

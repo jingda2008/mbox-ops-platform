@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { selectPublicPrivacyPolicy, type PublicPrivacyPolicyView } from './approved-privacy-policy.js'
 import {registerOrderFinancialRecoveryRoutes} from './order-financial-recovery-api.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import {registerManualPointsRoutes} from './manual-points-api.js'
 import {registerLoyaltyRefundReviewRoutes} from './loyalty-refund-review-api.js'
 import {UpgradeQualificationError} from './checkout-upgrade-eligibility.js'
 import {
@@ -134,6 +135,7 @@ interface StaffMemberLedgerRow extends Record<string, unknown> {
 
 export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceApiOptions> = async (app, options) => {
   registerLoyaltyRefundReviewRoutes(app, options)
+  registerManualPointsRoutes(app, options)
   registerOrderFinancialRecoveryRoutes(app, options)
   app.get('/public/mini/bootstrap', async (request, reply) => handle(reply, async () => {
     const context = await options.resolvePublicContext(request)
@@ -1234,17 +1236,8 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   )
 
   app.post<{ Params: { customerId: string } }>('/staff/customers/:customerId/points', async (request, reply) => handle(reply, async () => {
-    const context = await staffContextWithPermission(options, request, 'loyalty.adjust.manual')
-    const body = objectBody(request.body)
-    const result = await options.service.adjustPoints(context, {
-      customerId: uuid(request.params.customerId, '客户'),
-      pointsDelta: integer(body.pointsDelta, '积分变化', -1_000_000, 1_000_000, undefined, true),
-      reason: text(body.reason, '调整原因', 2, 240),
-      sourceType: enumValue(body.sourceType, '来源', ['order', 'activity', 'benefit', 'campaign', 'service_recovery', 'manual'] as const),
-      sourceId: text(body.sourceId, '来源编号', 1, 128),
-      idempotencyKey: idempotencyKey(request),
-    })
-    return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+    await staffContextWithPermission(options, request, 'loyalty.adjust.manual')
+    throw new CustomerExperienceRequestError('人工积分调整须先申请并由其他授权员工复核，请使用会员异常处理入口', 'LOYALTY_MANUAL_REVIEW_REQUIRED', 409)
   }))
 
   app.get('/staff/loyalty/accounts', async (request, reply) => handle(reply, async () => {

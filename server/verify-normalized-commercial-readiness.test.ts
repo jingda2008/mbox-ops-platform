@@ -133,3 +133,11 @@ describe('normalized commercial readiness', () => {
     }, miniTrust).map((issue) => issue.code)).toContain('miniprogram.release_evidence_missing')
   })
 })
+
+// Invalid source observations must not pass a commercial readiness gate.
+it.each(['045','NaN','Infinity','',null])('rejects unavailable or unsupported schema %s',schemaVersion=>{
+ expect(evaluateCommercialReadiness({...ready,schemaVersion},undefined,miniReady,miniTrust).some(i=>i.code==='schema.unavailable')).toBe(true)
+})
+it.each([NaN,Infinity,-1,0.5])('rejects corrupt authoritative counts %s',value=>{
+ expect(evaluateCommercialReadiness({...ready,productsMissingCost:value},undefined,miniReady,miniTrust).some(i=>i.code==='snapshot.invalid')).toBe(true)
+})

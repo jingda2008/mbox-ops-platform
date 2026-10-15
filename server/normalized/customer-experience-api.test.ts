@@ -22,6 +22,20 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
+it('rejects the legacy direct points mutation even for authorized employees without invoking the adjustment service',async()=>{
+ const app=Fastify();apps.push(app)
+ const scope={tenantId:'11111111-1111-4111-8111-111111111111',storeId:'22222222-2222-4222-8222-222222222222'}
+ const adjustPoints=vi.fn()
+ vi.spyOn(StaffAccessRepository.prototype,'assertPermission').mockResolvedValue({} as never)
+ await app.register(customerExperienceApiPlugin,{
+  transactions:{run:async(_scope,operation)=>operation({scope,query:vi.fn()} as never)},service:{adjustPoints} as unknown as CustomerExperienceService,
+  resolveStaffContext:()=>({scope,employeeId:'33333333-3333-4333-8333-333333333333',actorRef:'employee:test',businessDate:'2026-10-15'}),
+  resolveGuestContext:()=>{throw new Error('unused')},resolvePublicContext:()=>{throw new Error('unused')},protectContact:()=>{throw new Error('unused')},
+ })
+ const response=await app.inject({method:'POST',url:'/staff/customers/44444444-4444-4444-8444-444444444444/points',headers:{'idempotency-key':'legacy-points-test'},payload:{pointsDelta:100,reason:'直接加分测试',sourceType:'manual',sourceId:'legacy-test'}})
+ expect(response.statusCode).toBe(409);expect(response.json().error.code).toBe('LOYALTY_MANUAL_REVIEW_REQUIRED');expect(adjustPoints).not.toHaveBeenCalled()
+})
+
 describe('customer experience activity contact API', () => {
   it('retires legacy offer issuance without blocking original checkout and still rejects malformed units', async () => {
     const app=Fastify(); apps.push(app)

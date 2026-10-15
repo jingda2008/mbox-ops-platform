@@ -1,0 +1,56 @@
+import {readFile} from 'node:fs/promises'
+import {expect,test,type Page} from '@playwright/test'
+for(const width of [320,360])test(`manual points independent review and lost receipt recovery at ${width}px`,async({page,browser},testInfo)=>{
+ test.setTimeout(90000)
+ const fixture=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
+ test.skip(!fixture.memberCardFixture,'Requires disposable manual points fixture')
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
+ async function login(p:Page,employee:string){
+  await p.goto(fixture.staffUrl);await p.getByLabel('门店口令').fill(fixture.dailyCredential);await p.getByRole('button',{name:/验证设备/}).click()
+  await p.getByLabel('员工账号').fill(employee);await p.getByLabel('四位 PIN').fill(fixture.employeePin);await p.getByRole('button',{name:/进入工作台/}).click()
+  await expect(p.getByTestId('normalized-workspace')).toBeVisible()
+  await p.goto(`${new URL(p.url()).origin}/staff/member-exceptions`)
+ }
+ await page.route('**/api/staff/loyalty/reconciliation',route=>route.fulfill({status:width===320?503:200,contentType:'application/json',body:JSON.stringify(width===320?{error:{message:'隔离读取失败'}}:{data:null})}),{times:1})
+ await page.setViewportSize({width,height:800});await login(page,fixture.employeeCode)
+ const reconciliation=page.locator('section.loyalty-policy-panel').filter({hasText:'积分对账与漏发'})
+ await expect(reconciliation).toContainText('积分数据尚未确认')
+ await expect(reconciliation).not.toContainText('当前没有待补发差异')
+ await reconciliation.getByRole('button',{name:'重新读取积分对账'}).click()
+ await expect(reconciliation).toContainText('当前没有待补发差异')
+ const panel=page.getByRole('region',{name:'人工积分申请与审核'}),memberNo=`MBX-MANUAL${width}`
+ await expect(panel.getByRole('button',{name:'提交申请，不立即入账'})).toBeEnabled()
+ await panel.getByLabel('会员号',{exact:true}).fill(memberNo)
+ await panel.getByLabel('变动积分（正数补发，负数纠错扣减）').fill('10')
+ await panel.getByLabel('申请或复核依据').fill('隔离浏览器补分依据')
+ const keys:string[]=[]
+ await page.route('**/api/staff/loyalty/manual-points/requests',async route=>{
+  keys.push(route.request().headers()['idempotency-key']!)
+  const response=await route.fetch();await response.body()
+  if(keys.length===1)await route.abort('failed');else await route.fulfill({response})
+ })
+ await panel.getByRole('button',{name:'提交申请，不立即入账'}).click()
+ await expect(page.getByRole('alertdialog')).toContainText(`${memberNo}，申请变动 10 分`)
+ await page.getByRole('alertdialog').getByRole('button',{name:'确认执行'}).click()
+ await expect(panel.getByRole('button',{name:'恢复原积分操作'})).toBeEnabled()
+ await page.reload()
+ await panel.getByRole('button',{name:'恢复原积分操作'}).click()
+ await expect(panel.getByRole('status')).toContainText('申请已保存')
+ expect(keys).toHaveLength(2);expect(keys[1]).toBe(keys[0])
+ const requested=panel.locator('article').filter({hasText:memberNo});await expect(requested).toHaveCount(1)
+ await expect(requested).toContainText('本人申请');await expect(requested.getByRole('button',{name:'复核通过并入账'})).toHaveCount(0)
+ await page.unrouteAll({behavior:'wait'})
+ const context=await browser.newContext({viewport:{width,height:800}})
+ try{
+  const reviewer=await context.newPage();await login(reviewer,'hugu')
+  const review=reviewer.getByRole('region',{name:'人工积分申请与审核'}),row=review.locator('article').filter({hasText:memberNo})
+  await review.getByLabel('申请或复核依据').fill('复核会员与补分依据通过')
+  await row.getByRole('button',{name:'复核通过并入账'}).click();await reviewer.getByRole('alertdialog').getByRole('button',{name:'确认执行'}).click()
+  await expect(review.getByRole('status')).toContainText('该次入账后可用 10 分')
+  await expect(row).toContainText('已入账');await expect(row).toContainText('可用积分变动 10')
+  const size=await reviewer.evaluate(()=>({viewport:document.documentElement.clientWidth,content:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)}));expect(size.content).toBeLessThanOrEqual(size.viewport+1)
+  await review.screenshot({path:testInfo.outputPath('manual-points-reviewed.png')})
+ }finally{await context.close()}
+ await panel.getByRole('button',{name:'重新读取',exact:true}).click();await expect(requested).toContainText('已入账')
+ expect(errors).toEqual([])
+})

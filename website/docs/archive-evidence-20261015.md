@@ -25,3 +25,13 @@ Scope: seven language `/archive/` pages and three editorial links on each homepa
 - Reservation pages, booking.js, gateway.js, server.mjs and shared style.css are byte-identical to production v18 in the release artifact. Menu data/templates unchanged in meaning (line-ending normalization only).
 
 Release status and post-release checks are recorded separately in the commercial checklist and release evidence, not inferred from these local checks.
+
+## Production readback — 2026-10-15 21:15 CST
+
+- Deployed content commit: `e421380c`, public container `mbox-public-site-www-v19`, release `/opt/mbox-public-site/releases/20261015-archive-v19`.
+- Caddy change is exclusively the www public upstream from v18 to v19. Old v18 retained; backup `/opt/mbox-public-site/Caddyfile.before-archive-v19`.
+- 17 anonymous public checks returned 200, including all seven archive pages, homepage entry points, menu, reservation page, live performances, `/api/website/menu`, sitemap, robots and existing Google/Baidu verification files. An initial checker used the backend-only menu path on the website and got 404; the actual documented public route passed.
+- Real browser playback reached 29 seconds with readyState 4 and no media error.
+- Backend image `sha256:9b854bc10bbc80dbfd243a821855772f9495e27afa38eeab3d682888810fcf80`, StartedAt `2026-10-13T17:58:18.380129469Z`, health healthy: unchanged before/after. The unrelated guessed `/api/health` path did not return success; Docker health and actual public performance/menu endpoints are the health evidence.
+- Reviewer independently checked final readback, business-file hashes and unchanged backend identity. No booking creation/cancellation or employee notification tests performed on production. No database writes.
+- Evidence directory: `/Users/jingda/mbox/outputs/website-content-20261013/content-evidence-20261015/`. Public availability and indexing permission do not establish new-page indexing or AI recommendations.

@@ -166,8 +166,11 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   await expect(page.locator('.staff-assignment-area label')).toHaveCount(1)
   await expectNoHorizontalOverflow(page, 'responsibility assignment')
   await expectTouchTargets(page, '.staff-assignment-panel', 'responsibility assignment')
-  const responsibilityHeight = await page.evaluate(() => document.documentElement.scrollHeight)
-  expect(responsibilityHeight).toBeLessThan(2_400)
+  // Scope the density contract to this panel: pending reservations created by
+  // other flows add a global banner and must not change the measured surface.
+  const responsibilityBox = await page.locator('.staff-assignment-panel').boundingBox()
+  expect(responsibilityBox).not.toBeNull()
+  expect(responsibilityBox!.height).toBeLessThan(2_400)
 
   const managerNavigation = new Set(data.employees.find((employee) => employee.code === data.employeeCode)?.navigationRoutes ?? [])
   const operationalRoutes = [

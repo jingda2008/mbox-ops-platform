@@ -109,4 +109,19 @@ integration('manual points independent review with real restricted PostgreSQL LO
   expect((await post('decisions',decision(requestId))).json().error.code).toBe('MANUAL_POINTS_MEMBER')
   expect((await post('decisions',decision(requestId,'reject'))).json().data.status).toBe('rejected')
  })
+ it('does not approve an old request under newly published points rules',async()=>{
+  const m=await member(),requestId=await request(m.memberNo)
+  const next=randomUUID(),effective=new Date().toISOString()
+  const publisher=await pool.connect()
+  try{
+  await publisher.query('BEGIN');await publisher.query('SET CONSTRAINTS mbox.loyalty_policy_versions_no_published_overlap_excl DEFERRED')
+  await publisher.query(`INSERT INTO mbox.loyalty_policy_versions(id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason)
+   SELECT $1,tenant_id,store_id,policy_code,2,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,12,$2,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,clock_timestamp(),publication_mode,'隔离新版有效期规则' FROM mbox.loyalty_policy_versions WHERE id=$3`,[next,effective,id.policy])
+  await publisher.query('UPDATE mbox.loyalty_policy_versions SET effective_until=$2 WHERE id=$1',[id.policy,effective])
+  await publisher.query('COMMIT')
+  }catch(e){await publisher.query('ROLLBACK');throw e}finally{publisher.release()}
+  actor=id.reviewer;const rejected=await post('decisions',decision(requestId))
+  expect(rejected.json().error).toMatchObject({code:'MANUAL_POINTS_POLICY_CHANGED',commitDisposition:'not_committed'})
+  expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE id=$1',[m.account])).rows[0].available_points).toBe(0)
+ })
 })

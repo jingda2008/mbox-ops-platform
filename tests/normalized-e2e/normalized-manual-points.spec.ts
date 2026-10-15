@@ -46,7 +46,7 @@ for(const width of [320,360])test(`manual points independent review and lost rec
   const review=reviewer.getByRole('region',{name:'人工积分申请与审核'}),row=review.locator('article').filter({hasText:memberNo})
   await review.getByLabel('申请或复核依据').fill('复核会员与补分依据通过')
   await row.getByRole('button',{name:'复核通过并入账'}).click();await reviewer.getByRole('alertdialog').getByRole('button',{name:'确认执行'}).click()
-  await expect(review.getByRole('status')).toContainText('当前可用 10 分')
+  await expect(review.getByRole('status')).toContainText('该次入账后可用 10 分')
   await expect(row).toContainText('已入账');await expect(row).toContainText('可用积分变动 10')
   const size=await reviewer.evaluate(()=>({viewport:document.documentElement.clientWidth,content:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)}));expect(size.content).toBeLessThanOrEqual(size.viewport+1)
   await review.screenshot({path:testInfo.outputPath('manual-points-reviewed.png')})

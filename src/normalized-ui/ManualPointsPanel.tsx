@@ -37,7 +37,7 @@ function Workspace({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
     const r=await api.postEndpoint<ManualPointsResult>(`/api/staff/loyalty/manual-points/${intent.kind==='request'?'requests':'decisions'}`,intent.body,{idempotencyKey:intent.key,timeoutMs:20000})
     return r
    },()=>load(board.page,board.scopeKey))
-   if(alive.current){setReason('');setNotice(result.status==='requested'?'申请已保存，等待另一名授权员工复核；尚未改变余额。':result.status==='rejected'?'已驳回，余额未改变。':`已审核入账：申请变动 ${result.pointsDelta} 分，可用余额变动 ${result.availableDelta} 分，当前可用 ${result.balance} 分，待回收 ${result.pendingRecoveryPoints} 分。`)}
+   if(alive.current){setReason('');setNotice(result.status==='requested'?'申请已保存，等待另一名授权员工复核；尚未改变余额。':result.status==='rejected'?'已驳回，余额未改变。':`已审核入账：申请变动 ${result.pointsDelta} 分，可用余额变动 ${result.availableDelta} 分，该次入账后可用 ${result.balance} 分，待回收 ${result.pendingRecoveryPoints} 分；最新余额请查看会员账户。`)}
   }catch(e){if(alive.current){setNotice(`${message(e)}；结果未知时请恢复原操作。`);if([401,403].includes((e as {status?:number}).status??0)){setBoard(null);setReady(false)}}}
   finally{flight.current=false;if(alive.current){setBusy(false);try{setPending(recovery.pending())}catch(e){setStorageError(message(e))}}}
  }

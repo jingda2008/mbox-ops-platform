@@ -1,0 +1,8 @@
+.manual-points-panel fieldset { display: grid; gap: 12px; min-width: 0; margin: 16px 0; padding: 12px; border: 1px solid #d4d1c7; border-radius: 10px; }
+.manual-points-panel label { display: grid; gap: 6px; min-width: 0; }
+.manual-points-panel input, .manual-points-panel textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; font: inherit; border: 1px solid #8f948a; border-radius: 6px; }
+.manual-points-panel textarea { min-height: 88px; resize: vertical; }
+.manual-points-panel button { min-height: 44px; max-width: 100%; white-space: normal; }
+.manual-points-panel article { margin: 12px 0; padding: 12px 0; border-top: 1px solid #d4d1c7; overflow-wrap: anywhere; }
+.manual-points-panel article button { margin: 4px 8px 4px 0; }
+.manual-points-panel p { overflow-wrap: anywhere; }

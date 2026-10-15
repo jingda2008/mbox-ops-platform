@@ -1,3 +1,4 @@
+import {seedManualPointsBrowserFixture} from './fixtures/manual-points-browser-fixture.js'
 import { seedMemberVisitRewardBrowserFixture } from './fixtures/member-visit-reward-browser-fixture.js'
 import {seedThreeScreenBrowserFixture} from './fixtures/three-screen-browser-fixture.js'
 import {seedKitchenBrowserFixture} from './fixtures/kitchen-browser-fixture.js'
@@ -120,6 +121,7 @@ try {
     const calendar=new CouponCalendarRepository(transaction),from=new Date(Date.now()-86400000).toISOString(),until=new Date(Date.now()+30*86400000).toISOString()
     const saved=await calendar.save({code:'BROWSER_GIFT_CAL',rule:{timezone:'Asia/Shanghai',dateBasis:'natural',businessDayStartMinute:0,dateFrom:from.slice(0,10),dateThrough:until.slice(0,10),validFrom:from,validUntil:until,weekdays:[1,2,3,4,5,6,7],weekStartsOn:1,windows:[{startMinute:0,endMinute:1440}],excludedDates:[],relativeValidity:{days:3,basis:'elapsed'}},limits:{perCustomerDay:null,perCustomerWeek:null,perCustomerCampaign:null},employeeId,businessDate,reason:'隔离赠券页面规则',requestKey:'browser-gift-calendar',expectedVersion:0})
     const approver=(await transaction.query<{id:string}>("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='hugu'",[scope.tenantId,scope.storeId])).rows[0]!.id
+    await seedManualPointsBrowserFixture(transaction,employeeId,approver,creator)
     await calendar.decide({versionId:saved.id,action:'approve',employeeId:approver,businessDate,reason:'隔离规则审核'})
     await calendar.decide({versionId:saved.id,action:'publish',employeeId:creator,businessDate,reason:'隔离规则发布'})
     for(const actor of [employeeId,approver,creator])for(const permissionCode of ['marketing.notice.view','marketing.notice.edit','marketing.notice.approve','marketing.notice.publish','marketing.send','marketing.refusal.record','marketing.consent.audit'])await access.setEmployeePermissionOverride({employeeId:actor,permissionCode,effect:'grant',reason:'隔离营销页面测试',configuredByEmployeeId:employeeId,startsAt})

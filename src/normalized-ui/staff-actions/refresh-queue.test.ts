@@ -46,4 +46,9 @@ describe('staff refresh queue', () => {
     await expect(queue.request()).rejects.toThrow('offline')
     await queue.request(); expect(read).toHaveBeenCalledTimes(2)
   })
+  it('does not confirm a mutation when navigation cancels its readback',async()=>{
+    const gate=deferred(),queue=new RefreshQueue(async()=>gate.promise)
+    const confirmed=queue.requestConfirmed(),assertion=expect(confirmed).rejects.toThrow('读取已中断')
+    await Promise.resolve();queue.cancel();gate.resolve();await assertion
+  })
 })

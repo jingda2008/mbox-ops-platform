@@ -85,7 +85,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
   },
   {
     code: 'member-exceptions', label: '会员权益异常', route: '/staff/member-exceptions', sortOrder: 287,
-    permissionCodes: ['loyalty.redemption.exception', 'loyalty.accrual.exception.view'],
+    permissionCodes: ['loyalty.redemption.exception', 'loyalty.accrual.exception.view', 'loyalty.adjust.manual'],
   },
   {
     code: 'member-overview', label: '会员等级与权益', route: '/staff/member-overview', sortOrder: 288,

@@ -144,17 +144,18 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       if(signal.aborted)return
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
-        return
+        throw error
       }
       setMessage(error instanceof Error ? error.message : '收银订单暂时无法读取')
       setPhase('error')
+      throw error
     }
   }, [api, areaId, onLoginRequired, paymentState, query])
   const refreshQueue = useMemo(() => new RefreshQueue(read), [read])
   useEffect(() => () => refreshQueue.cancel(), [refreshQueue])
   const load = useCallback(async (_searchQuery: string, quiet = false) => {
     if (!quiet) { setPhase('loading'); setMessage(null) }
-    await refreshQueue.request(!quiet)
+    await refreshQueue.request(!quiet).catch(() => { /* read already displays the error */ })
   }, [refreshQueue])
 
   useEffect(() => { void load(query) }, [load, query, refreshToken])
@@ -164,7 +165,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       if (document.visibilityState === 'visible' && busyKey === null) void load(query, true)
     }
     const changed = () => {
-      if (document.visibilityState === 'visible' && busyKey === null) void refreshQueue.request(true)
+      if (document.visibilityState === 'visible' && busyKey === null) void refreshQueue.request(true).catch(() => { /* read already displays the error */ })
     }
     const timer = globalThis.setInterval(refresh, 15_000)
     document.addEventListener('visibilitychange', refresh)
@@ -188,43 +189,37 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   ): Promise<boolean> => {
     setBusyKey(key)
     setNotice(null)
-    const attempt = mutationCoordinator.current.prepare(key, body)
     try {
-      const result = await api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey })
-      mutationCoordinator.current.complete(attempt.signature)
+      const result = await mutationCoordinator.current.execute(key, body,
+        attempt => api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey }),
+        () => refreshQueue.requestConfirmed())
       setNotice({ kind: 'success', text: key.startsWith('payment-provider-query-')
         ? paymentQueryNotice(result, successMessage) : successMessage })
-      await load(query)
       return true
     } catch (error) {
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return false
       }
-      mutationCoordinator.current.fail(
-        attempt.signature,
-        error instanceof NormalizedApiError && error.retryable,
-      )
       setNotice({
         kind: 'error',
-        text: error instanceof Error ? error.message : '操作没有完成，请核对后重试',
+        text: `${error instanceof Error ? error.message : '操作结果暂未确认'}；请核对原记录，重试将沿用原请求。`,
       })
       return false
     } finally {
       setBusyKey(null)
     }
-  }, [api, load, onLoginRequired, query])
+  }, [api, onLoginRequired, refreshQueue])
 
   const closePendingBusinessDays = useCallback(async () => {
     const key = 'business-day-close-pending'
-    const attempt = mutationCoordinator.current.prepare(key, {})
     setBusyKey(key)
     setNotice(null)
     try {
-      const result = await api.postEndpoint<BusinessDayClosureResult>(
-        '/api/business-days/close-pending', {}, { idempotencyKey: attempt.idempotencyKey },
-      )
-      mutationCoordinator.current.complete(attempt.signature)
+      const result = await mutationCoordinator.current.execute(key, {},
+        attempt => api.postEndpoint<BusinessDayClosureResult>(
+          '/api/business-days/close-pending', attempt.body, { idempotencyKey: attempt.idempotencyKey }),
+        () => refreshQueue.requestConfirmed())
       setBusinessDayClosure(result)
       setNotice({
         kind: result.blockedTableSessionCount === 0 ? 'success' : 'error',
@@ -234,37 +229,31 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
             ? `已结束${result.closedBusinessDayCount}个营业日，并安全关闭${result.closedTableSessionCount}桌。`
             : `已安全关闭${result.closedTableSessionCount}桌；仍有${result.blockedTableSessionCount}桌需先处理。`,
       })
-      await load(query)
     } catch (error) {
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return
       }
-      mutationCoordinator.current.fail(
-        attempt.signature,
-        error instanceof NormalizedApiError && error.retryable,
-      )
       setNotice({
         kind: 'error',
-        text: error instanceof Error ? error.message : '上一营业日未能结束，请刷新后重试',
+        text: `${error instanceof Error ? error.message : '营业日关闭结果暂未确认'}；请核对原记录后重试。`,
       })
     } finally {
       setBusyKey(null)
     }
-  }, [api, load, onLoginRequired, query])
+  }, [api, onLoginRequired, refreshQueue])
 
   const createOnlinePayment = useCallback(async (
     input: Readonly<CashierOnlinePaymentInput>,
   ): Promise<OnlinePaymentAction | null> => {
     const key = `cashier-online-payment-${input.method}-${input.orderId}`
-    const attempt = mutationCoordinator.current.prepare(key, input)
     setBusyKey(key)
     setNotice(null)
     try {
-      const result = await api.postEndpoint<{ providerAction: OnlinePaymentAction }>(
-        '/api/payments', input, { idempotencyKey: attempt.idempotencyKey },
-      )
-      mutationCoordinator.current.complete(attempt.signature)
+      const result = await mutationCoordinator.current.execute(key, input,
+        attempt => api.postEndpoint<{ providerAction: OnlinePaymentAction }>(
+          '/api/payments', attempt.body, { idempotencyKey: attempt.idempotencyKey }),
+        () => refreshQueue.requestConfirmed())
       setNotice({
         kind: result.providerAction.status === 'failed' ? 'error' : 'success',
         text: result.providerAction.status === 'failed'
@@ -273,23 +262,18 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
             ? '付款二维码已生成，到账前请勿重复收款。'
             : '顾客付款码已受理，到账结果以支付渠道回传为准。',
       })
-      await load(query)
       return result.providerAction
     } catch (error) {
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return null
       }
-      mutationCoordinator.current.fail(
-        attempt.signature,
-        error instanceof NormalizedApiError && error.retryable,
-      )
-      setNotice({ kind: 'error', text: error instanceof Error ? error.message : '收款没有发起成功' })
+      setNotice({ kind: 'error', text: `${error instanceof Error ? error.message : '收款结果暂未确认'}；请先核对原付款，重试将沿用原请求。` })
       return null
     } finally {
       setBusyKey(null)
     }
-  }, [api, load, onLoginRequired, query])
+  }, [api, onLoginRequired, refreshQueue])
 
   const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
   return <>{view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}

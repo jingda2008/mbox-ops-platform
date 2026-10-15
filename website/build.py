@@ -159,3 +159,5 @@ sitemap.append('</urlset>')
 (A/'favicon.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#214635"/><text x="32" y="46" text-anchor="middle" font-size="44" font-family="Georgia" fill="#ddc390">M</text></svg>')
 m=B/'.openai/hosting.json';config=json.loads(m.read_text());config.pop('static',None);m.write_text(json.dumps(config,indent=2)+'\n')
 print('Built 7 home pages, 7 menu pages, 7 reservation pages; 187 items each. Public pages allow indexing; sitemap includes all seven languages.')
+from build_archive import render_archive
+render_archive(B, LANGS, C, header, footer)

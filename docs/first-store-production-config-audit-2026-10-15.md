@@ -68,3 +68,12 @@
 - 新预检SQL已在生产只读事务回读：库存成本103、配方0、自选组0、固定套餐异常1，和分项查询一致。
 - 完整本地check与PR CI完成情况以任务回执及关联PR的精确head为准，运行未完成前不预写成功。生产数据不上传GitHub；CI只使用隔离夹具。
 - 正式发布、规则启用、微信平台审核、实付退款、纸票、新积分流程与实物库存现场验收继续开放。保留有效历史验收，不把本轮全部重记为未完成。
+
+
+## 2026-10-15 23:27 CST 完整CI与最终审计回执
+
+[PR369](https://github.com/jingda2008/mbox-ops-platform/pull/369)代码提交`5951ffdc8a4d056723eff62470b478fcfe75fbd1`的[完整CI 38757223878](https://github.com/jingda2008/mbox-ops-platform/actions/runs/38757223878)于2026-10-15 23:24:45 CST成功。quality、normalized_database、normalized_browser、performance及verify全部通过；常规2556项、数据库3312项通过，浏览器基础138项通过/38条件跳过，三屏18项、会员10项通过。各组不合计为独立用例总数。docs/fast_quality因完整检查范围跳过，image因无发布标签跳过，Android源码未变更未触发。
+
+CONFIG-AUDIT-20261015-01/02代码修复与CI已验证；03/04保持开放，所需成本事实与B01—B08经营决定没有由测试代替。额外使用当前生产StaffAccessRepository在只读事务核对14名员工有效权限，确认3名服务员无赠送额度、1名收银无折扣额度、1名老板无退款额度、2名人工积分权限持有人无审批额度、1名收银无制作站点范围；没有因兼岗而补足上述缺项。对应23:08只读回执effective-access.json与摘要已保存，无员工姓名或认证信息。
+
+最后公网回读仍为c78ebfd/schema265/ready。PR未合并；无发布标签、部署、小程序上传或生产数据修改。CI完成后的本节及商业化清单更新只作本地审计提交，PR当前代码head保持上述已验证提交。

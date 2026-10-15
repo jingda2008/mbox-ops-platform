@@ -71,7 +71,11 @@ integration('current M-BOX commercial configuration', () => {
       tablesMissingLayout: 29,
     })
     expect(readiness.status).toBe('blocked')
+    // Catalog import is not inventory/recipe setup. A clean store must retain
+    // this operational gate until tracked products have actual recipe data.
+    expect(readiness.snapshot.productsMissingRecipes).toBeGreaterThan(0)
     expect(readiness.issues.map(issue=>issue.code).sort()).toEqual([
+      'catalog.recipe_missing',
       'miniprogram.release_evidence_missing', 'tables.layout_unconfirmed',
     ])
     expect(store.tables.every(table=>table.minimumSpendMinor === 0)).toBe(true)

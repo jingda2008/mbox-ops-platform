@@ -27,6 +27,9 @@ export interface CommercialReadinessSnapshot {
   productsMissingCost: number
   bundlesMissingComponents: number
   invalidBundleComponents: number
+  invalidBundleChoiceGroups: number
+  productsMissingRecipes: number
+  inventoryCostsUnverified: number
   financialRolesMissingLimits: string[]
   kdsRolesMissingStationScopes: string[]
   operationalRolesMissingPermissions: string[]
@@ -89,7 +92,7 @@ export function evaluateCommercialReadiness(
     blocker('miniprogram.commit_mismatch', '小程序候选证据提交与应用候选提交不一致')
   }
 
-  const counts = ['configurationApplications','catalogApplications','reservationPolicies','activeTables','activeEmployees','activeProducts','guestVisibleProducts','recommendationProducts','productsMissingCurrentPrice','productsMissingCost','bundlesMissingComponents','invalidBundleComponents','tablesMissingMinimumSpend','tablesMissingLayout'] as const
+  const counts = ['configurationApplications','catalogApplications','reservationPolicies','activeTables','activeEmployees','activeProducts','guestVisibleProducts','recommendationProducts','productsMissingCurrentPrice','productsMissingCost','bundlesMissingComponents','invalidBundleComponents','invalidBundleChoiceGroups','productsMissingRecipes','inventoryCostsUnverified','tablesMissingMinimumSpend','tablesMissingLayout'] as const
   if (counts.some(key => !Number.isSafeInteger(snapshot[key]) || snapshot[key] < 0)) {
     blocker('snapshot.invalid', '经营统计缺失或不是有效非负整数，不能确认商用条件')
   }
@@ -128,6 +131,15 @@ export function evaluateCommercialReadiness(
   if (snapshot.invalidBundleComponents > 0) {
     blocker('catalog.bundle_invalid', `${snapshot.invalidBundleComponents}个组合引用了无效或非单品商品`)
   }
+  if (snapshot.invalidBundleChoiceGroups > 0) {
+    blocker('catalog.bundle_choice_invalid', `${snapshot.invalidBundleChoiceGroups}个套餐必选组缺少足够的有效渠道候选商品`)
+  }
+  if (snapshot.productsMissingRecipes > 0) {
+    blocker('catalog.recipe_missing', `${snapshot.productsMissingRecipes}个受库存管理的在售出品商品缺少有效配方或原料库存配置`)
+  }
+  if (snapshot.inventoryCostsUnverified > 0) {
+    blocker('inventory.cost_unverified', `${snapshot.inventoryCostsUnverified}项正库存缺少已核实成本，不能确认库存价值与毛利`)
+  }
   if (snapshot.recommendationProducts < 3) {
     blocker('catalog.recommendations_insufficient', '客户推荐区至少需要3个已配置且可售的推荐商品')
   }
@@ -165,9 +177,12 @@ export async function inspectCommercialReadiness(input: {
   const client = new Client({
     connectionString: input.databaseUrl,
     application_name: 'mbox-normalized-commercial-readiness',
+    options: '-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=30000',
   })
   await client.connect()
   try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    await client.query("SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true)", [input.tenantId, input.storeId])
     const result = await client.query<ReadinessRow>(readinessSql(), [input.tenantId, input.storeId])
     const row = result.rows[0]
     if (!row) throw new Error('Unable to inspect normalized commercial readiness')
@@ -193,6 +208,9 @@ export async function inspectCommercialReadiness(input: {
       productsMissingCost: number(row.products_missing_cost),
       bundlesMissingComponents: number(row.bundles_missing_components),
       invalidBundleComponents: number(row.invalid_bundle_components),
+      invalidBundleChoiceGroups: number(row.invalid_bundle_choice_groups),
+      productsMissingRecipes: number(row.products_missing_recipes),
+      inventoryCostsUnverified: number(row.inventory_costs_unverified),
       financialRolesMissingLimits: textArray(row.financial_roles_missing_limits),
       kdsRolesMissingStationScopes: textArray(row.kds_roles_missing_station_scopes),
       operationalRolesMissingPermissions: textArray(row.operational_roles_missing_permissions),
@@ -211,7 +229,7 @@ export async function inspectCommercialReadiness(input: {
       issues,
     }
   } finally {
-    await client.end()
+    try { await client.query('ROLLBACK') } finally { await client.end() }
   }
 }
 
@@ -237,6 +255,9 @@ interface ReadinessRow extends Record<string, unknown> {
   products_missing_cost: string
   bundles_missing_components: string
   invalid_bundle_components: string
+  invalid_bundle_choice_groups: string
+  products_missing_recipes: string
+  inventory_costs_unverified: string
   financial_roles_missing_limits: unknown
   kds_roles_missing_station_scopes: unknown
   operational_roles_missing_permissions: unknown
@@ -276,7 +297,10 @@ function readinessSql(): string {
       (SELECT count(*)::text FROM mbox.products product WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid
         AND product.status='active' AND product.product_kind='bundle' AND NOT EXISTS (
           SELECT 1 FROM mbox.product_bundle_components component WHERE component.tenant_id=product.tenant_id
-            AND component.store_id=product.store_id AND component.bundle_product_id=product.id)) AS bundles_missing_components,
+            AND component.store_id=product.store_id AND component.bundle_product_id=product.id)
+        AND NOT EXISTS (SELECT 1 FROM mbox.product_bundle_choice_groups choice_group
+          WHERE choice_group.tenant_id=product.tenant_id AND choice_group.store_id=product.store_id
+            AND choice_group.bundle_product_id=product.id)) AS bundles_missing_components,
       (SELECT count(*)::text FROM mbox.product_bundle_components component
         JOIN mbox.products bundle ON bundle.tenant_id=component.tenant_id AND bundle.store_id=component.store_id
           AND bundle.id=component.bundle_product_id
@@ -284,6 +308,45 @@ function readinessSql(): string {
           AND item.id=component.component_product_id
         WHERE component.tenant_id=$1::uuid AND component.store_id=$2::uuid AND bundle.status='active'
           AND (bundle.product_kind<>'bundle' OR item.product_kind<>'single' OR item.status<>'active')) AS invalid_bundle_components,
+      (SELECT count(*)::text FROM (
+        SELECT choice_group.id
+        FROM mbox.product_bundle_choice_groups choice_group
+        JOIN mbox.products bundle ON (bundle.tenant_id,bundle.store_id,bundle.id)=
+          (choice_group.tenant_id,choice_group.store_id,choice_group.bundle_product_id)
+        LEFT JOIN mbox.product_bundle_choice_options choice_option
+          ON (choice_option.tenant_id,choice_option.store_id,choice_option.choice_group_id)=
+            (choice_group.tenant_id,choice_group.store_id,choice_group.id)
+        LEFT JOIN mbox.products item ON (item.tenant_id,item.store_id,item.id)=
+          (choice_option.tenant_id,choice_option.store_id,choice_option.component_product_id)
+        WHERE bundle.tenant_id=$1::uuid AND bundle.store_id=$2::uuid AND bundle.status='active'
+        GROUP BY choice_group.id,bundle.allowed_channels
+        HAVING ('guest_qr'=ANY(bundle.allowed_channels) AND count(choice_option.id) FILTER(
+          WHERE item.status='active' AND item.product_kind='single' AND item.guest_visible
+            AND 'guest_qr'=ANY(item.allowed_channels))<choice_group.selection_count)
+          OR ('staff_assisted'=ANY(bundle.allowed_channels) AND count(choice_option.id) FILTER(
+          WHERE item.status='active' AND item.product_kind='single'
+            AND 'staff_assisted'=ANY(item.allowed_channels))<choice_group.selection_count)
+      ) invalid_choices) AS invalid_bundle_choice_groups,
+      (SELECT count(*)::text FROM mbox.products product
+        WHERE product.tenant_id=$1::uuid AND product.store_id=$2::uuid AND product.status='active'
+          AND product.product_kind='single' AND product.inventory_control_mode='tracked'
+          AND product.fulfillment_station IN ('bar','kitchen')
+          AND NOT EXISTS (SELECT 1 FROM mbox.recipes recipe
+            WHERE (recipe.tenant_id,recipe.store_id,recipe.product_id)=(product.tenant_id,product.store_id,product.id)
+              AND recipe.status='active' AND recipe.effective_at<=statement_timestamp()
+              AND EXISTS (SELECT 1 FROM mbox.recipe_items ingredient
+                WHERE (ingredient.tenant_id,ingredient.store_id,ingredient.recipe_id)=(recipe.tenant_id,recipe.store_id,recipe.id))
+              AND NOT EXISTS (SELECT 1 FROM mbox.recipe_items ingredient
+                LEFT JOIN mbox.inventory_items item ON (item.tenant_id,item.store_id,item.id)=
+                  (ingredient.tenant_id,ingredient.store_id,ingredient.inventory_item_id)
+                LEFT JOIN mbox.inventory_balances balance ON (balance.tenant_id,balance.store_id,balance.inventory_item_id)=
+                  (ingredient.tenant_id,ingredient.store_id,ingredient.inventory_item_id)
+                WHERE (ingredient.tenant_id,ingredient.store_id,ingredient.recipe_id)=(recipe.tenant_id,recipe.store_id,recipe.id)
+                  AND (item.id IS NULL OR item.status<>'active' OR balance.id IS NULL))
+          )) AS products_missing_recipes,
+      (SELECT count(*)::text FROM mbox.inventory_balances balance
+        WHERE balance.tenant_id=$1::uuid AND balance.store_id=$2::uuid AND balance.on_hand_quantity>0
+          AND (balance.cost_status<>'complete' OR balance.weighted_unit_cost_minor IS NULL)) AS inventory_costs_unverified,
       COALESCE((SELECT jsonb_agg(missing.role_code || ':' || missing.permission_code ORDER BY missing.role_code, missing.permission_code)
         FROM (SELECT role.code AS role_code, permission.code AS permission_code
           FROM mbox.roles role
@@ -355,6 +418,7 @@ function readinessSql(): string {
 }
 
 function number(value: string): number {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) throw new Error('Invalid readiness counter')
   const result = Number(value)
   if (!Number.isSafeInteger(result) || result < 0) throw new Error('Invalid readiness counter')
   return result

@@ -143,7 +143,9 @@ for lang,_ in LANGS:
  folder=D/lang;folder.mkdir(exist_ok=True);(folder/'menu').mkdir(exist_ok=True);(folder/'reserve').mkdir(exist_ok=True)
  pages[f'/{lang}/']=home(lang,C[lang]);pages[f'/{lang}/menu/']=menu(lang,C[lang]);(folder/'reserve/index.html').write_text(reserve(lang,C[lang]));(folder/'index.html').unlink(missing_ok=True);(folder/'menu/index.html').unlink(missing_ok=True)
 (P/'pages.json').write_text(json.dumps(pages,ensure_ascii=False))
-(D/'index.html').write_text('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="index,follow,max-image-preview:large"><title>M-BOX Shanghai</title><script src="/language.js" defer></script></head><body><h1>M—BOX Shanghai</h1>'+''.join(f'<a href="/{lang}/">{name}</a> ' for lang,name in LANGS)+'</body></html>')
+from root_page import render_root
+(D/'index.html').write_text(render_root(), encoding='utf-8')
+(B/'aliyun/public-overrides/index.html').write_text(render_root(), encoding='utf-8')
 (D/'robots.txt').write_text(f'User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: {ORIGIN}/sitemap.xml\n')
 # All public language routes are explicit and independent of browser/IP routing.
 sitemap=['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">']

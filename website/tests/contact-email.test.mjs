@@ -34,7 +34,8 @@ test('labeled contact email sits directly under each displayed phone number', ()
     const linked = pair(telLabel, emailLabel, {arrow: true});
     const visit = pair(telLabel, emailLabel, {arrow: false, phoneClass: 'phone'});
     const home = pages['/' + lang + '/'];
-    assert.equal(home.split(email).length - 1, 3, lang + ' home');
+    assert.equal(home.split(email).length - 1, 4, lang + ' home');
+    assert.ok(home.includes('<div class="hero-contact">' + email + '</div><div class="hero-actions">'), lang + ' prominent email');
     assert.equal(home.split(linked).length - 1, 2, lang + ' home linked pairs');
     assert.equal(home.split(visit).length - 1, 1, lang + ' visit pair');
     assert.ok(home.includes('<div class="footer-contact">' + linked), lang + ' footer');

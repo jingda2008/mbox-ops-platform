@@ -106,3 +106,8 @@ section[id],details[id]{scroll-margin-top:0}
  .contact-card .contact-pair .email-label{margin-top:9px}
  .contact-card .contact-pair a{font-size:clamp(18px,5.5vw,24px);line-height:1.4}
 }
+
+/* Homepage contact is visible before the primary actions. */
+.hero-contact{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:0 0 22px;color:#e8debf;font:14px/1.5 var(--sans)}
+.hero-contact .email-label{color:#d2c9ae}
+.hero-contact .contact-email{display:inline-flex;align-items:center;min-height:44px;color:#f7f4ec;font-weight:600;letter-spacing:.02em;white-space:normal;overflow-wrap:anywhere}

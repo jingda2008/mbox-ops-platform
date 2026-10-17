@@ -10,3 +10,15 @@ document.addEventListener('input',e=>{if(e.target.id==='menu-search')filterMenu(
 document.addEventListener('click',e=>{const b=e.target.closest('.filter');if(b){activeFilter=b.dataset.filter;filterMenu()}});
 function initializeMenu(query=new URLSearchParams(location.search).get('q')||'',filter='all'){const search=document.querySelector('#menu-search');if(search){search.value=query;activeFilter=filter;filterMenu()}}
 window.addEventListener('menu-updated',e=>initializeMenu(e.detail.query,e.detail.filter));initializeMenu();
+
+// Keep the homepage email prominent on already-running SSR releases.
+// New builds include the same block in HTML; do not duplicate it.
+(()=>{
+ const hero=document.querySelector('.hero-copy');
+ if(!hero||hero.querySelector('.hero-contact'))return;
+ const actions=hero.querySelector('.hero-actions');
+ const source=document.querySelector('.contact-email-line');
+ if(!actions||!source)return;
+ const contact=document.createElement('div');contact.className='hero-contact';
+ contact.append(source.cloneNode(true));actions.before(contact);
+})();

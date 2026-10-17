@@ -163,3 +163,5 @@ m=B/'.openai/hosting.json';config=json.loads(m.read_text());config.pop('static',
 print('Built 7 home pages, 7 menu pages, 7 reservation pages; 187 items each. Public pages allow indexing; sitemap includes all seven languages.')
 from build_archive import render_archive
 render_archive(B, LANGS, C, header, footer)
+from build_news import render_news
+render_news(B)

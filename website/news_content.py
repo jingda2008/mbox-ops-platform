@@ -9,6 +9,7 @@ ARTICLES = [{
  'duration': 'PT31.77S',
  'copy': {
  'zh': {
+  'search_title': '瑞幸咖啡上海大咖秀活动回顾 | M-BOX',
   'title': '把同事的另一面，交给舞台',
   'subtitle': '瑞幸咖啡上海「大咖秀」在 M-BOX · 活动回顾',
   'summary': '从主题布置、现场演唱到吉他演奏与团队合影，一段真实活动影像，记录相聚走上舞台的样子。',
@@ -24,6 +25,7 @@ ARTICLES = [{
   'source': '本文由 M-BOX 根据门店提供的活动说明与现场视频整理。品牌名称用于说明活动事实；本页不是瑞幸咖啡官方公告。',
  },
  'en': {
+  'search_title': 'Luckin Coffee Daka Show Recap | M-BOX Shanghai',
   'title': 'Let the stage reveal another side of your team',
   'subtitle': 'Luckin Coffee Shanghai “Daka Show” at M-BOX · Event recap',
   'summary': 'Themed decorations, singing, guitar playing and a group photo: real footage of a gathering taking to the stage.',
@@ -39,6 +41,7 @@ ARTICLES = [{
   'source': 'Prepared by M-BOX from event information and footage supplied by the venue. Brand names identify the event; this is not an official Luckin Coffee announcement.',
  },
  'ru': {
+  'search_title': 'Шоу Daka Show Luckin Coffee | M-BOX Шанхай',
   'title': 'Увидеть коллег с другой стороны — на сцене',
   'subtitle': '«Daka Show» Luckin Coffee Shanghai в M-BOX · Обзор события',
   'summary': 'Тематическое оформление, вокал, гитара и общее фото — реальные кадры встречи, вышедшей на сцену.',
@@ -54,6 +57,7 @@ ARTICLES = [{
   'source': 'Материал M-BOX подготовлен по описанию и видео, предоставленным заведением. Названия брендов обозначают событие; это не официальное сообщение Luckin Coffee.',
  },
  'ja': {
+  'search_title': '瑞幸咖啡「大咖秀」イベントレポート | M-BOX 上海',
   'title': 'ステージで出会う、同僚のもう一つの顔',
   'subtitle': '瑞幸咖啡（Luckin Coffee）上海「大咖秀」in M-BOX · イベントレポート',
   'summary': 'テーマ装飾、歌、ギター演奏、集合写真。集まりがステージへと広がる様子を、実際の映像で振り返ります。',
@@ -69,6 +73,7 @@ ARTICLES = [{
   'source': '店舗提供の活動説明と映像をもとに M-BOX が作成しました。ブランド名はイベントの事実を示すためのもので、瑞幸咖啡の公式発表ではありません。',
  },
  'ko': {
+  'search_title': '루이싱커피 다카쇼 행사 리뷰 | M-BOX 상하이',
   'title': '무대에서 만나는 동료의 새로운 모습',
   'subtitle': '루이싱커피 상하이 「大咖秀 · Daka Show」 at M-BOX · 행사 돌아보기',
   'summary': '테마 장식과 노래, 기타 연주, 단체 사진까지. 모임이 무대로 이어지는 모습을 실제 영상으로 만나보세요.',
@@ -84,6 +89,7 @@ ARTICLES = [{
   'source': '매장에서 제공한 행사 설명과 영상으로 M-BOX가 작성했습니다. 브랜드명은 행사 사실을 설명하기 위한 것이며 루이싱커피의 공식 발표가 아닙니다.',
  },
  'fr': {
+  'search_title': 'Retour sur le Daka Show de Luckin Coffee | M-BOX Shanghai',
   'title': 'Découvrir une autre facette de ses collègues, sur scène',
   'subtitle': 'Le « Daka Show » de Luckin Coffee Shanghai chez M-BOX · Retour sur événement',
   'summary': 'Décor thématique, chant, guitare et photo de groupe : les images réelles d’une rencontre qui prend la scène.',
@@ -99,6 +105,7 @@ ARTICLES = [{
   'source': 'Article préparé par M-BOX à partir des informations et de la vidéo fournies par le lieu. Les marques sont citées pour identifier l’événement ; il ne s’agit pas d’une annonce officielle de Luckin Coffee.',
  },
  'de': {
+  'search_title': 'Rückblick: Luckin Coffee Daka Show | M-BOX Shanghai',
   'title': 'Kollegen von einer anderen Seite erleben — auf der Bühne',
   'subtitle': 'Luckin Coffee Shanghai „Daka Show“ bei M-BOX · Veranstaltungsrückblick',
   'summary': 'Themendekoration, Gesang, Gitarrenspiel und ein Gruppenfoto: echte Aufnahmen einer Begegnung auf der Bühne.',

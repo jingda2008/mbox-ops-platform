@@ -223,6 +223,7 @@ integration('normalized PostgreSQL transaction integration', () => {
       capacityOverrideReason: suffix === 'one' ? '现场加椅并保持通道畅通' : null,
       guestProfileSnapshot: { scene: 'integration' },
       openedByEmployeeId: employeeId,
+      primaryServiceEmployeeId: employeeId,
       idempotencyKey: `normalized-table-open-${suffix}-0001`,
       requestFingerprint: JSON.stringify({ tableId, suffix }),
     })

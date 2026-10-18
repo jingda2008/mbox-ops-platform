@@ -473,6 +473,7 @@ integration('normalized table management PostgreSQL concurrency', () => {
 
   function openCommand(tableId: string, guestCount: number, suffix: string) {
     return {
+      primaryServiceEmployeeId: employeeOneId,
       ...base(suffix),
       tableId,
       publicId: `session-${suffix}-${randomUUID()}`,

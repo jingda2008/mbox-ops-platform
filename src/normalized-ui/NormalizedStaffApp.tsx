@@ -1,3 +1,4 @@
+import { TableServiceLauncher } from './staff-actions/TableServicePanel'
 import {StaffReservationNotice} from './staff-actions/StaffReservationNotice'
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
 import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
@@ -193,12 +194,12 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setStaffLocation(target.pathname + target.search)
     window.dispatchEvent(new Event('hashchange'))
   }
-  const sessionControls = <StaffSessionMenu
+  const sessionControls = <><TableServiceLauncher key={staffWorkspaceIdentityKey(auth)} staffSessionId={auth.session.id} canHandover={auth.permissions.includes('table.assignment.manage')} /><StaffSessionMenu
     api={api}
     auth={auth}
     onSwitched={switchReady}
     onLoggedOut={logoutReady}
-  />
+  /></>
   const content = staffRoute !== null ? (
     <main className={`normalized-staff-action-shell${dedicatedScreen?' three-screen-shell':''}`}>
       {!dedicatedScreen&&<header>
@@ -246,6 +247,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     <StaffRouteRestoration route={staffLocation} />
     {!dedicatedScreen&&<StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>}
     {!dedicatedScreen&&<StaffReservationNotice key={staffWorkspaceIdentityKey(auth)} sessionId={auth.session.id} enabled={auth.permissions.includes('reservation.view')} onNavigate={navigate}/>}
+    {dedicatedScreen&&<TableServiceLauncher key={staffWorkspaceIdentityKey(auth)} staffSessionId={auth.session.id} canHandover={auth.permissions.includes('table.assignment.manage')}/>}
     {content}
     {staffNavigation !== null && !dedicatedScreen && <StaffBottomNavigation
       entries={staffNavigation}

@@ -1,3 +1,4 @@
+import {TableServiceRepository} from './table-service-repository.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {readFileSync,writeFileSync} from 'node:fs'
 import {readPhysicalPickupUnits} from './pickup-workflow-query.js'
@@ -158,6 +159,9 @@ integration('trusted pickup exact physical transaction boundary',()=>{
     await pool.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND operation_scope='commerce.pickup'",[tenantId])
     expect((await ok(body,key)).receipt.receiptId).toBe(result.receipt.receiptId)
     const reverted=await ok(undo(result));expect(reverted.receipt.revision).toBe(2);expect(reverted.revision).toBeGreaterThan(result.revision);expect((await board()).revision).toBeGreaterThanOrEqual(reverted.revision);expect(reverted.receipt.undo).not.toBeNull();expect((await board()).tables.find(table=>table.tableSessionId===first.tableSessionId)?.units).toHaveLength(3)
+    const serviceHistory=await runtime.run({tenantId,storeId},tx=>new TableServiceRepository(tx).detail(first.tableSessionId))
+    expect(serviceHistory.activities.filter(row=>row.kind==='pickup').map(row=>row.event)).toEqual(['pickup.undone','pickup.taken'])
+    expect(serviceHistory.activities.filter(row=>row.kind==='pickup').every(row=>row.actorId===employeeId&&row.title.includes('授权账号'))).toBe(true)
     const retaken=await ok(await take(first));expect(retaken.receipt.receiptId).not.toBe(result.receipt.receiptId)
     expect((await command(undo(result))).json().error.code).toBe('PICKUP_UNDO_UNAVAILABLE');expect(await financial(first)).toEqual(before)
   })

@@ -218,6 +218,7 @@ export interface EndAssignmentCommand extends TableManagementCommandBase {
 }
 
 export interface OpenManagedTableCommand extends TableManagementCommandBase {
+  primaryServiceEmployeeId?: string
   tableId: string
   publicId: string
   guestCount: number
@@ -739,9 +740,9 @@ export class TableManagementRepository {
       INSERT INTO mbox.table_sessions (
         tenant_id, store_id, table_id, public_id, business_date, guest_count,
         capacity_at_open, capacity_override_reason, capacity_overridden_by_employee_id,
-        guest_profile_snapshot, status, opened_by_employee_id
+        guest_profile_snapshot, status, opened_by_employee_id, primary_service_employee_id
       ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::date, $6, $7, $8,
-        $9::uuid, $10::jsonb, 'open', $11::uuid)
+        $9::uuid, $10::jsonb, 'open', $11::uuid, mbox.resolve_table_primary($1::uuid,$2::uuid,$3::uuid,$13::uuid))
       RETURNING id, table_id, $12::text AS table_code, public_id, business_date::text,
         guest_count, capacity_at_open, capacity_override_reason,
         capacity_overridden_by_employee_id, guest_profile_snapshot, status,
@@ -749,7 +750,7 @@ export class TableManagementRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.tableId,
       input.publicId, input.businessDate, input.guestCount, table.capacity, overrideReason,
       overCapacity ? input.openedByEmployeeId : null, JSON.stringify(profile), input.openedByEmployeeId,
-      table.code])
+      table.code, input.primaryServiceEmployeeId ?? null])
     return mapSession(requiredRow(result.rows[0], '桌次'))
   }
 

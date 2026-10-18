@@ -240,6 +240,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
         capacityOverrideReason: input.capacityOverrideReason,
         guestProfileSnapshot: input.guestProfileSnapshot,
         publicId: input.publicId ?? null,
+        primaryServiceEmployeeId: input.primaryServiceEmployeeId ?? null,
       }),
       table: input.table,
       publicId,
@@ -248,6 +249,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
       capacityOverrideReason: input.capacityOverrideReason,
       guestProfileSnapshot: input.guestProfileSnapshot,
       openedByEmployeeId: context.employeeId,
+      primaryServiceEmployeeId: input.primaryServiceEmployeeId,
     })
     return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
   }))
@@ -705,6 +707,7 @@ function readOpenTableInput(body: JsonObject) {
     table: tableId === null
       ? { kind: 'code' as const, value: tableCode! }
       : { kind: 'id' as const, value: readUuid(tableId, 'tableId') },
+    primaryServiceEmployeeId: body.primaryServiceEmployeeId === undefined ? undefined : readUuid(body.primaryServiceEmployeeId, '主服务员'),
     guestCount: readInteger(body.guestCount, 'guestCount', 1, 200),
     capacityOverrideReason: readOptionalString(body.capacityOverrideReason, 'capacityOverrideReason', 1_000),
     guestProfileSnapshot: readOptionalJsonObject(body.guestProfileSnapshot, 'guestProfileSnapshot'),
@@ -1052,6 +1055,7 @@ function safeErrorCode(error: unknown): string {
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (typeof error === 'object' && error !== null && 'code' in error && ['P2701','P2702'].includes(String(error.code))) return { statusCode:409,body:{error:{code:'TABLE_SERVICE_CONFLICT',message:(error instanceof Error ? error.message : '请确认本次主服务员')}} }
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }

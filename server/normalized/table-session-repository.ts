@@ -66,6 +66,7 @@ interface TableSessionRow extends Record<string, unknown> {
 }
 
 export interface OpenTableSessionInput {
+  primaryServiceEmployeeId?: string
   table: TableReference
   publicId: string
   businessDate: string
@@ -170,10 +171,10 @@ export class TableSessionRepository {
         tenant_id, store_id, table_id, public_id, business_date,
         guest_count, capacity_at_open, capacity_override_reason,
         capacity_overridden_by_employee_id, guest_profile_snapshot, status,
-        opened_by_employee_id
+        opened_by_employee_id, primary_service_employee_id
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5::date,
-        $6, $7, $8, $9::uuid, $10::jsonb, 'open', $11::uuid
+        $6, $7, $8, $9::uuid, $10::jsonb, 'open', $11::uuid, mbox.resolve_table_primary($1::uuid,$2::uuid,$3::uuid,$13::uuid)
       )
       RETURNING id, table_id, $12::text AS table_code, public_id,
         business_date::text, guest_count, capacity_at_open,
@@ -194,6 +195,7 @@ export class TableSessionRepository {
       JSON.stringify(guestProfileSnapshot),
       input.openedByEmployeeId ?? null,
       tableRow.code,
+      input.primaryServiceEmployeeId ?? null,
     ])
     const row = inserted.rows[0]
     if (inserted.rowCount !== 1 || row === undefined) {

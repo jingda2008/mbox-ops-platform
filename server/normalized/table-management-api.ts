@@ -1,3 +1,4 @@
+import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
 import { registerNativeAssignmentSchedule } from './native-assignment-schedule.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -61,6 +62,7 @@ class TableManagementRequestError extends Error {
 }
 
 export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOptions> = async (app, options) => {
+  registerTableService(app, options)
   await registerNativeAssignmentSchedule(app, options)
   registerNativeTableConfiguration(app, options)
   app.get('/table-management/areas', async (request, reply) => handle(reply, async () => {
@@ -192,6 +194,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const body = readObject(request.body)
     const execution = await options.commands.open(commandBase(request, context, body, '现场开台', {
       tableId: readUuid(body.tableId, 'tableId'),
+      ...(body.primaryServiceEmployeeId === undefined ? {} : { primaryServiceEmployeeId: readUuid(body.primaryServiceEmployeeId, '主服务员') }),
       publicId: optionalString(body.publicId, 'publicId', 128) ?? `table-session-${randomUUID()}`,
       guestCount: readInteger(body.guestCount, 'guestCount', 1, 200),
       capacityOverrideReason: optionalString(body.capacityOverrideReason, 'capacityOverrideReason', 1000),
@@ -697,6 +700,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  if (typeof error === 'object' && error !== null && 'code' in error && ['P2701','P2702'].includes(String(error.code))) return { status:409,code:'TABLE_SERVICE_CONFLICT',message:(error instanceof Error ? error.message : '请确认本次主服务员') }
   if (error instanceof ParticipantMovementNotCommittedError) return { status:409,code:'TABLE_PARTICIPANT_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed' }
   if (error instanceof AssignmentNotCommittedError) return { status: 409,
     code: 'TABLE_ASSIGNMENT_NOT_COMMITTED', message: error.message, commitDisposition: 'not_committed' }

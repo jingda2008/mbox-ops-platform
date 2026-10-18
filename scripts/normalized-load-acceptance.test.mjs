@@ -44,6 +44,16 @@ test('classifies idempotency replay and conflict causes without request data', (
 
 test('passes a complete built-in mock run at sustained 5 RPS', async () => {
   const transport = createMockTransport({ latencyMs: 1 })
+  const send = transport.request.bind(transport)
+  let explicitOwners = 0
+  transport.request = async (request) => {
+    if (request.path === '/api/table-sessions' && request.method === 'POST') {
+      assert.ok(request.body.primaryServiceEmployeeId, 'load openings must identify their service owner')
+      assert.equal(request.body.primaryServiceEmployeeId, request.body.employeeId)
+      explicitOwners += 1
+    }
+    return send(request)
+  }
   const report = await runNormalizedLoadAcceptance({
     mode: 'mock',
     transport,
@@ -58,6 +68,7 @@ test('passes a complete built-in mock run at sustained 5 RPS', async () => {
 
   assert.equal(report.schemaVersion, 'normalized-load-acceptance-v2')
   assert.equal(report.gate.passed, true, JSON.stringify(report.gate.failures))
+  assert.ok(explicitOwners > 3, 'both measured and fixture openings must name their service owner')
   assert.equal(report.consistency.kdsDuplicateClaims, 0)
   assert.equal(report.consistency.kdsInconsistentStates, 0)
   assert.equal(report.scenarios.tableOpen.summary.requests, 3)

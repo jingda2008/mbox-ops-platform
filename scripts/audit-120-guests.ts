@@ -77,7 +77,7 @@ try{
     await db.query('UPDATE mbox.table_assignments SET ends_at=clock_timestamp() WHERE table_id=$1 AND ends_at IS NULL',[t.id])
     const role=(await db.query('SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1 AND ends_at IS NULL LIMIT 1',[actor.employeeId])).rows[0].role_id
     await db.query("INSERT INTO mbox.table_assignments(tenant_id,store_id,table_id,employee_id,role_id,assignment_type,starts_at,reason) VALUES($1,$2,$3,$4,$5,'primary',clock_timestamp()-interval '1 minute','isolated audit roster')",[scope.tenantId,scope.storeId,t.id,actor.employeeId,role])
-    const session=required(await request('open','POST','/api/table-sessions',actor,{tableId:t.id,guestCount:4,employeeId:actor.employeeId},id(`open-${i}`)),'open')
+    const session=required(await request('open','POST','/api/table-sessions',actor,{tableId:t.id,guestCount:4,employeeId:actor.employeeId,primaryServiceEmployeeId:actor.employeeId},id(`open-${i}`)),'open')
     const context=required(await request('context','POST','/api/commerce/assisted-order-contexts',actor,{tableSessionId:session.id,employeeId:actor.employeeId}),'context')
     sessions.push({...session,code:t.code,actor,context:context.token})
   }

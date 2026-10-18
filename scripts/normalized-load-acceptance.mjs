@@ -457,6 +457,7 @@ async function runTableOpenOperation(context, index, observations) {
       tableId,
       guestCount: 2,
       employeeId: context.fixtures.serviceEmployeeId,
+      primaryServiceEmployeeId: context.fixtures.serviceEmployeeId,
       guestProfileSnapshot: { source: 'load_acceptance' },
     },
   }, index)
@@ -485,6 +486,7 @@ async function openFixtureSessions(context) {
         tableId,
         guestCount: 2,
         employeeId: context.fixtures.serviceEmployeeId,
+        primaryServiceEmployeeId: context.fixtures.serviceEmployeeId,
         guestProfileSnapshot: { source: 'load_acceptance' },
       },
       idempotencyKey: `${context.runId}:table-open-fixture:${index}`,

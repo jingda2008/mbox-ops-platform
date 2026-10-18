@@ -14,9 +14,11 @@ export function PrimaryServiceSelect({tableId,staffSessionId,value,onChange}:{ta
  },[api,tableId,retry,onChange])
  return <div className="table-service-primary"><label>主服务员（必选）<select aria-label="主服务员（必选）" value={value} disabled={!options} onChange={e=>onChange(e.target.value)}><option value="">{options?'请选择本次主服务员':'正在读取员工…'}</option>{options?.employees.map(e=><option key={e.id} value={e.id}>{e.name} · {e.code}</option>)}</select></label>{error&&<p role="alert">{error}<button type="button" onClick={()=>setRetry(v=>v+1)}>重新读取人员</button></p>}<small>开台操作人单独记录；请确认实际负责本桌的人。</small></div>
 }
-export function TableServiceLauncher({staffSessionId,canHandover}:{staffSessionId:string;canHandover:boolean}) {
- const [open,setOpen]=useState(false)
- return <><button className="table-service-launcher" type="button" onClick={()=>setOpen(true)}>全店桌台服务记录</button>{open&&createPortal(<ServiceDirectory staffSessionId={staffSessionId} canHandover={canHandover} onClose={()=>setOpen(false)}/>,document.body)}</>
+export function TableServiceLauncher({onOpen}:{onOpen:()=>void}) {
+ return <button className="table-service-launcher" type="button" onClick={onOpen}>全店桌台服务记录</button>
+}
+export function TableServiceDirectory({staffSessionId,canHandover,onClose}:{staffSessionId:string;canHandover:boolean;onClose:()=>void}) {
+ return createPortal(<ServiceDirectory staffSessionId={staffSessionId} canHandover={canHandover} onClose={onClose}/>,document.body)
 }
 function ServiceDirectory({staffSessionId,canHandover,onClose}:{staffSessionId:string;canHandover:boolean;onClose:()=>void}) {
  const api=useMemo(()=>new TableServiceApi(staffSessionId),[staffSessionId]),[tables,setTables]=useState<ServiceTable[]>([]),[selected,setSelected]=useState<string|null>(null),[error,setError]=useState(''),[search,setSearch]=useState(''),[refresh,setRefresh]=useState(0)

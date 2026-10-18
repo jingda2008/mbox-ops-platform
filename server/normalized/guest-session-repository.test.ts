@@ -276,8 +276,20 @@ integration('normalized guest sessions with PostgreSQL', () => {
       deviceFingerprint: deviceKey,
       businessDate: '2026-08-11',
     })
-    // One waiting scan and two concurrent active scans already consumed three attempts.
-    for (let index = 0; index < 7; index += 1) {
+    // Earlier cases may cross a fixed-minute boundary. Establish this case's
+    // own live window instead of depending on their three historical attempts.
+    await pool.query(`
+      DELETE FROM mbox.guest_session_rate_limits
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND attempt_kind = 'table_scan'
+    `, [tenantId, storeId])
+    await expect(scan()).resolves.toMatchObject({ status: 'already_active' })
+    await pool.query(`
+      UPDATE mbox.guest_session_rate_limits
+      SET window_started_at = clock_timestamp(),
+          expires_at = clock_timestamp() + interval '1 minute'
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND attempt_kind = 'table_scan'
+    `, [tenantId, storeId])
+    for (let index = 0; index < 9; index += 1) {
       await expect(scan()).resolves.toMatchObject({ status: 'already_active' })
     }
     const limited = await scan()
@@ -292,6 +304,22 @@ integration('normalized guest sessions with PostgreSQL', () => {
         AND reason_code = 'SCAN_RATE_LIMITED'
     `, [tenantId, storeId])
     expect(events.rows[0]?.count).toBe('1')
+
+    // Expiration starts a new window; the eleventh scan must not stay blocked.
+    await pool.query(`
+      UPDATE mbox.guest_session_rate_limits
+      SET window_started_at = clock_timestamp() - interval '61 seconds',
+          expires_at = clock_timestamp() - interval '1 second'
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND attempt_kind = 'table_scan'
+    `, [tenantId, storeId])
+    await expect(scan()).resolves.toMatchObject({ status: 'already_active' })
+    const reset = await pool.query<{ attempt_count: number; duration_valid: boolean }>(`
+      SELECT attempt_count, expires_at - window_started_at = interval '1 minute' AS duration_valid
+      FROM mbox.guest_session_rate_limits
+      WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND attempt_kind = 'table_scan'
+    `, [tenantId, storeId])
+    expect(reset.rows).toHaveLength(2)
+    expect(reset.rows).toEqual([{ attempt_count: 1, duration_valid: true }, { attempt_count: 1, duration_valid: true }])
   })
 
   it('invalidates the old token immediately when the table begins closing', async () => {

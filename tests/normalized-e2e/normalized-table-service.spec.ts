@@ -37,3 +37,24 @@ test('desktop service directory is usable and anonymous access is denied',async(
  const anonymous=await request.get('/api/table-service/tables');expect(anonymous.status()).toBe(401)
  await page.setViewportSize({width:1366,height:900});await login(page);await page.getByRole('button',{name:'全店桌台服务记录'}).click();await page.getByLabel('搜索服务记录桌台').fill('W1');await expect(page.locator('.table-service-grid button').first()).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);await page.keyboard.press('Escape');await expect(page.getByRole('dialog',{name:'全店桌台服务记录'})).toHaveCount(0)
 })
+test('service directory stays open when initial workspace finishes loading',async({page})=>{
+ let releaseWorkspace!:()=>void
+ const workspaceReady=new Promise<void>(resolve=>{releaseWorkspace=resolve})
+ await page.route('**/api/staff/workspace',async route=>{
+  const response=await route.fetch()
+  if(response.status()===200)await workspaceReady
+  await route.fulfill({response})
+ })
+ try{
+  await login(page,true)
+  await page.getByRole('button',{name:'全店桌台服务记录',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'全店桌台服务记录'})
+  await expect(dialog).toBeVisible();await dialog.getByLabel('搜索服务记录桌台').fill('W1')
+  await dialog.locator('.table-service-grid button').filter({hasText:/^W1 ·/}).click()
+  await expect(dialog.getByText('当前主服务员：',{exact:false})).toBeVisible()
+  releaseWorkspace()
+  await expect(page.getByTestId('normalized-workspace')).toBeAttached()
+  await expect(dialog).toBeVisible();await expect(dialog.getByLabel('搜索服务记录桌台')).toHaveValue('W1')
+  await expect(dialog.getByText('当前主服务员：',{exact:false})).toBeVisible()
+ }finally{releaseWorkspace()}
+})

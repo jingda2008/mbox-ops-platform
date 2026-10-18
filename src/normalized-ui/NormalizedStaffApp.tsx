@@ -1,4 +1,4 @@
-import { TableServiceLauncher } from './staff-actions/TableServicePanel'
+import { TableServiceLauncher, TableServiceDirectory } from './staff-actions/TableServicePanel'
 import {StaffReservationNotice} from './staff-actions/StaffReservationNotice'
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
 import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
@@ -31,6 +31,7 @@ const ThreeScreenWorkspace=lazy(()=>import('./staff-actions/ThreeScreenWorkspace
 export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiClient }) {
   const api = useMemo(() => suppliedApi ?? new NormalizedApiClient(), [suppliedApi])
   const [auth, setAuth] = useState<StaffAuthView | null>(null)
+  const [serviceHistorySessionId, setServiceHistorySessionId] = useState<string | null>(null)
   const [phase, setPhase] = useState<'checking' | 'credential' | 'login' | 'ready'>('checking')
   const [message, setMessage] = useState<string | null>(null)
   const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
@@ -194,7 +195,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     setStaffLocation(target.pathname + target.search)
     window.dispatchEvent(new Event('hashchange'))
   }
-  const sessionControls = <><TableServiceLauncher key={staffWorkspaceIdentityKey(auth)} staffSessionId={auth.session.id} canHandover={auth.permissions.includes('table.assignment.manage')} /><StaffSessionMenu
+  const sessionControls = <><TableServiceLauncher onOpen={() => setServiceHistorySessionId(auth.session.id)} /><StaffSessionMenu
     api={api}
     auth={auth}
     onSwitched={switchReady}
@@ -247,7 +248,8 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     <StaffRouteRestoration route={staffLocation} />
     {!dedicatedScreen&&<StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>}
     {!dedicatedScreen&&<StaffReservationNotice key={staffWorkspaceIdentityKey(auth)} sessionId={auth.session.id} enabled={auth.permissions.includes('reservation.view')} onNavigate={navigate}/>}
-    {dedicatedScreen&&<TableServiceLauncher key={staffWorkspaceIdentityKey(auth)} staffSessionId={auth.session.id} canHandover={auth.permissions.includes('table.assignment.manage')}/>}
+    {dedicatedScreen&&<TableServiceLauncher onOpen={() => setServiceHistorySessionId(auth.session.id)}/>}
+    {serviceHistorySessionId === auth.session.id && <TableServiceDirectory key={auth.session.id} staffSessionId={auth.session.id} canHandover={auth.permissions.includes('table.assignment.manage')} onClose={() => setServiceHistorySessionId(null)} />}
     {content}
     {staffNavigation !== null && !dedicatedScreen && <StaffBottomNavigation
       entries={staffNavigation}

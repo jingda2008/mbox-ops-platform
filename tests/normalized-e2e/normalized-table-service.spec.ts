@@ -12,6 +12,9 @@ test('zero-permission employee can inspect current/history but cannot hand over 
  const response=await page.request.post('/api/table-management/sessions/open',{headers:{'x-idempotency-key':crypto.randomUUID()},data:{tableId:crypto.randomUUID(),guestCount:2}});expect(response.status()).toBe(403)
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true)
  await page.screenshot({path:'artifacts/normalized-browser/service-history-reader-360.png',fullPage:true});await dialog.getByRole('button',{name:'关闭',exact:true}).click();await expect(dialog).toHaveCount(0)
+ await page.goto('/staff/live');await expect(page.getByRole('alert')).toContainText('当前账号没有这个页面的有效权限')
+ await page.getByRole('button',{name:'全店桌台服务记录',exact:true}).click();await expect(dialog).toBeVisible()
+ await dialog.locator('.table-service-grid button').filter({hasText:/^W1 ·/}).click();await expect(dialog.getByText('当前主服务员：',{exact:false})).toBeVisible()
 })
 test('manager must select a primary, can open, then hand over with durable visible history',async({page})=>{
  await page.setViewportSize({width:390,height:844});await login(page)

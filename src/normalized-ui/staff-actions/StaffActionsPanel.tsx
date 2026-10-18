@@ -1,3 +1,4 @@
+import { PrimaryServiceSelect, TableServicePanel } from './TableServicePanel'
 import {ReservationCancel} from './ReservationCancel'
 import {ReservationContact} from './ReservationContact'
 import {canCompleteReservation} from './reservation-reception'
@@ -167,6 +168,7 @@ export function StaffActionsPanel({
   const [tableActionDialogOpen, setTableActionDialogOpen] = useState(false)
   const [focusedActionId,setFocusedActionId]=useState<string|null>(initialFactId)
   const [guestCount, setGuestCount] = useState('')
+  const [primaryServiceEmployeeId, setPrimaryServiceEmployeeId] = useState('')
   const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
   const [capacityReason, setCapacityReason] = useState('')
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null)
@@ -396,6 +398,7 @@ export function StaffActionsPanel({
     secondaryTableSessionIdRef.current = null
     setTableActionDialogOpen(false)
     setGuestCount('')
+    setPrimaryServiceEmployeeId('')
     setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
     setTransferTargetId(null)
@@ -592,6 +595,7 @@ export function StaffActionsPanel({
     setSelectedTableId(table.id)
     setTableActionDialogOpen(openDialog)
     setGuestCount('')
+    setPrimaryServiceEmployeeId('')
     setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
     setTransferTargetId(null)
@@ -612,6 +616,7 @@ export function StaffActionsPanel({
     if (!hasPermission(permissions, 'table.open')) return revealPermissionGuidance('table.open')
     const validated = validateOpenTableInput(selectedTable, guestCount, capacityReason)
     if ('error' in validated) return showNotice({ kind: 'error', message: validated.error })
+    if (!primaryServiceEmployeeId) return showNotice({ kind:'error',message:'请选择本次主服务员' })
     const snapshot = operations
     const optimisticSession = {
       id: `optimistic-${selectedTable.id}`,
@@ -633,6 +638,7 @@ export function StaffActionsPanel({
     try {
       await api.openTable({
         tableId: selectedTable.id,
+        primaryServiceEmployeeId,
         ...validated,
         guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
       })
@@ -1200,6 +1206,9 @@ export function StaffActionsPanel({
           {selectedTable !== null && tableActionDialogOpen && (
             <TableActionSheet
               table={selectedTable}
+              staffSessionId={staffSessionId}
+              primaryServiceEmployeeId={primaryServiceEmployeeId}
+              onPrimaryServiceEmployeeId={setPrimaryServiceEmployeeId}
               allTables={operations.tables}
               permissions={permissions}
               guestCount={guestCount}
@@ -1778,6 +1787,9 @@ function staffSeatPreferenceLabel(preference: StaffReservation['seatPreference']
 }
 
 interface TableActionSheetProps {
+  staffSessionId?: string
+  primaryServiceEmployeeId: string
+  onPrimaryServiceEmployeeId(id:string):void
   table: StaffActionTable
   allTables: StaffActionTable[]
   permissions: readonly string[]
@@ -1881,6 +1893,7 @@ function TableActionSheet(props: TableActionSheetProps) {
 
       {table.activeSession === null ? (
         <div className="staff-open-table">
+          {hasPermission(props.permissions, 'table.open')&&<PrimaryServiceSelect tableId={table.id} staffSessionId={props.staffSessionId} value={props.primaryServiceEmployeeId} onChange={props.onPrimaryServiceEmployeeId}/>}
           <label><Users size={17} /> 实际到店人数</label>
           <div className="staff-count-picks">
             {Array.from({ length: Math.min(8, Math.max(4, table.capacity + 2)) }, (_, index) => index + 1).map((count) => (
@@ -1918,7 +1931,7 @@ function TableActionSheet(props: TableActionSheetProps) {
             </label>
           )}
           {hasPermission(props.permissions, 'table.open') ? (
-            <button className="staff-primary-action" type="button" onClick={props.onOpen} disabled={props.pending || props.guestCount.length === 0}>
+            <button className="staff-primary-action" type="button" onClick={props.onOpen} disabled={props.pending || props.guestCount.length === 0 || !props.primaryServiceEmployeeId}>
               {props.pending ? <LoaderCircle className="is-spinning" size={18} /> : <Check size={18} />} 确认开台
             </button>
           ) : (
@@ -1927,6 +1940,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         </div>
       ) : (
         <div className="staff-open-session">
+          <TableServicePanel compact key={`${table.id}:${table.activeSession?.id}`} tableId={table.id} staffSessionId={props.staffSessionId} canHandover={hasPermission(props.permissions, 'table.assignment.manage')}/>
           <p><strong>{table.activeSession.guestCount}人</strong><span>{table.activeSession.status === 'closing' ? '结台待完成，请先处理下方提示' : '本桌服务进行中'}</span></p>
           {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
           {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}

@@ -1,3 +1,4 @@
+import { ScryptCredentialHasher } from '../server/normalized/staff-auth-command-service.js'
 import {seedManualPointsBrowserFixture} from './fixtures/manual-points-browser-fixture.js'
 import { seedMemberVisitRewardBrowserFixture } from './fixtures/member-visit-reward-browser-fixture.js'
 import {seedThreeScreenBrowserFixture} from './fixtures/three-screen-browser-fixture.js'
@@ -92,6 +93,12 @@ try {
   if(process.env.NORMALIZED_E2E_REQUIREMENTS_V9==='true')await runtime.transactions.run(scope,async transaction=>{const access=new StaffAccessRepository(transaction);for(const permissionCode of ['bottle.manage.all','bottle.custody.export'])await access.setEmployeePermissionOverride({employeeId,permissionCode,effect:'grant',reason:'v9隔离浏览器验收',configuredByEmployeeId:employeeId,startsAt:new Date(Date.now()-60000).toISOString()})})
   // Opt-in, throwaway database only. Never add these grants to the real store
   // configuration merely to make a new feature visible during acceptance.
+  if(process.env.NORMALIZED_E2E_SERVICE_HISTORY==='true') {
+    const pinHash=await new ScryptCredentialHasher().hash('5210')
+    await runtime.transactions.run(scope,async tx=>{
+      await tx.query("INSERT INTO mbox.employees(tenant_id,store_id,employee_code,display_name,pin_hash) VALUES($1,$2,'history-reader','仅查看员工',$3)",[scope.tenantId,scope.storeId,pinHash])
+    })
+  }
   const memberCardFixture = process.env.NORMALIZED_E2E_MEMBER_CARDS === 'true'
   if (memberCardFixture) await runtime.transactions.run(scope, async transaction => {
     // Deterministic qualification fixture: a counted, non-stock-managed drink
@@ -168,6 +175,7 @@ try {
     guestCount: 2,
     guestProfileSnapshot: { scene: 'friends', source: 'browser_acceptance' },
     openedByEmployeeId: employeeId,
+    primaryServiceEmployeeId: employeeId,
     idempotencyKey: `browser-open-${randomBytes(12).toString('hex')}`,
     requestFingerprint: JSON.stringify({ table: 'W1', guestCount: 2, businessDate }),
   })
@@ -181,7 +189,7 @@ try {
   if(process.env.NORMALIZED_E2E_REMAKE_HANDOVER==='true'){
     // Opt-in fixture only: publicly creating remake batches remains disabled.
     // No printer/provider worker runs in this throwaway browser database.
-    const opened=await new TableSessionCommandService(runtime.commandExecutor).open({scope,actor:{type:'employee',employeeId},table:{kind:'code',value:'W2'},publicId:`remake-fixture-${randomUUID()}`,businessDate,guestCount:2,guestProfileSnapshot:{source:'browser_remake_fixture'},openedByEmployeeId:employeeId,idempotencyKey:randomUUID(),requestFingerprint:'isolated-remake-handover'})
+    const opened=await new TableSessionCommandService(runtime.commandExecutor).open({scope,actor:{type:'employee',employeeId},table:{kind:'code',value:'W2'},publicId:`remake-fixture-${randomUUID()}`,businessDate,guestCount:2,guestProfileSnapshot:{source:'browser_remake_fixture'},openedByEmployeeId:employeeId,primaryServiceEmployeeId:employeeId,idempotencyKey:randomUUID(),requestFingerprint:'isolated-remake-handover'})
     const ids=await runtime.transactions.run(scope,async tx=>{
       const productId=randomUUID(),orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID(),productName='隔离重做实物'
       await tx.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES($1,$2,$3,'QA-REMAKE-HANDOVER',$4,'test','bar','not_managed')`,[productId,scope.tenantId,scope.storeId,productName])

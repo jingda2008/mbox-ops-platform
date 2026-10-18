@@ -289,6 +289,7 @@ export interface StaffActionsApiPort {
   }>): Promise<void>
   endTableAssignment(assignmentId: string, reason: string): Promise<void>
   openTable(input: Readonly<{
+    primaryServiceEmployeeId?: string
     tableId: string
     guestCount: number
     capacityOverrideReason?: string
@@ -663,6 +664,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   async openTable(input: Readonly<{
+    primaryServiceEmployeeId?: string
     tableId: string
     guestCount: number
     capacityOverrideReason?: string

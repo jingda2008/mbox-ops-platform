@@ -98,6 +98,7 @@
 .normalized-staff-action-shell > header > button,
 .normalized-staff-action-shell > header .staff-return-actions > button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px; color: inherit; background: #202820; border: 1px solid #4d584f; border-radius: 6px; }
 .normalized-route-notice { position: fixed; z-index: 30; top: 12px; right: 12px; left: 12px; max-width: 720px; margin: 0 auto; padding: 12px 14px; color: #6a3e13; background: #fff8e5; border: 1px solid #d6b86c; border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+.normalized-staff-action-shell > .normalized-route-notice { position: relative; z-index: auto; inset: auto; margin: 12px; }
 @media (min-width: 760px) { .normalized-staff-action-shell { padding-bottom: 0; } }
 
 .normalized-session-trigger { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid #aeb7b0; border-radius: 6px; background: #fff; color: #1d241f; text-align: left; }

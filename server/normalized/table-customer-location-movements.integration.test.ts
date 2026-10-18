@@ -1,3 +1,4 @@
+import {TableServiceRepository} from './table-service-repository.js'
 import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { createHash, randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
@@ -68,10 +69,12 @@ integration('table customer location movements', () => {
       movedGuestCount:2,participantIds:[],roles:[],confirmations:[],key:`whole-${randomUUID()}`,
     })
     expect(result.moved_participant_count).toBe(0)
-    const current=await pool.query(`SELECT table_id,location_version,current_location_movement_event_id
+    const priorTableHistory=await new ScopedPostgresTransactionRunner(runtime).run({tenantId,storeId},tx=>new TableServiceRepository(tx).sessions(tables[0]!,0))
+    expect(priorTableHistory.sessions.some(row=>row.id===source&&row.primaryId===employeeId)).toBe(true)
+    const current=await pool.query(`SELECT table_id,location_version,current_location_movement_event_id,primary_service_employee_id
       FROM mbox.table_sessions WHERE id=$1`,[source])
     expect(current.rows[0]).toMatchObject({
-      table_id:tables[1],location_version:'1',current_location_movement_event_id:result.movement_event_id,
+      table_id:tables[1],location_version:'1',current_location_movement_event_id:result.movement_event_id,primary_service_employee_id:employeeId,
     })
     const client=await runtimeClient()
     try {
@@ -101,11 +104,11 @@ integration('table customer location movements', () => {
       movedGuestCount:1,participantIds:[participation],roles:['companion'],confirmations:['confirmed'],
       key:`split-${randomUUID()}`,splitPublicId:`split-${randomUUID()}`,
     })
-    const state=await pool.query(`SELECT id,table_id,guest_count,status FROM mbox.table_sessions
+    const state=await pool.query(`SELECT id,table_id,guest_count,status,primary_service_employee_id FROM mbox.table_sessions
       WHERE id=ANY($1::uuid[]) ORDER BY id`,[[source,result.target_table_session_id]])
     expect(state.rows.find((row) => row.id===source)).toMatchObject({ guest_count:2,status:'open' })
     expect(state.rows.find((row) => row.id===result.target_table_session_id))
-      .toMatchObject({ table_id:tables[3],guest_count:1,status:'open' })
+      .toMatchObject({ table_id:tables[3],guest_count:1,status:'open',primary_service_employee_id:employeeId })
     const token=await pool.query(`SELECT revoked_at,revoke_reason FROM mbox.guest_sessions WHERE id=$1`,[guestSession])
     expect(token.rows[0]?.revoked_at).not.toBeNull()
     expect(token.rows[0]?.revoke_reason).toBe('table_location_changed')
@@ -765,8 +768,8 @@ integration('table customer location movements', () => {
     const id=randomUUID()
     await pool.query(`INSERT INTO mbox.table_sessions(
       id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,
-      guest_profile_snapshot,status,opened_by_employee_id
-    ) SELECT $1,$2,$3,venue_table.id,$4,'2026-08-16',$5,venue_table.capacity,'{}','open',$6
+      guest_profile_snapshot,status,opened_by_employee_id,primary_service_employee_id
+    ) SELECT $1,$2,$3,venue_table.id,$4,'2026-08-16',$5,venue_table.capacity,'{}','open',$6,$6
       FROM mbox.tables venue_table WHERE venue_table.id=$7`,
     [id,tenantId,storeId,`session-${randomUUID()}`,guestCount,employeeId,tableId])
     return id

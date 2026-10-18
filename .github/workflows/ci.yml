@@ -246,6 +246,19 @@ jobs:
             artifacts/normalized-browser-three-screen
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+      - name: Verify employee service history and mandatory primary ownership on a fresh database
+        env:
+          NORMALIZED_E2E_SERVICE_HISTORY: 'true'
+        run: npm run test:e2e:normalized -- tests/normalized-e2e/normalized-table-service.spec.ts
+      - name: Upload employee service history browser evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: table-service-browser-${{ github.sha }}
+          path: artifacts/normalized-browser
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
   performance:
     if: needs.classify.outputs.scope == 'full'

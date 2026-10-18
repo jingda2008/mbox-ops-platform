@@ -16,7 +16,7 @@ export function PrimaryServiceSelect({tableId,staffSessionId,value,onChange}:{ta
 }
 export function TableServiceLauncher({staffSessionId,canHandover}:{staffSessionId:string;canHandover:boolean}) {
  const [open,setOpen]=useState(false)
- return <><button type="button" onClick={()=>setOpen(true)}>全店桌台服务记录</button>{open&&createPortal(<ServiceDirectory staffSessionId={staffSessionId} canHandover={canHandover} onClose={()=>setOpen(false)}/>,document.body)}</>
+ return <><button className="table-service-launcher" type="button" onClick={()=>setOpen(true)}>全店桌台服务记录</button>{open&&createPortal(<ServiceDirectory staffSessionId={staffSessionId} canHandover={canHandover} onClose={()=>setOpen(false)}/>,document.body)}</>
 }
 function ServiceDirectory({staffSessionId,canHandover,onClose}:{staffSessionId:string;canHandover:boolean;onClose:()=>void}) {
  const api=useMemo(()=>new TableServiceApi(staffSessionId),[staffSessionId]),[tables,setTables]=useState<ServiceTable[]>([]),[selected,setSelected]=useState<string|null>(null),[error,setError]=useState(''),[search,setSearch]=useState(''),[refresh,setRefresh]=useState(0)

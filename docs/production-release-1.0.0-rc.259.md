@@ -77,3 +77,19 @@ qucan用户不记得PIN，真实登录/浏览器验收未完成。生产有效�
 - `main259-database-first.log`、`main259-ci-complete.log`、`tag259-browser-ci.log`、`pr373-ci-complete.log`、`scan-window-expiry-repro-targeted.log`、`scan-window-fixed.log`。
 
 凭据与会话令牌不进入文档或Git；原失败记录保留。此记录说明本轮软件发布及限定线上验收结果，不宣称所有商业清单或现场验收全部关闭。
+
+
+## 2026-10-18 21:01 CST 四桌当前主服务员确认完成
+
+用户随后明确回复“四桌都按开台账号确认”。通过正常生产登录和授权交接接口操作，先读取原桌次、确认仍open且负责人空缺、核对开台账号及当前版本，再逐桌补确认并回读。四桌均成功，无并发覆盖：
+
+| 桌台 | 本次确认的当前主服务员 | 原桌次 | 回读结果 |
+|---|---|---|---|
+| G2 | 三沐（sanmu） | `8aad0d67-e5d6-46b6-9ad3-a728da167628` | open、revision1，确认原因与原请求一致 |
+| B3 | 李艳（liyan） | `5c19e86e-fc04-4270-bf72-b2e17caf02c0` | open、revision1，确认原因与原请求一致 |
+| A9 | Jerry（jerry） | `801514cf-f677-40b3-9105-5f2ded639580` | open、revision1，确认原因与原请求一致 |
+| VIP5 | Jerry（jerry） | `38e6e4b1-d47a-4c89-8876-0e2a193e6fc0` | open、revision1，确认原因与原请求一致 |
+
+核验时间2026-10-18 21:00:51 CST，门店当前活动桌次缺少主服务员为0。每条记录保留此前未知、用户本次明确确认的来源、实际写入时间及操作账号；没有倒填开台时历史，没有更改消费订单或全局排班。操作会话已退出204。原始回执为`outputs/rc258-service-history-20261018/four-current-primary-confirmation.jsonl`，不含PIN或会话令牌。
+
+本节关闭上文四桌负责人待确认项；qucan因PIN未知的真实登录及现场服务验收边界保持。已部署版本仍rc259/ea948926/schema270，本次没有再次发布软件。

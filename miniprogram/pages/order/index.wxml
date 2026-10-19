@@ -230,7 +230,7 @@
     </view>
   </view>
 
-  <view wx:if="{{checkoutMemberInviteVisible}}" class="sheet-mask checkout-member-mask" bindtap="skipCheckoutMembership">
+  <view wx:if="{{checkoutMemberInviteVisible}}" class="sheet-mask checkout-member-mask" style="bottom: {{(customTabBarHeight || 50) + 1}}px" bindtap="skipCheckoutMembership">
     <view class="checkout-member-sheet" catchtap="keepCheckoutMemberInviteOpen" role="dialog" aria-label="提交订单前加入会员邀请">
       <text class="checkout-member-title">加入会员，让积分替你买单</text>
       <text class="checkout-member-copy">消费攒积分，下次点单直接抵。</text>

@@ -128,7 +128,7 @@ const wechatPolicyTemplateDivergences = {
   'pages/home/index': {"wechat": "acb7a4220bb51bdeaea146ef9680a9c585f30c8a9a2a15912d59fc787e1b6c3c", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
-  'pages/order/index': {"wechat": "d821f4699a7d6b3aae157a5c6d63a17aa5e08d3862904fbb1b3fca03e8161434", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
+  'pages/order/index': {"wechat": "f264a628b9dbd75023a6740117fc299ccc89e16afa4678231b05111aeeb04c7c", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
   'pages/profile/index': {"wechat": "47bd1a98e91f44294073f14d239c59760564ccbbe00969c1baa15835dcbc8ff8", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "7c694cb4e1af0da672bf457deb8912b421bdbf89f528e5744764103cc3c5522b", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},

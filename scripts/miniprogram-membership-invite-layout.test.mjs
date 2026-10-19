@@ -43,7 +43,9 @@ test('membership invitation keeps accepted copy and usable actions on small phon
 test('checkout membership invitation has reachable choices above the custom tab bar', async () => {
   const source=await readFile(resolve(root,'miniprogram/pages/order/index.wxml'),'utf8')
   const start=source.indexOf('  <view wx:if="{{checkoutMemberInviteVisible}}"')
-  const markup=source.slice(start,source.indexOf('  <view wx:if="{{paymentResult}}"',start))
+  const template=source.slice(start,source.indexOf('  <view wx:if="{{paymentResult}}"',start))
+  assert.ok(template.includes('bottom: {{(customTabBarHeight || 50) + 1}}px'))
+  const markup=template.replace('{{(customTabBarHeight || 50) + 1}}', '85')
   assert.ok(markup.includes('消费攒积分，下次点单直接抵。'))
   const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages/order/index.wxss'))
   const browser=await chromium.launch({headless:true})
@@ -51,10 +53,10 @@ test('checkout membership invitation has reachable choices above the custom tab 
     const page=await browser.newPage()
     for(const [width,height] of [[320,568],[375,667],[430,932],[720,360]]) {
       await page.setViewportSize({width,height})
-      await page.setContent(`<style>html,body{margin:0}view{display:block}button{box-sizing:border-box}text{overflow-wrap:anywhere}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page order-page">${markup}</view>`)
+      await page.setContent(`<style>html,body{margin:0}view{display:block}button{box-sizing:border-box}text{overflow-wrap:anywhere}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page order-page">${markup}</view><div style="position:fixed;bottom:0;left:0;right:0;height:85px;z-index:9999;background:white">custom navigation layer</div>`)
       for(const name of ['加入会员','先下单']) {
         const button=page.getByRole('button',{name,exact:true});await button.scrollIntoViewIfNeeded();const box=await button.boundingBox()
-        assert.ok(box.height>=44&&box.x>=0&&box.x+box.width<=width+1&&box.y>=0&&box.y+box.height<=height+1);await button.click({trial:true})
+        assert.ok(box.height>=44&&box.x>=0&&box.x+box.width<=width+1&&box.y>=0&&box.y+box.height<=height-85);await button.click({trial:true})
       }
     }
   } finally {await browser.close()}

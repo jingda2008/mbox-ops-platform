@@ -59,3 +59,17 @@ test('checkout membership invitation has reachable choices above the custom tab 
     }
   } finally {await browser.close()}
 })
+
+test('custom navigation keeps its buttons above the iPhone home indicator under global border-box styles', async()=>{
+  const style=await readFile(resolve(root,'miniprogram/custom-tab-bar/index.wxss'),'utf8')
+  const browser=await chromium.launch({headless:true})
+  try {
+    const page=await browser.newPage()
+    for(const width of [320,375,430,720]) {
+      await page.setViewportSize({width,height:667})
+      await page.setContent(`<style>html,body{margin:0}view,text,button{box-sizing:border-box}${style}</style><view class="tab-bar" style="padding-bottom:34px">${['首页','预约','点单','超嗨','我的'].map(name=>`<button class="tab-item"><text>${name}</text></button>`).join('')}</view>`)
+      const bar=await page.locator('.tab-bar').boundingBox();assert.equal(bar.height,85)
+      for(const button of await page.getByRole('button').all()) {const box=await button.boundingBox();assert.ok(box.height>=44&&box.y+box.height<=667-34);await button.click({trial:true})}
+    }
+  } finally {await browser.close()}
+})

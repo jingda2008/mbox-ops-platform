@@ -432,6 +432,7 @@ Page({
         avatarUrl: wx.getStorageSync('mbox.member.avatarUrl') || '',
         ...preferenceView,
       })
+      if (isCurrent() && typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/profile/index') }
       if (isCurrent()) rememberPresentationOptions('coupon_open', extractPromptPresentation(results[8]))
       if (isCurrent()) rememberPresentationOptions('member_card', extractPromptPresentation(results[9]))
     } catch (error) {

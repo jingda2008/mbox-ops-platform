@@ -121,15 +121,16 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 // Alipay remains at its separately frozen template and is not part of this release.
 // 2026-09-19: member QR preview is explicitly WeChat-only. Pin both reviewed
 // templates and styles; all Alipay syntax, handler and package checks remain active.
-// 2026-10-13: both platforms share zero/unknown progress, retry and coupon navigation.
+// 2026-10-19: WeChat cards remove inline retry, show cumulative fallback and next-tier benefit previews.
+// Alipay keeps its frozen retry and coupon navigation; both retain true-zero/unknown distinctions.
 // Re-reviewed existing QR/policy differences; the changed progress blocks are tested on both platforms.
 const wechatPolicyTemplateDivergences = {
-  'pages/member-center/index': {"wechat": "d2b746e4de42a5527734d5f4828b8a8d145069d49041c6d742ad632904b9fc90", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "85ad4dc6577e9d9b1852699a988bed713f241727a36369fe87b1a48143adfcc2", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
+  'pages/member-center/index': {"wechat": "7dbfe56ea18bae3db3cb72002ad0582690e646f6b5710c2693ef18412e61d8d4", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "1805410a89f4ed7daf9f203b03ffce39e0520c943ef6fe0e06396de68b01b09b", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
   'pages/home/index': {"wechat": "acb7a4220bb51bdeaea146ef9680a9c585f30c8a9a2a15912d59fc787e1b6c3c", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
   'pages/order/index': {"wechat": "8ec602a270fedb97ea4250af64985833d555a77923c99947523a8b04c164b4b0", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
-  'pages/profile/index': {"wechat": "47bd1a98e91f44294073f14d239c59760564ccbbe00969c1baa15835dcbc8ff8", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "7c694cb4e1af0da672bf457deb8912b421bdbf89f528e5744764103cc3c5522b", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
+  'pages/profile/index': {"wechat": "c8741771e41f5e04e2d22b83d216c6b8098866353e590991ba5de7b634feee65", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
   'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},

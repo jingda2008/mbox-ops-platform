@@ -75,3 +75,39 @@ test('custom navigation keeps its buttons above the iPhone home indicator under 
     }
   } finally {await browser.close()}
 })
+
+test('member cards keep growth difference and next tier action fully visible on narrow screens', async () => {
+  const browser = await chromium.launch({headless:true})
+  try {
+    const page = await browser.newPage()
+    for (const route of ['profile','member-center']) {
+      const prefix = route === 'profile' ? 'profile-member-card' : 'member-card'
+      const source = await readFile(resolve(root,`miniprogram/pages/${route}/index.wxml`),'utf8')
+      const start = source.indexOf(`<view class="${prefix}__progress">`)
+      const end = route === 'profile' ? source.indexOf('\n\n    <view wx:else',start) : source.indexOf('    <view wx:if="{{tierBenefitsVisible}}"',start)
+      const block = source.slice(start,end)
+        .replace(/\{\{membership.cardGrowthText\}\}/g,'成长值 680 / 10,000')
+        .replace(/\{\{membership.cardDifferenceText\}\}/g,'距银卡还差 9,320 成长值')
+        .replace(/\{\{membership.cardProgressPercent\}\}/g,'7')
+        .replace(/\{\{membership.cardCurrentTierText\}\}/g,'普卡')
+        .replace(/\{\{membership.cardNextTierText\}\}/g,'银卡')
+        .replace(/\{\{membership.cardBenefitText\}\}/g,'查看银卡权益 ›')
+      const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,`miniprogram/pages/${route}/index.wxss`))
+      for (const width of [320,375,430]) {
+        await page.setViewportSize({width,height:667})
+        await page.setContent(`<style>html,body{margin:0}view{display:block}button{box-sizing:border-box}text{overflow-wrap:anywhere}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page ${route==='profile'?'profile-page':'member-center-page'}"><view class="${prefix}">${block}</view>`)
+        assert.ok(await page.evaluate(()=>document.body.scrollWidth<=innerWidth+1))
+        const card = await page.locator('.'+prefix).boundingBox()
+        for (const text of await page.locator(`.${prefix}__progress-copy text`).all()) {
+          const box=await text.boundingBox()
+          assert.ok(box.x>=card.x&&box.x+box.width<=card.x+card.width+1)
+          assert.ok(box.y>=card.y&&box.y+box.height<=card.y+card.height+1)
+          assert.ok(await text.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'no clipped progress text')
+        }
+        const button=page.getByRole('button',{name:'查看银卡权益 ›'})
+        assert.ok((await button.boundingBox()).height>=44)
+        await button.click({trial:true})
+      }
+    }
+  } finally {await browser.close()}
+})

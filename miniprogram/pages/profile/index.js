@@ -138,10 +138,10 @@ function memberCardPreviewLevel() {
   }
 }
 
-function memberCardProgress(level, progress, previewLevel, status) {
+function memberCardProgress(level, progress, previewLevel, status, lifetimeGrowth) {
   return buildMemberCardProgress(level,
     previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress,
-    previewLevel ? 'ready' : status)
+    previewLevel ? 'ready' : status, lifetimeGrowth)
 }
 
 function membershipView(item) {
@@ -183,7 +183,8 @@ function membershipView(item) {
     expiryText: expiry
       ? `近30天有 ${expiry.expiringWithin30Days} 积分将到期，最近 ${String(expiry.nextExpiryAt).slice(0, 10)}`
       : '',
-  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus))
+  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus,
+    item.lifetimeGrowth === undefined ? item.growthValue : item.lifetimeGrowth))
 }
 
 function benefitView(item) {
@@ -1006,6 +1007,10 @@ Page({
   openContact() {
     if (!this.requireMembership('contact')) return
     wx.navigateTo({ url: '/pages/profile-contact/index' })
+  },
+  openNextTierBenefits() {
+    if (!this.data.membership) return
+    wx.navigateTo({ url: '/pages/member-center/index?view=next-tier-benefits' })
   },
   async openCoupons() {
     if (!this.requireMembership('coupons')) return

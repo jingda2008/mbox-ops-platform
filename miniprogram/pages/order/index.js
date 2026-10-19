@@ -533,7 +533,14 @@ Page({
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
-  openCheckoutPoints() { return checkoutCouponActions.openCheckoutPoints.call(this) },
+  openCheckoutPoints() {
+    if (this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
+    const result = this.data.pointsPickerOpen ? undefined : checkoutCouponActions.openCheckoutPoints.call(this)
+    this.setData({ checkoutScrollTarget: '' }, () => {
+      if (this.data.checkoutConfirmVisible && this.data.pointsPickerOpen) this.setData({ checkoutScrollTarget: 'checkout-points' })
+    })
+    return result
+  },
   onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
   quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
   openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
@@ -604,6 +611,7 @@ Page({
     cartCount: 0,
     cartExpanded: false,
     checkoutConfirmVisible: false,
+    checkoutScrollTarget: '',
     pendingPayment: null,
     checkoutLocked: false,
     paymentResult: null,

@@ -1797,3 +1797,24 @@
 .checkout-member-copy { display: block; margin-top: 12rpx; font-size: 26rpx; line-height: 1.6; color: #6f675f; }
 .checkout-member-actions { display: flex; gap: 16rpx; margin-top: 26rpx; }
 .checkout-member-actions button { flex: 1; min-width: 0; min-height: 44px; margin: 0; padding: 0 12rpx; font-size: 26rpx; line-height: 44px; }
+
+/* Points are an explicit choice next to the fixed payable total. */
+.checkout-points-entry { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12rpx; border-bottom: 1rpx solid #e4e0d6; }
+.checkout-points-entry__title { font-size: 26rpx; font-weight: 650; color: #254c3e; }
+.checkout-points-entry__balance { margin-left: 12rpx; font-size: 20rpx; color: #637365; }
+.checkout-points-entry__action { flex-shrink: 0; width: auto; min-height: 44px; margin: 0; padding: 8rpx 14rpx; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 16rpx; background: #edf3ed; color: #254c3e; font-size: 24rpx; line-height: 1.4; }
+.checkout-points-picker { padding: 16rpx 0; border-bottom: 1rpx solid #e4e0d6; }
+.checkout-points-picker__title { display: block; margin-bottom: 10rpx; color: #254c3e; font-size: 28rpx; font-weight: 650; }
+.checkout-points-picker__input { box-sizing: border-box; height: 44px; margin: 12rpx 0; padding: 0 16rpx; border: 1rpx solid #cbd7cb; border-radius: 12rpx; background: #fff; font-size: 26rpx; }
+
+@media (max-height: 450px) {
+  .checkout-confirm__sheet { padding: 8px 16px; }
+  .checkout-confirm__sheet > .sheet-handle, .checkout-confirm__eyebrow, .checkout-confirm__total-note { display: none; }
+  .checkout-confirm__head { min-height: 32px; }
+  .checkout-confirm__title { font-size: 18px; }
+  .checkout-confirm__lines { margin-top: 4px; }
+  .checkout-confirm__total { padding: 2px 0; }
+  .checkout-confirm__total > text { font-size: 22px; }
+  .checkout-confirm__total view text:first-child { font-size: 14px; }
+  .checkout-confirm__total view text.checkout-confirm__total-note { display: none; }
+}

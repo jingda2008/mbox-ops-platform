@@ -16,7 +16,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
   // Render the actual WXML hierarchy; emulate only native tags and fixture values.
   markup = markup.replace('{{(customTabBarHeight || 50) + 1}}', '85')
     .replace(/disabled="[^"]*"/g, '').replace(/<input([^>]*?)\/>/g, '<input$1>')
-    .replace(/\{\{[^}]+\}\}/g, expression => expression.includes('checkoutLocked ?') ? '确认支付' : expression.includes('cartTotal') ? '¥40.00' : expression.includes('item.name') ? '泰象气泡水' : expression.includes('pointsBalance') ? '0' : '')
+    .replace(/\{\{[^}]+\}\}/g, expression => expression.includes('已抵 ') ? '选择抵扣积分 ›' : expression.includes('checkoutLocked ?') ? '确认支付' : expression.includes('cartTotal') ? '¥40.00' : expression.includes('item.name') ? '泰象气泡水' : expression.includes('pointsBalance') ? '0' : '')
   const style = await css(resolve(root, 'miniprogram/app.wxss')) + await css(resolve(root, 'miniprogram/pages/order/index.wxss'))
   const browser = await chromium.launch({ headless: true })
   try {
@@ -28,7 +28,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
         document.querySelectorAll('.checkout-upgrade,.checkout-upgrade__message,.cart-line__selection,.cart-line__unavailable,.coupon-portion').forEach(el => el.remove())
       })
       const assertFooter = async () => {
-        for (const name of ['继续加购', '确认支付']) {
+        for (const name of ['继续加购', '确认支付', '选择抵扣积分 ›']) {
           const button = page.getByRole('button', { name, exact: true })
           const box = await button.boundingBox()
           assert.ok(box.height >= 44 && box.x >= 0 && box.x + box.width <= width + 1 && box.y >= 0 && box.y + box.height <= height - 85 + 1, `${name} visible above navigation at ${width}x${height}: ${JSON.stringify(box)}`)
@@ -36,11 +36,12 @@ test('expanded checkout keeps payment visible and every form control scrollable 
         }
       }
       await assertFooter()
+      assert.equal(await page.locator('[bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), false, 'points entry remains fixed beside total')
       for (const selector of ['[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {
         const control = page.locator(selector)
         assert.ok(await control.evaluate(el => Boolean(el.closest('scroll-view'))), `${selector} must share the scrolling form`)
         await control.scrollIntoViewIfNeeded()
-        await control.click({ trial: true, timeout: 1000 })
+        await control.click({ trial: true, timeout: 1000 }).catch(async error => { throw new Error(`${width}x${height} ${selector} scroll=${JSON.stringify(await page.locator('scroll-view').boundingBox())}`, { cause: error }) })
         await assertFooter()
       }
       const scroll = await page.locator('scroll-view').evaluate(el => ({ height: el.clientHeight, content: el.scrollHeight }))

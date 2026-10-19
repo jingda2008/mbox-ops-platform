@@ -247,6 +247,5 @@
 
 </view>
 
-<view wx:if="{{connectionState === 'active' && !cart.length && !checkoutLocked}}" class="empty-cart-float" style="bottom: {{(customTabBarHeight || 50) + 8}}px"><button class="empty-cart-fab" hover-class="empty-cart-fab--pressed" aria-label="购物车暂无商品" bindtap="showEmptyCart"><view class="cart-overview__mark-icon" aria-hidden="true"></view><text class="empty-cart-fab__label">购物车</text></button></view>
 
 <launch-popup />

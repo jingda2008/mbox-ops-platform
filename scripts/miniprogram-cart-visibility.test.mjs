@@ -34,14 +34,13 @@ for (const kind of ['invalid-session','changed-table','first-load']) {
   }finally{h.dispose()}
  })
 }
-test('connected empty carts retain a floating icon and cannot submit an empty order',async()=>{
+test('empty carts hide the shortcut and cannot submit an empty order',async()=>{
  const source=await readFile('miniprogram/pages/order/index.wxml','utf8')
  const condition=source.match(/<view wx:if="\{\{([^}]+)\}\}" class="cart-dock">/)[1]
  const visible=Function('connectionState','cart','checkoutLocked',`return Boolean(${condition})`)
  assert.equal(visible('active',[],false),false);assert.equal(visible('active',[],true),true);assert.equal(visible('needs_scan',[],false),false)
- const emptyCondition=source.match(/<view wx:if="\{\{([^}]+)\}\}" class="empty-cart-float"/)[1]
- const emptyVisible=Function('connectionState','cart','checkoutLocked',`return Boolean(${emptyCondition})`)
- assert.equal(emptyVisible('active',[],false),true);assert.equal(emptyVisible('active',[{}],false),false);assert.equal(emptyVisible('active',[],true),false);assert.equal(emptyVisible('needs_scan',[],false),false)
+ assert.doesNotMatch(source,/empty-cart-float|showEmptyCart/)
+ assert.equal(visible('active',[{}],false),true)
  const h=setup();try{await h.page.preparePage();await h.page.openCheckout();assert.equal(h.state.calls.includes('submit'),false);assert.equal(h.page.data.checkoutConfirmVisible,false)}finally{h.dispose()}
 })
 

@@ -73,27 +73,3 @@ test('bundle confirmation remains clickable above navigation on small and landsc
     }
   } finally { await browser.close() }
 })
-test('empty cart stays at viewport bottom left above navigation outside scrolling content', async () => {
-  const source=await readFile(resolve(root,'miniprogram/pages/order/index.wxml'),'utf8')
-  const match=source.match(/<view wx:if="[^\n]+class="empty-cart-float"[^\n]+<\/view>/)
-  assert.ok(match)
-  const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages/order/index.wxss'))
-  const browser=await chromium.launch({headless:true})
-  try {
-    const page=await browser.newPage()
-    for(const [width,height,navigationHeight] of [[320,568,50],[393,724,50],[393,852,84],[720,360,50]]) {
-      await page.setViewportSize({width,height})
-      const markup=match[0].replace('{{(customTabBarHeight || 50) + 8}}',String(navigationHeight+8))
-      await page.setContent(`<style>html,body{margin:0}view{display:block}button:not([size="mini"]){width:184px;min-width:160px;margin-left:auto;margin-right:auto}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page order-page" style="height:calc(100vh - ${navigationHeight}px);transform:translateZ(0)"><view style="height:1600px">scrolling menu</view></view>${markup}<div style="position:fixed;bottom:0;left:0;right:0;height:${navigationHeight}px;z-index:9999;background:white">navigation</div>`)
-      const button=page.getByRole('button',{name:'购物车暂无商品'}),box=await button.boundingBox()
-      assert.equal(box.width,56);assert.equal(box.height,60);assert.equal(box.x,8)
-      assert.equal(box.y+box.height,height-navigationHeight-8)
-      assert.equal(await button.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)')
-      const basket=await page.locator('.cart-overview__mark-icon').boundingBox()
-      assert.ok(basket.width>=24 && basket.height>=17)
-      await page.evaluate(()=>window.scrollTo(0,300))
-      assert.deepEqual(await button.boundingBox(),box)
-      await button.click({trial:true,timeout:1000})
-    }
-  } finally {await browser.close()}
-})

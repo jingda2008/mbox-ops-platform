@@ -2069,7 +2069,6 @@ Page({
   openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
   openAccount() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBenefits() { wx.switchTab({ url: '/pages/profile/index' }) },
-  showEmptyCart() { wx.showToast({ title: '购物车暂无商品，请先选菜', icon: 'none' }) },
   toggleCart() { this.openCartDetails() },
 
   openCartDetails() {

@@ -1832,54 +1832,72 @@
   min-height: 44px;
 }
 
-.empty-cart-fab {
+.empty-cart-float {
   position: fixed;
   z-index: 30;
-  left: 14px;
+  top: auto;
+  right: auto;
+  left: 8px;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  padding: 0;
+}
+.empty-cart-float > .empty-cart-fab {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
   display: flex;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  line-height: 1;
   margin: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+  transform: none;
 }
 .empty-cart-fab::after { border: 0; }
-.empty-cart-fab--pressed { opacity: .65; }
+.empty-cart-fab--pressed { opacity: .75; }
 .empty-cart-fab .cart-overview__mark-icon {
   box-sizing: border-box;
-  width: 17px;
-  height: 12px;
-  margin-top: -3px;
-  margin-left: 3px;
-  border: 1.7px solid #315d46;
-  border-top: 1.5px solid #b79a5f;
-  border-radius: 1px 1px 3px 3px;
+  width: 24px;
+  height: 17px;
+  margin-top: -4px;
+  margin-left: 5px;
+  border: 2.4px solid #254f39;
+  border-top: 2.2px solid #a48039;
+  border-radius: 1px 1px 4px 4px;
   transform: skew(-7deg);
 }
 .empty-cart-fab .cart-overview__mark-icon::before {
   box-sizing: border-box;
-  top: -6px;
-  left: -5px;
-  width: 5px;
-  height: 6px;
-  border-top: 1.7px solid #315d46;
-  border-right: 1.7px solid #315d46;
+  top: -8px;
+  left: -7px;
+  width: 7px;
+  height: 8px;
+  border-top: 2.4px solid #254f39;
+  border-right: 2.4px solid #254f39;
   border-left: 0;
-  border-radius: 0 2px 0 0;
+  border-radius: 0 3px 0 0;
 }
 .empty-cart-fab .cart-overview__mark-icon::after {
-  right: 10px;
-  bottom: -6px;
-  width: 3.5px;
-  height: 3.5px;
-  background: #b79a5f;
-  box-shadow: 11px 0 0 #b79a5f;
+  right: 14px;
+  bottom: -8px;
+  width: 4.5px;
+  height: 4.5px;
+  background: #a48039;
+  box-shadow: 16px 0 0 #a48039;
 }
 .checkout-points-picker__input { color: #b42318; }

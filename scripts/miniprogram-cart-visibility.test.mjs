@@ -39,7 +39,7 @@ test('connected empty carts retain a floating icon and cannot submit an empty or
  const condition=source.match(/<view wx:if="\{\{([^}]+)\}\}" class="cart-dock">/)[1]
  const visible=Function('connectionState','cart','checkoutLocked',`return Boolean(${condition})`)
  assert.equal(visible('active',[],false),false);assert.equal(visible('active',[],true),true);assert.equal(visible('needs_scan',[],false),false)
- const emptyCondition=source.match(/<button wx:if="\{\{([^}]+)\}\}" class="empty-cart-fab"/)[1]
+ const emptyCondition=source.match(/<view wx:if="\{\{([^}]+)\}\}" class="empty-cart-float"/)[1]
  const emptyVisible=Function('connectionState','cart','checkoutLocked',`return Boolean(${emptyCondition})`)
  assert.equal(emptyVisible('active',[],false),true);assert.equal(emptyVisible('active',[{}],false),false);assert.equal(emptyVisible('active',[],true),false);assert.equal(emptyVisible('needs_scan',[],false),false)
  const h=setup();try{await h.page.preparePage();await h.page.openCheckout();assert.equal(h.state.calls.includes('submit'),false);assert.equal(h.page.data.checkoutConfirmVisible,false)}finally{h.dispose()}

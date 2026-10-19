@@ -98,7 +98,7 @@ test('only modal masks and the requested empty-cart shortcut remain fixed across
     'miniprogram/pages/home/index.wxss: .member-invite-mask',
     'miniprogram/pages/home/index.wxss: .performance-panel-mask',
     'miniprogram/pages/member-center/index.wxss: .member-code-preview-mask',
-    'miniprogram/pages/order/index.wxss: .empty-cart-fab',
+    'miniprogram/pages/order/index.wxss: .empty-cart-float',
     'miniprogram/pages/order/index.wxss: .sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',

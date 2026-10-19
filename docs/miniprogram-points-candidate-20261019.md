@@ -1,5 +1,7 @@
 # 积分小程序候选准备记录
 
+最新状态（2026-10-19 18:52 CST）：rc260已通过官方开发者工具成功上传微信开发版；上传前后166个文件完整性一致，积分入口/事件绑定及全积分结清提示均存在。未选体验版、未提审/正式发布，现场验收按用户要求等到店。下文18:33准备和18:42登录阻塞为历史记录。
+
 记录时间：2026-10-19 18:33 CST。用户要求现场到店后再验，本轮只核对上传记录并准备最新版本。
 
 ## 上传证据结论
@@ -38,3 +40,21 @@
 18:38官方开发者工具CLI在Fetching AppID permissions阶段返回微信错误10“需要重新登录”，尚未进入Upload阶段，无upload-info.json回执。CLI退出码为0，但业务日志明确失败，不能据退出码认定成功。原始输出及结构化结果保留在`wechat-rc260/upload.log`、`upload-command-result.json`、`upload-attempt-1.json`。
 
 已通过官方CLI生成扫码登录二维码。用户回复已扫码确认，但本机islogin仍返回false、登录进程仍等待；已向用户核对手机提示。18:41再次验证候选完整性ready、文件未变化。当前状态为登录确认阻塞，尚未上传成功、未提审/发布、未现场验收。不得覆盖失败日志或伪造上传回执；登录成功后再上传同一候选并留存独立重试证据。
+
+## 2026-10-19 18:52 CST 开发版上传成功
+
+用户要求重新登录。终止本任务旧登录等待客户端，保留开发者工具；重新生成官方二维码。用户扫码确认后，CLI明确返回login成功，islogin返回true。随后上传同一rc260候选，18:52:03 CST完成，退出0且日志明确含`✔ upload`，upload-info-2.json记录包大小1,046,896字节。
+
+| 上传后核对 | 结果 |
+|---|---|
+| 开发版版本/AppID | 1.0.0-rc.260 / wxdb9f2dc413484f2d |
+| 来源提交 | 55be235542e066b2d1232d2749424492a406e1f8 |
+| 候选摘要 | 963607ac6c0be70fc80f987cfed8423cd8a6d8f2b9da4bde2ef37c1d5cfbfc5c，与上传前一致 |
+| 文件完整性 | 166个文件哈希全部与候选清单一致；candidate验证ready |
+| 积分入口 | pages/order/index.wxml包含“使用积分抵扣”，事件绑定openCheckoutPoints，对应实现存在 |
+| 全积分提示 | “积分结清，无需另付款”存在 |
+| 页面纳入打包 | app.json注册pages/order/index；miniprogramRoot为./；packOptions.ignore为空 |
+| 上传日志摘要 | 31edacbf45b9326816944e68fad96e7e631b579030c34df3a9aaa444c53fa701 |
+| 平台回执摘要 | a242e5069cdb892662c53262f84679654714f6e5b4bad86dcd956ffa1626b7c9 |
+
+新增证据：候选目录内`upload-2.log`、`upload-info-2.json`、`upload-command-result-2.json`、`upload-result.json`、`after-upload-verification.json`；上轮失败证据不覆盖。证明范围是官方CLI接收上传、上传输入包未变化及入口已包含，不声称远端反编译回读。未选体验版、未提审/正式发布，未执行现场支付、退款或新打印；POINTS-ACCEPT-20261019-01现场项保持开放。

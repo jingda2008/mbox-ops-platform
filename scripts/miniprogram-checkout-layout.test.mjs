@@ -60,13 +60,13 @@ test('bundle confirmation remains clickable above navigation on small and landsc
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage()
-    for (const [width, height] of [[320,568],[375,667],[393,852],[430,932],[720,360]]) {
+    for (const [width, height, navigationHeight] of [[320,568,50],[393,724,50],[375,667,84],[393,852,84],[430,932,84],[720,360,50]]) {
       await page.setViewportSize({width,height})
-      await page.setContent(`<style>html,body{margin:0}view,block,scroll-view{display:block}scroll-view{overflow-y:auto!important}button{box-sizing:border-box}${style.replace(/(-?[\d.]+)rpx\b/g, (_,n) => `${Number(n)*width/750}px`)}</style>${markup}<div style="position:fixed;bottom:0;left:0;right:0;height:85px;z-index:9999;background:white">navigation</div>`)
+      await page.setContent(`<style>html,body{margin:0}view,block,scroll-view{display:block}scroll-view{overflow-y:auto!important}button{box-sizing:border-box}${style.replace(/(-?[\d.]+)rpx\b/g, (_,n) => `${Number(n)*width/750}px`)}</style><view class="page order-page" style="height:calc(100vh - ${navigationHeight}px)">${markup.replace('bottom: 85px"', `bottom: ${navigationHeight + 1}px"`)}</view><div style="position:fixed;bottom:0;left:0;right:0;height:${navigationHeight}px;z-index:9999;background:white">navigation</div>`)
       await page.evaluate(() => document.querySelectorAll('.product-detail-footer > button:not([catchtap="confirmBundleProduct"]),.product-detail-browse-note').forEach(el => el.remove()))
       const button = page.locator('[catchtap="confirmBundleProduct"]')
       const box = await button.boundingBox()
-      assert.ok(box.height >= 44 && box.y >= 0 && box.y+box.height <= height-85+1, `bundle confirm reachable at ${width}x${height}: ${JSON.stringify(box)}`)
+      assert.ok(box.height >= 44 && box.y >= 0 && box.y+box.height <= height-navigationHeight+1, `bundle confirm reachable at ${width}x${height}: ${JSON.stringify(box)}`)
       await button.click({trial:true,timeout:1000})
       assert.ok(await page.locator('.product-detail-scroll').evaluate(el => el.clientHeight > 0))
     }

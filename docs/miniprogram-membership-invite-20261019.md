@@ -154,3 +154,7 @@
 - `/Users/jingda/mbox/outputs/g1-points-menu-20261019/wechat-rc260-ui3-final/` 保存manifest、candidate-evidence、upload/preview-info与result、前后verify、测试日志。168源文件与提交逐字节相同，170文件上传/预览前后hash一致。
 - 临时预览码：`/Users/jingda/mbox/outputs/g1-points-menu-20261019/rc260-ui3-preview-qr.jpg`，官方工具输出JPEG470×470。
 - 只完成微信开发上传和预览。平台安全访问限制阻断设体验版，需用户在版本管理选择ui.3；正式发布及手机现场加购、真实支付退款、纸票仍未验收。
+
+### 2026-10-19 23:27 CST 详情按钮现场截图追加
+
+用户提供“别回家”套餐详情截图，确认绿色加入按钮被底栏覆盖；图片不能证明所运行版本，已请求确认是更新前还是ui.3扫码后。ui.3候选170文件hash重新核对一致，含product-detail-mask底部预留。布局测试补充实际page/order-page外层、50px与84px导航及6个尺寸通过；仍只是浏览器WXML/CSS模型，不是该安卓手机原生复验。此次仅加强测试与记录，无小程序源码变动、无再次上传，最新开发版仍ui.3。

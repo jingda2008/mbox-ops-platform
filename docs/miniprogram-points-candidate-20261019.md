@@ -30,3 +30,11 @@
 可导入压缩包：`/Users/jingda/mbox/outputs/miniprogram-rc260-20261019/MBOX-WeChat-1.0.0-rc.260-candidate.zip`，SHA256 `7e2688af4ac7ef1ce6252823552621d5638f55c36d6d3823dfdab8a44f5f1200`，510,489字节，ZIP CRC检查通过。
 
 候选清单SHA256 `963607ac6c0be70fc80f987cfed8423cd8a6d8f2b9da4bde2ef37c1d5cfbfc5c`。输出目录留存`tests.log`、`static.log`、`candidate-verification.json`、`source-readback.json`、`preparation-result.json`及使用说明。candidate ready只证明本地完整性，不代表微信原生编译、平台审核、正式发布或真机验收通过。无后台部署、生产交易或新打印命令。
+
+## 2026-10-19 18:42 CST 开发版上传尝试
+
+用户明确要求将rc260上传到微信开发版，现场验收等到店。上传前再次核对候选摘要、166个文件哈希、积分按钮及事件绑定、全积分结清提示，candidate完整性ready。
+
+18:38官方开发者工具CLI在Fetching AppID permissions阶段返回微信错误10“需要重新登录”，尚未进入Upload阶段，无upload-info.json回执。CLI退出码为0，但业务日志明确失败，不能据退出码认定成功。原始输出及结构化结果保留在`wechat-rc260/upload.log`、`upload-command-result.json`、`upload-attempt-1.json`。
+
+已通过官方CLI生成扫码登录二维码。用户回复已扫码确认，但本机islogin仍返回false、登录进程仍等待；已向用户核对手机提示。18:41再次验证候选完整性ready、文件未变化。当前状态为登录确认阻塞，尚未上传成功、未提审/发布、未现场验收。不得覆盖失败日志或伪造上传回执；登录成功后再上传同一候选并留存独立重试证据。

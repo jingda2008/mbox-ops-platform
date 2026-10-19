@@ -486,7 +486,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       let expiringLot:string|undefined
       if(expireBeforeReturn){
         expiringLot=randomUUID()
-        await pool.query("INSERT INTO mbox.loyalty_point_lots(id,tenant_id,store_id,membership_id,customer_id,source_type,source_id,original_points,remaining_points,available_at,expires_at) VALUES($1,$2,$3,$4,$5,'legacy_balance','expiry-fixture',10,10,clock_timestamp()-interval '1 day',clock_timestamp()+interval '3 seconds')",[expiringLot,tenantId,storeId,membership,customer])
+        await pool.query("INSERT INTO mbox.loyalty_point_lots(id,tenant_id,store_id,membership_id,customer_id,source_type,source_id,original_points,remaining_points,available_at,expires_at) VALUES($1,$2,$3,$4,$5,'legacy_balance','expiry-fixture',10,10,clock_timestamp()-interval '1 day',clock_timestamp()+interval '10 seconds')",[expiringLot,tenantId,storeId,membership,customer])
         await pool.query('UPDATE mbox.loyalty_accounts SET available_points=40 WHERE membership_id=$1',[membership])
       }
       const selectedProduct=points===20?bundle:product,total=points===20?2000:1000
@@ -614,7 +614,10 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30)
       }
     }
-  })
+  // This integration includes a deliberate database-clock expiry wait of up to
+  // 10 seconds plus five complete settlement/refund/printing flows. Keep the
+  // global 5-second limit unchanged; this is not a latency acceptance test.
+  },30_000)
 
   it('creates, edits, previews, independently approves and publishes the cash rule with the restricted runtime login',async()=>{
     const staff=(employeeId:string)=>({scope,employeeId,businessDate})

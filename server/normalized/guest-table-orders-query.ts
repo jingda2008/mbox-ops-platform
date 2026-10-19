@@ -275,7 +275,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
     })
   }
   const points=await readCheckoutPoints(transaction,[...orders.keys()],true)
-  for(const [key,value] of points){const order=orders.get(key);if(order){order.points=value;order.pricingLabel='积分抵扣 '+value.used+' 分'+(value.credited?'，已返 '+value.credited+' 分':'')}}
+  for(const [key,value] of points){const order=orders.get(key);if(order){order.points=value;order.pricingLabel='积分抵扣 '+value.used+' 分'+(value.restored?'，已返还 '+value.restored+' 分，恢复可用 '+value.credited+' 分'+(value.restored>value.credited?'（'+(value.restored-value.credited)+' 分原批次已过期）':''):'')}}
   return [...orders.values()]
 }
 

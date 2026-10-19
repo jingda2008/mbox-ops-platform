@@ -9,7 +9,10 @@ import {ItemAfterSalesQuery} from './item-after-sales-query.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import Fastify from 'fastify'
-import {NormalizedCommandExecutor} from './command-executor.js'
+import {NormalizedCommandExecutor,appendOutboxMessage} from './command-executor.js'
+import {loadGuestTableOrders} from './guest-table-orders-query.js'
+import {readCheckoutPrintSummary} from './checkout-print-summary.js'
+import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {nativeMemberGiftApiPlugin} from './native-member-gift-api.js'
 import {loadGiftBenefitProducts} from './gift-benefit-products.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
@@ -467,12 +470,30 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,product_kind,fulfillment_station,inventory_control_mode) VALUES($1,$2,$3,'POINTS_BUNDLE','Points bundle','snack','bundle','none','not_managed')",[bundle,tenantId,storeId])
     await pool.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',2000,'CNY',clock_timestamp()-interval '1 day')",[tenantId,storeId,bundle])
     await pool.query('INSERT INTO mbox.product_bundle_components(tenant_id,store_id,bundle_product_id,component_product_id,quantity,sort_order) VALUES($1,$2,$3,$4,2,1)',[tenantId,storeId,bundle,product])
-    for(const points of [5,6,10,20]){
+    const printer=randomUUID()
+    await pool.query("INSERT INTO mbox.devices(id,tenant_id,store_id,code,name,device_type,station_code,connectivity_status) VALUES($1,$2,$3,'POINTS_PRINTER','隔离积分打印机','printer','cashier','offline')",[printer,tenantId,storeId])
+    await pool.query("INSERT INTO mbox.printer_routes(tenant_id,store_id,code,name,station_code,printer_device_id) VALUES($1,$2,'POINTS_CASHIER','积分收银','cashier',$3)",[tenantId,storeId,printer])
+    const bills=async(orderId:string,sessionId:string)=>runner.run(scope,async tx=>{
+      const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,eventType:'manual.order-bill.requested.v1',payload:{orderId}})
+      const tableSource=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:randomUUID(),aggregateVersion:1,eventType:'manual.table-bill.requested.v1',payload:{tableSessionId:sessionId}})
+      const repository=new PrintTicketSourceRepository(tx,true)
+      const orderJob=(await repository.materializeManualOrderBill(source,orderId,'隔离验收'))[0]!
+      return {orderJobId:orderJob.id,order:orderJob.printSnapshot,
+        table:(await repository.materializeManualTableBill(tableSource,sessionId,'隔离验收'))[0]!.printSnapshot}
+    })
+    for(const [points,expireBeforeReturn] of [[5,false],[6,false],[10,false],[20,false],[10,true]] as const){
+      const startingBalance=expireBeforeReturn?40:30
+      let expiringLot:string|undefined
+      if(expireBeforeReturn){
+        expiringLot=randomUUID()
+        await pool.query("INSERT INTO mbox.loyalty_point_lots(id,tenant_id,store_id,membership_id,customer_id,source_type,source_id,original_points,remaining_points,available_at,expires_at) VALUES($1,$2,$3,$4,$5,'legacy_balance','expiry-fixture',10,10,clock_timestamp()-interval '1 day',clock_timestamp()+interval '3 seconds')",[expiringLot,tenantId,storeId,membership,customer])
+        await pool.query('UPDATE mbox.loyalty_accounts SET available_points=40 WHERE membership_id=$1',[membership])
+      }
       const selectedProduct=points===20?bundle:product,total=points===20?2000:1000
       await pool.query('UPDATE mbox.table_session_customer_participations SET left_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3 AND left_at IS NULL',[tenantId,storeId,customer])
       const table=randomUUID(),session=randomUUID()
-      await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,2)",[table,tenantId,storeId,area,`P${points}`])
-      await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1,$2,$3,$4,$5,CURRENT_DATE,2,'open')",[session,tenantId,storeId,table,`points-session-${points}`])
+      await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,2)",[table,tenantId,storeId,area,`P${points}${expireBeforeReturn?"E":""}`])
+      await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1,$2,$3,$4,$5,CURRENT_DATE,2,'open')",[session,tenantId,storeId,table,`points-session-${points}${expireBeforeReturn?"E":""}`])
       await pool.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[tenantId,storeId,session,customer])
       const actorRef=await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId:session,customerId:customer})
       const cart=await runner.run(scope,async tx=>{const carts=new GuestSharedCartRepository(tx),c=await carts.readOpen(session,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`);await tx.query('INSERT INTO mbox.guest_shared_cart_lines(tenant_id,store_id,cart_id,product_id,quantity) VALUES($1,$2,$3,$4,1)',[tenantId,storeId,c.id,selectedProduct]);await tx.query('UPDATE mbox.guest_shared_carts SET version=version+1 WHERE id=$1',[c.id]);return carts.readOpen(session,c.publicId)})
@@ -499,7 +520,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
           resolveGuestContext:async()=>({scope,sessionKind:'table' as const,customerId:customer,tableSessionId:session,reservationId:null,tableCode:'POINTS',tableDisplayName:'Points',businessDate,expiresAt:new Date(Date.now()+3600000).toISOString(),capabilities:['guest.order.create','guest.session.read'],actorRef}),resolveDeviceFingerprint:()=> 'points-http-integration-device-1234'})
         try{
           const balance=await app.inject({method:'GET',url:'/api/guest/shared-cart/points'})
-          expect(balance.statusCode,balance.body).toBe(200);expect(balance.json().data.availablePoints).toBe(30)
+          expect(balance.statusCode,balance.body).toBe(200);expect(balance.json().data.availablePoints).toBe(startingBalance)
           const call={method:'POST' as const,url:'/api/guest/shared-cart/points-settlement',headers:{'idempotency-key':randomUUID()},payload:{expectedGeneration:cart.generation,expectedVersion:cart.version,couponQuoteId:quote.id}}
           const response=await app.inject(call);expect(response.statusCode,response.body).toBe(201)
           expect(response.json().data).toMatchObject({payment:null,pointsSettlement:true,pointsUsed:points,settlement:{payableAmountMinor:0}})
@@ -511,7 +532,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
           order=await runner.run(scope,tx=>new OrderRepository(tx).getSubmittedForFulfillment(id))
         }finally{await app.close()}
       }else order=await runner.run(scope,place)
-      expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30-points)
+      expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(startingBalance-points)
       if(points>=10){
         expect((await runner.run(scope,tx=>tx.query('SELECT mbox.order_consumption_settled($1,$2,$3) AS settled',[tenantId,storeId,order.id]))).rows[0]!.settled).toBe(true)
         await runner.run(scope,async tx=>{
@@ -520,19 +541,39 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         })
         expect((await pool.query('SELECT status FROM mbox.checkout_point_holds WHERE quote_id=$1',[quote.id])).rows[0].status).toBe('consumed')
         expect((await pool.query('SELECT count(*)::int n FROM mbox.payments WHERE order_id=$1',[order.id])).rows[0].n).toBe(0)
+        expect(await runner.run(scope,tx=>readCheckoutPrintSummary(tx,[order!.id]))).toMatchObject({received:0,due:0,state:'paid'})
+        const paidBills=await bills(order.id,session)
+        for(const snapshot of [paidBills.order,paidBills.table]){
+          expect(snapshot).toMatchObject({title:'结账单',checkoutState:'paid',totalAmountMinor:0})
+          expect(snapshot.lines).toEqual(expect.arrayContaining([expect.objectContaining({name:`积分抵扣 ${points} 分（已扣除）`,totalAmountMinor:points*100})]))
+          expect(snapshot.subtitle).not.toMatch(/已确认收款|未确认收款|不代表已付款/)
+        }
         const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
         const request={scope,employeeId:editor,businessDate,reason:'顾客退回未制作商品',idempotencyKey:randomUUID(),orderItemId:order.items.find(i=>points===20?i.parentOrderItemId!==null:i.parentOrderItemId===null)!.id,quantity:1}
         const asked=await service.request(request)
         expect(asked.value.status).toBe('requested')
-        expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30-points)
+        expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(startingBalance-points)
         const decision={scope,employeeId:editor,businessDate,reason:'核对积分退回',idempotencyKey:randomUUID(),caseId:asked.value.caseId,decision:'approved' as const}
         await expect(service.decide(decision)).rejects.toThrow('另一位')
         const view=await new ItemAfterSalesQuery(runner).item({scope,employeeId:approver,itemId:order.items.find(i=>points===20?i.parentOrderItemId!==null:i.parentOrderItemId===null)!.id})
         expect(view.cases[0]).toMatchObject({canApprove:true,pointsReturn:{approvalAmountMinor:points*100}})
+        if(expiringLot)await pool.query('SELECT pg_sleep(GREATEST(0,EXTRACT(epoch FROM(expires_at-clock_timestamp())))+0.02) FROM mbox.loyalty_point_lots WHERE id=$1',[expiringLot])
         const approved=await service.decide({...decision,employeeId:approver,idempotencyKey:randomUUID()})
         expect(approved.value.stoppedQuantity).toBe(1)
         expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(points===20?20:30)
         expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).restoreStoppedCase(asked.value.caseId))).toBe(0)
+        const guestOrders=await runner.run(scope,tx=>loadGuestTableOrders(tx,session,customer))
+        expect(guestOrders.find(o=>o.publicId===order.publicId)).toMatchObject({
+          points:{used:points,restored:10,credited:expireBeforeReturn?0:10},
+          pricingLabel:`积分抵扣 ${points} 分，已返还 10 分，恢复可用 ${expireBeforeReturn?0:10} 分${expireBeforeReturn?'（10 分原批次已过期）':''}`,
+        })
+        expect((await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE id=$1',[paidBills.orderJobId])).rows[0].print_snapshot).toEqual(paidBills.order)
+        const returnedBills=await bills(order.id,session)
+        for(const snapshot of [returnedBills.order,returnedBills.table]){
+          expect(snapshot.lines).toEqual(expect.arrayContaining([
+            expect.objectContaining({name:'原抵扣积分累计返还',quantity:10,note:expireBeforeReturn?'累计恢复可用 0 分；其中 10 分已过期，不恢复可用余额':'累计恢复可用 10 分'}),
+          ]))
+        }
         expect((await pool.query('SELECT count(*)::int n FROM mbox.refunds WHERE order_id=$1',[order.id])).rows[0].n).toBe(0)
         if(points===20){
           const second=await service.request({...request,idempotencyKey:randomUUID()})
@@ -557,6 +598,13 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
           await pool.query(`INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,'CNY')`,[tenantId,storeId,refund,order.items[0]!.id,amount])
           expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).restoreRefund(order.id,refund))).toBe(amount===100?1:5)
           expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).restoreRefund(order.id,refund))).toBe(0)
+          const refundSnapshot=await runner.run(scope,async tx=>{
+            const source=await appendOutboxMessage(tx,{aggregateType:'refund',aggregateId:refund,aggregateVersion:1,eventType:'refund.succeeded.v1',payload:{refundId:refund}})
+            return (await new PrintTicketSourceRepository(tx).materializeCashierRefund(source,refund))[0]!.printSnapshot
+          })
+          expect(refundSnapshot.totalAmountMinor).toBe(amount)
+          expect(refundSnapshot.lines).toEqual(expect.arrayContaining([expect.objectContaining({name:'原抵扣积分累计返还',quantity:amount===100?1:6})]))
+
         }
         expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30)
       }else{

@@ -881,6 +881,8 @@ Page({
     this.orderLoadStartedAt = Date.now()
     this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
     const scopeChanged = this.visibleTableScope !== request.scope
+    const retainedCartScope = !scopeChanged && session.cartScope
+      && this.data.connectionState === 'active' && this.cartSnapshotScope === tableSessionCacheScope()
     this.visibleTableScope = request.scope
     this.cartRecovery = null
     if (scopeChanged) {
@@ -960,6 +962,15 @@ Page({
       await this.loadActiveData(request)
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
+        const temporaryConnectionFailure = error && (error.code === 'NETWORK_ERROR'
+          || [408, 429].includes(Number(error.statusCode)) || Number(error.statusCode) >= 500)
+        if (!tableConfirmed && retainedCartScope && temporaryConnectionFailure) {
+          // Retain the last confirmed same-table display, never its write authority.
+          // A retry must revalidate the session, cart and bill before ordering resumes.
+          this.setData({ loading: false, browseOnly: false, orderReady: false, paymentStateReady: false,
+            error: '连接暂未恢复，已保留本桌购物车显示，请重试后继续点单。' })
+          return
+        }
         if (tableConfirmed && !['GUEST_SESSION_INVALID','TABLE_QR_INVALID'].includes(error && error.code)) {
           this.recordOrderTiming('ready', this.orderLoadStartedAt, false)
           this.setData({ loading: false, orderReady: false, error: customerErrorMessage(error, '购物车或付款状态暂未确认，请重试；可以先浏览菜单。') })

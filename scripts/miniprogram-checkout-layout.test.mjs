@@ -53,7 +53,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
 test('bundle confirmation remains clickable above navigation on small and landscape screens', async () => {
   const source = await readFile(resolve(root, 'miniprogram/pages/order/index.wxml'), 'utf8')
   const start = source.indexOf('  <view wx:if="{{detailProduct}}"')
-  let markup = source.slice(start, source.indexOf('  <view wx:if="{{connectionState === \'active\' && (cart.length', start))
+  let markup = source.slice(start, source.lastIndexOf('  <view', source.indexOf('class="cart-dock"', start)))
   assert.ok(markup.includes('product-detail-footer'))
   markup = markup.replace('{{(customTabBarHeight || 50) + 1}}', '85').replace(/disabled="[^"]*"/g, '').replace(/\{\{[^}]+\}\}/g, expression => expression.includes('保存第') ? '确认选择并加入' : expression.includes('priceText') ? '¥168.00' : '套餐内容')
   const style = await css(resolve(root, 'miniprogram/app.wxss')) + await css(resolve(root, 'miniprogram/pages/order/index.wxss'))

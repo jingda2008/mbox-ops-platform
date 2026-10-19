@@ -141,15 +141,15 @@
     <view wx:if="{{selectedCategory !== 'recommendation'}}" class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
       <view wx:if="{{visibleProducts.length}}" class="product-list">
-        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
-          <view class="product-media">
+        <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available ? '' : 'is-unavailable'}}">
+          <view class="product-media" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
             <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
             <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片暂未加载，可查看详情' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
             <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
-          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct" disabled="{{!orderReady}}">＋</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
+          <view class="product-main" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.availabilityText}}</text></view><button wx:if="{{item.available}}" class="{{item.bundleChoiceGroups.length ? 'product-choice-action' : ''}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct" disabled="{{!orderReady}}">{{item.bundleChoiceGroups.length ? '选规格' : '＋'}}</button><button wx:else class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
@@ -170,7 +170,7 @@
     </scroll-view>
   </view>
 
-  <view wx:if="{{detailProduct}}" class="product-detail-mask sheet-mask" bindtap="closeProductDetail">
+  <view wx:if="{{detailProduct}}" class="product-detail-mask sheet-mask" style="bottom: {{(customTabBarHeight || 50) + 1}}px" bindtap="closeProductDetail">
     <view class="product-detail-sheet {{detailProduct.productKind === 'bundle' ? 'is-bundle' : ''}}" catchtap="keepProductDetailOpen">
       <view class="product-detail-header"><text>{{detailProduct.productKind === 'bundle' ? '套餐详情' : '商品详情'}}</text><button class="product-detail-close" aria-label="关闭商品详情" hover-class="product-detail-close--pressed" catchtap="closeProductDetail">关闭</button></view>
       <scroll-view scroll-y class="product-detail-scroll">

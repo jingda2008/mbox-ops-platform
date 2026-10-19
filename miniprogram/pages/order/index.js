@@ -1607,7 +1607,7 @@ Page({
       wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
-    if(product.productKind==='bundle'){
+    if(product.productKind==='bundle'&&(product.bundleChoiceGroups||[]).length){
       this.setData({ detailProduct:Object.assign(resetBundleChoiceSelections(product),{
           selectionSource:String(event.currentTarget.dataset.source||'menu_add'),
         }),

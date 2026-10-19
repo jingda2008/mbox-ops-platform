@@ -1818,3 +1818,16 @@
   .checkout-confirm__total view text:first-child { font-size: 14px; }
   .checkout-confirm__total view text.checkout-confirm__total-note { display: none; }
 }
+
+/* Required choices use a named action instead of implying immediate add. */
+.product-action .product-choice-action {
+  width: auto;
+  min-width: 64px;
+  padding: 0 10px;
+  font-size: 24rpx;
+  flex-shrink: 0;
+}
+
+.product-detail-footer button {
+  min-height: 44px;
+}

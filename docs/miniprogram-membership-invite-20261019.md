@@ -175,3 +175,9 @@
 - G1实时只读：有效可用131积分、账户与BASE规则正常，当前桌次没有积分报价记录。23:32–23:41相关积分GET8次全部200，未见points-quote/points-settlement请求（日志窗口边界限制）；付款失败具体提示尚未知，不能将UI修复当成真实积分支付成功。
 - 证据目录`/Users/jingda/mbox/outputs/g1-points-menu-20261019/`中的g1-points-incident.json和cart-http-recent.json；不输出客户隐私/凭证，未替客户试扣或创建交易。
 - 66edc520候选尚未上传即被此交互修订取代，最终ui.4将使用新提交和独立目录，不覆盖旧候选。
+
+### 2026-10-19 23:49 CST ui.4最终上传回执
+
+- `1.0.0-rc.260-ui.4` / `4d1d4ca00a1555904fc44e90b36da2b36ac7ffc5`，官方CLI退出0、✔ upload，1,063,547字节；同源preview退出0、✔ preview，1,061,351字节。
+- `/Users/jingda/mbox/outputs/g1-points-menu-20261019/wechat-rc260-ui4-reviewed/`保存上传/预览回执及日志、manifest、candidate证据、583/17测试日志、前后verify。168源文件逐字节对应提交；170候选文件上传/预览前后hash一致。
+- 临时预览码`/Users/jingda/mbox/outputs/g1-points-menu-20261019/rc260-ui4-preview-qr.jpg`，JPEG。尚未设置体验版、提审或正式发布；公众平台仍受工具访问限制。手机购物车与真实积分抵扣待用户复验。

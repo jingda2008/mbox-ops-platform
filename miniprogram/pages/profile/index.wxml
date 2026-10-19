@@ -1,4 +1,4 @@
-<view class="page profile-page">
+<view class="page profile-page" style="padding-bottom: calc(98rpx + {{customTabBarHeight || 50}}px)">
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取会员与权益" />
   <view wx:elif="{{error}}" class="profile-load-error">
     <state-panel type="error" title="会员资料读取失败" message="{{error}}" />

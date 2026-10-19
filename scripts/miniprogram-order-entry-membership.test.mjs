@@ -13,14 +13,15 @@ const verified = { status: 'active', publicId: 'CVC' + '1'.repeat(32) }
 function tabFixture(overrides = {}) {
   let definition
   const routes = [], storage = new Map(), phoneCalls = []
+  const page = {route:'pages/home/index',data:{},setData(patch){Object.assign(this.data,patch)}}
   const api = { getMiniBootstrap: async () => ({ membership: null }), getVerifiedPhones: async () => [], replaceVerifiedPhone: async code => { phoneCalls.push(code); return verified }, ...overrides }
-  const wx = { getStorageSync: key => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), switchTab: ({url}) => routes.push(url), showToast() {} }
+  const wx = { getWindowInfo:()=>({screenHeight:844,safeArea:{bottom:810}}), getStorageSync: key => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), switchTab: ({url}) => routes.push(url), showToast() {} }
   vm.runInNewContext(readFileSync(new URL('../miniprogram/custom-tab-bar/index.js', import.meta.url), 'utf8'), {
-    Component: value => definition = value, getCurrentPages: () => [{route:'pages/home/index'}], wx,
+    Component: value => definition = value, getCurrentPages: () => [page], wx,
     require: name => ({'../utils/api':api,'../utils/wechat-phone':phoneReader,'../utils/customer-error':{customerErrorMessage:(_e,fallback)=>fallback},'../config/index':{getRuntimeConfig:()=>({membershipInviteCooldownHours:24})}})[name],
   })
   const bar = { ...definition.methods, data: structuredClone(definition.data), setData(patch) { Object.assign(this.data,patch) } }
-  return {bar,definition,routes,storage,phoneCalls,api}
+  return {bar,definition,routes,storage,phoneCalls,api,page,wx}
 }
 test('menu tab uses native phone button only for known unverified nonmembers', async () => {
   const h = tabFixture(); await h.bar.refresh('/pages/home/index'); assert.equal(h.bar.data.needsPhone,true)
@@ -85,3 +86,8 @@ test('rapid submit taps cannot stack checkout under the membership invitation', 
   const h=orderFixture(); await Promise.all([h.page.openCheckout(),h.page.openCheckout()])
   assert.equal(h.page.data.checkoutMemberInviteVisible,true);assert.equal(h.page.data.checkoutConfirmVisible,false);assert.equal(h.state.calls.length,0)
 })
+
+ test('tab and page reserve the same iPhone safe area; invalid device dimensions do not collapse layout', async()=>{
+   const h=tabFixture();await h.bar.refresh();assert.equal(h.bar.data.safeBottom,34);assert.equal(h.page.data.customTabBarHeight,84)
+   h.wx.getWindowInfo=()=>({screenHeight:700,safeArea:{bottom:720}});await h.bar.refresh();assert.equal(h.bar.data.safeBottom,0);assert.equal(h.page.data.customTabBarHeight,50)
+ })

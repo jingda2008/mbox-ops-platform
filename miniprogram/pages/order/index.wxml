@@ -1,4 +1,4 @@
-<view class="page order-page">
+<view class="page order-page" style="height: calc(100vh - {{customTabBarHeight || 50}}px)">
   <scroll-view scroll-y enhanced show-scrollbar="{{false}}" scroll-into-view="{{menuScrollTarget}}" class="order-scroll">
     <view class="order-scroll__content">
   <view wx:if="{{membershipInviteVisible}}" class="menu-phone-entry">

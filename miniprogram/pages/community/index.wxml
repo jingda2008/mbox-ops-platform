@@ -1,4 +1,4 @@
-<view class="page community-page">
+<view class="page community-page" style="padding-bottom: calc(98rpx + {{customTabBarHeight || 50}}px)">
   <view class="community-hero">
     <image class="community-hero__watermark" src="/assets/brand/superhigh-mark.png" mode="aspectFit" aria-hidden="true" />
     <view class="community-hero__brand">

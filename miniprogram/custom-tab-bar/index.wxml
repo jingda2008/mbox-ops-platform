@@ -1,4 +1,4 @@
-<view class="tab-bar">
+<view class="tab-bar" style="padding-bottom: {{safeBottom}}px">
   <block wx:for="{{tabs}}" wx:key="path">
     <button wx:if="{{index === 2 && needsPhone}}" class="tab-item {{selected === index ? 'is-selected' : ''}}" open-type="getPhoneNumber" bindgetphonenumber="authorizeAndOrder" disabled="{{busy}}" aria-label="点单，授权手机号后进入，也可拒绝继续">
       <image src="/assets/tabbar/{{item.icon}}{{selected === index ? '-active' : ''}}.png" /><text>{{item.text}}</text>

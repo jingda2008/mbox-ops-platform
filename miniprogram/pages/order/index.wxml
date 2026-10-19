@@ -227,9 +227,16 @@
   <view wx:if="{{membershipInviteVisible}}" class="sheet-mask membership-invite-mask" bindtap="dismissMembershipInvite">
     <view class="membership-invite" catchtap="keepMembershipInviteOpen" role="dialog" aria-label="加入会员邀请">
       <view class="membership-invite__copy"><text>加入会员，让积分替你买单</text><text>消费攒积分，下次点单直接抵。</text><text>1积分＝1元</text></view>
-      <view class="membership-invite__actions"><button bindtap="enrollFromMenu">立即加入</button><button bindtap="dismissMembershipInvite">继续点菜</button></view>
+      <checkbox-group bindchange="onMembershipInviteAgreementChange"><label class="membership-invite__agreement"><checkbox value="agree" checked="{{membershipInviteAgreed}}" disabled="{{membershipBusy}}" color="#2d2925" /><text>同意《用户服务协议》和《隐私政策》</text></label></checkbox-group>
+      <text wx:if="{{membershipInviteError}}" class="membership-invite__error">{{membershipInviteError}}</text>
+      <view class="membership-invite__actions">
+        <button wx:if="{{membershipInviteAgreed}}" open-type="getPhoneNumber" bindgetphonenumber="enrollFromMenu" loading="{{membershipBusy}}" disabled="{{membershipBusy}}">授权手机号加入</button>
+        <button wx:else bindtap="remindMembershipInviteAgreement">授权手机号加入</button>
+        <button bindtap="dismissMembershipInvite">先点菜</button>
+      </view>
       <button class="membership-invite__recovery" bindtap="openMembershipRecovery">我已是会员</button>
-      <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
+      <button class="membership-invite__privacy" bindtap="showMembershipTerms">用户服务协议</button>
+      <button class="membership-invite__privacy" bindtap="openInvitePrivacy">隐私政策</button>
     </view>
   </view>
 </view>

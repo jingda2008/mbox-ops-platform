@@ -1314,10 +1314,12 @@
 .membership-invite__copy text:first-child { font-size: 34rpx; font-weight: 600; line-height: 1.5; }
 .membership-invite__copy text:nth-child(2) { margin-top: 14rpx; color: #766d62; font-size: 26rpx; line-height: 1.5; }
 .membership-invite__copy text:last-child { margin-top: 24rpx; color: #7b5c31; font-size: 42rpx; font-weight: 600; }
+.membership-invite__agreement { display: flex; align-items: center; gap: 10rpx; margin-top: 24rpx; font-size: 22rpx; line-height: 1.6; color: #6f675f; }
+.membership-invite__error { display: block; margin-top: 12rpx; font-size: 24rpx; line-height: 1.5; color: #a13324; }
 .membership-invite__actions { display: flex; gap: 16rpx; margin-top: 32rpx; }
 .membership-invite__actions button {
   flex: 1; min-width: 0; min-height: max(88rpx, 44px); margin: 0; padding: 0 16rpx;
-  border: 0; border-radius: 44rpx; background: #2d2925; color: #fff; font-size: 28rpx; line-height: max(88rpx, 44px);
+  border: 0; border-radius: 44rpx; background: #2d2925; color: #fff; font-size: 26rpx; line-height: max(88rpx, 44px);
 }
 .membership-invite__actions button:last-child { border: 1rpx solid #b9a98e; background: transparent; color: #655844; }
 .membership-invite__recovery, .membership-invite__privacy {

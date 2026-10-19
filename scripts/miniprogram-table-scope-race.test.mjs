@@ -251,6 +251,7 @@ async function loadOrderPage(state) {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
     require(specifier) {
+      if (specifier === '../../utils/wechat-phone') return loadMiniModule(new URL('../miniprogram/utils/wechat-phone.js', import.meta.url))
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return {

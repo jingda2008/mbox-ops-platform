@@ -607,6 +607,7 @@ Page({
     benefitCount: 0,
     membershipInviteVisible: false,
     membershipBusy: false,
+    membershipStatus: 'unknown',
     membershipTerms: null,
     wechatNotificationPromptOptions: [],
     wechatOrderSelectionPromptOptions: [],
@@ -630,6 +631,9 @@ Page({
     })
   },
   onHide() {
+    this.selectionNotificationPending = null
+    this.membershipInvitePending = false
+    this.setData({ membershipInviteVisible: false, membershipStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
@@ -854,7 +858,8 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false, paymentStateReady: false })
+    this.membershipInvitePending = false
+    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, membershipTerms: null })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     this.cartRecovery = null
@@ -1191,7 +1196,15 @@ Page({
     const loaders = {
       performance: async () => { const result = await loadPerformanceView(); return { performance: result.performance, performanceError: result.error } },
       benefits: async () => ({ benefitCount: (await getCustomerBenefits() || []).reduce((sum,item) => sum + Number(item.quantityAvailable || 0),0) }),
-      membership: async () => { const result = await getMiniBootstrap(); return { membershipTerms: result && result.membershipTerms || null } },
+      membership: async () => {
+        const result = await getMiniBootstrap()
+        return {
+          membershipTerms: result && result.membershipTerms || null,
+          // Only an explicit server null proves this customer is not a member.
+          membershipStatus: result && result.membership === null ? 'nonmember'
+            : result && result.membership ? 'member' : 'unknown',
+        }
+      },
       order_checkout: async () => ({ wechatNotificationPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_checkout')) }),
       order_selection: async () => ({ wechatOrderSelectionPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_selection')) }),
       service: async () => ({ serviceSummary: serviceSummaryView(await getServiceRequests(), this.data.serviceStaffName) }),
@@ -1202,6 +1215,11 @@ Page({
       const update = await loaders[name]()
       if (!current()) return
       this.setData(update)
+      if (name === 'membership') {
+        this.membershipInviteRequest = request || this.currentTableRequest()
+        if (update.membershipStatus !== 'nonmember') this.setData({ membershipInviteVisible: false })
+        this.maybeShowMembershipInvite()
+      }
       if (name === 'order_checkout') rememberPresentationOptions(name, update.wechatNotificationPromptOptions)
       if (name === 'order_selection') rememberPresentationOptions(name, update.wechatOrderSelectionPromptOptions)
       if (name === 'recommendation') { this.recommendationFeatureDisabled = false; this.ensureInitialRecommendations(request) }
@@ -1215,10 +1233,26 @@ Page({
         this.setData({ recommendationError: '门店暂未开放推荐，请直接从菜单选择。', recommendationQuestionVisible: false })
         return
       }
+      if (name === 'membership') this.setData({ membershipStatus: 'unknown', membershipInviteVisible: false })
       this.orderExtraErrors[name] = true
       if (name === 'recommendation') this.setData({ recommendationError: '推荐暂时无法读取，点此重试；菜单仍可正常点单。' })
     }
   },
+
+  maybeShowMembershipInvite() {
+    if (!this.membershipInvitePending || this.membershipInviteShown || this.selectionNotificationPending) return
+    if (!this.membershipInviteRequest || !this.isCurrentTableRequest(this.membershipInviteRequest)) return
+    if (this.data.membershipStatus !== 'nonmember' || !this.data.membershipTerms) return
+    if (!this.data.orderReady || this.data.browseOnly || !this.data.cartCount || this.data.busy
+      || this.data.detailProduct || this.data.checkoutConfirmVisible || this.data.checkoutLocked
+      || this.data.paymentResult || this.data.recommendationQuestionVisible) return
+    if (Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY)) > Date.now()) return
+    this.membershipInviteShown = true
+    this.membershipInvitePending = false
+    this.setData({ membershipInviteVisible: true, cartExpanded: false })
+  },
+
+  keepMembershipInviteOpen() {},
 
   dismissMembershipInvite() {
     const configuredHours = Number(getRuntimeConfig().membershipInviteCooldownHours)
@@ -1241,6 +1275,7 @@ Page({
       this.setData({ error: '暂时无法查看入会说明，点单不受影响' })
       return
     }
+    this.dismissMembershipInvite()
     wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=enroll' })
   },
 
@@ -1320,7 +1355,7 @@ Page({
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
-  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }) },
+  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }); this.maybeShowMembershipInvite() },
   toggleDetailInformation() { this.setData({ detailInformationExpanded: !this.data.detailInformationExpanded }) },
   keepProductDetailOpen() {},
   previewProductImage() {
@@ -1633,9 +1668,17 @@ Page({
     // The first concrete order action is the natural place for the benefit
     // bundle.  It is separate from the later payment-result bundle.
     // Cached optional notification prompts cannot delay the cart write.
-    void this.offerOrderNotifications('order_selection', tableRequest).catch(() => {})
+    const notification = this.selectionNotificationPending || this.offerOrderNotifications('order_selection', tableRequest).catch(() => {})
+    this.selectionNotificationPending = notification
+    void notification.then(() => {
+      if (this.selectionNotificationPending === notification) this.selectionNotificationPending = null
+      if (this.isCurrentTableRequest(tableRequest)) this.maybeShowMembershipInvite()
+    })
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (!await this.adjustSharedCart(productId, 1,bundleSelections)) return false
+    if (!this.isCurrentTableRequest(tableRequest)) return false
+    this.membershipInvitePending = true
+    this.maybeShowMembershipInvite()
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
     if (source === 'recommendation' && this.data.recommendationPublicId) {

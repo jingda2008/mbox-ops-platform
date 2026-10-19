@@ -85,12 +85,7 @@
       <button data-code="complaint" disabled="{{quickServiceBusy}}" bindtap="requestQuickService"><view class="quick-service__surface"><text class="quick-service__dot"></text><text>{{quickServiceBusy === 'complaint' ? '正在通知' : '投诉/不满意'}}</text></view></button>
     </view>
 
-    <view wx:if="{{membershipInviteVisible}}" class="membership-invite">
-      <view class="membership-invite__copy"><text>加入 M-BOX 会员</text><text>{{membershipTerms.summary}}</text></view>
-      <view class="membership-invite__actions"><button bindtap="enrollFromMenu" loading="{{membershipBusy}}">加入会员</button><button bindtap="dismissMembershipInvite">稍后再说</button></view>
-      <button class="membership-invite__recovery" bindtap="openMembershipRecovery">我已是会员</button>
-      <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
-    </view>
+
 
 
     <view id="connected-menu-anchor"></view>
@@ -229,6 +224,14 @@
     <view class="payment-result__sheet"><button class="payment-result__close compact-text-action" aria-label="关闭付款提示" hover-class="payment-result__close--pressed" bindtap="closePaymentResult">关闭</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
   </view>
 
+  <view wx:if="{{membershipInviteVisible}}" class="sheet-mask membership-invite-mask" bindtap="dismissMembershipInvite">
+    <view class="membership-invite" catchtap="keepMembershipInviteOpen" role="dialog" aria-label="加入会员邀请">
+      <view class="membership-invite__copy"><text>加入会员，让积分替你买单</text><text>消费攒积分，下次点单直接抵。</text><text>1积分＝1元</text></view>
+      <view class="membership-invite__actions"><button bindtap="enrollFromMenu">立即加入</button><button bindtap="dismissMembershipInvite">继续点菜</button></view>
+      <button class="membership-invite__recovery" bindtap="openMembershipRecovery">我已是会员</button>
+      <button class="membership-invite__privacy" bindtap="showMembershipTerms">查看会员权益说明</button>
+    </view>
+  </view>
 </view>
 
 <launch-popup />

@@ -1679,7 +1679,19 @@
 .checkout-note > text { flex: 0 0 auto; color: #6d746b; font-size: 21rpx; }
 .checkout-note input { flex: 1; width: 0; min-width: 0; height: 44px; font-size: 23rpx; }
 .checkout-confirm__total { margin-top: 0; padding: 10rpx 2rpx; }
-.checkout-confirm__lines { max-height: 52vh; }
+/* The mask reserves the custom navigation height. Only the form scrolls;
+   totals and payment remain reachable when points or coupons expand. */
+.checkout-confirm__sheet { height: 100%; box-sizing: border-box; }
+.checkout-confirm__sheet > .sheet-handle { flex-shrink: 0; }
+.checkout-confirm__lines { height: 0; min-height: 0; max-height: none; flex: 1 1 0%; }
+.checkout-confirm__footer .checkout-confirm__footer-button { display: flex; align-items: center; justify-content: center; min-height: 44px; padding: 8rpx; line-height: 1.4; }
+.checkout-confirm__footer { padding-top: 8rpx; }
+@media (max-height: 450px) {
+  .checkout-confirm__sheet > .sheet-handle { margin-bottom: 4px; }
+  .checkout-confirm__head { min-height: 44px; }
+  .checkout-confirm__title { font-size: 24rpx; margin-top: 0; }
+  .checkout-confirm__total { padding-top: 4px; padding-bottom: 4px; }
+}
 .checkout-upgrade__actions button { display: flex; align-items: center; justify-content: center; border-radius: 14rpx; }
 .checkout-upgrade__title { margin: 6rpx 0; }
 .product-tastes { display: flex; flex-wrap: wrap; gap: 6rpx; margin: 8rpx 0; }

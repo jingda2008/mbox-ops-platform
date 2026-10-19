@@ -6,22 +6,22 @@ const terms = { version: 1, summary: '消费积分说明' }
 const bootstrap = { membership: null, membershipTerms: terms }
 const event = { currentTarget: { dataset: { id: 'p1' } } }
 const phone = { detail: { code: 'wechat-phone-test-code' } }
-const agree = { detail: { value: ['agree'] } }
+const verifiedPhone = { publicId: 'CVC' + '1'.repeat(32), status: 'active' }
 const key = 'mbox.membership.invite.dismissed.until.v1'
 function setup(overrides = {}) {
-  return fixture('order', { getMiniBootstrap: async () => bootstrap, adjustSharedCart: async () => cart(2), ...overrides })
+  return fixture('order', { getMiniBootstrap: async () => bootstrap, getVerifiedPhones: async () => [], adjustSharedCart: async () => cart(2), ...overrides })
 }
 async function read(h) { await h.page.loadOrderExtra('membership', h.page.currentTableRequest()); return h }
 async function ready(overrides = {}) { return read(setup(overrides)) }
 
 test('entering menu invites confirmed nonmember before any dish selection or phone submission', async () => {
   let enrollments = 0
-  const h = setup({ enrollMembership: async () => { enrollments++ } })
+  const h = setup({ replaceVerifiedPhone: async () => { enrollments++ } })
   h.page.updateCart([], { ...cart(1), lines: [] })
   await read(h)
   assert.equal(h.page.data.cartCount, 0)
   assert.equal(h.page.data.membershipInviteVisible, true)
-  assert.equal(h.page.data.membershipInviteAgreed, false)
+  assert.equal(h.page.data.menuPhoneStatus, 'missing')
   assert.equal(enrollments, 0)
   const before = Date.now()
   h.page.dismissMembershipInvite()
@@ -31,7 +31,7 @@ test('entering menu invites confirmed nonmember before any dish selection or pho
   assert.equal(h.page.data.cartCount, 1)
 })
 
-for (const [name, response] of [['member', { ...bootstrap, membership: { memberNo: 'M1' } }], ['missing identity', { membershipTerms: terms }], ['empty response', null], ['unpublished terms', { membership: null, membershipTerms: null }]]) {
+for (const [name, response] of [['member', { ...bootstrap, membership: { memberNo: 'M1' } }], ['missing identity', { membershipTerms: terms }], ['empty response', null]]) {
   test(`${name} never receives an enrollment invitation`, async () => {
     const h = await ready({ getMiniBootstrap: async () => response })
     await h.page.addProduct(event)
@@ -102,42 +102,38 @@ test('checkout is never covered by a late invitation', async () => {
   assert.equal(h.page.data.membershipInviteVisible, false)
 })
 
-test('no agreement, denied phone and closed invitation never submit enrollment', async () => {
+test('denied phone and closed entry never submit phone or membership', async () => {
   let calls = 0
-  const h = await ready({ enrollMembership: async () => { calls++ } })
-  await h.page.enrollFromMenu(phone)
-  assert.equal(calls, 0)
-  h.page.onMembershipInviteAgreementChange(agree)
-  await h.page.enrollFromMenu({ detail: { errMsg: 'getPhoneNumber:fail user deny' } })
+  const h = await ready({ replaceVerifiedPhone: async () => { calls++ } })
+  await h.page.authorizeMenuPhone({ detail: { errMsg: 'getPhoneNumber:fail user deny' } })
   assert.equal(calls, 0)
   assert.match(h.page.data.membershipInviteError, /未授权/)
   h.page.dismissMembershipInvite()
-  await h.page.enrollFromMenu(phone)
+  await h.page.authorizeMenuPhone(phone)
   assert.equal(calls, 0)
   assert.equal(await h.page.addProduct(event), true)
 })
 
-test('phone authorization submits once with current terms; enrollment preserves cart and refreshes identity', async () => {
+test('native phone authorization submits once without terms or enrollment and preserves cart', async () => {
   const pending = deferred(), calls = []
-  const h = await ready({ enrollMembership: async (...args) => { calls.push(args); return pending.promise } })
-  h.page.onMembershipInviteAgreementChange(agree)
-  const enrolling = h.page.enrollFromMenu(phone)
-  await h.page.enrollFromMenu(phone)
+  const h = await ready({ replaceVerifiedPhone: async (...args) => { calls.push(args); return pending.promise } })
+  const enrolling = h.page.authorizeMenuPhone(phone)
+  await h.page.authorizeMenuPhone(phone)
   assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0], [1, 'mini_menu', phone.detail.code])
-  h.api.getMiniBootstrap = async () => ({ ...bootstrap, membership: { memberNo: 'new-member' } })
-  pending.resolve({ membership: { memberNo: 'new-member' } })
+  assert.deepEqual(calls[0], [phone.detail.code])
+  h.api.enrollMembership = async () => { throw Error('must not enroll') }
+  pending.resolve(verifiedPhone)
   await enrolling
-  assert.equal(h.page.data.membershipStatus, 'member')
+  assert.equal(h.page.data.membershipStatus, 'nonmember')
+  assert.equal(h.page.data.menuPhoneStatus, 'verified')
   assert.equal(h.page.data.membershipInviteVisible, false)
   assert.equal(h.page.data.membershipBusy, false)
   assert.equal(h.page.data.cartCount, 1)
 })
 
-test('failed enrollment stays retryable and customer can continue ordering', async () => {
-  const h = await ready({ enrollMembership: async () => { throw Error('offline') } })
-  h.page.onMembershipInviteAgreementChange(agree)
-  await h.page.enrollFromMenu(phone)
+test('failed phone verification stays retryable and customer can continue ordering', async () => {
+  const h = await ready({ replaceVerifiedPhone: async () => { throw Error('offline') } })
+  await h.page.authorizeMenuPhone(phone)
   assert.equal(h.page.data.membershipStatus, 'nonmember')
   assert.equal(h.page.data.membershipBusy, false)
   assert.ok(h.page.data.membershipInviteError)
@@ -145,31 +141,29 @@ test('failed enrollment stays retryable and customer can continue ordering', asy
   assert.equal(await h.page.addProduct(event), true)
 })
 
-test('returning from reading agreements reopens invitation without preselecting consent', async () => {
-  for (const action of ['showMembershipTerms', 'openInvitePrivacy']) {
+test('returning from privacy preserves the phone entry and cart', async () => {
+  for (const action of ['openInvitePrivacy']) {
     const h = await ready(), routes = []
     h.wx.navigateTo = options => routes.push(options.url)
-    h.page.onMembershipInviteAgreementChange(agree)
     h.page[action]()
     assert.equal(routes.length, 1)
     h.page.onHide()
     await h.page.preparePage()
     await read(h)
     assert.equal(h.page.data.membershipInviteVisible, true)
-    assert.equal(h.page.data.membershipInviteAgreed, false)
+    assert.equal(h.page.data.menuPhoneStatus, 'missing')
     assert.equal(h.page.data.cartCount, 1)
   }
 })
 
-test('hidden-page and stale enrollment responses do not alter a new table', async () => {
+test('hidden-page and stale phone verification responses do not alter a new table', async () => {
   const response = deferred()
-  const h = await ready({ enrollMembership: () => response.promise })
-  h.page.onMembershipInviteAgreementChange(agree)
-  const pending = h.page.enrollFromMenu(phone)
+  const h = await ready({ replaceVerifiedPhone: () => response.promise })
+  const pending = h.page.authorizeMenuPhone(phone)
   h.page.onHide()
   h.state.session = { tableCode: 'W21', tableToken: 'other', cartScope: 'other' }
   h.page.beginTableRequest()
-  response.resolve({ membership: { memberNo: 'old-response' } })
+  response.resolve(verifiedPhone)
   await pending
   assert.equal(h.page.data.membershipStatus, 'unknown')
   assert.equal(h.page.data.membershipInviteVisible, false)
@@ -179,6 +173,26 @@ test('browse menu also loads entry invitation, without requiring a table or cart
   const h = setup()
   await h.page.loadBrowseData('', undefined, h.page.currentTableRequest())
   await Promise.resolve(); await Promise.resolve()
+  await new Promise(resolve => setImmediate(resolve))
   assert.equal(h.page.data.browseOnly, true)
   assert.equal(h.page.data.membershipInviteVisible, true)
 })
+
+ test('phone authorization does not require published membership terms', async () => {
+   const h = await ready({ getMiniBootstrap: async () => ({ membership: null, membershipTerms: null }) })
+   assert.equal(h.page.data.membershipInviteVisible, true)
+ })
+ test('verified phone and unknown phone state suppress the optional entry', async () => {
+   for (const getVerifiedPhones of [async () => [verifiedPhone], async () => { throw Error('offline') }]) {
+     const h = await ready({ getVerifiedPhones })
+     assert.equal(h.page.data.membershipInviteVisible, false)
+     assert.equal(await h.page.addProduct(event), true)
+   }
+ })
+ test('incomplete verification response never claims success', async () => {
+   const h = await ready({ replaceVerifiedPhone: async () => ({}) })
+   await h.page.authorizeMenuPhone(phone)
+   assert.equal(h.page.data.menuPhoneStatus, 'missing')
+   assert.equal(h.page.data.membershipInviteVisible, true)
+   assert.ok(h.page.data.membershipInviteError)
+ })

@@ -11,13 +11,12 @@ async function css(file) {
 }
 test('membership invitation keeps accepted copy and usable actions on small phones and landscape', async () => {
   const source = await readFile(resolve(root, 'miniprogram/pages/order/index.wxml'), 'utf8')
-  const template = source.slice(source.indexOf('  <view wx:if="{{membershipInviteVisible}}"'), source.lastIndexOf('</view>'))
-  for (const copy of ['加入会员，让积分替你买单', '消费攒积分，下次点单直接抵。', '1积分＝1元', '授权手机号加入', '先点菜']) assert.ok(template.includes(copy))
-  assert.match(template, /wx:if="\{\{membershipInviteAgreed\}\}" open-type="getPhoneNumber" bindgetphonenumber="enrollFromMenu"/)
-  assert.match(template, /checkbox value="agree" checked="\{\{membershipInviteAgreed\}\}"/)
-  const markup = template.replace(/disabled="\{\{membershipBusy\}\}"/g, '').replace(/<button wx:else bindtap="remindMembershipInviteAgreement">[\s\S]*?<\/button>/, '')
+  const template = source.slice(source.indexOf('  <view wx:if="{{membershipInviteVisible}}"'), source.indexOf('  <state-panel', source.indexOf('  <view wx:if="{{membershipInviteVisible}}"')))
+  for (const copy of ['授权手机号', '暂不授权']) assert.ok(template.includes(copy))
+  assert.match(template, /open-type="getPhoneNumber" bindgetphonenumber="authorizeMenuPhone"/)
+  assert.doesNotMatch(template, /checkbox|role="dialog"|sheet-mask|enrollFromMenu/)
+  const markup = template.replace(/disabled="\{\{membershipBusy\}\}"/g, '')
     .replace(/<text wx:if="\{\{membershipInviteError\}\}"[\s\S]*?<\/text>/, '')
-    .replace(/<checkbox value="agree"[^>]*\/>/, '<input type="checkbox" aria-label="同意协议" />')
   const style = await css(resolve(root, 'miniprogram/app.wxss')) + await css(resolve(root, 'miniprogram/pages/order/index.wxss'))
   const browser = await chromium.launch({ headless: true })
   try {
@@ -26,7 +25,7 @@ test('membership invitation keeps accepted copy and usable actions on small phon
       await page.setViewportSize({ width, height })
       await page.setContent(`<style>html,body{margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif}view{display:block}button{box-sizing:border-box;font-family:inherit}text{overflow-wrap:anywhere}${style.replace(/(-?[\d.]+)rpx\b/g, (_, n) => `${Number(n)*width/750}px`)}</style><view class="page order-page">${markup}</view>`)
       assert.ok(await page.evaluate(() => document.body.scrollWidth <= innerWidth + 1), 'no horizontal overflow')
-      for (const action of ['授权手机号加入', '先点菜', '用户服务协议', '隐私政策']) {
+      for (const action of ['授权手机号', '暂不授权', '隐私政策']) {
         const button = page.getByRole('button', { name: action, exact: true })
         await button.scrollIntoViewIfNeeded()
         const box = await button.boundingBox()

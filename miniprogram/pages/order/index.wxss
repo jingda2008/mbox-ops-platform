@@ -1300,33 +1300,14 @@
 .recommend-foot button { min-width: 104rpx; min-height: 76rpx; border-radius: 38rpx; }
 .recommend-foot .recommend-select { min-width: 122rpx; }
 @media (max-width: 390px) { .recommend-card { width: 500rpx; } }
-.membership-invite-mask { z-index: 65; }
-.membership-invite {
-  width: 100%;
-  box-sizing: border-box;
-  max-height: 85vh;
-  overflow-y: auto;
-  padding: 42rpx 30rpx calc(30rpx + env(safe-area-inset-bottom));
-  border-radius: 28rpx 28rpx 0 0;
-  background: #f8f3e9;
-}
-.membership-invite__copy text { display: block; }
-.membership-invite__copy text:first-child { font-size: 34rpx; font-weight: 600; line-height: 1.5; }
-.membership-invite__copy text:nth-child(2) { margin-top: 14rpx; color: #766d62; font-size: 26rpx; line-height: 1.5; }
-.membership-invite__copy text:last-child { margin-top: 24rpx; color: #7b5c31; font-size: 42rpx; font-weight: 600; }
-.membership-invite__agreement { display: flex; align-items: center; gap: 10rpx; margin-top: 24rpx; font-size: 22rpx; line-height: 1.6; color: #6f675f; }
-.membership-invite__error { display: block; margin-top: 12rpx; font-size: 24rpx; line-height: 1.5; color: #a13324; }
-.membership-invite__actions { display: flex; gap: 16rpx; margin-top: 32rpx; }
-.membership-invite__actions button {
-  flex: 1; min-width: 0; min-height: max(88rpx, 44px); margin: 0; padding: 0 16rpx;
-  border: 0; border-radius: 44rpx; background: #2d2925; color: #fff; font-size: 26rpx; line-height: max(88rpx, 44px);
-}
-.membership-invite__actions button:last-child { border: 1rpx solid #b9a98e; background: transparent; color: #655844; }
-.membership-invite__recovery, .membership-invite__privacy {
-  display: inline-block; width: auto; min-height: max(80rpx, 44px); margin: 18rpx 24rpx 0 0; padding: 0;
-  border: 0; background: transparent; color: #6f675f; font-size: 22rpx; line-height: max(80rpx, 44px); text-align: left;
-}
-.membership-invite__recovery::after, .membership-invite__privacy::after { border: 0; }
+.menu-phone-entry { margin: 12rpx 0 20rpx; padding: 20rpx 24rpx; border-radius: 20rpx; background: #f1f4ed; }
+.menu-phone-entry__copy { display: block; color: #365743; font-size: 24rpx; line-height: 1.5; }
+.menu-phone-entry__actions { display: flex; gap: 16rpx; margin-top: 14rpx; }
+.menu-phone-entry__actions button { flex: 1; min-width: 0; min-height: 44px; margin: 0; padding: 0 16rpx; border-radius: 24px; background: #214f3e; color: #fff; font-size: 26rpx; line-height: 44px; }
+.menu-phone-entry__actions button:last-child { background: transparent; color: #365743; }
+.menu-phone-entry__error { display: block; margin-top: 12rpx; color: #a13324; font-size: 24rpx; }
+.menu-phone-entry__privacy { width: auto; min-height: 44px; margin: 0; padding: 0; border: 0; background: transparent; color: #6f675f; font-size: 22rpx; line-height: 44px; text-align: left; }
+.menu-phone-entry__privacy::after { border: 0; }
 
 /* Checkout outcome is explicit: WeChat acceptance is not labelled as store
    settlement until the table ledger confirms it. */

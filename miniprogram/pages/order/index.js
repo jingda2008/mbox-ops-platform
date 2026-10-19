@@ -20,7 +20,8 @@ const {
   getTodayPerformances,
   getCustomerBenefits,
   getMiniBootstrap,
-  enrollMembership,
+  getVerifiedPhones,
+  replaceVerifiedPhone,
   getWechatNotificationPrompt,
   createServiceTask,
   getServiceRequests,
@@ -610,7 +611,7 @@ Page({
     membershipInviteVisible: false,
     membershipBusy: false,
     membershipStatus: 'unknown',
-    membershipInviteAgreed: false,
+    menuPhoneStatus: 'unknown',
     membershipInviteError: '',
     membershipTerms: null,
     wechatNotificationPromptOptions: [],
@@ -636,7 +637,7 @@ Page({
   },
   onHide() {
     this.selectionNotificationPending = null
-    this.setData({ membershipInviteVisible: false, membershipStatus: 'unknown', membershipInviteAgreed: false })
+    this.setData({ membershipInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
@@ -861,7 +862,7 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, membershipTerms: null, membershipInviteAgreed: false, membershipInviteError: '' })
+    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     this.cartRecovery = null
@@ -1201,7 +1202,9 @@ Page({
       benefits: async () => ({ benefitCount: (await getCustomerBenefits() || []).reduce((sum,item) => sum + Number(item.quantityAvailable || 0),0) }),
       membership: async () => {
         const result = await getMiniBootstrap()
+        const phones = result && result.membership === null ? await getVerifiedPhones() : null
         return {
+          menuPhoneStatus: Array.isArray(phones) ? (phones.length ? 'verified' : 'missing') : 'unknown',
           membershipTerms: result && result.membershipTerms || null,
           // Only an explicit server null proves this customer is not a member.
           membershipStatus: result && result.membership === null ? 'nonmember'
@@ -1245,17 +1248,15 @@ Page({
   maybeShowMembershipInvite() {
     if ((this.membershipInviteShown && !this.resumeMembershipInvite) || this.selectionNotificationPending) return
     if (!this.membershipInviteRequest || !this.isCurrentTableRequest(this.membershipInviteRequest)) return
-    if (this.data.membershipStatus !== 'nonmember' || !this.data.membershipTerms) return
+    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
     if ((!this.data.orderReady && !this.data.browseCatalogLoaded) || this.data.busy
       || this.data.detailProduct || this.data.checkoutConfirmVisible || this.data.checkoutLocked
       || this.data.paymentResult || this.data.recommendationQuestionVisible) return
     if (Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY)) > Date.now()) return
     this.membershipInviteShown = true
     this.resumeMembershipInvite = false
-    this.setData({ membershipInviteVisible: true, membershipInviteAgreed: false, membershipInviteError: '', cartExpanded: false })
+    this.setData({ membershipInviteVisible: true, membershipInviteError: '' })
   },
-
-  keepMembershipInviteOpen() {},
 
   dismissMembershipInvite() {
     this.resumeMembershipInvite = false
@@ -1263,36 +1264,19 @@ Page({
     const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
       ? configuredHours : 24
     wx.setStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY, Date.now() + cooldownHours * 60 * 60 * 1000)
-    this.setData({ membershipInviteVisible: false, membershipInviteAgreed: false })
+    this.setData({ membershipInviteVisible: false })
   },
 
-  openMembershipRecovery() { wx.switchTab({ url: '/pages/profile/index' }) },
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
-
-  showMembershipTerms() {
-    if (!this.data.membershipTerms) return
-    this.resumeMembershipInvite = this.data.membershipInviteVisible
-    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=view' })
-  },
 
   openInvitePrivacy() {
     this.resumeMembershipInvite = this.data.membershipInviteVisible
     this.openPrivacy()
   },
 
-  onMembershipInviteAgreementChange(event) {
-    if (this.data.membershipBusy) return
-    this.setData({ membershipInviteAgreed: (event.detail.value || []).includes('agree'), membershipInviteError: '' })
-  },
-
-  remindMembershipInviteAgreement() {
-    this.setData({ membershipInviteError: '请先阅读并勾选同意协议，再授权手机号加入。' })
-  },
-
-  async enrollFromMenu(event) {
+  async authorizeMenuPhone(event) {
     if (this.data.membershipBusy || !this.data.membershipInviteVisible) return
-    if (!this.data.membershipInviteAgreed) { this.remindMembershipInviteAgreement(); return }
-    if (this.data.membershipStatus !== 'nonmember' || !this.data.membershipTerms) return
+    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
     const request = this.currentTableRequest()
     if (!request || !this.isCurrentTableRequest(request)) return
     const authorization = readWechatPhoneAuthorization(event)
@@ -1302,15 +1286,16 @@ Page({
     }
     this.setData({ membershipBusy: true, membershipInviteError: '' })
     try {
-      await enrollMembership(this.data.membershipTerms.version, 'mini_menu', authorization.code)
+      // Phone verification is independent of membership terms and enrollment.
+      // The native authorization alone must never create a membership.
+      const verified = await replaceVerifiedPhone(authorization.code)
+      if (!verified || verified.status !== 'active' || !verified.publicId) throw new Error('手机号验证结果不完整，请重试')
       if (!this.isCurrentTableRequest(request)) return
       this.dismissMembershipInvite()
-      this.setData({ membershipStatus: 'member' })
-      wx.showToast({ title: '入会成功，继续点菜', icon: 'success' })
-      // Refresh the authoritative member projection without clearing the cart or changing tables.
-      await this.loadOrderExtra('membership', request)
+      this.setData({ menuPhoneStatus: 'verified' })
+      wx.showToast({ title: '手机号已授权', icon: 'success' })
     } catch (error) {
-      if (this.isCurrentTableRequest(request)) this.setData({ membershipInviteError: customerErrorMessage(error, '入会暂未完成，可重试或先点菜。') })
+      if (this.isCurrentTableRequest(request)) this.setData({ membershipInviteError: customerErrorMessage(error, '手机号授权未完成，可重试或继续点菜。') })
     } finally {
       this.setData({ membershipBusy: false })
     }

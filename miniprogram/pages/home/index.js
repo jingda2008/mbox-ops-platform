@@ -186,7 +186,7 @@ Page({
     this.ensureTableRequestGuard()
   },
 
-  onShow() { enablePublicShareMenu(); this.loadData() },
+  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/home/index') } enablePublicShareMenu(); this.loadData() },
   onHide() { this.stopWaitingPoll(); this.invalidateTableRequests() },
   onUnload() { this.stopWaitingPoll(); this.invalidateTableRequests() },
 

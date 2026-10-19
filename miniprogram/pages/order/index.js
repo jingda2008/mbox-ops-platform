@@ -609,6 +609,7 @@ Page({
     paymentResult: null,
     benefitCount: 0,
     membershipInviteVisible: false,
+    checkoutMemberInviteVisible: false,
     membershipBusy: false,
     membershipStatus: 'unknown',
     menuPhoneStatus: 'unknown',
@@ -619,7 +620,15 @@ Page({
   },
 
   onLoad() { this.ensureTableRequestGuard() },
-  onShow() { enablePublicShareMenu(); this.preparePage() },
+  async onShow() {
+    if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/order/index') }
+    enablePublicShareMenu()
+    await this.preparePage()
+    const resumeScope = this.checkoutMemberReturnScope
+    this.checkoutMemberReturnScope = null
+    const request = this.currentTableRequest()
+    if (resumeScope && request && request.scope === resumeScope && this.isCurrentTableRequest(request)) await this.openCheckout()
+  },
 
   onShareAppMessage() {
     return publicSharePayload({
@@ -637,7 +646,7 @@ Page({
   },
   onHide() {
     this.selectionNotificationPending = null
-    this.setData({ membershipInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
+    this.setData({ membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
@@ -862,7 +871,7 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
+    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     this.cartRecovery = null
@@ -1866,6 +1875,7 @@ Page({
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
       cartExpanded: false,
       checkoutConfirmVisible: cart.length ? this.data.checkoutConfirmVisible : false,
+      checkoutMemberInviteVisible: cart.length ? this.data.checkoutMemberInviteVisible : false,
       cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
       cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
       cartWritesFrozen: Boolean(sharedCart && sharedCart.guestWritesFrozen),
@@ -2039,6 +2049,34 @@ Page({
     this.loadCheckoutUpgrade()
   },
 
+  maybeInviteCheckoutMember(request) {
+    if (!request || !this.isCurrentTableRequest(request) || this.data.membershipStatus !== 'nonmember'
+      || !this.data.membershipTerms || !this.data.cart.length || this.data.checkoutLocked
+      || this.checkoutMemberInvitedScope === request.scope) return false
+    this.checkoutMemberInvitedScope = request.scope
+    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, membershipInviteVisible: false, cartExpanded: false })
+    return true
+  },
+
+  keepCheckoutMemberInviteOpen() {},
+
+  async skipCheckoutMembership() {
+    if (!this.data.checkoutMemberInviteVisible) return
+    this.setData({ checkoutMemberInviteVisible: false })
+    await this.openCheckout()
+  },
+
+  joinFromCheckout() {
+    const request = this.currentTableRequest()
+    if (!this.data.checkoutMemberInviteVisible || !request || !this.isCurrentTableRequest(request)) return
+    this.checkoutMemberReturnScope = request.scope
+    this.setData({ checkoutMemberInviteVisible: false })
+    wx.navigateTo({
+      url: '/pages/membership-terms/index?source=mini_menu&action=enroll',
+      fail: () => { this.checkoutMemberReturnScope = null; this.openCheckout() },
+    })
+  },
+
   async handlePendingPaymentBeforeCheckout() {
     const pending = this.data.pendingPayment
     if (!pending || !pending.orderPublicId) return false
@@ -2052,13 +2090,14 @@ Page({
 
   async openCheckout() {
     if (this.data.orderReady === false) return false
-    if (this.data.busy) return
+    if (this.data.busy || this.data.checkoutMemberInviteVisible) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (this.data.checkoutLocked) return this.retryCheckout(tableRequest)
     if (!this.data.cart.length) return
     if (await this.handlePendingPaymentBeforeCheckout()) return
     if (!this.isCurrentTableRequest(tableRequest)) return
+    if (this.data.checkoutMemberInviteVisible) return
     if (this.data.cartWritesFrozen) {
       this.setData({ error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
@@ -2067,6 +2106,7 @@ Page({
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
     }
+    if (this.maybeInviteCheckoutMember(tableRequest)) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
     this.loadCheckoutUpgrade()
   },
@@ -2104,6 +2144,7 @@ Page({
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
     const tableRequest = Object.assign({}, this.currentTableRequest())
     if (!this.isCurrentTableRequest(tableRequest)) return
+    if (this.maybeInviteCheckoutMember(tableRequest)) return
     // Snapshot the final click before a prerequisite can yield to a cart poll,
     // coupon refresh or new table scan. The submitted draft stays immutable.
     const reviewedDraft = this.checkoutDraft(null)

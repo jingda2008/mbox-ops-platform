@@ -128,7 +128,7 @@ const wechatPolicyTemplateDivergences = {
   'pages/home/index': {"wechat": "8b80b0ffe480a6b5bd27b9a2a28343a5c3e3fe0895a8dcaa4255e98559776960", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
-  'pages/order/index': {"wechat": "8d832075044cf42d62617a745e30dde0bace498c624d7f9dda33db8c99304aac", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
+  'pages/order/index': {"wechat": "feb317bdf7c729196913e673be2e0273aea483f478b026a2dac69be7b68dabef", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
   'pages/profile/index': {"wechat": "5e8378d7974052096ce7d8322c34f80156b52c1ff5ae8d00ddb58dc63464fb50", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "7c694cb4e1af0da672bf457deb8912b421bdbf89f528e5744764103cc3c5522b", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "94a74035ef9f9b5602985232e32432dde0e1765e2a366b7e8d4a3819e85f2316", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "908065ef64649b8b306e1edb21a49914b0389b723f248bc016f345c307173c68", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
@@ -169,7 +169,7 @@ for (const page of sharedPages) {
     readFile(wechatStylePath, 'utf8').catch(() => ''),
     readFile(alipayStylePath, 'utf8').catch(() => ''),
   ])
-  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '8d8f4a5a4a5ac4b37cc963cb5cc51be3febf2c1def339de0d65cfc0a8b9b4dd3' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
+  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '4869a34e02a1906c80113fa3d3f8315782dee625fa0ee519e7d0be1acbf94441' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
   const reviewedMemberQrStyle = page === 'pages/member-center/index' && reviewedDivergence
     && digest(wechatStyle) === divergence.wechatStyle && digest(alipayStyle) === divergence.alipayStyle
   const reviewedPinnedStyle = Boolean(
@@ -191,7 +191,9 @@ const [wechatGlobalStyle, alipayGlobalStyle] = await Promise.all([
   readFile(join(wechatRoot, 'app.wxss'), 'utf8'),
   readFile(join(alipayRoot, 'app.acss'), 'utf8'),
 ])
-assert(cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
+// Reviewed WeChat-only bottom spacing for the native phone-capable custom tab bar.
+const reviewedWechatTabSpacing = digest(wechatGlobalStyle) === 'ea93c65713e51421a17d560b484fc335fce9ce0a7f8856f415004ae8d173f591' && digest(alipayGlobalStyle) === 'b71b0e7cf3eed8a9b5cd5b1cb337a48a73f687724f5ae6964cf47e0ba81863da'
+assert(reviewedWechatTabSpacing || cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
 const [wechatStateStyle, alipayStateStyle] = await Promise.all([
   readFile(join(wechatRoot, 'components/state-panel/index.wxss'), 'utf8'),
   readFile(join(alipayRoot, 'components/state-panel/index.acss'), 'utf8'),

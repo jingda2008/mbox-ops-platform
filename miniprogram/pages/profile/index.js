@@ -302,7 +302,7 @@ Page({
     wechatMemberCardPresentationOptions: [],
   },
 
-  onShow() {
+  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/profile/index') }
     this._pageHidden = false
     const shouldOpenLogin = consumeMembershipLoginRedirect()
     this.setData({

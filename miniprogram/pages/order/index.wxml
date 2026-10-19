@@ -230,6 +230,15 @@
     </view>
   </view>
 
+  <view wx:if="{{checkoutMemberInviteVisible}}" class="sheet-mask checkout-member-mask" bindtap="skipCheckoutMembership">
+    <view class="checkout-member-sheet" catchtap="keepCheckoutMemberInviteOpen" role="dialog" aria-label="提交订单前加入会员邀请">
+      <text class="checkout-member-title">加入会员，让积分替你买单</text>
+      <text class="checkout-member-copy">消费攒积分，下次点单直接抵。</text>
+      <text class="checkout-member-copy">1积分＝1元</text>
+      <view class="checkout-member-actions"><button class="primary-button" bindtap="joinFromCheckout">加入会员</button><button class="secondary-button" bindtap="skipCheckoutMembership">先下单</button></view>
+    </view>
+  </view>
+
   <view wx:if="{{paymentResult}}" class="payment-result sheet-mask">
     <view class="payment-result__sheet"><button class="payment-result__close compact-text-action" aria-label="关闭付款提示" hover-class="payment-result__close--pressed" bindtap="closePaymentResult">关闭</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" bindtap="openPaymentResultAccount">查看本桌账单</button><button wx:if="{{paymentResult.canRetry}}" class="primary-button" bindtap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button wx:else class="primary-button" bindtap="closePaymentResult">完成</button></view></view>
   </view>

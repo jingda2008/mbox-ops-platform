@@ -289,3 +289,6 @@ page .detail-dock > button.payment-button {
     box-sizing: border-box;
   }
 }
+
+/* The custom tab bar occupies document space formerly reserved by WeChat. */
+.page.home-page, .page.reservations-page, .page.community-page, .page.profile-page { padding-bottom: calc(98rpx + 50px + env(safe-area-inset-bottom)); }

@@ -39,3 +39,23 @@ test('membership invitation keeps accepted copy and usable actions on small phon
     }
   } finally { await browser.close() }
 })
+
+test('checkout membership invitation has reachable choices above the custom tab bar', async () => {
+  const source=await readFile(resolve(root,'miniprogram/pages/order/index.wxml'),'utf8')
+  const start=source.indexOf('  <view wx:if="{{checkoutMemberInviteVisible}}"')
+  const markup=source.slice(start,source.indexOf('  <view wx:if="{{paymentResult}}"',start))
+  assert.ok(markup.includes('消费攒积分，下次点单直接抵。'))
+  const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages/order/index.wxss'))
+  const browser=await chromium.launch({headless:true})
+  try {
+    const page=await browser.newPage()
+    for(const [width,height] of [[320,568],[375,667],[430,932],[720,360]]) {
+      await page.setViewportSize({width,height})
+      await page.setContent(`<style>html,body{margin:0}view{display:block}button{box-sizing:border-box}text{overflow-wrap:anywhere}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page order-page">${markup}</view>`)
+      for(const name of ['加入会员','先下单']) {
+        const button=page.getByRole('button',{name,exact:true});await button.scrollIntoViewIfNeeded();const box=await button.boundingBox()
+        assert.ok(box.height>=44&&box.x>=0&&box.x+box.width<=width+1&&box.y>=0&&box.y+box.height<=height+1);await button.click({trial:true})
+      }
+    }
+  } finally {await browser.close()}
+})

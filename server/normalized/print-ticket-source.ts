@@ -141,10 +141,12 @@ export class PrintTicketSourceRepository {
     const totals=await readCheckoutPrintSummary(this.transaction,orders.map(o=>o.id))
     const lines:PrintTicketLine[]=[]
     const reductions=new Map((await this.transaction.query<{order_id:string;amount:string}>(`SELECT order_id,sum(amount_minor)::text AS amount FROM mbox.item_receivable_adjustment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=ANY($3::uuid[]) GROUP BY order_id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(order=>order.id)])).rows.map(row=>[row.order_id,signedAdjustment(row.amount)]))
+    const pointsByOrder=await readCheckoutPoints(this.transaction,orders.map(order=>order.id))
     for(const order of orders){
       const original=numeric(order.total_amount_minor,'total'),stopped=reductions.get(order.id)??0
       if(stopped>original)throw new Error('停止减免超过原订单金额，未生成整桌账单')
       lines.push({name:`订单 ${order.public_id}${order.status==='cancelled'?'（已取消）':''}`,quantity:1},...(await this.loadItems(order.id,false,true)).map(toCashierLine),{name:'原订单应付',quantity:1,totalAmountMinor:original})
+      lines.push(...checkoutPointLines(pointsByOrder.get(order.id)))
       if(stopped!==0)lines.push({name:stopped>0?'退菜减额（已扣除）':'套餐按单点价补差（已计入）',quantity:1,totalAmountMinor:Math.abs(stopped)},{name:'退菜重算后应付',quantity:1,totalAmountMinor:original-stopped})
     }
     lines.push({name:'桌次实际收款',quantity:1,totalAmountMinor:totals.received},
@@ -155,7 +157,7 @@ export class PrintTicketSourceRepository {
     // A manually generated bill is a document of its own. Keep the source UUID
     // for job idempotency and table tracing; older bridges print ticketReference directly.
     const billNumber=settlementDisplayNumber(source.occurred_at,this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId)
-    const statusLabel=totals.state==='paid'?'已确认收款':totals.state==='partial'?'部分收款 · 尚未结清':'未确认收款 · 不代表已付款'
+    const statusLabel=totals.state==='paid'?(pointsByOrder.size?'已确认结清':'已确认收款'):totals.state==='partial'?'部分收款 · 尚未结清':'未确认收款 · 不代表已付款'
     return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',checkoutState:totals.state,subtitle:`陆家嘴中心 L+MALL · 本桌次完整消费账单 · ${statusLabel}`,test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:billNumber,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:`合计为整桌应付，实收及退款另列。取消订单不计入应付。付款后请重新生成账单；补打保留原快照。原始桌次追溯码：${sessionId}`,payment:null,lines,totalAmountMinor:totals.receivable,currency:currency(context.currency)})
   }
 
@@ -189,6 +191,7 @@ export class PrintTicketSourceRepository {
     const lines:PrintTicketLine[]=[{name:'消费时间',quantity:1,note:consumedAt},...items.map(toCashierLine),...packageComparisons,
       {name:'优惠前应付（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
       {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
+      ...checkoutPointReturnLines(context.points),
       ...receivableAdjustmentLines(context),
       {name:'订单应付金额',quantity:1,totalAmountMinor:total},
       {name:'已确认实际收款',quantity:1,totalAmountMinor:received},
@@ -222,7 +225,7 @@ export class PrintTicketSourceRepository {
     }
     snapshot.lines = [...snapshot.lines,
       {name:'优惠前应付合计（套餐按套餐售价）',quantity:1,totalAmountMinor:numeric(context.subtotal_amount_minor,'subtotal')},
-      {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')}]
+      {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},...checkoutPointReturnLines(context.points)]
     const jobs = await this.materializeDocument(sourceId, `${context.order_public_id}:summary`, snapshot)
     // A tab order needs a pre-bill before any collection has been initiated.
     // Immediate checkout does not grant this path permission to produce food.
@@ -319,8 +322,9 @@ export class PrintTicketSourceRepository {
     [this.transaction.scope.tenantId,this.transaction.scope.storeId,sessionId])).rows
     if (!orders.length || orders.some(o => Number(o.total_amount_minor)>0 && !['paid','refunded','partially_refunded'].includes(o.payment_status))) return []
     const lines: PrintTicketLine[] = []
+    const pointsByOrder=await readCheckoutPoints(this.transaction,orders.map(order=>order.id))
     for (const order of orders) {
-      lines.push({name:`订单 ${order.public_id}`,quantity:1,totalAmountMinor:Number(order.total_amount_minor)})
+      lines.push({name:`订单 ${order.public_id}`,quantity:1,totalAmountMinor:Number(order.total_amount_minor)},...checkoutPointLines(pointsByOrder.get(order.id)))
       for (const item of await this.loadItems(order.id)) lines.push(toProductionLine(item))
     }
     const amounts = (await this.transaction.query<{received:string;refunded:string}>(`
@@ -542,7 +546,7 @@ export class PrintTicketSourceRepository {
       operatorLabel: null,
       note: refund.order_note,
       payment: paymentFromRefund(refund),
-      lines: [{ name: `订单退款 · ${refund.order_public_id}`, quantity: 1, totalAmountMinor: numeric(refund.refund_amount_minor, 'refund_amount_minor') }],
+      lines: [{ name: `订单退款 · ${refund.order_public_id}`, quantity: 1, totalAmountMinor: numeric(refund.refund_amount_minor, 'refund_amount_minor') },...checkoutPointReturnLines(refund.points)],
       totalAmountMinor: numeric(refund.refund_amount_minor, 'refund_amount_minor'),
       currency: currency(refund.currency),
     })
@@ -1024,4 +1028,15 @@ function currency(value: string): 'CNY' {
 function requiredTime(value: string | null, field: string): string {
   if (value === null || Number.isNaN(Date.parse(value))) throw new Error(`${field}无效`)
   return value
+}
+
+/** Points are quantities, never cash receipts; returns keep the original expiry. */
+function checkoutPointReturnLines(points?:CheckoutPointsView):PrintTicketLine[]{
+  if(!points?.restored)return []
+  const expired=points.restored-points.credited
+  return [{name:'原抵扣积分累计返还',quantity:points.restored,
+    note:`累计恢复可用 ${points.credited} 分`+(expired>0?`；其中 ${expired} 分已过期，不恢复可用余额`:'')}]
+}
+function checkoutPointLines(points?:CheckoutPointsView):PrintTicketLine[]{
+  return points?[{name:`积分抵扣 ${points.used} 分（已扣除）`,quantity:1,totalAmountMinor:points.used*100},...checkoutPointReturnLines(points)]:[]
 }

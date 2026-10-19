@@ -4,14 +4,15 @@ import type { ScopedTransaction } from './transaction-runner.js'
 /** Read confirmed, per-order allocations; a pending channel attempt is never cash. */
 export async function readCheckoutPrintSummary(tx: ScopedTransaction, orderIds: readonly string[]) {
   const { rows } = await tx.query<{
-    receivable: string; received: string; refunded: string; pending: string; due: string; needs_collection: boolean
+    receivable: string; received: string; refunded: string; pending: string; due: string; needs_collection: boolean; consumption_settled: boolean
   }>(`
     SELECT CASE WHEN ordering.status='cancelled' THEN 0 ELSE ${orderReceivableSql('ordering')} END::text AS receivable,
       amounts.received::text, amounts.refunded::text, amounts.pending::text,
       CASE WHEN ${orderNeedsCollectionSql('ordering')}
         THEN ${orderCollectionDueSql('ordering')}
         ELSE 0 END::text AS due,
-      ${orderNeedsCollectionSql('ordering')} AS needs_collection
+      ${orderNeedsCollectionSql('ordering')} AS needs_collection,
+      mbox.order_consumption_settled(ordering.tenant_id,ordering.store_id,ordering.id) AS consumption_settled
     FROM mbox.orders ordering
     CROSS JOIN LATERAL (SELECT
       COALESCE((SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p
@@ -43,7 +44,7 @@ export async function readCheckoutPrintSummary(tx: ScopedTransaction, orderIds: 
   return {
     receivable: sum('receivable'), received, refunded, net: received - refunded,
     pending: sum('pending'), due: sum('due'),
-    state: received === 0 ? 'unpaid' as const
+    state: received === 0 && !rows.some(row => row.consumption_settled) ? 'unpaid' as const
       : rows.some(row => row.needs_collection) ? 'partial' as const : 'paid' as const,
   }
 }

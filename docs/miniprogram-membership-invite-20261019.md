@@ -86,3 +86,7 @@
 - 根因进一步定位为全局border-box使50px导航包含底部padding；组件显式content-box后，34px安全区独立预留。新增真实样式几何回归，覆盖320/375/430/720宽度；三组布局测试通过。个人页登录/退出完成后同步刷新导航资格，避免旧身份按钮残留。完整571项回归再次通过（two-stage-verified-tests.log）。
 - 开发工具当前首页点击底部“点单”，已实际弹出“超嗨M-BOX 申请 / 获取并验证你的手机号 / 拒绝 / 允许”，截图`outputs/membership-native-phone-20261019/menu-tab-native-phone-popup.png`。未点击允许、未提交手机号、未确认会员协议、未创建订单。截图属于开发工具实际微信组件，不是手机现场验收。
 - 前两次two-stage预览已被此修复取代；从本次提交重建独立候选和最新临时预览，不覆盖原清单。
+
+### 21:10 最新临时预览完成
+
+源码`6027cbe8e414c4a3e119e8143299e1a963f98310`，独立候选`outputs/membership-native-phone-20261019/wechat-two-stage-verified/miniprogram`。官方CLI预览成功，包1,055,784字节；预览后170个清单文件哈希全部一致。最新二维码`outputs/membership-native-phone-20261019/two-stage-verified-preview-qr.png`，替代本日较早临时二维码。微信172文件静态、支付宝23页/5导航一致性、清单校验、571回归和3组布局全部通过。本次仅临时预览，未替换开发版/体验版/正式版，未部署后端；手机号允许后的生产绑定、入会与现场资金/出纸仍待用户实测。

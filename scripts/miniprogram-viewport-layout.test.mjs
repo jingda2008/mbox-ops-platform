@@ -78,7 +78,7 @@ test('non-tab detail actions retain the physical device safe area and flexible n
   assert.match(termsStyle, /\.terms-dock\s*\{[^}]*env\(safe-area-inset-bottom\)/)
 })
 
-test('only modal masks remain fixed across mini-program pages', async () => {
+test('only modal masks and the requested empty-cart shortcut remain fixed across mini-program pages', async () => {
   const styleFiles = (await listFiles('miniprogram/pages')).filter((path) => path.endsWith('.wxss'))
   const fixedSelectors = []
 
@@ -98,6 +98,7 @@ test('only modal masks remain fixed across mini-program pages', async () => {
     'miniprogram/pages/home/index.wxss: .member-invite-mask',
     'miniprogram/pages/home/index.wxss: .performance-panel-mask',
     'miniprogram/pages/member-center/index.wxss: .member-code-preview-mask',
+    'miniprogram/pages/order/index.wxss: .empty-cart-fab',
     'miniprogram/pages/order/index.wxss: .sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',
     'miniprogram/pages/profile/index.wxss: .login-sheet-mask',

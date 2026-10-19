@@ -34,10 +34,20 @@ for (const kind of ['invalid-session','changed-table','first-load']) {
   }finally{h.dispose()}
  })
 }
-test('connected empty carts retain a dock and cannot submit an empty order',async()=>{
+test('connected empty carts retain a floating icon and cannot submit an empty order',async()=>{
  const source=await readFile('miniprogram/pages/order/index.wxml','utf8')
  const condition=source.match(/<view wx:if="\{\{([^}]+)\}\}" class="cart-dock">/)[1]
  const visible=Function('connectionState','cart','checkoutLocked',`return Boolean(${condition})`)
- assert.equal(visible('active',[],false),true);assert.equal(visible('active',[],true),true);assert.equal(visible('needs_scan',[],false),false)
+ assert.equal(visible('active',[],false),false);assert.equal(visible('active',[],true),true);assert.equal(visible('needs_scan',[],false),false)
+ const emptyCondition=source.match(/<button wx:if="\{\{([^}]+)\}\}" class="empty-cart-fab"/)[1]
+ const emptyVisible=Function('connectionState','cart','checkoutLocked',`return Boolean(${emptyCondition})`)
+ assert.equal(emptyVisible('active',[],false),true);assert.equal(emptyVisible('active',[{}],false),false);assert.equal(emptyVisible('active',[],true),false);assert.equal(emptyVisible('needs_scan',[],false),false)
  const h=setup();try{await h.page.preparePage();await h.page.openCheckout();assert.equal(h.state.calls.includes('submit'),false);assert.equal(h.page.data.checkoutConfirmVisible,false)}finally{h.dispose()}
+})
+
+test('unconfirmed points keep checkout open and point directly to the red numeric input',async()=>{
+ const h=setup()
+ try {await h.page.preparePage();await add(h);h.page.setData({checkoutConfirmVisible:true,pointsInput:'5',pointsPickerOpen:false});assert.equal(h.page.couponCheckoutReady(),false);assert.equal(h.page.data.pointsPickerOpen,true);assert.equal(h.page.data.checkoutScrollTarget,'checkout-points');assert.match(h.page.data.pointsError,/核对积分/);assert.equal(h.state.calls.includes('submit'),false)}finally{h.dispose()}
+ const markup=await readFile('miniprogram/pages/order/index.wxml','utf8')
+ assert.match(markup,/type="number"[^>]+placeholder="请输入抵扣积分数字" placeholder-style="color: #b42318"/)
 })

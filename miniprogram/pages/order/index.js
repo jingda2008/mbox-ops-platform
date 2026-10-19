@@ -543,6 +543,15 @@ Page({
   },
   onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
   quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
+  couponCheckoutReady() {
+    const ready = checkoutCouponActions.couponCheckoutReady.call(this)
+    if (!ready && this.data.pointsInput) {
+      this.setData({ pointsPickerOpen: true, pointsError: '请先核对积分抵扣金额，确认后再支付。', checkoutScrollTarget: '' }, () => {
+        if (this.data.checkoutConfirmVisible) this.setData({ checkoutScrollTarget: 'checkout-points' })
+      })
+    }
+    return ready
+  },
   openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
   loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
   chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
@@ -2060,6 +2069,7 @@ Page({
   openStatus() { wx.navigateTo({ url: '/pages/status/index' }) },
   openAccount() { wx.navigateTo({ url: '/pages/account/index' }) },
   openBenefits() { wx.switchTab({ url: '/pages/profile/index' }) },
+  showEmptyCart() { wx.showToast({ title: '购物车暂无商品，请先选菜', icon: 'none' }) },
   toggleCart() { this.openCartDetails() },
 
   openCartDetails() {

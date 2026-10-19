@@ -36,6 +36,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
         }
       }
       await assertFooter()
+      assert.equal(await page.locator('.checkout-points-picker__input').evaluate(el => getComputedStyle(el).color), 'rgb(180, 35, 24)')
       assert.equal(await page.locator('[bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), false, 'points entry remains fixed beside total')
       for (const selector of ['[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {
         const control = page.locator(selector)
@@ -71,4 +72,22 @@ test('bundle confirmation remains clickable above navigation on small and landsc
       assert.ok(await page.locator('.product-detail-scroll').evaluate(el => el.clientHeight > 0))
     }
   } finally { await browser.close() }
+})
+test('empty cart stays a small reachable icon above navigation', async () => {
+  const source=await readFile(resolve(root,'miniprogram/pages/order/index.wxml'),'utf8')
+  const match=source.match(/<button wx:if="[^\n]+class="empty-cart-fab"[^\n]+<\/button>/)
+  assert.ok(match)
+  const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages/order/index.wxss'))
+  const browser=await chromium.launch({headless:true})
+  try {
+    const page=await browser.newPage()
+    for(const [width,height,navigationHeight] of [[320,568,50],[393,724,50],[393,852,84],[720,360,50]]) {
+      await page.setViewportSize({width,height})
+      const markup=match[0].replace('{{(customTabBarHeight || 50) + 14}}',String(navigationHeight+14))
+      await page.setContent(`<style>html,body{margin:0}view{display:block}${style.replace(/(-?[\d.]+)rpx\b/g,(_,n)=>`${Number(n)*width/750}px`)}</style><view class="page order-page">${markup}</view><div style="position:fixed;bottom:0;left:0;right:0;height:${navigationHeight}px;z-index:9999;background:white">navigation</div>`)
+      const button=page.getByRole('button',{name:'购物车暂无商品'}),box=await button.boundingBox()
+      assert.equal(box.width,44);assert.equal(box.height,44);assert.equal(box.x,14);assert.ok(box.y+box.height<=height-navigationHeight-14+1)
+      await button.click({trial:true,timeout:1000})
+    }
+  } finally {await browser.close()}
 })

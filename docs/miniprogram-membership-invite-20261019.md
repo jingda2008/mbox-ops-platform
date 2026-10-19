@@ -208,3 +208,12 @@
 生产只读调用现网会员投影确认ready：575/10000、382/10000、0/10000；本轮未修改客户积分或消费记录。隔离数据库7项通过，包含精确门槛与过期消费排除；小程序588、布局18、静态172文件及支付宝13检查通过。ui.5候选将包括此前会员卡、透明绿金购物车与ui.4全部修复。上传结果另追加。
 
 配置发布/只读/数据库验收证据：`/Users/jingda/mbox/outputs/tier-activation-20261020/`。
+
+
+## 2026-10-20 00:12 CST ui.5官方上传回执
+
+- 开发版`1.0.0-rc.260-ui.5`，来源`ef0a49de58dd7edcd5d7af4a14bd3934fa866a2c`，官方CLI上传及预览退出0且明确成功。上传1,065,219字节，预览1,063,023字节。
+- 候选`/Users/jingda/mbox/outputs/g1-points-menu-20261019/wechat-rc260-ui5-reviewed/miniprogram`；同级manifest、evidence、source-verification、verify-before/after、upload/preview-info与日志可核对。168源码文件一致，170候选文件未被上传修改。
+- 新临时预览二维码：`/Users/jingda/mbox/outputs/g1-points-menu-20261019/rc260-ui5-preview-qr.jpg`，JPEG470x470。不是长期体验二维码。
+- 成长规则已在线启用；后台readiness ready且workers healthy。前端本包包括会员卡进度/下级权益入口/去重读按钮、透明绿金购物车和此前ui.4修复。
+- 体验版必须由用户在公众平台对ui.5选择“设为体验版”：此前site-safety拒绝访问该站，未绕过限制。未提审/正式发布；真实点单、积分支付/退款、打印和手机显示仍待验收。

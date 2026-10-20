@@ -23,7 +23,7 @@ import { NumberInputWithUnit } from "./NumberInputWithUnit";
 import "./owner-finance-panel.css";
 import { executeRecoverableCommand } from "./recoverable-command";
 
-type Mode = "cost" | "recurring" | "payroll" | "settings";
+type Mode = "dashboard" | "cost" | "recurring" | "payroll" | "settings";
 type Category = {
   id: string;
   code: string;
@@ -74,11 +74,15 @@ type Cost = {
   counterparty: string | null;
   note: string | null;
   correctsCostEntryId: string | null;
+  correctionReason?: string | null;
   recurringRuleId: string | null;
   payrollRunId: string | null;
   corrected: boolean;
 };
 type Recurring = {
+  version: number;
+  counterparty: string | null;
+  note: string | null;
   id: string;
   publicId: string;
   name: string;
@@ -143,17 +147,19 @@ export function OwnerFinancePanel({
     return executeRecoverableCommand(auth.employee.id + ":" + endpoint, body, options.idempotencyKey,
       (idempotencyKey) => api.postEndpoint(endpoint, body, { idempotencyKey }));
   }
-  const [mode, setMode] = useState<Mode>(auth.permissions.some((p) => p.startsWith("commercial.cost.")) ? "cost" : "payroll");
+  const [mode, setMode] = useState<Mode>(auth.permissions.some((p) => p.startsWith("commercial.cost.")) ? "dashboard" : "payroll");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const costFormRef = useRef<HTMLFormElement>(null);
+  const [editingRecurring, setEditingRecurring] = useState<Recurring | null>(null);
+  const [ruleChangeReason, setRuleChangeReason] = useState("");
   const [correctingCost, setCorrectingCost] = useState<Cost | null>(null);
   const [correctionReason, setCorrectionReason] = useState("");
   const [editingPayrollLine, setEditingPayrollLine] = useState<PayrollLine | null>(null);
   const writeInFlight = useRef(false);
   const loadGeneration = useRef(0);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   const firstOfMonth = `${today.slice(0, 7)}-01`;
   const [range, setRange] = useState({ start: firstOfMonth, end: today });
   const [cost, setCost] = useState({
@@ -161,7 +167,6 @@ export function OwnerFinancePanel({
     categoryId: "",
     centerId: "",
     amount: "",
-    tax: "0",
     start: today,
     end: today,
     paid: true,
@@ -174,7 +179,6 @@ export function OwnerFinancePanel({
     categoryId: "",
     centerId: "",
     amount: "",
-    tax: "0",
     recurrence: "month",
     start: firstOfMonth,
     end: "",
@@ -215,6 +219,7 @@ export function OwnerFinancePanel({
     overview?.canViewPayroll === true;
   const load = useCallback(async (afterWrite = false) => {
     const generation = ++loadGeneration.current;
+    setOverview(null);
     if (!range.start || !range.end || range.start > range.end) {
       setNotice("请选择完整且起止顺序正确的日期范围。");
       setBusy("");
@@ -353,8 +358,7 @@ export function OwnerFinancePanel({
             serviceStartDate: cost.start,
             serviceEndDate: cost.end,
             cashPaidOn: cost.paid ? cost.paidOn : null,
-            netAmountMinor: toMinor(cost.amount),
-            taxAmountMinor: toMinor(cost.tax),
+            amountMinor: toMinor(cost.amount),
             currency: "CNY",
             sourceType: sourceFor(selectedCategory.systemCategory),
             counterparty: optional(cost.counterparty),
@@ -370,6 +374,8 @@ export function OwnerFinancePanel({
         : "费用已记录并进入利润口径",
     );
     if (succeeded) {
+      if (cost.start > range.end || cost.end < range.start) setRange({ start: cost.start, end: cost.end });
+      setMode("dashboard");
       setCorrectingCost(null);
       setCorrectionReason("");
       const businessDate = overview?.businessDate ?? today;
@@ -377,7 +383,6 @@ export function OwnerFinancePanel({
         ...value,
         name: "",
         amount: "",
-        tax: "0",
         start: businessDate,
         end: businessDate,
         paid: true,
@@ -391,14 +396,14 @@ export function OwnerFinancePanel({
     const fallbackCategory = overview?.categories.find(
       (candidate) => candidate.systemCategory === item.category,
     );
+    setMode("cost");
     setCorrectingCost(item);
     setCorrectionReason("");
     setCost({
       name: item.name,
       categoryId: item.categoryDefinitionId ?? fallbackCategory?.id ?? "",
       centerId: item.costCenterId ?? overview?.costCenters[0]?.id ?? "",
-      amount: fromMinor(item.netAmountMinor),
-      tax: fromMinor(item.taxAmountMinor),
+      amount: fromMinor(item.grossAmountMinor),
       start: item.serviceStartDate,
       end: item.serviceEndDate,
       paid: item.cashPaidOn !== null,
@@ -413,34 +418,50 @@ export function OwnerFinancePanel({
   function cancelCostCorrection() {
     setCorrectingCost(null);
     setCorrectionReason("");
+    setCost((value) => ({ ...value, name: "", amount: "", counterparty: "", note: "" }));
+    setMode("dashboard");
   }
   async function submitRecurring(event: FormEvent) {
     event.preventDefault();
     if (!selectedRecurringCategory) return setNotice("请选择费用分类");
-    await run(
+    const succeeded = await run(
       "recurring",
       () =>
         postCommand(
           "/api/commercial-ops/recurring-costs",
           {
+            ...(editingRecurring ? { ruleId: editingRecurring.id, expectedVersion: editingRecurring.version, changeReason: ruleChangeReason } : {}),
             name: recurring.name,
             categoryDefinitionId: selectedRecurringCategory.id,
             costCenterId: recurring.centerId,
             recurrence: recurring.recurrence,
-            allocationPeriod: recurring.recurrence,
+            allocationPeriod: editingRecurring?.allocationPeriod ?? recurring.recurrence,
             recognitionState: recurring.paid ? "actual" : "accrual",
             startsOn: recurring.start,
             endsOn: optional(recurring.end),
-            netAmountMinor: toMinor(recurring.amount),
-            taxAmountMinor: toMinor(recurring.tax),
+            amountMinor: toMinor(recurring.amount),
             sourceType: sourceFor(selectedRecurringCategory.systemCategory),
             counterparty: optional(recurring.counterparty),
             note: optional(recurring.note),
           },
           { idempotencyKey: key("owner-recurring") },
         ),
-      "周期费用规则已保存；点击“生成到今天”后才会入账",
+      editingRecurring ? "周期规则已修改；已生成的费用金额保持原记录" : "周期费用规则已保存；点击“生成到今天”后才会入账",
     );
+    if (succeeded) resetRecurringForm();
+  }
+  function resetRecurringForm() {
+    setEditingRecurring(null);
+    setRuleChangeReason("");
+    setRecurring((value) => ({ ...value, name: "", amount: "", start: firstOfMonth, end: "", counterparty: "", note: "" }));
+  }
+  function beginRecurringEdit(item: Recurring) {
+    setEditingRecurring(item);
+    setRuleChangeReason("");
+    setRecurring({ name: item.name, categoryId: item.categoryDefinitionId, centerId: item.costCenterId,
+      amount: fromMinor(item.grossAmountMinor), recurrence: item.recurrence, start: item.startsOn, end: item.endsOn ?? "",
+      paid: item.recognitionState === "actual", counterparty: item.counterparty ?? "", note: item.note ?? "" });
+    requestAnimationFrame(() => document.querySelector('.owner-finance-panel form')?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
   async function materialize() {
     const throughDate = overview?.businessDate ?? today;
@@ -643,16 +664,16 @@ export function OwnerFinancePanel({
 
   if (!auth.permissions.some((p) => ["commercial.cost.view", "commercial.cost.manage", "commercial.payroll.view", "commercial.payroll.manage", "commercial.payroll.post"].includes(p))) return null;
   return (
-    <section className="owner-finance-panel" aria-label="老板费用与工资管理">
+    <section className="owner-finance-panel" aria-label="财务仪表盘">
       <header>
         <div>
-          <strong>费用、员工与工资</strong>
-          <small>经营账和支付分离：这里核算与入账，不会自动打款。</small>
+          <strong>财务仪表盘</strong>
+          <small>金额按输入值记录，无需区分含税或未税，不做税务计算。</small>
         </div>
         <button
           type="button"
           aria-label="刷新经营费用"
-          disabled={busy === "load"}
+          disabled={busy !== ""}
           onClick={() => void load()}
         >
           <RefreshCw size={16} />
@@ -664,10 +685,10 @@ export function OwnerFinancePanel({
         </p>
       )}
       <nav aria-label="经营费用功能">
-        {(canManage || overview?.canViewCost) && <button data-active={mode === "cost"} onClick={() => setMode("cost")}>
-          <CircleDollarSign size={16} />
-          费用
+        {(canManage || overview?.canViewCost) && <button data-active={mode === "dashboard"} onClick={() => setMode("dashboard")}>
+          <CircleDollarSign size={16} />费用总览
         </button>}
+        {canManage && <button data-active={mode === "cost"} onClick={() => setMode("cost")}>录入费用</button>}
         {canManage && <button
           data-active={mode === "recurring"}
           onClick={() => setMode("recurring")}
@@ -692,6 +713,21 @@ export function OwnerFinancePanel({
           分类设置
         </button>}
       </nav>
+      {mode === "dashboard" && <>
+          <div className="owner-finance-form">
+            <label>记录开始日期<input type="date" value={range.start} onChange={(event) => setRange({ ...range, start: event.target.value })} /></label>
+            <label>记录结束日期<input type="date" value={range.end} onChange={(event) => setRange({ ...range, end: event.target.value })} /></label>
+          </div>
+          {busy === "load" && <p role="status">正在读取费用记录…</p>}
+          {overview && !overview.canViewCost && <p role="status">当前账号没有费用查看权限，请由管理员授权。</p>}
+          {overview?.canViewCost && <FinanceSummary costs={overview.costs} />}
+          {overview?.canViewCost && <Records
+            costs={overview?.costs ?? []}
+            busy={busy}
+            onCorrect={beginCostCorrection}
+            canManage={canManage}
+          />}
+      </>}
       {mode === "cost" && (
         <>
           {canManage && <form
@@ -730,26 +766,15 @@ export function OwnerFinancePanel({
               items={overview?.costCenters ?? []}
             />
             <label>
-              未税金额
+              金额
               <NumberInputWithUnit
                 required
                 inputMode="decimal"
                 unit="元"
+                aria-label="金额"
                 value={cost.amount}
                 onChange={(event) =>
                   setCost({ ...cost, amount: event.target.value })
-                }
-              />
-            </label>
-            <label>
-              税额
-              <NumberInputWithUnit
-                required
-                inputMode="decimal"
-                unit="元"
-                value={cost.tax}
-                onChange={(event) =>
-                  setCost({ ...cost, tax: event.target.value })
                 }
               />
             </label>
@@ -852,23 +877,14 @@ export function OwnerFinancePanel({
               )}
             </div>
           </form>}
-          <div className="owner-finance-form">
-            <label>记录开始日期<input type="date" value={range.start} onChange={(event) => setRange({ ...range, start: event.target.value })} /></label>
-            <label>记录结束日期<input type="date" value={range.end} onChange={(event) => setRange({ ...range, end: event.target.value })} /></label>
-          </div>
-          <Records
-            costs={overview?.costs ?? []}
-            busy={busy}
-            onCorrect={beginCostCorrection}
-            canManage={canManage}
-          />
+
         </>
       )}
       {mode === "recurring" && canManage && (
         <>
           <form className="owner-finance-form" onSubmit={submitRecurring}>
             <header>
-              <strong>建立周期费用</strong>
+              <strong>{editingRecurring ? "修改周期费用" : "建立周期费用"}</strong>
               <small>
                 规则与实际入账分开，防止重复计算；生成动作具有防重复保护。酒水采购需走收货入库，不在这里自动生成。
               </small>
@@ -899,11 +915,12 @@ export function OwnerFinancePanel({
               items={overview?.costCenters ?? []}
             />
             <label>
-              每期未税金额
+              每期金额
               <NumberInputWithUnit
                 required
                 inputMode="decimal"
                 unit="元/期"
+                aria-label="每期金额"
                 value={recurring.amount}
                 onChange={(event) =>
                   setRecurring({ ...recurring, amount: event.target.value })
@@ -911,20 +928,9 @@ export function OwnerFinancePanel({
               />
             </label>
             <label>
-              税额
-              <NumberInputWithUnit
-                required
-                inputMode="decimal"
-                unit="元/期"
-                value={recurring.tax}
-                onChange={(event) =>
-                  setRecurring({ ...recurring, tax: event.target.value })
-                }
-              />
-            </label>
-            <label>
               周期
               <select
+                disabled={editingRecurring !== null}
                 value={recurring.recurrence}
                 onChange={(event) =>
                   setRecurring({ ...recurring, recurrence: event.target.value })
@@ -938,6 +944,7 @@ export function OwnerFinancePanel({
               <input
                 required
                 type="date"
+                readOnly={editingRecurring !== null}
                 value={recurring.start}
                 onChange={(event) =>
                   setRecurring({ ...recurring, start: event.target.value })
@@ -949,6 +956,7 @@ export function OwnerFinancePanel({
               <input
                 type="date"
                 min={recurring.start}
+                readOnly={editingRecurring !== null}
                 value={recurring.end}
                 onChange={(event) =>
                   setRecurring({ ...recurring, end: event.target.value })
@@ -970,7 +978,16 @@ export function OwnerFinancePanel({
                 <option value="paid">到期视为已支付</option>
               </select>
             </label>
-            <button disabled={busy !== ""}>保存周期规则</button>
+            <label>收款方（选填）<input value={recurring.counterparty} onChange={(event) => setRecurring({ ...recurring, counterparty: event.target.value })} /></label>
+            <label>备注（选填）<textarea value={recurring.note} onChange={(event) => setRecurring({ ...recurring, note: event.target.value })} /></label>
+            {editingRecurring && <>
+              <p className="wide owner-finance-summary-note">修改只影响尚未生成的费用（包括未补记的历史期间）；已生成记录请到费用总览修改。原周期和日期保留，调整周期请结束原规则后新建。</p>
+              <label className="wide">修改原因<textarea required minLength={2} value={ruleChangeReason} onChange={(event) => setRuleChangeReason(event.target.value)} /></label>
+            </>}
+            <div className="owner-finance-form-actions wide">
+              <button disabled={busy !== ""}>{editingRecurring ? "保存规则修改" : "保存周期规则"}</button>
+              {editingRecurring && <button type="button" className="secondary" disabled={busy !== ""} onClick={resetRecurringForm}>取消规则修改</button>}
+            </div>
           </form>
           <div className="owner-finance-toolbar">
             <span>{overview?.recurringRules.length ?? 0} 条规则</span>
@@ -986,6 +1003,7 @@ export function OwnerFinancePanel({
             items={overview?.recurringRules ?? []}
             busy={busy}
             setStatus={setRecurringStatus}
+            onEdit={beginRecurringEdit}
           />
         </>
       )}
@@ -1335,6 +1353,21 @@ function SelectEmployee({
     </label>
   );
 }
+function FinanceSummary({ costs }: { costs: Cost[] }) {
+  const current = costs.filter((item) => !item.corrected);
+  const total = current.reduce((sum, item) => sum + item.grossAmountMinor, 0);
+  const paid = current.filter((item) => item.cashPaidOn !== null).reduce((sum, item) => sum + item.grossAmountMinor, 0);
+  return <section aria-label="费用汇总">
+    <div className="owner-finance-metrics">
+      <article><small>有效记录</small><strong>{current.length} 笔</strong></article>
+      <article><small>记录金额合计</small><strong>¥{fromMinor(total)}</strong></article>
+      <article><small>已标记付款</small><strong>¥{fromMinor(paid)}</strong></article>
+      <article><small>未标记付款</small><strong>¥{fromMinor(total - paid)}</strong></article>
+    </div>
+    <p className="owner-finance-summary-note">汇总费用日期与所选期间重叠的整笔金额，不是期间分摊费用或现金流水；已被更正的原记录不重复计入。</p>
+  </section>;
+}
+
 function Records({
   costs,
   busy,
@@ -1348,9 +1381,10 @@ function Records({
 }) {
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
-  useEffect(() => { setPage(0); }, [costs, search]);
+  const [showHistory, setShowHistory] = useState(false);
+  useEffect(() => { setPage(0); }, [costs, search, showHistory]);
   const term = search.trim().toLocaleLowerCase("zh-CN");
-  const current = costs.filter((item) => !item.corrected && (!term || [item.name, item.publicId, item.costCenterName, item.counterparty, item.note, fromMinor(item.grossAmountMinor)].join(" ").toLocaleLowerCase("zh-CN").includes(term)));
+  const current = costs.filter((item) => (showHistory || !item.corrected) && (!term || [item.name, item.publicId, item.costCenterName, item.counterparty, item.note, fromMinor(item.grossAmountMinor)].join(" ").toLocaleLowerCase("zh-CN").includes(term)));
   return (
     <div className="owner-finance-list">
       <header>
@@ -1358,13 +1392,14 @@ function Records({
         <span>{current.length} 笔</span>
       </header>
       <label>搜索费用<input type="search" placeholder="项目、单号、往来方、备注或金额" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+      <label><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />显示已被更正的历史记录</label>
       {current.length === 0 ? (
         <p>{term ? "所选期间没有匹配的费用，请调整关键词或日期。" : "所选期间尚未录入费用。"}</p>
       ) : (
         current.slice(page * 50, (page + 1) * 50).map((item) => (
           <article key={item.id}>
             <div>
-              <strong>{item.name}</strong>
+              <strong>{item.name}{item.corrected ? "（历史记录，不计入合计）" : ""}</strong>
               <small>
                 {item.costCenterName ?? "未分成本中心"} ·{" "}
                 {item.serviceStartDate}
@@ -1373,18 +1408,25 @@ function Records({
                   : ` 至 ${item.serviceEndDate}`}{" "}
                 · {item.cashPaidOn ? "已支付" : "未标记付款"}
               </small>
+              <details><summary>查看详情</summary>
+                <small>记录编号：{item.publicId}</small><br />
+                <small>收款方：{item.counterparty || "未填写"}</small><br />
+                <small>付款日期：{item.cashPaidOn || "未标记付款"}</small><br />
+                <small>备注：{item.note || "未填写"}</small><br />
+                {item.correctsCostEntryId && <small>本笔为更正记录；原因：{item.correctionReason || "未填写"}</small>}
+              </details>
             </div>
             <div className="owner-finance-actions">
               <b>¥{fromMinor(item.grossAmountMinor)}</b>
-              {canManage && item.sourceType !== "payroll" &&
-                item.sourceType !== "inventory_purchase" && (
+              {canManage && !item.corrected && item.sourceType !== "payroll" &&
+                item.sourceType !== "inventory_purchase" && !["personnel", "beverage_purchase"].includes(item.category) && (
                   <button
                     type="button"
                     className="secondary"
                     disabled={busy !== ""}
                     onClick={() => onCorrect(item)}
                   >
-                    更正
+                    查看 / 修改
                   </button>
                 )}
             </div>
@@ -1399,7 +1441,9 @@ function RecurringList({
   items,
   busy,
   setStatus,
+  onEdit,
 }: {
+  onEdit(item: Recurring): void;
   items: Recurring[];
   busy: string;
   setStatus(
@@ -1424,6 +1468,7 @@ function RecurringList({
             </div>
             <div className="owner-finance-actions">
               <b>¥{fromMinor(item.grossAmountMinor)}/期</b>
+              {item.status !== "ended" && <button type="button" disabled={busy !== ""} onClick={() => onEdit(item)}>修改规则</button>}
               {item.status === "active" ? (
                 <>
                   <button

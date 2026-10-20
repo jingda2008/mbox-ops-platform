@@ -158,6 +158,8 @@ interface MenuOrderingWorkspaceProps {
   submitDisabled?: boolean
   complimentaryMode?: boolean
   guestSalesMode?: boolean
+  /** Only customer checkout requires the repeated-quantity review. */
+  confirmRepeatedQuantities?: boolean
   /** The staff-assisted endpoint has already enforced staff_assisted eligibility. */
   includeNonGuestProducts?: boolean
   partySize?: number
@@ -185,7 +187,7 @@ interface MenuOrderingWorkspaceProps {
 export function isMenuConfirmationDisabled(input: Readonly<{
   busy: boolean
   submitDisabled: boolean
-  confirmation: 'submit' | 'duplicate' | 'continue' | null
+  confirmation: 'submit' | 'duplicate' | 'continue' | 'quantity' | null
   confirmedDuplicateOrderId: string
 }>): boolean {
   // Continuing only resumes the local/shared-cart adjustment. It is not a
@@ -213,6 +215,7 @@ export function MenuOrderingWorkspace({
   submitDisabled = false,
   complimentaryMode = false,
   guestSalesMode = false,
+  confirmRepeatedQuantities = false,
   includeNonGuestProducts = false,
   partySize = 1,
   recommendationScene,
@@ -238,7 +241,11 @@ export function MenuOrderingWorkspace({
   const [categoryId, setCategoryId] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [clock, setClock] = useState(() => Date.now() + clockOffsetMs)
-  const [confirmation, setConfirmation] = useState<'submit' | 'duplicate' | 'continue' | null>(null)
+  const [confirmation, setConfirmation] = useState<'submit' | 'duplicate' | 'continue' | 'quantity' | null>(null)
+  const quantityReview = useRef<{ fingerprint: string; duplicateOrderId?: string } | null>(null)
+  const confirmedQuantity = useRef<string | null>(null)
+  const submitInFlight = useRef(false)
+  const [quantityLines, setQuantityLines] = useState<{ id: string; name: string; quantity: number }[]>([])
   const [confirmationError, setConfirmationError] = useState('')
   const [confirmedDuplicateOrderId, setConfirmedDuplicateOrderId] = useState('')
   const [pendingProductId, setPendingProductId] = useState('')
@@ -727,6 +734,11 @@ export function MenuOrderingWorkspace({
 
   async function submit() {
     if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
+    if (confirmRepeatedQuantities && cartProducts.some(product => (cart[product.id] ?? 0) > 1)) {
+      confirmedQuantity.current = null
+      await executeSubmit()
+      return
+    }
     if (orderSafety?.requireSubmitConfirmation !== false) {
       setConfirmationError('')
       setConfirmation('submit')
@@ -735,8 +747,42 @@ export function MenuOrderingWorkspace({
     await executeSubmit()
   }
 
+  function quantityFingerprint() {
+    return JSON.stringify({ items: buildMenuCartItems(cartProducts, cart, cartBundleSelections, itemNotes), note: fulfillmentNote.trim() })
+  }
+
+  function returnToCart() {
+    quantityReview.current = null
+    confirmedQuantity.current = null
+    setConfirmation(null)
+    if (guestSalesMode) setCartOpen(true)
+  }
+
+  async function confirmQuantity() {
+    const review = quantityReview.current
+    if (!review) return
+    if (quantityFingerprint() !== review.fingerprint) {
+      returnToCart()
+      setCartAdjustmentError('同桌购物车已经变化，请核对最新商品和数量后重新提交。')
+      return
+    }
+    confirmedQuantity.current = review.fingerprint
+    await executeSubmit(review.duplicateOrderId)
+  }
+
   async function executeSubmit(duplicateOrderId?: string) {
-    if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
+    if (cartProducts.length === 0 || checkoutBusy || submitDisabled || submitInFlight.current) return
+    const repeated = cartProducts.filter(product => (cart[product.id] ?? 0) > 1)
+      .map(product => ({ id: product.id, name: product.name, quantity: cart[product.id]! }))
+    const fingerprint = quantityFingerprint()
+    if (confirmRepeatedQuantities && repeated.length && confirmedQuantity.current !== fingerprint) {
+      quantityReview.current = { fingerprint, duplicateOrderId }
+      setQuantityLines(repeated)
+      setConfirmationError('')
+      setConfirmation('quantity')
+      return
+    }
+    submitInFlight.current = true
     // Only unsubmitted drafts may be restored. An unknown submission must not
     // silently become a fresh order after reload.
     draftHandedOff.current=true
@@ -770,6 +816,9 @@ export function MenuOrderingWorkspace({
       }
       setConfirmationError(error instanceof Error ? error.message : '订单没有提交，请核对后再试一次')
       setConfirmation('submit')
+    } finally {
+      submitInFlight.current = false
+      confirmedQuantity.current = null
     }
   }
 
@@ -883,7 +932,7 @@ export function MenuOrderingWorkspace({
         {tableControl}
       </header>
 
-      {cartAdjustmentError && <div className="menu-confirm-error" role="alert">{cartAdjustmentError}</div>}
+      {cartAdjustmentError && (!compactCart || !cartOpen) && <div className="menu-confirm-error" role="alert">{cartAdjustmentError}</div>}
       {cartReadOnly && <div className="menu-confirm-error" role="status">{cartReadOnlyMessage}</div>}
 
       {guestSalesMode && <GuestRecommendationTools
@@ -1105,6 +1154,7 @@ export function MenuOrderingWorkspace({
           {cartOpen && (
             <aside className="menu-cart-drawer" role="dialog" aria-modal="true" aria-label="购物车明细">
               <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>本次待提交</strong><span>{itemCount} 件</span><button className="icon-button" title="关闭购物车" onClick={() => setCartOpen(false)}><X size={18} /></button></div>
+              {cartAdjustmentError && <div className="menu-confirm-error" role="alert">{cartAdjustmentError}</div>}
               <div className="menu-cart-lines">{cartLines}</div>
               {fulfillmentNoteField}
               <footer className="menu-cart-drawer-footer">
@@ -1250,14 +1300,17 @@ export function MenuOrderingWorkspace({
         </section>
       </div>}
 
-      {confirmation && <div className="menu-confirm-backdrop" role="presentation" onClick={() => setConfirmation(null)}>
-        <section className="menu-confirm-dialog" role="dialog" aria-modal="true" aria-label={confirmation === 'continue' ? '确认继续加单' : complimentaryMode ? '确认赠送' : '确认上单'} onClick={(event) => event.stopPropagation()}>
+      {confirmation && <div className="menu-confirm-backdrop" role="presentation" onClick={() => { if (!checkoutBusy) returnToCart() }}>
+        <section className="menu-confirm-dialog" role="dialog" aria-modal="true" aria-label={confirmation === 'quantity' ? '确认商品数量' : confirmation === 'continue' ? '确认继续加单' : complimentaryMode ? '确认赠送' : '确认上单'} onClick={(event) => event.stopPropagation()}>
           <header>
             <span className={confirmation === 'duplicate' ? 'is-warning' : ''}>{confirmation === 'duplicate' ? <AlertTriangle size={22} /> : complimentaryMode ? <Gift size={22} /> : <ShoppingCart size={22} />}</span>
-            <div><small>{confirmation === 'continue' ? 'CONTINUE ORDER' : complimentaryMode ? 'GIFT CHECK' : 'ORDER CHECK'}</small><h2>{confirmation === 'duplicate' ? '刚刚下过一笔相同订单' : confirmation === 'continue' ? '还要继续加单吗？' : complimentaryMode ? '请确认这次赠送' : '请确认这次上单'}</h2></div>
-            <button className="icon-button" title="关闭" onClick={() => setConfirmation(null)}><X size={19} /></button>
+            <div><small>{confirmation === 'continue' ? 'CONTINUE ORDER' : complimentaryMode ? 'GIFT CHECK' : 'ORDER CHECK'}</small><h2>{confirmation === 'quantity' ? '以下商品点了多份，数量是否正确？' : confirmation === 'duplicate' ? '刚刚下过一笔相同订单' : confirmation === 'continue' ? '还要继续加单吗？' : complimentaryMode ? '请确认这次赠送' : '请确认这次上单'}</h2></div>
+            <button className="icon-button" title="关闭" disabled={checkoutBusy} onClick={returnToCart}><X size={19} /></button>
           </header>
-          {confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
+          {confirmation === 'quantity' ? <>
+            <p>请核对本次购物车中的商品数量。</p>
+            <div className="menu-confirm-lines">{quantityLines.map(line => <div key={line.id}><span>{line.name}</span><strong>× {line.quantity}</strong></div>)}</div>
+          </> : confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
             <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((cartUnitAmount(product) * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
             <div className="menu-confirm-total"><span>{complimentaryMode ? `赠送价值 · 共 ${itemCount} 件` : `共 ${itemCount} 件`}</span><strong>{complimentaryMode ? '客人零应付' : `¥${(total / 100).toFixed(2)}`}</strong></div>
             {fulfillmentNoteField}
@@ -1265,16 +1318,17 @@ export function MenuOrderingWorkspace({
           </>}
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
-            <button className="secondary-button" disabled={checkoutBusy} onClick={() => setConfirmation(null)}>再看看</button>
+            <button className="secondary-button" disabled={checkoutBusy} onClick={returnToCart}>{confirmation === 'quantity' ? '否，返回购物车' : '再看看'}</button>
             <button className="primary-button" data-haptic="action" disabled={isMenuConfirmationDisabled({
               busy: checkoutBusy,
               submitDisabled,
               confirmation,
               confirmedDuplicateOrderId,
             })} onClick={() => {
-              if (confirmation === 'continue') void confirmContinuation()
+              if (confirmation === 'quantity') void confirmQuantity()
+              else if (confirmation === 'continue') void confirmContinuation()
               else void executeSubmit(confirmation === 'duplicate' ? confirmedDuplicateOrderId : undefined)
-            }}><Check size={17} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
+            }}><Check size={17} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : confirmation === 'quantity' ? '是，确认提交' : confirmation === 'duplicate' ? '确认继续加单' : confirmation === 'continue' ? '继续选商品' : complimentaryMode ? '确认赠送' : '确认上单'}</button>
           </footer>
         </section>
       </div>}

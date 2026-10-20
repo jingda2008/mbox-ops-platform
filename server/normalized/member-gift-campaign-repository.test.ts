@@ -660,6 +660,12 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).releaseCancelled(order.id))).toBe(0)
         expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30)
       }
+      const pointNotices=(await pool.query('SELECT event_key,event_type,points_delta FROM mbox.official_points_notifications WHERE membership_id=$1',[membership])).rows
+      const ledgerEntries=(await pool.query('SELECT id FROM mbox.loyalty_point_ledger WHERE membership_id=$1',[membership])).rows
+      expect(pointNotices.filter(n=>n.event_key.startsWith('ledger:')).map(n=>n.event_key).sort()).toEqual(ledgerEntries.map(l=>'ledger:'+l.id).sort())
+      expect(pointNotices.some(n=>n.event_type==='checkout_hold')).toBe(true)
+      if(points*100===total)expect(pointNotices.some(n=>n.event_type==='checkout_settled'&&n.points_delta===0)).toBe(true)
+      if(expireBeforeReturn)expect(pointNotices.some(n=>n.event_type==='expired_return')).toBe(true)
     }
   // This integration includes a deliberate database-clock expiry wait of up to
   // 10 seconds plus six complete settlement/refund/printing flows. Keep the

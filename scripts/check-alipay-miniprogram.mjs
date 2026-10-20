@@ -125,6 +125,9 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 // Alipay keeps its frozen retry and coupon navigation; both retain true-zero/unknown distinctions.
 // Re-reviewed existing QR/policy differences; the changed progress blocks are tested on both platforms.
 const wechatPolicyTemplateDivergences = {
+  // 2026-10-21: official-account consent is WeChat-only; Alipay has no bound OA identity contract.
+  // Freeze this reviewed addition while retaining all Alipay syntax, handler, style and API guards.
+  'pages/profile-notifications/index': { wechat: '772452633c1a3670619afdc4b7aa3254ffab6afe06375a8db39b6d51e11d77fc', alipay: '3968ed9454102f463e26a0aab169f895fac5e1d57fad0bc0e13475ed773d496c' },
   'pages/member-center/index': {"wechat": "7dbfe56ea18bae3db3cb72002ad0582690e646f6b5710c2693ef18412e61d8d4", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "1805410a89f4ed7daf9f203b03ffce39e0520c943ef6fe0e06396de68b01b09b", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
   'pages/home/index': {"wechat": "acb7a4220bb51bdeaea146ef9680a9c585f30c8a9a2a15912d59fc787e1b6c3c", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
   // 2026-10-20: identical quantity review added on both platforms; pre-existing platform differences retained.

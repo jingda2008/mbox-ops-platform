@@ -35,6 +35,14 @@ export class SocialAccountRepository{
   if(existing?.account.enabled&&!input.enabled){const linked=await this.tx.query<{customer_id:string}>('SELECT DISTINCT customer_id FROM mbox.social_relationships WHERE tenant_id=$1 AND store_id=$2 AND account_id=$3 AND customer_id IS NOT NULL',[...this.scope,id]);for(const row of linked.rows)await this.refreshCards(row.customer_id)}
   return{id,callbackPath:`/api/social-accounts/${id}/callback`,credentialsConfigured:true}
  }
+ async recordPointsReceipt(accountId:string,xml:string){
+  const reference=xmlValue(xml,'MsgID'),success=xmlValue(xml,'Status')==='success'
+  if(!/^[0-9]{1,30}$/.test(reference))throw new Error('INVALID_MESSAGE_REFERENCE')
+  await this.tx.query("INSERT INTO mbox.official_points_receipts(tenant_id,store_id,account_id,provider_reference,delivered) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",[...this.scope,accountId,reference,success])
+  const changed=await this.tx.query("UPDATE mbox.official_points_notifications SET status=$5,error_code=$6,completed_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND account_id=$3 AND provider_reference=$4 AND status IN('accepted','unknown') RETURNING id",[...this.scope,accountId,reference,success?'delivered':'delivery_failed',success?null:'PROVIDER_DELIVERY_FAILED'])
+  // Other template-message products share this callback; their receipts are not ours.
+  return changed.rowCount
+ }
  async recordBroadcastReceipt(accountId:string,xml:string){
   const reference=xmlValue(xml,'MsgID'),success=xmlValue(xml,'Status')==='send success'
   await this.tx.query("UPDATE mbox.social_broadcasts SET status=$5,error_code=$6,completed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND account_id=$3 AND provider_reference=$4 AND status IN('accepted','unknown')",[...this.scope,accountId,reference,success?'delivered':'delivery_failed',success?null:'PROVIDER_DELIVERY_FAILED'])
@@ -101,6 +109,7 @@ export class SocialAccountRepository{
 export async function processSocialEvent(repo:SocialAccountRepository,accountId:string,xml:string,adapter?:OfficialSocialAccountAdapter){
  const {account,credentials}=await repo.account(accountId),event=xmlValue(xml,'Event',false)
  
+ if(account.kind==='service_account'&&event==='TEMPLATESENDJOBFINISH'){await repo.recordPointsReceipt(accountId,xml);return}
  if(account.kind==='service_account'&&event==='MASSSENDJOBFINISH'){await repo.recordBroadcastReceipt(accountId,xml);return}
  if(account.kind==='service_account'&&!['subscribe','unsubscribe'].includes(event))return
  if(account.kind==='wecom'&&event!=='change_external_contact')return

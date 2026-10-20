@@ -197,6 +197,7 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
       resultCodec: jsonCodec<CostResult>(),
     }, async (transaction) => {
       await createAccess(transaction).assertPermission(context.employeeId, 'commercial.cost.manage')
+      await assertCostSourcePermission(createAccess(transaction), context.employeeId, input)
       const cost = await createRepository(transaction).createCost(input)
       const result = toCostResult(cost)
       return {
@@ -231,6 +232,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
         resultCodec: jsonCodec<CostResult>(),
       }, async (transaction) => {
         await createAccess(transaction).assertPermission(context.employeeId, 'commercial.cost.manage')
+        await assertCostSourcePermission(createAccess(transaction), context.employeeId, input)
+        await assertEditableCost(transaction, costId, createAccess(transaction), context.employeeId)
         const cost = await createRepository(transaction).correctCost(costId, input, reason)
         const result = toCostResult(cost)
         return {
@@ -614,6 +617,34 @@ function readScopeIds(value: JsonValue): string[] {
   return []
 }
 
+// New clients record one amount. Legacy split fields remain readable for installed clients.
+export function readRecordedAmount(body: Record<string, unknown>): { netAmountMinor: number; taxAmountMinor: number } {
+  if (body.amountMinor !== undefined) {
+    const amount = readInteger(body.amountMinor, 'amountMinor', 0);
+    if (body.netAmountMinor !== undefined || body.taxAmountMinor !== undefined) {
+      throw new CommercialApiRequestError('金额不能同时使用新旧字段');
+    }
+    return { netAmountMinor: amount, taxAmountMinor: 0 };
+  }
+  return {
+    netAmountMinor: readInteger(body.netAmountMinor, 'netAmountMinor', 0),
+    taxAmountMinor: body.taxAmountMinor === undefined ? 0 : readInteger(body.taxAmountMinor, 'taxAmountMinor', 0),
+  };
+}
+
+export async function assertCostSourcePermission(access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string, source: { sourceType: string; category: string }): Promise<void> {
+  if (source.sourceType === 'payroll' || source.category === 'personnel') await access.assertPermission(employeeId, 'commercial.payroll.manage');
+  if (source.sourceType === 'inventory_purchase' || source.category === 'beverage_purchase') await access.assertPermission(employeeId, 'inventory.receive');
+}
+
+export async function assertEditableCost(transaction: ScopedTransaction, costId: string, access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string): Promise<void> {
+  const current = await transaction.query<{ source_type: string; category: string }>(
+    'SELECT source_type,category FROM mbox.operating_cost_entries WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid',
+    [transaction.scope.tenantId, transaction.scope.storeId, costId],
+  );
+  for (const row of current.rows) await assertCostSourcePermission(access, employeeId, { sourceType: row.source_type, category: row.category });
+}
+
 export function readCostInput(
   body: Record<string, unknown>,
   context: NormalizedOperationsRequestContext,
@@ -628,8 +659,7 @@ export function readCostInput(
     serviceEndDate: readDate(body.serviceEndDate, 'serviceEndDate'),
     cashPaidOn: body.cashPaidOn === undefined || body.cashPaidOn === null
       ? null : readDate(body.cashPaidOn, 'cashPaidOn'),
-    netAmountMinor: readInteger(body.netAmountMinor, 'netAmountMinor', 0),
-    taxAmountMinor: body.taxAmountMinor === undefined ? 0 : readInteger(body.taxAmountMinor, 'taxAmountMinor', 0),
+    ...readRecordedAmount(body),
     currency: readCurrency(body.currency),
     sourceType: readEnum(body.sourceType, SOURCE_TYPES, 'sourceType'),
     displayName: readOptionalString(body.displayName, 'displayName', 128),

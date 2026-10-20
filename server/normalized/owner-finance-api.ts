@@ -1,5 +1,5 @@
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
-import { CommercialApiRequestError, readCostInput, toCostResult } from "./commercial-ops-api.js";
+import { CommercialApiRequestError, assertCostSourcePermission, assertEditableCost, readRecordedAmount, readCostInput, toCostResult } from "./commercial-ops-api.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
@@ -78,6 +78,8 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
       const input=readCostInput(body,context,`cost-${randomUUID()}`);
       return commandReply(reply,options,context,request,correction?"commercial.cost.correct":"commercial.cost.create",{costId,reason,input:{...input,publicId:body.publicId??null}},async tx=>{
         await access(tx).assertPermission(context.employeeId,"commercial.cost.manage");
+        await assertCostSourcePermission(access(tx), context.employeeId, input);
+        if (costId) await assertEditableCost(tx, costId, access(tx), context.employeeId);
         const repo=new CommercialOpsRepository(tx);
         const value=correction?await repo.correctCost(costId!,input,reason!):await repo.createCost(input);
         return {...toCostResult(value),status:"recorded",aggregateVersion:1};
@@ -124,7 +126,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
             ids(context),
           );
           const costs = await transaction.query(
-            `SELECT cost.id,cost.public_id AS "publicId",COALESCE(cost.display_name,definition.name,cost.category) AS name,cost.category,cost.recognition_state AS "recognitionState",cost.allocation_period AS "allocationPeriod",cost.service_start_date::text AS "serviceStartDate",cost.service_end_date::text AS "serviceEndDate",cost.cash_paid_on::text AS "cashPaidOn",cost.net_amount_minor::text AS "netAmountMinor",cost.tax_amount_minor::text AS "taxAmountMinor",cost.gross_amount_minor::text AS "grossAmountMinor",cost.currency,cost.source_type AS "sourceType",cost.category_definition_id AS "categoryDefinitionId",cost.cost_center_id AS "costCenterId",center.name AS "costCenterName",cost.counterparty,cost.note,cost.corrects_cost_entry_id AS "correctsCostEntryId",cost.recurring_rule_id AS "recurringRuleId",cost.payroll_run_id AS "payrollRunId",EXISTS(SELECT 1 FROM mbox.operating_cost_entries correction WHERE correction.tenant_id=cost.tenant_id AND correction.store_id=cost.store_id AND correction.corrects_cost_entry_id=cost.id) AS corrected FROM mbox.operating_cost_entries cost LEFT JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=cost.tenant_id AND definition.store_id=cost.store_id AND definition.id=cost.category_definition_id LEFT JOIN mbox.cost_centers center ON center.tenant_id=cost.tenant_id AND center.store_id=cost.store_id AND center.id=cost.cost_center_id WHERE cost.tenant_id=$1::uuid AND cost.store_id=$2::uuid AND cost.service_start_date<=$4::date AND cost.service_end_date>=$3::date ORDER BY cost.service_start_date DESC,cost.recorded_at DESC,cost.id`,
+            `SELECT cost.id,cost.public_id AS "publicId",COALESCE(cost.display_name,definition.name,cost.category) AS name,cost.category,cost.recognition_state AS "recognitionState",cost.allocation_period AS "allocationPeriod",cost.service_start_date::text AS "serviceStartDate",cost.service_end_date::text AS "serviceEndDate",cost.cash_paid_on::text AS "cashPaidOn",cost.net_amount_minor::text AS "netAmountMinor",cost.tax_amount_minor::text AS "taxAmountMinor",cost.gross_amount_minor::text AS "grossAmountMinor",cost.currency,cost.source_type AS "sourceType",cost.category_definition_id AS "categoryDefinitionId",cost.cost_center_id AS "costCenterId",center.name AS "costCenterName",cost.counterparty,cost.note,cost.corrects_cost_entry_id AS "correctsCostEntryId",cost.correction_reason AS "correctionReason",cost.recurring_rule_id AS "recurringRuleId",cost.payroll_run_id AS "payrollRunId",EXISTS(SELECT 1 FROM mbox.operating_cost_entries correction WHERE correction.tenant_id=cost.tenant_id AND correction.store_id=cost.store_id AND correction.corrects_cost_entry_id=cost.id) AS corrected FROM mbox.operating_cost_entries cost LEFT JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=cost.tenant_id AND definition.store_id=cost.store_id AND definition.id=cost.category_definition_id LEFT JOIN mbox.cost_centers center ON center.tenant_id=cost.tenant_id AND center.store_id=cost.store_id AND center.id=cost.cost_center_id WHERE cost.tenant_id=$1::uuid AND cost.store_id=$2::uuid AND cost.service_start_date<=$4::date AND cost.service_end_date>=$3::date ORDER BY cost.service_start_date DESC,cost.recorded_at DESC,cost.id`,
             [...ids(context), startDate, endDate],
           );
           const employees = canViewPayroll
@@ -268,21 +270,23 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           RECOGNITION,
           "确认状态",
         ),
-        netAmountMinor: minor(body.netAmountMinor, "未税金额"),
-        taxAmountMinor: minor(body.taxAmountMinor ?? 0, "税额"),
+        ...readRecordedAmount(body),
         sourceType: enumValue(body.sourceType, SOURCES, "来源"),
         counterparty: optionalText(body.counterparty, "收款方", 128),
         note: optionalText(body.note, "备注", 1000),
       };
       if (input.endsOn && input.endsOn < input.startsOn)
         throw new OwnerFinanceRequestError("结束日期不能早于开始日期");
+      const editingId = body.ruleId === undefined ? null : uuid(body.ruleId, "周期规则");
+      const expectedVersion = editingId ? integer(body.expectedVersion, "规则版本", 1, 1_000_000) : null;
+      const changeReason = editingId ? text(body.changeReason, "修改原因", 1000) : null;
       return commandReply(
         reply,
         options,
         context,
         request,
-        "commercial.recurring-cost.create",
-        input,
+        editingId ? "commercial.recurring-cost.update" : "commercial.recurring-cost.create",
+        editingId ? { ...input, editingId, expectedVersion, changeReason } : input,
         async (transaction) => {
           await access(transaction).assertPermission(
             context.employeeId,
@@ -305,6 +309,20 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
             );
           if (input.sourceType !== recurringSource(category.system_category))
             throw new OwnerFinanceRequestError("费用来源与费用分类不一致");
+          if (editingId) {
+            const previous = one(await transaction.query<{ public_id: string; version: number; status: string; recurrence: string; starts_on: string; ends_on: string | null; allocation_period: string }>(
+              `SELECT *,starts_on::text,ends_on::text FROM mbox.recurring_operating_cost_rules WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE`,
+              [...ids(context), editingId],
+            ), "周期规则不存在");
+            await assertRecurringSourcePermission(transaction, editingId, access(transaction), context.employeeId);
+            if (previous.version !== expectedVersion || previous.status === "ended") throw new OwnerFinanceConflictError("规则已变更或结束，请刷新后重试");
+            if (previous.recurrence !== input.recurrence || previous.starts_on !== input.startsOn || previous.ends_on !== input.endsOn || previous.allocation_period !== input.allocationPeriod)
+              throw new OwnerFinanceRequestError("修改规则不改变原周期和日期；调整周期请结束原规则后新建");
+            await transaction.query(`UPDATE mbox.recurring_operating_cost_rules SET name=$4,category_definition_id=$5::uuid,cost_center_id=$6::uuid,recognition_state=$7,net_amount_minor=$8::bigint,tax_amount_minor=$9::bigint,source_type=$10,counterparty=$11,note=$12,version=version+1,updated_at=clock_timestamp() WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`,
+              [...ids(context), editingId, input.name, input.categoryDefinitionId, input.costCenterId, input.recognitionState, input.netAmountMinor, input.taxAmountMinor, input.sourceType, input.counterparty, input.note]);
+            return { ...result(editingId, previous.public_id, previous.status, previous.version + 1), changeReason,
+              previousRule: JSON.parse(JSON.stringify(previous)) as JsonObject, recordedRule: input as unknown as JsonObject };
+          }
           const publicId = `recurring-cost-${randomUUID()}`;
           const row = one(
             await transaction.query<{ id: string }>(
@@ -331,7 +349,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           );
           return result(row.id, publicId, "active");
         },
-        "commercial.recurring_cost.created",
+        editingId ? "commercial.recurring_cost.updated" : "commercial.recurring_cost.created",
         "recurring_operating_cost",
       );
     }),
@@ -360,12 +378,13 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               "commercial.cost.manage",
             );
             const rules = await transaction.query<RecurringDbRow>(
-              `SELECT rule.id,rule.public_id,rule.name,rule.category_definition_id,rule.cost_center_id,rule.recurrence,rule.starts_on::text AS starts_on,rule.ends_on::text AS ends_on,rule.allocation_period,rule.recognition_state,rule.net_amount_minor::text AS net_amount_minor,rule.tax_amount_minor::text AS tax_amount_minor,rule.currency,rule.source_type,rule.counterparty,rule.note,definition.system_category FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id AND definition.id=rule.category_definition_id WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid AND rule.status='active' AND rule.starts_on<=$3::date AND (rule.ends_on IS NULL OR rule.ends_on>=rule.starts_on) ORDER BY rule.id`,
+              `SELECT rule.id,rule.public_id,rule.name,rule.category_definition_id,rule.cost_center_id,rule.recurrence,rule.starts_on::text AS starts_on,rule.ends_on::text AS ends_on,rule.allocation_period,rule.recognition_state,rule.net_amount_minor::text AS net_amount_minor,rule.tax_amount_minor::text AS tax_amount_minor,rule.currency,rule.source_type,rule.counterparty,rule.note,definition.system_category FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON definition.tenant_id=rule.tenant_id AND definition.store_id=rule.store_id AND definition.id=rule.category_definition_id WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid AND rule.status='active' AND rule.starts_on<=$3::date AND (rule.ends_on IS NULL OR rule.ends_on>=rule.starts_on) ORDER BY rule.id FOR UPDATE OF rule`,
               [...ids(context), throughDate],
             );
             let created = 0;
             const repository = new CommercialOpsRepository(transaction);
             for (const rule of rules.rows) {
+              await assertCostSourcePermission(access(transaction), context.employeeId, { sourceType: rule.source_type, category: rule.system_category });
               for (const occurrence of occurrences(
                 rule.starts_on,
                 rule.ends_on,
@@ -457,6 +476,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               ),
               "周期费用规则不存在",
             );
+            await assertRecurringSourcePermission(transaction, ruleId, access(transaction), context.employeeId);
             const allowed =
               (current.status === "active" &&
                 (status === "paused" || status === "ended")) ||
@@ -1267,6 +1287,7 @@ function codec<T>(): JsonCodec<T> {
 }
 
 class OwnerFinanceRequestError extends Error {}
+class OwnerFinanceConflictError extends Error {}
 async function handle(
   reply: FastifyReply,
   operation: () => Promise<FastifyReply>,
@@ -1309,6 +1330,7 @@ async function handle(
           },
         });
     if (
+      error instanceof OwnerFinanceConflictError ||
       error instanceof IdempotencyConflictError ||
       error instanceof IdempotencyInProgressError
     )
@@ -1388,3 +1410,13 @@ const SOURCES = [
   "manual",
 ] as const;
 const PAY_BASES = ["monthly", "daily", "hourly", "per_shift"] as const;
+
+// Authorize the stored source before allowing a caller to reclassify or resume
+// a legacy recurring rule. Expense access never implies payroll/purchasing access.
+async function assertRecurringSourcePermission(transaction: ScopedTransaction, ruleId: string, staffAccess: Pick<StaffAccessRepository, "assertPermission">, employeeId: string): Promise<void> {
+  const stored = one(await transaction.query<{ source_type: string; system_category: string }>(
+    `SELECT rule.source_type,definition.system_category FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON (definition.tenant_id,definition.store_id,definition.id)=(rule.tenant_id,rule.store_id,rule.category_definition_id) WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid AND rule.id=$3::uuid`,
+    [transaction.scope.tenantId, transaction.scope.storeId, ruleId],
+  ), "周期费用规则不存在");
+  await assertCostSourcePermission(staffAccess, employeeId, { sourceType: stored.source_type, category: stored.system_category });
+}

@@ -141,6 +141,8 @@ async function recordNotificationConsent(input) {
     method: 'POST', headers: { 'idempotency-key': randomId('notification-consent') }, data: input,
   })).data
 }
+async function getOfficialPointsNotifications() { return (await publicRequest('/api/public/mini/official-points-notifications')).data }
+async function setOfficialPointsNotifications(input) { return (await publicRequest('/api/public/mini/official-points-notifications', { method: 'POST', data: input })).data }
 async function getWechatNotificationAuthorizations() {
   return (await publicRequest('/api/public/mini/wechat-notification-authorizations')).data
 }
@@ -1054,6 +1056,7 @@ module.exports = {
   getGuestSession, getMiniBootstrap, getPrivacyPolicy, getMembershipTerms, getMiniLoyalty, getMiniLoyaltyLedger,
   recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
   getNotificationConsent, recordNotificationConsent,
+  getOfficialPointsNotifications, setOfficialPointsNotifications,
   getWechatNotificationAuthorizations, recordWechatNotificationAuthorization,
   getWechatMemberServiceNotificationAuthorizations, recordWechatMemberServiceNotificationAuthorization,
   getWechatNotificationPrompt,

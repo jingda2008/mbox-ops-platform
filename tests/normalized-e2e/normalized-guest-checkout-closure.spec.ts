@@ -28,12 +28,52 @@ async function setup(page:any,quantity:number){
     await expect(page.locator('.menu-cart-summary-copy strong')).toContainText(`${i+1}`)
   }
   await page.getByRole('button',{name:'查看已选',exact:true}).click()
-  return f
+  return { ...f, guestDevice: response.request().headers()['x-mbox-guest-device'] }
 }
 async function confirm(page:any){
   await page.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:/确认订单并微信支付/}).click()
-  await page.getByRole('dialog',{name:'确认上单'}).getByRole('button',{name:'确认上单',exact:true}).click()
+  await page.getByRole('dialog',{name:'确认商品数量'}).getByRole('button',{name:'是，确认提交',exact:true}).click()
 }
+test('duplicate quantities are grouped; no returns to the unchanged editable cart', async ({page}) => {
+  const f = await setup(page, 3)
+  let posts = 0
+  await page.route('**/api/guest/shared-cart/checkout', async route => { posts++; await route.continue() })
+  await page.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:/确认订单并微信支付/}).click()
+  const dialog = page.getByRole('dialog', { name: '确认商品数量' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.menu-confirm-lines > div')).toHaveCount(1)
+  await expect(dialog).toContainText(f.orderableProductName)
+  await expect(dialog).toContainText('× 3')
+  for (const width of [320, 390]) {
+    await page.setViewportSize({width,height:850})
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true)
+  }
+  await page.screenshot({path:'artifacts/normalized-browser/quantity-confirmation.png',fullPage:true})
+  await dialog.getByRole('button',{name:'否，返回购物车',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog',{name:'购物车明细'})).toBeVisible()
+  await expect(page.locator('.menu-cart-summary-copy strong')).toContainText('3')
+  expect(posts).toBe(0)
+})
+
+test('a same-table change while reviewing quantity returns to the cart without submitting', async ({page}) => {
+  const f = await setup(page, 2)
+  let posts = 0
+  await page.route('**/api/guest/shared-cart/checkout', async route => { posts++; await route.continue() })
+  await page.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:/确认订单并微信支付/}).click()
+  const dialog = page.getByRole('dialog',{name:'确认商品数量'})
+  await expect(dialog).toContainText('× 2')
+  const headers = {'x-mbox-guest-device': f.guestDevice}
+  const original = (await (await page.request.get('/api/guest/shared-cart',{headers})).json()).data
+  const changed = await page.request.post('/api/guest/shared-cart/lines', {headers:{...headers,'idempotency-key':crypto.randomUUID()},data:{productId:original.lines[0].productId,delta:1,expectedGeneration:original.generation,expectedVersion:original.version}})
+  expect(changed.status()).toBe(200)
+  await expect(page.locator('.menu-cart-summary-copy strong')).toContainText('3')
+  await dialog.getByRole('button',{name:'是，确认提交',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('dialog',{name:'购物车明细'})).toContainText('同桌购物车已经变化')
+  expect(posts).toBe(0)
+})
+
 test('product notes reach every committed portion in shared checkout',async({page})=>{
   const f=await setup(page,4)
   await page.getByLabel(`${f.orderableProductName}商品备注`).fill('本份少冰不加糖')

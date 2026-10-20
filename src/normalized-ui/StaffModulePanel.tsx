@@ -1337,11 +1337,12 @@ export function OperationsModule({ api, auth, view, sales, canViewProfit }: { ap
       <EmployeeSalesSummary sales={sales} />
     </section> : null
   if (!canViewProfit) return <div className="staff-module-body">
-    {finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}
+    {finance}
     {salesSection}
   </div>
-  if (view === null) return <div className="staff-module-body">{finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}<EmptyState text="本营业日暂无经营数据" />{salesSection}</div>
+  if (view === null) return <div className="staff-module-body">{finance}<EmptyState text="本营业日暂无经营数据" />{salesSection}</div>
   return <div className="staff-module-body">
+    {finance}
     <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>{view.range.startDate} 营业概览</strong><small>{view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}</small></div></div>
     <div className="staff-metric-grid">
       <article><small>实收净额</small><strong className={view.revenue.cash.netReceiptsMinor < 0 ? 'is-negative' : ''}>¥{signedMinorAmount(view.revenue.cash.netReceiptsMinor)}</strong></article>
@@ -1355,7 +1356,6 @@ export function OperationsModule({ api, auth, view, sales, canViewProfit }: { ap
     {(view.gaps.orderItemsMissingCostCount > 0 || view.gaps.inventoryLossesMissingCostCount > 0) && <p className="staff-module-warning">有 {view.gaps.orderItemsMissingCostCount} 个已售单品和 {view.gaps.inventoryLossesMissingCostCount} 笔损耗缺少成本，当前利润只能作为暂估。</p>}
     {view.caveats.length > 0 && <p className="staff-module-footnote">{view.caveats[0]}</p>}
     {salesSection}
-    {finance&&<details className="staff-finance-management"><summary>费用与工资管理</summary>{finance}</details>}
   </div>
 }
 

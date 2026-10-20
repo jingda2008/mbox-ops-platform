@@ -1,3 +1,4 @@
+import {createActivityContactProtectionKeyring} from './normalized/personal-contact-protection.js'
 import { createNormalizedApp } from './normalized/normalized-app.js'
 import { Pool } from 'pg'
 import { loadNormalizedRuntimeConfig } from './normalized/normalized-runtime-config.js'
@@ -118,6 +119,8 @@ async function main(): Promise<void> {
         nativePush: config.nativePush,
         getuiPush: config.getuiPush,
         transactions: workerTransactions,
+        ...(config.wechatIdentity?{officialPointsMiniProgramAppId:config.wechatIdentity.appId}:{}),
+        officialPointsProtection:createActivityContactProtectionKeyring(config.personalContactProtection??null,config.secret),
         aiExecutions: runtime.services.ai,
         adapters,
         paymentProviderConfigured: config.guestPaymentMode === 'simulation' || config.payment !== null,

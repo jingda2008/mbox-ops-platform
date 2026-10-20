@@ -1,3 +1,4 @@
+import {officialPointsNotificationApiPlugin} from './official-points-notification-api.js'
 import { nativePushApiPlugin } from './native-push-api.js'
 import { NativePushRepository } from './native-push-repository.js'
 import { registerNativeUpdateDistribution } from './native-update-distribution.js'
@@ -1251,6 +1252,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
             businessDate: day.businessDate,
           }
         },
+      })
+      await reservationApp.register(officialPointsNotificationApiPlugin, {
+        transactions, protection:activityContactProtection, resolveStaffContext:staffReservationContext,
+        resolvePublicContext: async request=>{const session=await authenticateReservationGuest(request);const day=await businessClock.current(scope);return{scope,customerId:session.customerId,actorRef:session.actorRef,businessDate:day.businessDate}},
       })
       await reservationApp.register(wechatLoyaltyNotificationApiPlugin, {
         transactions,

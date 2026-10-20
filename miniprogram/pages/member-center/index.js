@@ -46,10 +46,10 @@ function memberCardPreviewLevel() {
   }
 }
 
-function memberCardProgress(level, progress, previewLevel, status) {
+function memberCardProgress(level, progress, previewLevel, status, lifetimeGrowth) {
   return buildMemberCardProgress(level,
     previewLevel ? MEMBER_CARD_PREVIEW_PROGRESS[level] : progress,
-    previewLevel ? 'ready' : status)
+    previewLevel ? 'ready' : status, lifetimeGrowth)
 }
 
 function membershipView(item) {
@@ -95,7 +95,8 @@ function membershipView(item) {
       ? `按当前会员规则估算还需消费 ${money(Number(item.estimatedSpendToNextTierMinor))}` : '',
     annualBenefitCounts: item.annualBenefitCounts || { preview: 0, granted: 0, available: 0 },
     updatedText: item.updatedAt ? `数据更新于 ${dateTime(item.updatedAt)}` : '',
-  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus))
+  }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus,
+    item.lifetimeGrowth === undefined ? item.growthValue : item.lifetimeGrowth))
 }
 
 function benefitView(item) {
@@ -155,6 +156,15 @@ function annualBenefitView(item) {
   }
 }
 
+function nextTierBenefits(items, tier) {
+  const rank = { member: 0, silver: 1, gold: 2 }
+  return items.filter(item => Number(item.policyVersion) > 0
+    && !['cancelled', 'expired', 'redeemed'].includes(item.status)
+    && (item.applicableTier === tier
+      || (item.inheritToHigherTiers === true && rank[item.applicableTier] < rank[tier])))
+    .map(annualBenefitView)
+}
+
 function annualBenefitStatusText(item) {
   if (item.kind === 'daily_snack' && item.currentFulfillmentStatus === 'ready') return '已核销，出品待取；无需重新申请'
   if (item.kind === 'daily_snack' && item.currentFulfillmentStatus === 'pending') return '已核销，正在制作；无需重新申请'
@@ -173,6 +183,16 @@ Page({
     loading: true, error: '', membership: null, benefits: [], points: [], growth: [], processing: [], annualCalendar: [],
     calendarFilters: CALENDAR_FILTERS, calendarFilterIndex: 0, calendarItems: [], dailySnackBusy: false,
     dailySnackClaim: null, memberCodePreviewVisible: false,
+    tierBenefitsVisible: false, tierBenefits: [], tierBenefitsTitle: '',
+  },
+
+  onLoad(options) {
+    this.setData({ tierBenefitsVisible: Boolean(options && options.view === 'next-tier-benefits') })
+  },
+
+  openNextTierBenefits() {
+    if (!this.data.membership) return
+    this.setData({ tierBenefitsVisible: !this.data.tierBenefitsVisible })
   },
 
   onShow() {
@@ -207,6 +227,8 @@ Page({
       if (isCurrent()) this.setData({
         loading: false,
         membership,
+        tierBenefits: membership ? nextTierBenefits(bootstrap.annualBenefitCalendar || [], membership.cardBenefitTier) : [],
+        tierBenefitsTitle: membership ? `${CARD_LEVEL_NAMES[membership.cardBenefitTier]}权益` : '',
         benefits,
         points: (bootstrap.points || []).slice(0, 5).map((item) => ledgerView(item, 'points')),
         growth: (bootstrap.growth || []).slice(0, 5).map((item) => ledgerView(item, 'growth')),

@@ -610,7 +610,15 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderLogic, /openCartDetails\(\)[\s\S]*?checkoutConfirmVisible:\s*true/)
   assert.match(orderLogic, /closeCheckoutConfirm\(\)\s*\{\s*if \(this\.data\.busy\) return/)
   assert.doesNotMatch(orderLogic, /closeCheckoutConfirm\(\)\s*\{\s*if \([^)]*checkoutLocked/)
-  assert.match(orderView, /disabled="\{\{!orderReady \|\| cartSyncing \|\| \(cartWritesFrozen && !checkoutLocked\)\}\}">\{\{checkoutLocked \? '继续确认' : '提交订单'\}\}/)
+  const checkoutButton = orderView.match(/<button class="checkout-button"[^>]+>/)[0]
+  const disabledExpression = checkoutButton.match(/disabled="\{\{([^}]+)\}\}"/)[1]
+  const isDisabled = Function('orderReady', 'cartSyncing', 'cartWritesFrozen', 'checkoutLocked', 'cart', `return Boolean(${disabledExpression})`)
+  assert.equal(isDisabled(true, false, true, true, []), false, 'unknown checkout stays recoverable even with an empty frozen cart')
+  assert.equal(isDisabled(true, false, false, false, []), true, 'an empty fresh cart cannot submit')
+  assert.equal(isDisabled(true, false, false, false, [{}]), false)
+  assert.equal(isDisabled(false, false, false, false, [{}]), true)
+  assert.equal(isDisabled(true, true, false, false, [{}]), true)
+  assert.equal(isDisabled(true, false, true, false, [{}]), true)
   assert.doesNotMatch(orderView, /disabled="\{\{busy \|\| pendingPayment \|\| cartSyncing/)
   assert.doesNotMatch(orderView, /wx:if="\{\{cartExpanded\}\}"/)
   assert.match(servicePage, /tableSessionCacheScope/)

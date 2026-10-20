@@ -251,6 +251,7 @@ async function loadOrderPage(state) {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
     require(specifier) {
+      if (specifier === '../../utils/wechat-phone') return loadMiniModule(new URL('../miniprogram/utils/wechat-phone.js', import.meta.url))
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return {
@@ -895,7 +896,11 @@ test('guest cart opens a review sheet before it creates an order or starts payme
   assert.equal(noticeCalls, 0)
   assert.equal(submitCalls, 0)
 
-  await page.confirmCheckout()
+  const submitting = page.confirmCheckout()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(page.data.quantityReviewVisible, true)
+  page.confirmRepeatedQuantities()
+  await submitting
 
   assert.equal(page.data.checkoutConfirmVisible, false)
   assert.equal(noticeCalls, 0)

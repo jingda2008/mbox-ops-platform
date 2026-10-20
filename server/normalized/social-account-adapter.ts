@@ -44,6 +44,14 @@ export class OfficialSocialAccountAdapter{
   const followers=Array.isArray(result.follow_user)?result.follow_user as {userid?:string}[]:[]
   return{unionId:typeof external?.unionid==='string'?external.unionid:null,active:followers.length>0,followers:followers.map(item=>item.userid).filter((value):value is string=>typeof value==='string')}
  }
+ /** Lists the account's installed template-message templates; does not certify the account. */
+ async templates():Promise<{templateId:string;title:string;content:string}[]>{
+  if(this.account.kind!=='service_account'||!this.account.enabled)throw new SocialProviderError('ACCOUNT_DISABLED')
+  const token=await this.accessToken()
+  const result=await this.json(`https://api.weixin.qq.com/cgi-bin/template/get_all_private_template?access_token=${encodeURIComponent(token)}`)
+  if(!Array.isArray(result.template_list))throw new SocialProviderError('INVALID_TEMPLATE_LIST')
+  return result.template_list.map(item=>{if(!item||typeof item.template_id!=='string'||typeof item.title!=='string'||typeof item.content!=='string')throw new SocialProviderError('INVALID_TEMPLATE_LIST');return{templateId:item.template_id,title:item.title,content:item.content}})
+ }
  async sendBroadcast(content:string):Promise<SocialDeliveryResult>{
   if(this.account.kind!=='service_account'||!this.account.enabled)return{status:'rejected',providerReference:null,errorCode:'ACCOUNT_DISABLED'}
   let token:string;try{token=await this.accessToken()}catch{return{status:'rejected',providerReference:null,errorCode:'TOKEN_UNAVAILABLE'}}
@@ -51,11 +59,11 @@ export class OfficialSocialAccountAdapter{
    const reference=messageReference(result.msg_id);return reference===null?{status:'unknown',providerReference:null,errorCode:'MISSING_RECEIPT'}:{status:'accepted',providerReference:reference,errorCode:null}
   }catch(error){return error instanceof SocialProviderError&&error.code.startsWith('WECHAT_')?{status:'rejected',providerReference:null,errorCode:error.code}:{status:'unknown',providerReference:null,errorCode:'DELIVERY_OUTCOME_UNKNOWN'}}
  }
- async sendTemplate(openId:string,templateId:string,data:Record<string,string>):Promise<SocialDeliveryResult>{
+ async sendTemplate(openId:string,templateId:string,data:Record<string,string>,miniProgram?:{appid:string;pagepath:string}):Promise<SocialDeliveryResult>{
   if(this.account.kind!=='service_account'||!this.account.enabled)return{status:'rejected',providerReference:null,errorCode:'ACCOUNT_DISABLED'}
   let token:string;try{token=await this.accessToken()}catch{return{status:'rejected',providerReference:null,errorCode:'TOKEN_UNAVAILABLE'}}
   try{
-   const result=await this.json(`https://api.weixin.qq.com/cgi-bin/message/template/send?access_token=${encodeURIComponent(token)}`,{touser:openId,template_id:templateId,data:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,{value}]))})
+   const result=await this.json(`https://api.weixin.qq.com/cgi-bin/message/template/send?access_token=${encodeURIComponent(token)}`,{touser:openId,template_id:templateId,...(miniProgram?{miniprogram:miniProgram}:{}),data:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,{value}]))})
    const reference=messageReference(result.msgid);if(reference===null)return{status:'unknown',providerReference:null,errorCode:'MISSING_RECEIPT'}
    return{status:'accepted',providerReference:reference,errorCode:null}
   }catch(error){return error instanceof SocialProviderError&&error.code.startsWith('WECHAT_')?{status:'rejected',providerReference:null,errorCode:error.code}:{status:'unknown',providerReference:null,errorCode:'DELIVERY_OUTCOME_UNKNOWN'}}

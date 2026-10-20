@@ -227,4 +227,17 @@
     <view class="payment-result__sheet"><button class="payment-result__close compact-text-action" aria-label="关闭付款提示" hover-class="payment-result__close--pressed" onTap="closePaymentResult">关闭</button><view class="payment-result__mark payment-result__mark--{{paymentResult.kind}}">{{paymentResult.mark}}</view><text class="payment-result__title">{{paymentResult.title}}</text><text class="payment-result__copy">{{paymentResult.copy}}</text><view class="payment-result__actions"><button class="secondary-button" onTap="openPaymentResultAccount">查看本桌账单</button><button a:if="{{paymentResult.canRetry}}" class="primary-button" onTap="retryPaymentFromResult" loading="{{busy}}">继续付款</button><button a:else class="primary-button" onTap="closePaymentResult">完成</button></view></view>
   </view>
 
+
+  <!-- Shared quantity review -->
+  <view a:if="{{quantityReviewVisible}}" class="quantity-review-mask" role="dialog" aria-label="确认商品数量">
+    <view class="quantity-review-sheet">
+      <text class="quantity-review-title">以下商品点了多份，数量是否正确？</text>
+      <text class="quantity-review-copy">请核对本次购物车中的商品数量。</text>
+      <scroll-view scroll-y class="quantity-review-lines">
+        <view a:for="{{quantityReviewLines}}" a:key="productId" class="quantity-review-line"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>
+      </scroll-view>
+      <view class="quantity-review-actions"><button class="secondary-button" onTap="cancelRepeatedQuantities">否，返回购物车</button><button class="primary-button" onTap="confirmRepeatedQuantities">是，确认提交</button></view>
+    </view>
+  </view>
+  <!-- End shared quantity review -->
 </view>

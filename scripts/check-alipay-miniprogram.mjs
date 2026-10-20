@@ -121,16 +121,22 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 // Alipay remains at its separately frozen template and is not part of this release.
 // 2026-09-19: member QR preview is explicitly WeChat-only. Pin both reviewed
 // templates and styles; all Alipay syntax, handler and package checks remain active.
-// 2026-10-13: both platforms share zero/unknown progress, retry and coupon navigation.
+// 2026-10-19: WeChat cards remove inline retry, show cumulative fallback and next-tier benefit previews.
+// Alipay keeps its frozen retry and coupon navigation; both retain true-zero/unknown distinctions.
 // Re-reviewed existing QR/policy differences; the changed progress blocks are tested on both platforms.
 const wechatPolicyTemplateDivergences = {
-  'pages/member-center/index': {"wechat": "d2b746e4de42a5527734d5f4828b8a8d145069d49041c6d742ad632904b9fc90", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "85ad4dc6577e9d9b1852699a988bed713f241727a36369fe87b1a48143adfcc2", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
-  'pages/home/index': {"wechat": "8b80b0ffe480a6b5bd27b9a2a28343a5c3e3fe0895a8dcaa4255e98559776960", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
+  // 2026-10-21: official-account consent is WeChat-only; Alipay has no bound OA identity contract.
+  // Freeze this reviewed addition while retaining all Alipay syntax, handler, style and API guards.
+  'pages/profile-notifications/index': { wechat: '772452633c1a3670619afdc4b7aa3254ffab6afe06375a8db39b6d51e11d77fc', alipay: '3968ed9454102f463e26a0aab169f895fac5e1d57fad0bc0e13475ed773d496c' },
+  'pages/member-center/index': {"wechat": "7dbfe56ea18bae3db3cb72002ad0582690e646f6b5710c2693ef18412e61d8d4", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "1805410a89f4ed7daf9f203b03ffce39e0520c943ef6fe0e06396de68b01b09b", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
+  'pages/home/index': {"wechat": "acb7a4220bb51bdeaea146ef9680a9c585f30c8a9a2a15912d59fc787e1b6c3c", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
+  // 2026-10-20: identical quantity review added on both platforms; pre-existing platform differences retained.
+  // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
-  'pages/order/index': {"wechat": "3af08bbc373795662a01ef4ece5691db931ce11159c42aa9dea857a81fd00b06", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
-  'pages/profile/index': {"wechat": "5e8378d7974052096ce7d8322c34f80156b52c1ff5ae8d00ddb58dc63464fb50", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "7c694cb4e1af0da672bf457deb8912b421bdbf89f528e5744764103cc3c5522b", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
-  'pages/community/index': {"wechat": "94a74035ef9f9b5602985232e32432dde0e1765e2a366b7e8d4a3819e85f2316", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
-  'pages/reservations/index': {"wechat": "908065ef64649b8b306e1edb21a49914b0389b723f248bc016f345c307173c68", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
+  'pages/order/index': { "wechat": "6d72f1815c78c972fd3c4a43a40832fd5f8b1e47055700e77f7107b5f1aa849c", "alipay": "60d63e030eef1787bdcaabe38a7cb57548e8a648fa6baad78a8c16562ce842be" },
+  'pages/profile/index': {"wechat": "c8741771e41f5e04e2d22b83d216c6b8098866353e590991ba5de7b634feee65", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
+  'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
+  'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
   'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},
 
   'pages/profile-preferences/index': { wechat: '821b839de36340872e068bcef174a1f58d63c285160f3e2fa048d7be69508276', alipay: 'a842657e97e011a6b76259dd9c9281e8878836d42e70d3ef32a5ae06b9ff9303' },
@@ -148,6 +154,11 @@ for (const page of sharedPages) {
   const wechatTemplate = await readFile(join(wechatRoot, `${page}.wxml`), 'utf8')
   const alipayTemplate = await readFile(`${alipayBase}.axml`, 'utf8')
   const alipayScript = await readFile(`${alipayBase}.js`, 'utf8')
+  if (page === 'pages/order/index') {
+    const quantityBlock = template => template.match(/<!-- Shared quantity review -->([\s\S]*?)<!-- End shared quantity review -->/)?.[1]
+    const block = quantityBlock(wechatTemplate)
+    assert(block && block.replace(/wx:/g, 'a:').replace(/bindtap=/g, 'onTap=') === quantityBlock(alipayTemplate), '两端重复数量确认清单必须一致')
+  }
   const divergence = wechatPolicyTemplateDivergences[page]
   const reviewedDivergence = Boolean(divergence && digest(wechatTemplate) === divergence.wechat && digest(alipayTemplate) === divergence.alipay)
   assert(reviewedDivergence || tagSignature(alipayTemplate) === tagSignature(wechatTemplate), `${page} 的标签布局与微信不一致`)
@@ -168,7 +179,10 @@ for (const page of sharedPages) {
     readFile(wechatStylePath, 'utf8').catch(() => ''),
     readFile(alipayStylePath, 'utf8').catch(() => ''),
   ])
-  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '21fad3da45aad7b45ec3eaaf2c4ddd373c967773e26cce46c6f6343b469366f9' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
+  if (page === 'pages/order/index') {
+    assert(cssSignature(wechatStyle.slice(wechatStyle.indexOf('.quantity-review-mask'))) === cssSignature(alipayStyle.slice(alipayStyle.indexOf('.quantity-review-mask'))), '两端数量确认样式必须一致')
+  }
+  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '43dd4b002e558cbb725810756c4a1d7bd684cedadca22a2d64a4de860de16aaf' && digest(alipayStyle) === '961e60f5ebc72e70693ed5deb7cfd88ee8f4f855cbbe2683b98e18a68fcf6988'
   const reviewedMemberQrStyle = page === 'pages/member-center/index' && reviewedDivergence
     && digest(wechatStyle) === divergence.wechatStyle && digest(alipayStyle) === divergence.alipayStyle
   const reviewedPinnedStyle = Boolean(
@@ -190,7 +204,9 @@ const [wechatGlobalStyle, alipayGlobalStyle] = await Promise.all([
   readFile(join(wechatRoot, 'app.wxss'), 'utf8'),
   readFile(join(alipayRoot, 'app.acss'), 'utf8'),
 ])
-assert(cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
+// Reviewed WeChat-only bottom spacing for the native phone-capable custom tab bar.
+const reviewedWechatTabSpacing = digest(wechatGlobalStyle) === 'ea93c65713e51421a17d560b484fc335fce9ce0a7f8856f415004ae8d173f591' && digest(alipayGlobalStyle) === 'b71b0e7cf3eed8a9b5cd5b1cb337a48a73f687724f5ae6964cf47e0ba81863da'
+assert(reviewedWechatTabSpacing || cssSignature(alipayGlobalStyle) === cssSignature(wechatGlobalStyle), '全局布局样式与微信不一致')
 const [wechatStateStyle, alipayStateStyle] = await Promise.all([
   readFile(join(wechatRoot, 'components/state-panel/index.wxss'), 'utf8'),
   readFile(join(alipayRoot, 'components/state-panel/index.acss'), 'utf8'),

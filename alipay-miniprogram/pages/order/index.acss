@@ -1836,3 +1836,14 @@
 .page.page button:focus-visible {
   outline:2px solid #537b64;outline-offset:2px;
 }
+
+.quantity-review-mask { position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:28rpx;box-sizing:border-box;background:rgba(0,0,0,.55); }
+.quantity-review-sheet { width:100%;max-width:680rpx;max-height:80vh;display:flex;flex-direction:column;padding:32rpx;box-sizing:border-box;border-radius:24rpx;background:#fff; }
+.quantity-review-title { display:block;font-size:32rpx;font-weight:700;line-height:1.5;color:#27241f; }
+.quantity-review-copy { display:block;margin:16rpx 0;font-size:24rpx;line-height:1.5;color:#665e54; }
+.quantity-review-lines { height:36vh;max-height:42vh;flex:none; }
+.quantity-review-line { display:flex;justify-content:space-between;gap:20rpx;padding:20rpx 0;border-bottom:1rpx solid #e3ded6;font-size:28rpx;line-height:1.5; }
+.quantity-review-line text:first-child { min-width:0;overflow-wrap:anywhere; }
+.quantity-review-line text:last-child { flex-shrink:0;font-weight:700; }
+.quantity-review-actions { display:grid;grid-template-columns:1fr 1fr;gap:16rpx;margin-top:24rpx; }
+.quantity-review-actions button { min-width:0;min-height:88rpx;margin:0;padding:16rpx 8rpx;font-size:25rpx;line-height:1.5;display:flex;align-items:center;justify-content:center; }

@@ -4,6 +4,16 @@
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取提醒设置</button></view>
     <view class="notice-card">
+      <text class="notice-title">公众号积分变动提醒</text>
+      <text class="notice-copy">积分到账、占用抵扣、退款返还、人工调整和到期变动均记录。开启后通过已绑定的公众号发送，不影响会员权益。</text>
+      <block wx:if="{{official}}">
+        <text>{{official.accountName || '门店尚未配置公众号积分通知'}}</text>
+        <text wx:if="{{!official.available}}">公众号通知权限尚未就绪，积分明细仍可在小程序查看。</text>
+        <text wx:elif="{{!official.linked}}">请先关注门店公众号并完成本人会员绑定。</text>
+        <switch checked="{{official.enabled}}" disabled="{{saving || (!official.enabled &amp;&amp; (!official.available || !official.linked))}}" bindchange="changeOfficial" aria-label="接收公众号积分变动提醒" />
+      </block>
+    </view>
+    <view class="notice-card">
       <text class="notice-title">微信会在需要时发起确认</text>
       <text class="notice-copy">报名、付款或查看优惠券时，微信会展示相应模板。你当场选择即可；不影响报名、点单或会员权益。</text>
     </view>

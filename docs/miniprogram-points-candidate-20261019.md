@@ -1,0 +1,66 @@
+# 积分小程序候选准备记录
+
+最新状态（2026-10-19 18:52 CST）：rc260已通过官方开发者工具成功上传微信开发版；上传前后166个文件完整性一致，积分入口/事件绑定及全积分结清提示均存在。未选体验版、未提审/正式发布，现场验收按用户要求等到店。下文18:33准备和18:42登录阻塞为历史记录。
+
+记录时间：2026-10-19 18:33 CST。用户要求现场到店后再验，本轮只核对上传记录并准备最新版本。
+
+## 上传证据结论
+
+- 最后找到的成功回执为2026-10-11 00:36 CST的`1.0.0-rc.253`，提交`18eb81b7491929a670d7aa04bf530ef8b1c4790a`。官方CLI退出0、日志含upload成功、包大小1,038,579字节，记录未选体验版/提审/发布。
+- 对应实际上传候选和Git版本均无“使用积分抵扣”。未找到更新的积分版上传回执。
+- 证据位于`/Users/jingda/mbox/outputs/miniprogram-rc253-20261011/wechat-rc253/`的`upload-result.json`、`upload-info.json`、`upload.log`及候选文件。
+- 微信平台页面访问受电脑操作工具规则限制，未绕过。远端当前开发/体验/正式版本仍未核实；不能断言其他人员未曾上传。本地证据不足以称为积分入口已上传。
+
+## 最新候选
+
+| 项目 | 结果 |
+|---|---|
+| 候选版本 | 1.0.0-rc.260 |
+| 来源 | 本轮fetch确认的最新origin/main：55be235542e066b2d1232d2749424492a406e1f8 |
+| AppID | wxdb9f2dc413484f2d |
+| 正式API | https://mbox.shmbox.com |
+| 积分入口 | 使用积分抵扣；全积分时“积分结清，无需另付款”均在候选中 |
+| 安全配置 | production、微信身份启用、开发数据兜底关闭、无默认桌码/开发身份 |
+| 小程序回归 | 539通过、0失败、0跳过 |
+| 静态检查 | 168源文件通过 |
+| 候选完整性 | 166文件、candidate阶段ready；164文件与主线逐字节一致，工程配置及release-config为构建生成 |
+| 比上次上传变化 | 12文件，涉及会员进度、积分入口/报价、账户显示及请求适配 |
+| 本轮上传/提审/发布 | 均未执行 |
+
+候选工程：`/Users/jingda/mbox/outputs/miniprogram-rc260-20261019/wechat-rc260/miniprogram`。
+
+可导入压缩包：`/Users/jingda/mbox/outputs/miniprogram-rc260-20261019/MBOX-WeChat-1.0.0-rc.260-candidate.zip`，SHA256 `7e2688af4ac7ef1ce6252823552621d5638f55c36d6d3823dfdab8a44f5f1200`，510,489字节，ZIP CRC检查通过。
+
+候选清单SHA256 `963607ac6c0be70fc80f987cfed8423cd8a6d8f2b9da4bde2ef37c1d5cfbfc5c`。输出目录留存`tests.log`、`static.log`、`candidate-verification.json`、`source-readback.json`、`preparation-result.json`及使用说明。candidate ready只证明本地完整性，不代表微信原生编译、平台审核、正式发布或真机验收通过。无后台部署、生产交易或新打印命令。
+
+## 2026-10-19 18:42 CST 开发版上传尝试
+
+用户明确要求将rc260上传到微信开发版，现场验收等到店。上传前再次核对候选摘要、166个文件哈希、积分按钮及事件绑定、全积分结清提示，candidate完整性ready。
+
+18:38官方开发者工具CLI在Fetching AppID permissions阶段返回微信错误10“需要重新登录”，尚未进入Upload阶段，无upload-info.json回执。CLI退出码为0，但业务日志明确失败，不能据退出码认定成功。原始输出及结构化结果保留在`wechat-rc260/upload.log`、`upload-command-result.json`、`upload-attempt-1.json`。
+
+已通过官方CLI生成扫码登录二维码。用户回复已扫码确认，但本机islogin仍返回false、登录进程仍等待；已向用户核对手机提示。18:41再次验证候选完整性ready、文件未变化。当前状态为登录确认阻塞，尚未上传成功、未提审/发布、未现场验收。不得覆盖失败日志或伪造上传回执；登录成功后再上传同一候选并留存独立重试证据。
+
+## 2026-10-19 18:52 CST 开发版上传成功
+
+用户要求重新登录。终止本任务旧登录等待客户端，保留开发者工具；重新生成官方二维码。用户扫码确认后，CLI明确返回login成功，islogin返回true。随后上传同一rc260候选，18:52:03 CST完成，退出0且日志明确含`✔ upload`，upload-info-2.json记录包大小1,046,896字节。
+
+| 上传后核对 | 结果 |
+|---|---|
+| 开发版版本/AppID | 1.0.0-rc.260 / wxdb9f2dc413484f2d |
+| 来源提交 | 55be235542e066b2d1232d2749424492a406e1f8 |
+| 候选摘要 | 963607ac6c0be70fc80f987cfed8423cd8a6d8f2b9da4bde2ef37c1d5cfbfc5c，与上传前一致 |
+| 文件完整性 | 166个文件哈希全部与候选清单一致；candidate验证ready |
+| 积分入口 | pages/order/index.wxml包含“使用积分抵扣”，事件绑定openCheckoutPoints，对应实现存在 |
+| 全积分提示 | “积分结清，无需另付款”存在 |
+| 页面纳入打包 | app.json注册pages/order/index；miniprogramRoot为./；packOptions.ignore为空 |
+| 上传日志摘要 | 31edacbf45b9326816944e68fad96e7e631b579030c34df3a9aaa444c53fa701 |
+| 平台回执摘要 | a242e5069cdb892662c53262f84679654714f6e5b4bad86dcd956ffa1626b7c9 |
+
+新增证据：候选目录内`upload-2.log`、`upload-info-2.json`、`upload-command-result-2.json`、`upload-result.json`、`after-upload-verification.json`；上轮失败证据不覆盖。证明范围是官方CLI接收上传、上传输入包未变化及入口已包含，不声称远端反编译回读。未选体验版、未提审/正式发布，未执行现场支付、退款或新打印；POINTS-ACCEPT-20261019-01现场项保持开放。
+
+## 2026-10-19 18:55 CST 体验版设置待平台操作
+
+用户要求rc260设为体验版并取得体验二维码。通过浏览器工具进入微信公众平台时，首次导航返回ERR_NETWORK_CHANGED；后续工具对错误页data:URL报告URL策略阻止，未能进入版本管理。没有执行体验版设置，也没有生成或取得体验二维码；不使用临时预览码冒充体验码，不改写已验证的开发版上传记录。
+
+已请用户在自己的浏览器进入小程序版本管理，对开发版本1.0.0-rc.260执行“设为体验版”，并反馈平台实际版本号。完成后仍需取得对应体验二维码作为交付证据。现场支付、返分、出纸继续等用户到店。该阻塞属于浏览器连接/工具访问路径，不能据此判断微信账号无权限或rc260未上传。

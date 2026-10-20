@@ -1,4 +1,4 @@
-<view class="page reservations-page">
+<view class="page reservations-page" style="padding-bottom: calc(98rpx + {{customTabBarHeight || 50}}px)">
   <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · 到店预约</text><text class="reservation-title">预约到店</text></view></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取本人预约" />
   <block wx:else>

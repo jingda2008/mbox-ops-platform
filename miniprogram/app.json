@@ -69,7 +69,8 @@
         "iconPath": "assets/tabbar/profile.png",
         "selectedIconPath": "assets/tabbar/profile-active.png"
       }
-    ]
+    ],
+    "custom": true
   },
   "usingComponents": {
     "state-panel": "/components/state-panel/index",

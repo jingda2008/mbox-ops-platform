@@ -1,3 +1,4 @@
+import {ProfitQueryService} from './profit-query-service.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
 import { MembershipConfigurationDraftService } from './membership-configuration-draft-service.js'
 import { PostgresMembershipConfigurationDraftRepository } from './membership-configuration-draft-repository.js'
@@ -43,6 +44,9 @@ import {PostgresPricingAuthority} from './postgres-pricing-authority.js'
 import {OrderRepository} from './order-repository.js'
 import {CheckoutCouponLifecycleRepository,noCouponFulfillmentHistorySql} from './checkout-coupon-lifecycle-repository.js'
 import {PaymentRepository} from './payment-repository.js'
+import {PaymentCommandService} from './payment-command-service.js'
+import {NormalizedPaymentCapabilityAuthorization} from './payment-security-policy.js'
+import {NormalizedProviderObservationAuthority,VerifiedProviderObservationService} from './provider-verification-observation.js'
 import {CheckoutCouponRecoveryWorker} from './checkout-coupon-recovery-worker.js'
 import {CheckoutCouponRefundReviewRepository,cashierCouponRefundReviewCountSql} from './checkout-coupon-refund-review-repository.js'
 const url=process.env.TEST_NORMALIZED_DATABASE_URL
@@ -453,11 +457,11 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
   it('locks points from original lots, settles zero without money, and restores cancelled holds once',async()=>{
     await pool.query(`INSERT INTO mbox.loyalty_policy_versions(tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason,points_rounding_scope,cash_redemption_enabled)
       VALUES($1,$2,'BASE',1,'published',1,1000,1,100,'floor',18,clock_timestamp()-interval '1 minute',$3,$4,clock_timestamp()-interval '1 minute',$5,clock_timestamp()-interval '1 minute','separated','隔离积分结账测试','order',true)`,[tenantId,storeId,editor,approver,publisher])
-    for(const code of ['refund.request','refund.approve']){
+    for(const code of ['refund.request','refund.approve','refund.execute']){
       await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING',[tenantId,storeId,code])
       await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4 ON CONFLICT DO NOTHING',[tenantId,storeId,role,code])
     }
-    await pool.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',10000,'CNY')",[tenantId,storeId,role])
+    await pool.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',100000,'CNY')",[tenantId,storeId,role])
     const customer=randomUUID(),membership=randomUUID(),area=randomUUID(),product=randomUUID()
     await pool.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status) VALUES($1,$2,$3,$4,'active')",[customer,tenantId,storeId,`points-${customer}`])
     await pool.query("INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no,level,status) VALUES($1,$2,$3,$4,$5,'member','active')",[membership,tenantId,storeId,customer,`MBX${membership.replaceAll('-','').slice(0,12).toUpperCase()}`])
@@ -481,15 +485,21 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       return {orderJobId:orderJob.id,order:orderJob.printSnapshot,
         table:(await repository.materializeManualTableBill(tableSource,sessionId,'隔离验收'))[0]!.printSnapshot}
     })
-    for(const [points,expireBeforeReturn] of [[5,false],[6,false],[10,false],[20,false],[10,true]] as const){
-      const startingBalance=expireBeforeReturn?40:30
+    for(const [points,expireBeforeReturn] of [[5,false],[6,false],[10,false],[20,false],[10,true],[200,false]] as const){
+      const startingBalance=points===200?300:expireBeforeReturn?40:30
+      if(points===200){
+        // Synthetic balance and price exist only in this disposable test database.
+        await pool.query("INSERT INTO mbox.loyalty_point_lots(tenant_id,store_id,membership_id,customer_id,source_type,source_id,original_points,remaining_points,available_at,expires_at) VALUES($1,$2,$3,$4,'legacy_balance','revenue-fixture',270,270,clock_timestamp()-interval '1 day',clock_timestamp()+interval '1 year')",[tenantId,storeId,membership,customer])
+        await pool.query('UPDATE mbox.loyalty_accounts SET available_points=300 WHERE membership_id=$1',[membership])
+        await pool.query('UPDATE mbox.product_prices SET amount_minor=70000 WHERE product_id=$1',[product])
+      }
       let expiringLot:string|undefined
       if(expireBeforeReturn){
         expiringLot=randomUUID()
         await pool.query("INSERT INTO mbox.loyalty_point_lots(id,tenant_id,store_id,membership_id,customer_id,source_type,source_id,original_points,remaining_points,available_at,expires_at) VALUES($1,$2,$3,$4,$5,'legacy_balance','expiry-fixture',10,10,clock_timestamp()-interval '1 day',clock_timestamp()+interval '10 seconds')",[expiringLot,tenantId,storeId,membership,customer])
         await pool.query('UPDATE mbox.loyalty_accounts SET available_points=40 WHERE membership_id=$1',[membership])
       }
-      const selectedProduct=points===20?bundle:product,total=points===20?2000:1000
+      const selectedProduct=points===20?bundle:product,total=points===200?70000:points===20?2000:1000
       await pool.query('UPDATE mbox.table_session_customer_participations SET left_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND customer_id=$3 AND left_at IS NULL',[tenantId,storeId,customer])
       const table=randomUUID(),session=randomUUID()
       await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,2)",[table,tenantId,storeId,area,`P${points}${expireBeforeReturn?"E":""}`])
@@ -511,7 +521,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       await expect(runner.run(scope,async tx=>{await place(tx);throw Error('rollback points order')})).rejects.toThrow('rollback points order')
       expect((await pool.query('SELECT count(*)::int AS n FROM mbox.checkout_point_holds WHERE quote_id=$1',[quote.id])).rows[0].n).toBe(0)
       let order
-      if(points>=10){
+      if(points*100===total){
         await pool.query('UPDATE mbox.table_sessions SET guest_cart_protocol_version=2 WHERE id=$1',[session])
         const commands=new NormalizedCommandExecutor(runner),app=Fastify()
         let providerCalls=0
@@ -533,7 +543,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         }finally{await app.close()}
       }else order=await runner.run(scope,place)
       expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(startingBalance-points)
-      if(points>=10){
+      if(points*100===total){
         expect((await runner.run(scope,tx=>tx.query('SELECT mbox.order_consumption_settled($1,$2,$3) AS settled',[tenantId,storeId,order.id]))).rows[0]!.settled).toBe(true)
         await runner.run(scope,async tx=>{
           await tx.query("UPDATE mbox.orders SET payment_status='paid' WHERE id=$1",[order.id])
@@ -582,40 +592,83 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         }
 
 
-      }else if(points===6){
-        const payment=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:order.id,publicId:`points-cash-${randomUUID()}`,provider:'simulation',method:'jsapi',initialStatus:'pending',principal:{type:'guest',tableSessionId:session,customerId:customer,guestSessionId:actorRef.slice('guest-session:'.length)}}))
-        expect(payment.amountMinor).toBe(400)
-        await runner.run(scope,async tx=>{
-          const repository=new PaymentRepository(tx)
-          await repository.applySucceededCallback({paymentPublicId:payment.publicId,provider:'simulation',providerTransactionId:`points-cash-fixture-${randomUUID()}`,reportedAmountMinor:400,reportedCurrency:'CNY'})
-          await repository.syncOrderPaymentStatus(order.id)
-          await new PaymentFulfillmentRepository(tx).activatePaidOrder(order.id)
-        })
-        for(const amount of [100,300]){
-          const refund=randomUUID()
-          await pool.query(`INSERT INTO mbox.refunds(id,tenant_id,store_id,payment_id,public_id,amount_minor,status,reason,requested_by_employee_id,approved_by_employee_id,decision_reason,provider_refund_id,completed_at,purpose)
-            VALUES($1,$2,$3,$4,$5,$6,'succeeded','隔离测试原商品退款',$7,$8,'独立审核',$9,clock_timestamp(),'return_goods')`,[refund,tenantId,storeId,payment.id,`points-refund-${refund}`,amount,editor,approver,`fixture-${refund}`])
-          await pool.query(`INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,'CNY')`,[tenantId,storeId,refund,order.items[0]!.id,amount])
-          expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).restoreRefund(order.id,refund))).toBe(amount===100?1:5)
+      }else if(points===6||points===200){
+        // Exercise the complete application lifecycle. Only channel observations
+        // are fixtures: no real WeChat call, cash transfer or production data.
+        const cashAmount=total-points*100,firstRefund=points===200?10000:100
+        const firstRestored=Math.floor(points*firstRefund/cashAmount)
+        const reports=new ProfitQueryService(runner)
+        const beforeCash=(await reports.getProfitReport(scope,'day',businessDate)).revenue.cash
+        const orderDate=(await pool.query('SELECT business_date::text AS order_date FROM mbox.orders WHERE id=$1',[order.id])).rows[0].order_date
+        const beforeAccrual=(await reports.getProfitReport(scope,'day',orderDate)).revenue.accrual.reconciledRevenueMinor
+        const commands=new NormalizedCommandExecutor(runner)
+        const service=new PaymentCommandService(commands,new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
+        const observations=new VerifiedProviderObservationService(runner)
+        const metadata=()=>({scope,businessDate,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
+        const payment=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:order.id,publicId:`points-cash-${randomUUID()}`,provider:'wechat',method:'jsapi',initialStatus:'pending',principal:{type:'guest',tableSessionId:session,customerId:customer,guestSessionId:actorRef.slice('guest-session:'.length)}}))
+        expect(payment.amountMinor).toBe(cashAmount)
+        const transactionId=`isolated-payment-${randomUUID()}`,occurredAt=new Date().toISOString()
+        const paymentObservation=await observations.recordPayment({scope,provider:'wechat',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef:'isolated-points-payment',paymentPublicId:payment.publicId,providerTransactionId:transactionId,reportedAmountMinor:cashAmount,reportedCurrency:'CNY',status:'succeeded',occurredAt,evidence:{isolatedFixture:true}})
+        const capture={...metadata(),actor:{type:'integration' as const,ref:'isolated-points-payment'},verifiedObservationId:paymentObservation,paymentPublicId:payment.publicId,provider:'wechat' as const,providerTransactionId:transactionId,reportedAmountMinor:cashAmount,reportedCurrency:'CNY',occurredAt}
+        await service.recordSucceededCallback(capture)
+        expect((await service.recordSucceededCallback(capture)).replayed).toBe(true)
+        expect(await runner.run(scope,tx=>readCheckoutPrintSummary(tx,[order.id]))).toMatchObject({received:cashAmount,due:0,state:'paid'})
+        const afterCash=(await reports.getProfitReport(scope,'day',businessDate)).revenue.cash
+        expect(afterCash.paymentReceiptsMinor-beforeCash.paymentReceiptsMinor).toBe(cashAmount)
+        expect((await pool.query('SELECT growth_value FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].growth_value).toBe(cashAmount/100)
+        expect(afterCash.netReceiptsMinor-beforeCash.netReceiptsMinor).toBe(cashAmount)
+        expect((await reports.getProfitReport(scope,'day',orderDate)).revenue.accrual.reconciledRevenueMinor-beforeAccrual).toBe(cashAmount)
+        expect((await pool.query('SELECT subtotal_amount_minor::int subtotal,discount_amount_minor::int discount,total_amount_minor::int payable FROM mbox.orders WHERE id=$1',[order.id])).rows[0]).toEqual({subtotal:total,discount:points*100,payable:cashAmount})
+        expect((await pool.query("SELECT count(*)::int n,sum(amount_minor)::int amount FROM mbox.reconciliation_entries WHERE payment_id=$1 AND entry_type='payment'",[payment.id])).rows[0]).toEqual({n:1,amount:cashAmount})
+        for(const amount of [firstRefund,cashAmount-firstRefund]){
+          const requested=await service.requestRefund({...metadata(),actor:{type:'employee',employeeId:editor},paymentId:payment.id,publicId:`points-refund-${randomUUID()}`,reason:'隔离积分退款验收，不出品',purpose:'return_goods',allocations:[{orderItemId:order.items[0]!.id,amountMinor:amount}]})
+          const refund=requested.value.id
+          expect(requested.value.status).toBe('requested')
+          const balanceBefore=startingBalance-points+(amount===firstRefund?0:firstRestored)+Math.floor((amount===firstRefund?cashAmount:cashAmount-firstRefund)/1000)
+          expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(balanceBefore)
+          await expect(service.approveRefund({...metadata(),actor:{type:'employee',employeeId:editor},refundId:refund,decisionReason:'申请人不得自审'})).rejects.toThrow()
+          await service.approveRefund({...metadata(),actor:{type:'employee',employeeId:approver},refundId:refund,decisionReason:'测试审批人独立审核'})
+          await service.beginRefundExecution({...metadata(),actor:{type:'employee',employeeId:approver},refundId:refund})
+          expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(balanceBefore)
+          const providerRefundId=`isolated-refund-${randomUUID()}`,returnedAt=new Date().toISOString()
+          const observationId=await observations.recordRefund({scope,provider:'wechat',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef:'isolated-points-refund',refundPublicId:requested.value.publicId,providerTransactionId:providerRefundId,originalProviderTransactionId:transactionId,reportedAmountMinor:amount,reportedCurrency:'CNY',status:'succeeded',occurredAt:returnedAt,evidence:{isolatedFixture:true}})
+          const result={...metadata(),actor:{type:'integration' as const,ref:'isolated-points-refund'},verifiedObservationId:observationId,refundPublicId:requested.value.publicId,provider:'wechat' as const,succeeded:true,providerRefundId,originalProviderTransactionId:transactionId,reportedAmountMinor:amount,reportedCurrency:'CNY',occurredAt:returnedAt}
+          expect((await service.recordProviderRefundResult(result)).value.status).toBe('succeeded')
+          expect((await service.recordProviderRefundResult(result)).replayed).toBe(true)
+          expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(amount===firstRefund?startingBalance-points+firstRestored+Math.floor((cashAmount-firstRefund)/1000):startingBalance)
+          expect((await pool.query('SELECT status FROM mbox.payments WHERE id=$1',[payment.id])).rows[0].status).toBe(amount===firstRefund?'partially_refunded':'refunded')
+          expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[order.id])).rows[0].payment_status).toBe(amount===firstRefund?'partially_refunded':'refunded')
+          expect((await pool.query("SELECT count(*)::int n FROM mbox.reconciliation_entries WHERE refund_id=$1 AND entry_type='refund'",[refund])).rows[0].n).toBe(1)
           expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).restoreRefund(order.id,refund))).toBe(0)
           const refundSnapshot=await runner.run(scope,async tx=>{
             const source=await appendOutboxMessage(tx,{aggregateType:'refund',aggregateId:refund,aggregateVersion:1,eventType:'refund.succeeded.v1',payload:{refundId:refund}})
             return (await new PrintTicketSourceRepository(tx).materializeCashierRefund(source,refund))[0]!.printSnapshot
           })
+          const cumulativeRefund=amount===firstRefund?firstRefund:cashAmount
+          const currentCash=(await reports.getProfitReport(scope,'day',businessDate)).revenue.cash
+          expect(currentCash.netReceiptsMinor-beforeCash.netReceiptsMinor).toBe(cashAmount-cumulativeRefund)
+          expect(currentCash.refundsMinor-beforeCash.refundsMinor).toBe(-cumulativeRefund)
+          expect((await reports.getProfitReport(scope,'day',orderDate)).revenue.accrual.reconciledRevenueMinor-beforeAccrual).toBe(cashAmount-cumulativeRefund)
           expect(refundSnapshot.totalAmountMinor).toBe(amount)
-          expect(refundSnapshot.lines).toEqual(expect.arrayContaining([expect.objectContaining({name:'原抵扣积分累计返还',quantity:amount===100?1:6})]))
+          expect(refundSnapshot.lines).toEqual(expect.arrayContaining([expect.objectContaining({name:'原抵扣积分累计返还',quantity:amount===firstRefund?firstRestored:points})]))
 
         }
-        expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30)
+        expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(startingBalance)
       }else{
         await pool.query("UPDATE mbox.orders SET status='cancelled',cancelled_at=clock_timestamp(),fulfillment_state='cancelled',fulfillment_expires_at=NULL,fulfillment_activated_at=NULL,fulfillment_released_at=clock_timestamp() WHERE id=$1",[order.id])
         expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).releaseCancelled(order.id))).toBe(points)
         expect(await runner.run(scope,tx=>new CheckoutPointsRepository(tx).releaseCancelled(order.id))).toBe(0)
         expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(30)
       }
+      const pointNotices=(await pool.query('SELECT event_key,event_type,points_delta FROM mbox.official_points_notifications WHERE membership_id=$1',[membership])).rows
+      const ledgerEntries=(await pool.query('SELECT id FROM mbox.loyalty_point_ledger WHERE membership_id=$1',[membership])).rows
+      expect(pointNotices.filter(n=>n.event_key.startsWith('ledger:')).map(n=>n.event_key).sort()).toEqual(ledgerEntries.map(l=>'ledger:'+l.id).sort())
+      expect(pointNotices.some(n=>n.event_type==='checkout_hold')).toBe(true)
+      if(points*100===total)expect(pointNotices.some(n=>n.event_type==='checkout_settled'&&n.points_delta===0)).toBe(true)
+      if(expireBeforeReturn)expect(pointNotices.some(n=>n.event_type==='expired_return')).toBe(true)
     }
   // This integration includes a deliberate database-clock expiry wait of up to
-  // 10 seconds plus five complete settlement/refund/printing flows. Keep the
+  // 10 seconds plus six complete settlement/refund/printing flows. Keep the
   // global 5-second limit unchanged; this is not a latency acceptance test.
   },30_000)
 

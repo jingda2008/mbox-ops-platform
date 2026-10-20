@@ -27,7 +27,7 @@ Page({
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
     pendingActivityId: '',
   },
-  onShow() { enablePublicShareMenu(); this.load() },
+  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/community/index') } enablePublicShareMenu(); this.load() },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
 
   onShareAppMessage() {

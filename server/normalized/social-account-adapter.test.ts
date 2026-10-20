@@ -43,3 +43,18 @@ describe('WeChat message delivery result boundaries',()=>{
   const request=vi.fn<typeof fetch>();expect((await new OfficialSocialAccountAdapter({...account,enabled:false},credentials,request).sendBroadcast('text')).status).toBe('rejected');expect(request).not.toHaveBeenCalled()
  })
 })
+
+it('reads installed template permission from the official API and preserves message deep links',async()=>{
+ const request=vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(new Response(JSON.stringify({template_list:[{template_id:'points-template',title:'积分变动通知',content:'{{thing1.DATA}}'}]}))).mockResolvedValueOnce(new Response(JSON.stringify({errcode:0,msgid:98765})))
+ const adapter=new OfficialSocialAccountAdapter(account,credentials,request)
+ expect(await adapter.templates()).toEqual([{templateId:'points-template',title:'积分变动通知',content:'{{thing1.DATA}}'}])
+ expect(String(request.mock.calls[1]![0])).toContain('https://api.weixin.qq.com/cgi-bin/template/get_all_private_template?')
+ expect(await adapter.sendTemplate('official-openid','points-template',{thing1:'积分返还'},{appid:'wxMiniProgram',pagepath:'pages/points/index'})).toMatchObject({status:'accepted'})
+ expect(JSON.parse(String(request.mock.calls[2]![1]?.body))).toMatchObject({touser:'official-openid',template_id:'points-template',miniprogram:{appid:'wxMiniProgram',pagepath:'pages/points/index'}})
+})
+it('does not infer template permission from a valid token or a malformed template response',async()=>{
+ for(const body of [{errcode:48001,errmsg:'not authorized'},{template_list:[{template_id:'bad'}]},{}]){
+  const request=vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(new Response(JSON.stringify(body)))
+  await expect(new OfficialSocialAccountAdapter(account,credentials,request).templates()).rejects.toThrow()
+ }
+})

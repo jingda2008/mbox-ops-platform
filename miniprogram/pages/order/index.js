@@ -20,10 +20,13 @@ const {
   getTodayPerformances,
   getCustomerBenefits,
   getMiniBootstrap,
+  getVerifiedPhones,
+  replaceVerifiedPhone,
   getWechatNotificationPrompt,
   createServiceTask,
   getServiceRequests,
 } = require('../../utils/api')
+const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
@@ -67,6 +70,17 @@ const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
   'GUEST_ORDER_RATE_LIMITED',
 ])
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
+
+function repeatedQuantityLines(lines) {
+  const grouped = new Map()
+  for (const line of lines || []) {
+    if (!line.productId || !Number.isSafeInteger(line.quantity) || line.quantity <= 0) continue
+    const item = grouped.get(line.productId) || { productId: line.productId, name: line.name, quantity: 0 }
+    item.quantity += line.quantity
+    grouped.set(line.productId, item)
+  }
+  return Array.from(grouped.values()).filter((item) => item.quantity > 1)
+}
 
 function compactMoney(amount) {
   const minor = Number(amount || 0)
@@ -530,9 +544,25 @@ Page({
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
-  openCheckoutPoints() { return checkoutCouponActions.openCheckoutPoints.call(this) },
+  openCheckoutPoints() {
+    if (this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
+    const result = this.data.pointsPickerOpen ? undefined : checkoutCouponActions.openCheckoutPoints.call(this)
+    this.setData({ checkoutScrollTarget: '' }, () => {
+      if (this.data.checkoutConfirmVisible && this.data.pointsPickerOpen) this.setData({ checkoutScrollTarget: 'checkout-points' })
+    })
+    return result
+  },
   onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
   quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
+  couponCheckoutReady() {
+    const ready = checkoutCouponActions.couponCheckoutReady.call(this)
+    if (!ready && this.data.pointsInput) {
+      this.setData({ pointsPickerOpen: true, pointsError: '请先核对积分抵扣金额，确认后再支付。', checkoutScrollTarget: '' }, () => {
+        if (this.data.checkoutConfirmVisible) this.setData({ checkoutScrollTarget: 'checkout-points' })
+      })
+    }
+    return ready
+  },
   openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
   loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
   chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
@@ -601,19 +631,34 @@ Page({
     cartCount: 0,
     cartExpanded: false,
     checkoutConfirmVisible: false,
+    quantityReviewVisible: false,
+    quantityReviewLines: [],
+    checkoutScrollTarget: '',
     pendingPayment: null,
     checkoutLocked: false,
     paymentResult: null,
     benefitCount: 0,
     membershipInviteVisible: false,
+    checkoutMemberInviteVisible: false,
     membershipBusy: false,
+    membershipStatus: 'unknown',
+    menuPhoneStatus: 'unknown',
+    membershipInviteError: '',
     membershipTerms: null,
     wechatNotificationPromptOptions: [],
     wechatOrderSelectionPromptOptions: [],
   },
 
   onLoad() { this.ensureTableRequestGuard() },
-  onShow() { enablePublicShareMenu(); this.preparePage() },
+  async onShow() {
+    if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/order/index') }
+    enablePublicShareMenu()
+    await this.preparePage()
+    const resumeScope = this.checkoutMemberReturnScope
+    this.checkoutMemberReturnScope = null
+    const request = this.currentTableRequest()
+    if (resumeScope && request && request.scope === resumeScope && this.isCurrentTableRequest(request)) await this.openCheckout()
+  },
 
   onShareAppMessage() {
     return publicSharePayload({
@@ -630,6 +675,8 @@ Page({
     })
   },
   onHide() {
+    this.selectionNotificationPending = null
+    this.setData({ membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
@@ -652,6 +699,7 @@ Page({
   },
 
   beginTableRequest(session) {
+    this.finishQuantityReview(false)
     return this.ensureTableRequestGuard().begin(tableRequestScope(session || getTableSession()))
   },
   rebaseTableRequest(request) {
@@ -661,7 +709,7 @@ Page({
   },
   currentTableRequest() { return this.ensureTableRequestGuard().current() },
   isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
-  invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
+  invalidateTableRequests() { this.finishQuantityReview(false); this.ensureTableRequestGuard().invalidate() },
 
   queuePendingGuestPaymentAbandonment(pendingOverride) {
     const paymentScope = tableSessionCacheScope()
@@ -854,8 +902,10 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false, paymentStateReady: false })
+    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
     const scopeChanged = this.visibleTableScope !== request.scope
+    const retainedCartScope = !scopeChanged && session.cartScope
+      && this.data.connectionState === 'active' && this.cartSnapshotScope === tableSessionCacheScope()
     this.visibleTableScope = request.scope
     this.cartRecovery = null
     if (scopeChanged) {
@@ -935,6 +985,15 @@ Page({
       await this.loadActiveData(request)
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
+        const temporaryConnectionFailure = error && (error.code === 'NETWORK_ERROR'
+          || [408, 429].includes(Number(error.statusCode)) || Number(error.statusCode) >= 500)
+        if (!tableConfirmed && retainedCartScope && temporaryConnectionFailure) {
+          // Retain the last confirmed same-table display, never its write authority.
+          // A retry must revalidate the session, cart and bill before ordering resumes.
+          this.setData({ loading: false, browseOnly: false, orderReady: false, paymentStateReady: false,
+            error: '连接暂未恢复，已保留本桌购物车显示，请重试后继续点单。' })
+          return
+        }
         if (tableConfirmed && !['GUEST_SESSION_INVALID','TABLE_QR_INVALID'].includes(error && error.code)) {
           this.recordOrderTiming('ready', this.orderLoadStartedAt, false)
           this.setData({ loading: false, orderReady: false, error: customerErrorMessage(error, '购物车或付款状态暂未确认，请重试；可以先浏览菜单。') })
@@ -982,6 +1041,7 @@ Page({
       this.applyFilters()
       this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
       void this.loadOrderExtra('performance', request)
+      void this.loadOrderExtra('membership', request)
       return true
     } catch (error) {
       if (request && !this.isCurrentTableRequest(request)) return false
@@ -1191,7 +1251,17 @@ Page({
     const loaders = {
       performance: async () => { const result = await loadPerformanceView(); return { performance: result.performance, performanceError: result.error } },
       benefits: async () => ({ benefitCount: (await getCustomerBenefits() || []).reduce((sum,item) => sum + Number(item.quantityAvailable || 0),0) }),
-      membership: async () => { const result = await getMiniBootstrap(); return { membershipTerms: result && result.membershipTerms || null } },
+      membership: async () => {
+        const result = await getMiniBootstrap()
+        const phones = result && result.membership === null ? await getVerifiedPhones() : null
+        return {
+          menuPhoneStatus: Array.isArray(phones) ? (phones.length ? 'verified' : 'missing') : 'unknown',
+          membershipTerms: result && result.membershipTerms || null,
+          // Only an explicit server null proves this customer is not a member.
+          membershipStatus: result && result.membership === null ? 'nonmember'
+            : result && result.membership ? 'member' : 'unknown',
+        }
+      },
       order_checkout: async () => ({ wechatNotificationPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_checkout')) }),
       order_selection: async () => ({ wechatOrderSelectionPromptOptions: extractPromptPresentation(await getWechatNotificationPrompt('order_selection')) }),
       service: async () => ({ serviceSummary: serviceSummaryView(await getServiceRequests(), this.data.serviceStaffName) }),
@@ -1202,6 +1272,11 @@ Page({
       const update = await loaders[name]()
       if (!current()) return
       this.setData(update)
+      if (name === 'membership') {
+        this.membershipInviteRequest = request || this.currentTableRequest()
+        if (update.membershipStatus !== 'nonmember') this.setData({ membershipInviteVisible: false })
+        this.maybeShowMembershipInvite()
+      }
       if (name === 'order_checkout') rememberPresentationOptions(name, update.wechatNotificationPromptOptions)
       if (name === 'order_selection') rememberPresentationOptions(name, update.wechatOrderSelectionPromptOptions)
       if (name === 'recommendation') { this.recommendationFeatureDisabled = false; this.ensureInitialRecommendations(request) }
@@ -1215,12 +1290,27 @@ Page({
         this.setData({ recommendationError: '门店暂未开放推荐，请直接从菜单选择。', recommendationQuestionVisible: false })
         return
       }
+      if (name === 'membership') this.setData({ membershipStatus: 'unknown', membershipInviteVisible: false })
       this.orderExtraErrors[name] = true
       if (name === 'recommendation') this.setData({ recommendationError: '推荐暂时无法读取，点此重试；菜单仍可正常点单。' })
     }
   },
 
+  maybeShowMembershipInvite() {
+    if ((this.membershipInviteShown && !this.resumeMembershipInvite) || this.selectionNotificationPending) return
+    if (!this.membershipInviteRequest || !this.isCurrentTableRequest(this.membershipInviteRequest)) return
+    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
+    if ((!this.data.orderReady && !this.data.browseCatalogLoaded) || this.data.busy
+      || this.data.detailProduct || this.data.checkoutConfirmVisible || this.data.checkoutLocked
+      || this.data.paymentResult || this.data.recommendationQuestionVisible) return
+    if (Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY)) > Date.now()) return
+    this.membershipInviteShown = true
+    this.resumeMembershipInvite = false
+    this.setData({ membershipInviteVisible: true, membershipInviteError: '' })
+  },
+
   dismissMembershipInvite() {
+    this.resumeMembershipInvite = false
     const configuredHours = Number(getRuntimeConfig().membershipInviteCooldownHours)
     const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
       ? configuredHours : 24
@@ -1228,20 +1318,38 @@ Page({
     this.setData({ membershipInviteVisible: false })
   },
 
-  openMembershipRecovery() { wx.switchTab({ url: '/pages/profile/index' }) },
   openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
 
-  showMembershipTerms() {
-    if (!this.data.membershipTerms) return
-    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=view' })
+  openInvitePrivacy() {
+    this.resumeMembershipInvite = this.data.membershipInviteVisible
+    this.openPrivacy()
   },
 
-  enrollFromMenu() {
-    if (!this.data.membershipTerms) {
-      this.setData({ error: '暂时无法查看入会说明，点单不受影响' })
+  async authorizeMenuPhone(event) {
+    if (this.data.membershipBusy || !this.data.membershipInviteVisible) return
+    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
+    const request = this.currentTableRequest()
+    if (!request || !this.isCurrentTableRequest(request)) return
+    const authorization = readWechatPhoneAuthorization(event)
+    if (!authorization.code) {
+      this.setData({ membershipInviteError: authorization.message })
       return
     }
-    wx.navigateTo({ url: '/pages/membership-terms/index?source=mini_menu&action=enroll' })
+    this.setData({ membershipBusy: true, membershipInviteError: '' })
+    try {
+      // Phone verification is independent of membership terms and enrollment.
+      // The native authorization alone must never create a membership.
+      const verified = await replaceVerifiedPhone(authorization.code)
+      if (!verified || verified.status !== 'active' || !verified.publicId) throw new Error('手机号验证结果不完整，请重试')
+      if (!this.isCurrentTableRequest(request)) return
+      this.dismissMembershipInvite()
+      this.setData({ menuPhoneStatus: 'verified' })
+      wx.showToast({ title: '手机号已授权', icon: 'success' })
+    } catch (error) {
+      if (this.isCurrentTableRequest(request)) this.setData({ membershipInviteError: customerErrorMessage(error, '手机号授权未完成，可重试或继续点菜。') })
+    } finally {
+      this.setData({ membershipBusy: false })
+    }
   },
 
   scanTable() {
@@ -1320,7 +1428,7 @@ Page({
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
-  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }) },
+  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }); this.maybeShowMembershipInvite() },
   toggleDetailInformation() { this.setData({ detailInformationExpanded: !this.data.detailInformationExpanded }) },
   keepProductDetailOpen() {},
   previewProductImage() {
@@ -1533,7 +1641,7 @@ Page({
       wx.showToast({ title: '这款商品当前暂不可点', icon: 'none' })
       return
     }
-    if(product.productKind==='bundle'){
+    if(product.productKind==='bundle'&&(product.bundleChoiceGroups||[]).length){
       this.setData({ detailProduct:Object.assign(resetBundleChoiceSelections(product),{
           selectionSource:String(event.currentTarget.dataset.source||'menu_add'),
         }),
@@ -1633,9 +1741,16 @@ Page({
     // The first concrete order action is the natural place for the benefit
     // bundle.  It is separate from the later payment-result bundle.
     // Cached optional notification prompts cannot delay the cart write.
-    void this.offerOrderNotifications('order_selection', tableRequest).catch(() => {})
+    const notification = this.selectionNotificationPending || this.offerOrderNotifications('order_selection', tableRequest).catch(() => {})
+    this.selectionNotificationPending = notification
+    void notification.then(() => {
+      if (this.selectionNotificationPending === notification) this.selectionNotificationPending = null
+      if (this.isCurrentTableRequest(tableRequest)) this.maybeShowMembershipInvite()
+    })
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (!await this.adjustSharedCart(productId, 1,bundleSelections)) return false
+    if (!this.isCurrentTableRequest(tableRequest)) return false
+    this.maybeShowMembershipInvite()
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
     if (source === 'recommendation' && this.data.recommendationPublicId) {
@@ -1802,6 +1917,7 @@ Page({
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
       cartExpanded: false,
       checkoutConfirmVisible: cart.length ? this.data.checkoutConfirmVisible : false,
+      checkoutMemberInviteVisible: cart.length ? this.data.checkoutMemberInviteVisible : false,
       cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
       cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
       cartWritesFrozen: Boolean(sharedCart && sharedCart.guestWritesFrozen),
@@ -1975,6 +2091,34 @@ Page({
     this.loadCheckoutUpgrade()
   },
 
+  maybeInviteCheckoutMember(request) {
+    if (!request || !this.isCurrentTableRequest(request) || this.data.membershipStatus !== 'nonmember'
+      || !this.data.membershipTerms || !this.data.cart.length || this.data.checkoutLocked
+      || this.checkoutMemberInvitedScope === request.scope) return false
+    this.checkoutMemberInvitedScope = request.scope
+    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, membershipInviteVisible: false, cartExpanded: false })
+    return true
+  },
+
+  keepCheckoutMemberInviteOpen() {},
+
+  async skipCheckoutMembership() {
+    if (!this.data.checkoutMemberInviteVisible) return
+    this.setData({ checkoutMemberInviteVisible: false })
+    await this.openCheckout()
+  },
+
+  joinFromCheckout() {
+    const request = this.currentTableRequest()
+    if (!this.data.checkoutMemberInviteVisible || !request || !this.isCurrentTableRequest(request)) return
+    this.checkoutMemberReturnScope = request.scope
+    this.setData({ checkoutMemberInviteVisible: false })
+    wx.navigateTo({
+      url: '/pages/membership-terms/index?source=mini_menu&action=enroll',
+      fail: () => { this.checkoutMemberReturnScope = null; this.openCheckout() },
+    })
+  },
+
   async handlePendingPaymentBeforeCheckout() {
     const pending = this.data.pendingPayment
     if (!pending || !pending.orderPublicId) return false
@@ -1988,13 +2132,14 @@ Page({
 
   async openCheckout() {
     if (this.data.orderReady === false) return false
-    if (this.data.busy) return
+    if (this.data.busy || this.data.checkoutMemberInviteVisible) return
     const tableRequest = this.currentTableRequest()
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (this.data.checkoutLocked) return this.retryCheckout(tableRequest)
     if (!this.data.cart.length) return
     if (await this.handlePendingPaymentBeforeCheckout()) return
     if (!this.isCurrentTableRequest(tableRequest)) return
+    if (this.data.checkoutMemberInviteVisible) return
     if (this.data.cartWritesFrozen) {
       this.setData({ error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
@@ -2003,6 +2148,7 @@ Page({
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
     }
+    if (this.maybeInviteCheckoutMember(tableRequest)) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
     this.loadCheckoutUpgrade()
   },
@@ -2035,11 +2181,31 @@ Page({
     return Object.keys(current).every(key => JSON.stringify(current[key]) === JSON.stringify(attempt[key]))
   },
 
+  reviewRepeatedQuantities() {
+    const lines = repeatedQuantityLines(this.data.cart)
+    if (!lines.length) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      this.quantityReviewResolve = resolve
+      this.setData({ quantityReviewVisible: true, quantityReviewLines: lines })
+    })
+  },
+
+  confirmRepeatedQuantities() { this.finishQuantityReview(true) },
+  cancelRepeatedQuantities() { this.finishQuantityReview(false) },
+  finishQuantityReview(confirmed) {
+    const resolve = this.quantityReviewResolve
+    if (!resolve) return
+    this.quantityReviewResolve = null
+    this.setData({ quantityReviewVisible: false, quantityReviewLines: [] })
+    resolve(confirmed === true)
+  },
+
   async confirmCheckout() {
     if (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
     const tableRequest = Object.assign({}, this.currentTableRequest())
     if (!this.isCurrentTableRequest(tableRequest)) return
+    if (this.maybeInviteCheckoutMember(tableRequest)) return
     // Snapshot the final click before a prerequisite can yield to a cart poll,
     // coupon refresh or new table scan. The submitted draft stays immutable.
     const reviewedDraft = this.checkoutDraft(null)
@@ -2057,6 +2223,16 @@ Page({
       }
       if (this.data.cart.some((item) => !item.available)) {
         this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
+        return
+      }
+      if (!this.checkoutDraftMatches(reviewedDraft)) {
+        this.setData({ error: '确认期间购物车或优惠已变化，请重新核对后提交。' })
+        return
+      }
+      if (!await this.reviewRepeatedQuantities()) return
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (this.data.cartSyncing || this.data.cartWritesFrozen || !this.checkoutDraftMatches(reviewedDraft)) {
+        this.setData({ error: '确认期间购物车或优惠已变化，请重新核对后提交。' })
         return
       }
       // Subscription prompts stay outside the final confirm -> payment flow.

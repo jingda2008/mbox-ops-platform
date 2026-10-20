@@ -1,3 +1,5 @@
+import {OfficialPointsNotificationWorker} from './official-points-notification-worker.js'
+import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import { NativePushWorker } from './native-push-worker.js'
 import { OfficialGetuiAdapter } from './native-push-getui.js'
 import { OfficialApnsAdapter } from './native-push-apns.js'
@@ -99,6 +101,8 @@ export interface NormalizedWorkerRuntimeOptions {
     delivery: WechatTemplateMessageDelivery
   }> | null
   staleGuestImmediatePaymentReconciliation?: Readonly<StaleGuestImmediatePaymentWorkerDeps> | null
+  officialPointsProtection?: ActivityContactProtectionKeyring
+  officialPointsMiniProgramAppId?: string
   marketingDelivery?: MarketingDeliveryAdapter | null
   paymentProviderConfigured?: boolean
   onError?: (worker: NormalizedWorkerName, error: unknown) => void
@@ -157,6 +161,7 @@ export function createNormalizedWorkerRuntime(
     loyaltyAnnualBenefitGrant: new LoyaltyAnnualBenefitGrantWorker(transactions),
     memberGiftDelivery: new MemberGiftDeliveryWorker(transactions),
     checkoutCouponRecovery:new CheckoutCouponRecoveryWorker(transactions),
+    ...(options.officialPointsProtection ? {officialPointsNotifications:new OfficialPointsNotificationWorker(transactions,options.officialPointsProtection,undefined,options.officialPointsMiniProgramAppId)} : {}),
     marketingDelivery: new MarketingDeliveryWorker(transactions,options.marketingDelivery??null),
     printSource: new PrintSourceWorker(transactions),
     annualDailySnackExpiry: new AnnualDailySnackExpiryWorker(transactions),

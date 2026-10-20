@@ -53,8 +53,8 @@ for (const name of ['profile', 'member-center']) {
     assert.equal(result.cardProgressAvailable, true)
     assert.equal(result.cardProgressPercent, 0)
     assert.equal(result.cardGrowthText, '成长值 0 / 2,000')
-    assert.equal(result.cardDifferenceText, '距银卡还差 2,000')
-    assert.equal(result.cardProgressRetry, false)
+    assert.equal(result.cardDifferenceText, platform === 'miniprogram' ? '距银卡还差 2,000 成长值' : '距银卡还差 2,000')
+    assert.equal(result.cardProgressRetry, platform === 'miniprogram' ? undefined : false)
     assert.equal(result.qualificationGrowth, 0)
   })
 
@@ -63,7 +63,7 @@ for (const name of ['profile', 'member-center']) {
     for (const tierProgress of [null, undefined, {}, ...[null, undefined, '', ' ', false, NaN, Infinity, 'bad'].map(rollingGrowth => ({ ...progress, rollingGrowth }))]) {
       const result = view({ level: 'member', tierProgress })
       assert.equal(result.cardProgressAvailable, false)
-      assert.equal(result.cardProgressRetry, true)
+      assert.equal(result.cardProgressRetry, platform === 'miniprogram' ? undefined : true)
       assert.equal(result.cardGrowthText, '成长进度暂未读取')
       assert.equal(result.qualificationGrowth, null)
     }
@@ -101,7 +101,8 @@ for (const name of ['profile', 'member-center']) {
     const style = await read(`${platform}/pages/${name}/index.${platform === 'miniprogram' ? 'wxss' : 'acss'}`)
     const track = template.match(new RegExp(`<view[^>]*class="${prefix}__track"[^>]*>`))[0]
     assert.doesNotMatch(track, /(?:wx|a):if/)
-    assert.match(template, /(?:wx|a):if="\{\{membership.cardProgressRetry\}\}"[^>]*(?:bindtap|onTap)="load"/)
+    if (platform === 'miniprogram') assert.doesNotMatch(template, /cardProgressRetry|重新读取进度/)
+    else assert.match(template, /(?:wx|a):if="\{\{membership.cardProgressRetry\}\}"[^>]*(?:bindtap|onTap)="load"/)
     assert.doesNotMatch(style.match(new RegExp(`\\.${prefix}__track view \\{[^}]+\\}`))[0], /min-width: [1-9]/)
     assert.equal(typeof (await harness(name, undefined, platform)).page.load, 'function')
   })
@@ -117,14 +118,14 @@ test('member center retry recovers missing progress to real zero; network error 
     return { membership: { level: 'member', tierProgress: attempt === 1 ? null : progress } }
   })
   await page.load()
-  assert.equal(page.data.membership.cardProgressRetry, true)
+  assert.equal(page.data.membership.cardProgressAvailable, false)
   await page.load()
   assert.ok(page.data.error)
   await page.load()
   assert.equal(page.data.error, '')
   assert.equal(page.data.membership.cardProgressAvailable, true)
   assert.equal(page.data.membership.cardProgressPercent, 0)
-  assert.equal(page.data.membership.cardProgressRetry, false)
+  assert.equal(page.data.membership.cardProgressRetry, undefined)
 })
 
 function deferred() {
@@ -165,11 +166,13 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     test(`${platform}/${name}: coupon label opens the actual coupon wallet`, async () => {
       const { page, view, navigation } = await harness(name, undefined, platform)
       page.data.membership = view(response(0).membership)
-      assert.equal(page.data.membership.cardBenefitText, '查看我的优惠券 ›')
+      assert.equal(page.data.membership.cardBenefitText, platform === 'miniprogram' ? '查看银卡权益 ›' : '查看我的优惠券 ›')
       await page.openCoupons()
       assert.equal(navigation.at(-1), '/pages/profile-coupons/index')
       const template = await read(`${platform}/pages/${name}/index.${platform === 'miniprogram' ? 'wxml' : 'axml'}`)
-      assert.match(template, /<button[^>]*(?:bindtap|onTap)="openCoupons"[^>]*>\{\{membership.cardBenefitText\}\}<\/button>/)
+      assert.match(template, platform === 'miniprogram'
+        ? /<button[^>]*bindtap="openNextTierBenefits"[^>]*>\{\{membership.cardBenefitText\}\}<\/button>/
+        : /<button[^>]*onTap="openCoupons"[^>]*>\{\{membership.cardBenefitText\}\}<\/button>/)
     })
   }
   test(`${platform}/profile: stale secondary failures cannot overwrite current rights`, async () => {
@@ -226,4 +229,61 @@ test('profile: delayed terms fallback after a failed read cannot clear a newer m
   terms.resolve({version:1}); await first
   assert.equal(page.data.membership.cardGrowthText, '成长值 680 / 2,000')
   assert.equal(page.data.error, '')
+})
+
+for (const name of ['profile', 'member-center']) {
+  test(`wechat/${name}: cumulative fallback is never substituted for unknown qualifying growth`, async () => {
+    const {view} = await harness(name)
+    for (const growth of [0, 680, 12000]) {
+      const result = view({level:'member', lifetimeGrowth:growth, tierProgress:null, tierProgressStatus:'rules_unavailable'})
+      assert.equal(result.cardGrowthText, `累计成长值 ${growth.toLocaleString('en-US')}`)
+      assert.equal(result.cardProgressAvailable, false)
+      assert.equal(result.cardProgressPercent, 0)
+      assert.equal(result.cardDifferenceText, '升级规则待公布')
+    }
+    for (const growth of [null, undefined, '', false]) {
+      assert.equal(view({level:'member', lifetimeGrowth:growth, tierProgress:null}).cardGrowthText, '成长进度暂未读取')
+    }
+  })
+  test(`wechat/${name}: published 10000 and 20000 targets use qualifying growth and cap at completion`, async () => {
+    const {view} = await harness(name)
+    for (const [level,nextTier,threshold] of [['member','silver',10000],['silver','gold',20000]]) {
+      for (const growth of [0,680,threshold,threshold+100]) {
+        const result = view({level,lifetimeGrowth:90000,tierProgressStatus:'ready',tierProgress:{rollingGrowth:growth,nextTier,upgradeThreshold:threshold}})
+        assert.equal(result.cardProgressPercent, Math.min(100,Math.round(growth/threshold*100)))
+        assert.equal(result.cardGrowthText, `成长值 ${growth.toLocaleString('en-US')} / ${threshold.toLocaleString('en-US')}`)
+        if(growth<threshold) assert.ok(result.cardDifferenceText.endsWith(`${(threshold-growth).toLocaleString('en-US')} 成长值`))
+        else assert.match(result.cardDifferenceText, /已达到/)
+      }
+    }
+  })
+}
+
+test('wechat: next-tier entry opens the correct preview, not a coupon wallet or claim', async () => {
+  const profile = await harness('profile')
+  profile.page.data.membership = profile.view(response(0).membership)
+  profile.page.openNextTierBenefits()
+  assert.equal(profile.navigation.at(-1), '/pages/member-center/index?view=next-tier-benefits')
+  const benefits = [
+    {id:'silver',title:'银卡礼遇',applicableTier:'silver',policyVersion:1,status:'pending'},
+    {id:'gold',title:'金卡礼遇',applicableTier:'gold',policyVersion:1,status:'pending'},
+    {id:'inherited',applicableTier:'member',inheritToHigherTiers:true,policyVersion:1,status:'pending'},
+    {id:'not-inherited',applicableTier:'member',policyVersion:1,status:'pending'},
+    {id:'old',applicableTier:'silver',policyVersion:1,status:'expired'},
+    {id:'unknown',applicableTier:'silver',status:'pending'},
+  ]
+  const {page} = await harness('member-center',async()=>({...response(0),annualBenefitCalendar:benefits}))
+  page.onLoad({view:'next-tier-benefits'})
+  await page.load()
+  assert.equal(page.data.tierBenefitsVisible,true)
+  assert.equal(page.data.tierBenefitsTitle,'银卡权益')
+  assert.deepEqual(Array.from(page.data.tierBenefits,x=>x.id),['silver','inherited'])
+  page.openNextTierBenefits(); assert.equal(page.data.tierBenefitsVisible,false)
+  const empty = await harness('member-center',async()=>response(0))
+  await empty.page.load()
+  assert.equal(empty.page.data.tierBenefits.length,0)
+  const template=await read('miniprogram/pages/member-center/index.wxml')
+  const preview=template.slice(template.indexOf('class="tier-benefits panel"'),template.indexOf('class="member-code-panel panel"'))
+  assert.match(preview,/暂无可展示的等级权益/)
+  assert.doesNotMatch(preview,/claimDailySnack|claimable|openCoupons/)
 })

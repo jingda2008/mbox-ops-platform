@@ -1,4 +1,4 @@
-<view class="page home-page">
+<view class="page home-page" style="padding-bottom: calc(98rpx + {{customTabBarHeight || 50}}px)">
   <view class="home-hero">
     <view class="brand-row">
       <view class="brand"><image class="brand-logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" aria-label="M-BOX 标志" /><text>M-BOX</text></view>

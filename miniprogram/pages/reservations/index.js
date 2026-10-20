@@ -99,7 +99,7 @@ Page({
   onLoad() {
     this.setData({ isDevelopment: getRuntimeConfig().isDevelopment, minimumDate: shanghaiDate(0), reservationDate: shanghaiDate(1) })
   },
-  onShow() { enablePublicShareMenu(); this.loadData() },
+  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/reservations/index') } enablePublicShareMenu(); this.loadData() },
 
   onShareAppMessage() {
     return publicSharePayload({

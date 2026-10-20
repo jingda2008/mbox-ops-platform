@@ -377,6 +377,14 @@ export class WechatLoyaltyNotificationRepository {
          JOIN mbox.customer_memberships membership
            ON membership.tenant_id=award.tenant_id AND membership.store_id=award.store_id
           AND membership.id=award.membership_id AND membership.status='active'`
+    // Older supported schemas have only the subscription-message channel. Check
+    // relation presence before parsing SQL that references the optional channel;
+    // do not catch query failures inside a financial transaction.
+    const channelSchema = await this.transaction.query<{ available: boolean }>(
+      `SELECT to_regclass('mbox.official_points_settings') IS NOT NULL
+        AND to_regclass('mbox.official_points_preferences') IS NOT NULL AS available`,
+    )
+    const officialChannelAvailable = channelSchema.rows[0]?.available === true
     const result = await this.transaction.query(`
       WITH eligible AS (
         SELECT membership.id AS membership_id,membership.customer_id,
@@ -399,6 +407,13 @@ export class WechatLoyaltyNotificationRepository {
         ) authorization_choice ON authorization_choice.decision='granted'
         WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
           AND policy.notification_type=$3 AND policy.status='published'
+          ${officialChannelAvailable ? `AND NOT EXISTS(SELECT 1 FROM mbox.official_points_settings primary_channel
+            JOIN mbox.social_accounts primary_account ON(primary_account.tenant_id,primary_account.store_id,primary_account.id)=(primary_channel.tenant_id,primary_channel.store_id,primary_channel.account_id)
+            JOIN mbox.official_points_preferences preference ON(preference.tenant_id,preference.store_id,preference.account_id)=(primary_channel.tenant_id,primary_channel.store_id,primary_channel.account_id)
+            WHERE primary_channel.tenant_id=policy.tenant_id AND primary_channel.store_id=policy.store_id
+              AND primary_channel.enabled AND primary_account.enabled AND primary_channel.certification_expires_at>clock_timestamp()
+              AND preference.customer_id=membership.customer_id AND preference.enabled)` : ''}
+
           AND policy.effective_from<=$8::timestamptz
           AND (policy.effective_until IS NULL OR policy.effective_until>$8::timestamptz)
           AND NOT EXISTS(

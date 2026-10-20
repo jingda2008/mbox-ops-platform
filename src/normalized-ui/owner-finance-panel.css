@@ -291,3 +291,36 @@
     overflow-x: hidden;
   }
 }
+
+.owner-finance-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.owner-finance-metrics article {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #c9d0c8;
+  border-radius: 8px;
+  background: #f8faf8;
+  overflow-wrap: anywhere;
+}
+.owner-finance-metrics small,
+.owner-finance-summary-note { color: #535b54; font-size: 12px; line-height: 1.6; }
+.owner-finance-metrics strong { color: #176b43; font-size: 18px; }
+.owner-finance-list > label { font-size: 12px; }
+.owner-finance-list input[type="search"] {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  margin-top: 5px;
+  padding: 8px;
+  border: 1px solid #c4cbc3;
+  border-radius: 6px;
+}
+.owner-finance-list details summary { cursor: pointer; min-height: 32px; font-size: 12px; }
+@media (min-width: 1000px) {
+  .owner-finance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

@@ -812,6 +812,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       {menuError !== null && <div className="guest-inline-error" role="alert"><AlertCircle /><span>{menuError}</span><button type="button" onClick={() => void loadMenu()}>重试</button></div>}
       {menuLoading || (cartProtocolVersion === 2 && sharedCart === null) ? <div className="guest-menu-loading"><LoaderCircle className="is-spinning" /> {sharedCartError ?? (cartProtocolVersion === 2 ? '正在同步同桌购物车' : '正在准备菜单')}{sharedCartError !== null && <button type="button" onClick={() => void loadSharedCart()}>重试</button>}</div> : (
         <MenuOrderingWorkspace
+          confirmRepeatedQuantities
           key={`${cartStorageKey ?? "shared"}:${checkoutViewRevision}`}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}

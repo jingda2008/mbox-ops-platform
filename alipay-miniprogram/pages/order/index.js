@@ -74,6 +74,17 @@ const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
 ])
 const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 
+function repeatedQuantityLines(lines) {
+  const grouped = new Map()
+  for (const line of lines || []) {
+    if (!line.productId || !Number.isSafeInteger(line.quantity) || line.quantity <= 0) continue
+    const item = grouped.get(line.productId) || { productId: line.productId, name: line.name, quantity: 0 }
+    item.quantity += line.quantity
+    grouped.set(line.productId, item)
+  }
+  return Array.from(grouped.values()).filter((item) => item.quantity > 1)
+}
+
 function compactMoney(amount) {
   const minor = Number(amount || 0)
   if (!Number.isSafeInteger(minor)) return money(amount)
@@ -607,6 +618,8 @@ Page({
     cartCount: 0,
     cartExpanded: false,
     checkoutConfirmVisible: false,
+    quantityReviewVisible: false,
+    quantityReviewLines: [],
     pendingPayment: null,
     checkoutLocked: false,
     paymentResult: null,
@@ -658,6 +671,7 @@ Page({
   },
 
   beginTableRequest(session) {
+    this.finishQuantityReview(false)
     return this.ensureTableRequestGuard().begin(tableRequestScope(session || getTableSession()))
   },
   rebaseTableRequest(request) {
@@ -667,7 +681,7 @@ Page({
   },
   currentTableRequest() { return this.ensureTableRequestGuard().current() },
   isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
-  invalidateTableRequests() { this.ensureTableRequestGuard().invalidate() },
+  invalidateTableRequests() { this.finishQuantityReview(false); this.ensureTableRequestGuard().invalidate() },
 
   queuePendingGuestPaymentAbandonment(pendingOverride) {
     const paymentScope = tableSessionCacheScope()
@@ -2007,6 +2021,25 @@ Page({
     return Object.keys(current).every(key => JSON.stringify(current[key]) === JSON.stringify(attempt[key]))
   },
 
+  reviewRepeatedQuantities() {
+    const lines = repeatedQuantityLines(this.data.cart)
+    if (!lines.length) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      this.quantityReviewResolve = resolve
+      this.setData({ quantityReviewVisible: true, quantityReviewLines: lines })
+    })
+  },
+
+  confirmRepeatedQuantities() { this.finishQuantityReview(true) },
+  cancelRepeatedQuantities() { this.finishQuantityReview(false) },
+  finishQuantityReview(confirmed) {
+    const resolve = this.quantityReviewResolve
+    if (!resolve) return
+    this.quantityReviewResolve = null
+    this.setData({ quantityReviewVisible: false, quantityReviewLines: [] })
+    resolve(confirmed === true)
+  },
+
   async confirmCheckout() {
     if (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
@@ -2033,6 +2066,16 @@ Page({
       }
       if (this.data.cart.some((item) => !item.available)) {
         this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
+        return
+      }
+      if (!this.checkoutDraftMatches(reviewedDraft)) {
+        this.setData({ error: '确认期间购物车或优惠已变化，请重新核对后提交。' })
+        return
+      }
+      if (!await this.reviewRepeatedQuantities()) return
+      if (!this.isCurrentTableRequest(tableRequest)) return
+      if (this.data.cartSyncing || this.data.cartWritesFrozen || !this.checkoutDraftMatches(reviewedDraft)) {
+        this.setData({ error: '确认期间购物车或优惠已变化，请重新核对后提交。' })
         return
       }
       // Subscription prompts stay outside the final confirm -> payment flow.

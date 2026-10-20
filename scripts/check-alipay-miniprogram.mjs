@@ -127,9 +127,10 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 const wechatPolicyTemplateDivergences = {
   'pages/member-center/index': {"wechat": "7dbfe56ea18bae3db3cb72002ad0582690e646f6b5710c2693ef18412e61d8d4", "alipay": "b63676d88ddde7184c64edc094a21e584d6d2221f0b620a66a05a88efa66b2c7", "wechatStyle": "1805410a89f4ed7daf9f203b03ffce39e0520c943ef6fe0e06396de68b01b09b", "alipayStyle": "97bc2e2aacf0ace0629c8f2de495ba0426909ff3f717dda9a5b821b9f66010b8"},
   'pages/home/index': {"wechat": "acb7a4220bb51bdeaea146ef9680a9c585f30c8a9a2a15912d59fc787e1b6c3c", "alipay": "5d0b08ce22d6e10ef63e443e04f29c99c8027e59c833e645cb6fc64145a5f725"},
+  // 2026-10-20: identical quantity review added on both platforms; pre-existing platform differences retained.
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
-  'pages/order/index': {"wechat": "8d049ec0f0f8d61af2cff9013595e1a885f337a8938be734855c57c20a1b9687", "alipay": "17199fca5c79d47ce1df251bdd571137689dd063359d130ca352bce7975d00d7"},
+  'pages/order/index': { "wechat": "6d72f1815c78c972fd3c4a43a40832fd5f8b1e47055700e77f7107b5f1aa849c", "alipay": "60d63e030eef1787bdcaabe38a7cb57548e8a648fa6baad78a8c16562ce842be" },
   'pages/profile/index': {"wechat": "c8741771e41f5e04e2d22b83d216c6b8098866353e590991ba5de7b634feee65", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
@@ -150,6 +151,11 @@ for (const page of sharedPages) {
   const wechatTemplate = await readFile(join(wechatRoot, `${page}.wxml`), 'utf8')
   const alipayTemplate = await readFile(`${alipayBase}.axml`, 'utf8')
   const alipayScript = await readFile(`${alipayBase}.js`, 'utf8')
+  if (page === 'pages/order/index') {
+    const quantityBlock = template => template.match(/<!-- Shared quantity review -->([\s\S]*?)<!-- End shared quantity review -->/)?.[1]
+    const block = quantityBlock(wechatTemplate)
+    assert(block && block.replace(/wx:/g, 'a:').replace(/bindtap=/g, 'onTap=') === quantityBlock(alipayTemplate), '两端重复数量确认清单必须一致')
+  }
   const divergence = wechatPolicyTemplateDivergences[page]
   const reviewedDivergence = Boolean(divergence && digest(wechatTemplate) === divergence.wechat && digest(alipayTemplate) === divergence.alipay)
   assert(reviewedDivergence || tagSignature(alipayTemplate) === tagSignature(wechatTemplate), `${page} 的标签布局与微信不一致`)
@@ -170,7 +176,10 @@ for (const page of sharedPages) {
     readFile(wechatStylePath, 'utf8').catch(() => ''),
     readFile(alipayStylePath, 'utf8').catch(() => ''),
   ])
-  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === 'cca9cc5e6299f6f6bbd4aeb166c41da70efd6e8687f13916001d9a851dd254d1' && digest(alipayStyle) === '4225c235d5e13f4a6552f4273dae0758f511c9306b487e1d2b9ed2e7f32fb6a3'
+  if (page === 'pages/order/index') {
+    assert(cssSignature(wechatStyle.slice(wechatStyle.indexOf('.quantity-review-mask'))) === cssSignature(alipayStyle.slice(alipayStyle.indexOf('.quantity-review-mask'))), '两端数量确认样式必须一致')
+  }
+  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '43dd4b002e558cbb725810756c4a1d7bd684cedadca22a2d64a4de860de16aaf' && digest(alipayStyle) === '961e60f5ebc72e70693ed5deb7cfd88ee8f4f855cbbe2683b98e18a68fcf6988'
   const reviewedMemberQrStyle = page === 'pages/member-center/index' && reviewedDivergence
     && digest(wechatStyle) === divergence.wechatStyle && digest(alipayStyle) === divergence.alipayStyle
   const reviewedPinnedStyle = Boolean(

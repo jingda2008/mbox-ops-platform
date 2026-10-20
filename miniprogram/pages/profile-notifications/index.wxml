@@ -10,7 +10,7 @@
         <text>{{official.accountName || '门店尚未配置公众号积分通知'}}</text>
         <text wx:if="{{!official.available}}">公众号通知权限尚未就绪，积分明细仍可在小程序查看。</text>
         <text wx:elif="{{!official.linked}}">请先关注门店公众号并完成本人会员绑定。</text>
-        <switch checked="{{official.enabled}}" disabled="{{saving || (!official.enabled &amp;&amp; (!official.available || !official.linked))}}" bindchange="changeOfficial" aria-label="接收公众号积分变动提醒" />
+        <switch checked="{{official.enabled}}" disabled="{{saving || (!official.enabled && (!official.available || !official.linked))}}" bindchange="changeOfficial" aria-label="接收公众号积分变动提醒" />
       </block>
     </view>
     <view class="notice-card">

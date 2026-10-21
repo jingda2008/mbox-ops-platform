@@ -172,8 +172,8 @@ function WechatFieldMappings({content,onChange}:{content:ConfigurationContent;on
   return <fieldset className="wechat-field-mappings"><legend>模板字段映射</legend>
     <p>有字段映射时只发送映射中的关键字。会员卡积分与当前积分都是这次变动后的账户可用积分；微信示例 0000 不补零。变动模板没有时间字段，发生时间列 time9 只满足原约束、不发送。到期“时间”是该批积分到期时间。上月消费与当月过期按门店时区在发送时计算。</p>
     <div className="membership-configuration-actions">
-      {notificationType!=='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(wechatPointsNotificationPreset(notificationType))}>填入会员卡积分变动模板</button>}
-      {notificationType==='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(wechatPointsNotificationPreset(notificationType))}>填入会员积分过期模板</button>}
+      {notificationType!=='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(notificationPreset(notificationType))}>填入会员卡积分变动模板</button>}
+      {notificationType==='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(notificationPreset(notificationType))}>填入会员积分过期模板</button>}
       <button type="button" disabled={mappings.length>=10||sources.every((source)=>used.has(source))} onClick={()=>{const source=sources.find((item)=>!used.has(item));if(source)write([...mappings,{dataKey:'',valueSource:source}])}}>增加字段</button>
     </div>
     {mappings.length===0?<small>尚未配置字段映射。保存后仍按原来的四个字段发送。</small>:mappings.map((field,index)=><article key={`${field.dataKey}:${field.valueSource}:${index}`}>
@@ -195,6 +195,9 @@ function WechatNotificationCreator({disabled,onCreate}:{disabled:boolean;onCreat
       <button type="button" disabled={disabled} onClick={()=>onCreate('loyalty_points_expiring',reason)}>新建积分到期通知</button>
     </div>
   </section>
+}
+function notificationPreset(notificationType:WechatLoyaltyNotificationType):ConfigurationContent{
+  return {...wechatPointsNotificationPreset(notificationType)}
 }
 function notificationTypeOf(content:ConfigurationContent):WechatLoyaltyNotificationType{
   const value=content.notificationType

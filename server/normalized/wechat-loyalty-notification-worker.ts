@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto'
+import {
+  wechatNotificationValueSources,
+  type WechatNotificationFieldMapping,
+  type WechatNotificationValueSource,
+} from '../../src/shared/wechat-loyalty-subscription-templates.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 import { WechatLoyaltyNotificationRepository, type WechatLoyaltyNotificationType } from './wechat-loyalty-notification-repository.js'
 import { LoyaltyOperationalControlRepository } from './loyalty-operational-control-repository.js'
@@ -25,6 +30,14 @@ export interface WechatSubscriptionDeliveryRequest {
   balanceAfter: number | null
   eventOccurredAt: string
   expiresAt: string | null
+  fieldMappings?: readonly WechatNotificationFieldMapping[]
+  storeName?: string | null
+  accountDisplayName?: string | null
+  memberNo?: string | null
+  lastMonthConsumedPoints?: number | null
+  monthExpiringPoints?: number | null
+  accountPointsBalance?: number | null
+  storeTimeZone?: string | null
 }
 
 export type WechatSubscriptionDeliveryResult =
@@ -48,11 +61,20 @@ interface ClaimedRow extends Record<string, unknown> {
   balance_data_key: string | null
   occurred_at_data_key: string
   expires_at_data_key: string | null
+  policy_id?: string
   points_change: number
   points_at_risk: number
   balance_after: number | null
   event_occurred_at: string
   expires_at: string | null
+  store_name?: string | null
+  store_timezone?: string | null
+  account_display_name?: string | null
+  member_no?: string | null
+  account_available_points?: number | null
+  last_month_consumed_points?: number | null
+  month_expiring_points?: number | null
+  fieldMappings?: readonly WechatNotificationFieldMapping[]
 }
 
 export interface WechatLoyaltyNotificationBatch {
@@ -251,18 +273,86 @@ async function claim(
         AND job.id=consumed.notification_job_id
       RETURNING job.*
     )
-    SELECT changed.id,changed.customer_id,changed.identity_external_id,
+    SELECT changed.id,changed.customer_id,changed.policy_id,changed.identity_external_id,
       changed.notification_type,changed.template_id,policy.page_path,
       policy.points_data_key,policy.balance_data_key,policy.occurred_at_data_key,
       policy.expires_at_data_key,changed.points_change,changed.points_at_risk,
-      changed.balance_after,changed.event_occurred_at::text,changed.expires_at::text
+      changed.balance_after,changed.event_occurred_at::text,changed.expires_at::text,
+      store.name AS store_name,COALESCE(store.timezone,'Asia/Shanghai') AS store_timezone,
+      profile.display_name AS account_display_name,membership.member_no,
+      account.available_points AS account_available_points,
+      COALESCE(consumed.points,0) AS last_month_consumed_points,
+      COALESCE(expiring.points,0) AS month_expiring_points
     FROM changed
     JOIN mbox.wechat_notification_policies policy
       ON policy.tenant_id=changed.tenant_id AND policy.store_id=changed.store_id
      AND policy.id=changed.policy_id
+    LEFT JOIN mbox.stores store
+      ON store.tenant_id=changed.tenant_id AND store.id=changed.store_id
+    LEFT JOIN mbox.customer_memberships membership
+      ON membership.tenant_id=changed.tenant_id AND membership.store_id=changed.store_id
+     AND membership.id=changed.membership_id AND membership.customer_id=changed.customer_id
+    LEFT JOIN mbox.customer_profiles profile
+      ON profile.tenant_id=changed.tenant_id AND profile.store_id=changed.store_id
+     AND profile.customer_id=changed.customer_id
+    LEFT JOIN mbox.loyalty_accounts account
+      ON account.tenant_id=changed.tenant_id AND account.store_id=changed.store_id
+     AND account.customer_id=changed.customer_id
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(-ledger.points_delta),0)::integer AS points
+      FROM mbox.loyalty_point_ledger ledger
+      WHERE ledger.tenant_id=changed.tenant_id AND ledger.store_id=changed.store_id
+        AND ledger.customer_id=changed.customer_id
+        AND ledger.entry_type='redeem' AND ledger.points_delta<0
+        AND ledger.occurred_at >= (
+          date_trunc('month', clock_timestamp() AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai'))
+          - interval '1 month'
+        ) AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+        AND ledger.occurred_at < date_trunc(
+          'month', clock_timestamp() AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+        ) AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+    ) consumed ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(lot.remaining_points),0)::integer AS points
+      FROM mbox.loyalty_point_lots lot
+      WHERE lot.tenant_id=changed.tenant_id AND lot.store_id=changed.store_id
+        AND lot.customer_id=changed.customer_id AND lot.status='available'
+        AND lot.remaining_points>0 AND lot.expires_at IS NOT NULL
+        AND lot.expires_at >= date_trunc(
+          'month', clock_timestamp() AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+        ) AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+        AND lot.expires_at < (
+          date_trunc('month', clock_timestamp() AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai'))
+          + interval '1 month'
+        ) AT TIME ZONE COALESCE(store.timezone,'Asia/Shanghai')
+    ) expiring ON true
     ORDER BY changed.scheduled_for,changed.created_at,changed.id
   `, [transaction.scope.tenantId, transaction.scope.storeId, workerId, batchSize])
-  return { jobs: claimed.rows, paused: false }
+  const policyIds = [...new Set(claimed.rows.flatMap((row) => (
+    typeof row.policy_id === 'string' && row.policy_id ? [row.policy_id] : []
+  )))]
+  const mappings = new Map<string, WechatNotificationFieldMapping[]>()
+  if (policyIds.length > 0) {
+    const fields = await transaction.query<{ policy_id: string; data_key: string; value_source: string }>(`
+      SELECT policy_id,data_key,value_source
+      FROM mbox.wechat_notification_policy_fields
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND policy_id=ANY($3::uuid[])
+      ORDER BY policy_id,sort_order,data_key
+    `, [transaction.scope.tenantId, transaction.scope.storeId, policyIds])
+    for (const field of fields.rows) {
+      if (!isValueSource(field.value_source)) continue
+      const list = mappings.get(field.policy_id) ?? []
+      list.push({ dataKey: field.data_key, valueSource: field.value_source })
+      mappings.set(field.policy_id, list)
+    }
+  }
+  return {
+    jobs: claimed.rows.map((row) => ({
+      ...row,
+      fieldMappings: typeof row.policy_id === 'string' ? mappings.get(row.policy_id) ?? [] : [],
+    })),
+    paused: false,
+  }
 }
 
 async function recordOutcome(
@@ -329,7 +419,32 @@ function toDeliveryRequest(row: ClaimedRow, openId: string): WechatSubscriptionD
     balanceAfter: row.balance_after === null ? null : Number(row.balance_after),
     eventOccurredAt: row.event_occurred_at,
     expiresAt: row.expires_at,
+    ...(row.fieldMappings && row.fieldMappings.length > 0 ? {
+      fieldMappings: row.fieldMappings,
+      storeName: textOrEmpty(row.store_name),
+      accountDisplayName: row.account_display_name ?? null,
+      memberNo: row.member_no ?? null,
+      lastMonthConsumedPoints: nonNegativeInteger(row.last_month_consumed_points),
+      monthExpiringPoints: nonNegativeInteger(row.month_expiring_points),
+      accountPointsBalance: row.account_available_points === null || row.account_available_points === undefined
+        ? null
+        : nonNegativeInteger(row.account_available_points),
+      storeTimeZone: textOrEmpty(row.store_timezone) || 'Asia/Shanghai',
+    } : {}),
   }
+}
+
+function isValueSource(value: string): value is WechatNotificationValueSource {
+  return (wechatNotificationValueSources as readonly string[]).includes(value)
+}
+
+function textOrEmpty(value: string | null | undefined): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function nonNegativeInteger(value: number | string | null | undefined): number {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
 }
 
 function validateWorker(workerId: string, batchSize: number): void {

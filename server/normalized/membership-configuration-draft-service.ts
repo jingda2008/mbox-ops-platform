@@ -1,4 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
+import {
+  wechatNotificationFieldMappingError,
+  type WechatNotificationFieldMapping,
+} from '../../src/shared/wechat-loyalty-subscription-templates.js'
 
 export type MembershipConfigurationDomain =
   | 'base_points'
@@ -128,6 +132,7 @@ export type MembershipConfigurationContent =
       minimumIntervalMinutes: number
       quietHoursStart: string | null
       quietHoursEnd: string | null
+      fieldMappings?: readonly WechatNotificationFieldMapping[]
     }>
 
 export interface MembershipConfigurationDraftRecord {
@@ -593,6 +598,7 @@ function compute(content: MembershipConfigurationContent, snapshot: MembershipIm
     content.occurredAtDataKey, content.expiresAtDataKey ?? '', content.expiryLeadDays ?? -1,
     content.maxPerCustomerPer24h, content.minimumIntervalMinutes,
     content.quietHoursStart ?? '', content.quietHoursEnd ?? '',
+    ...(content.fieldMappings ?? []).flatMap((field) => [field.dataKey, field.valueSource]),
     notification.activeAuthorizations, notification.expectedMessagesPer24h,
   ])
 }
@@ -739,6 +745,12 @@ export function assertContent(content: MembershipConfigurationContent) {
         || !time(content.quietHoursEnd!) || content.quietHoursStart === content.quietHoursEnd))) invalid(
       '微信通知静默时段无效',
     )
+    const mappingError = wechatNotificationFieldMappingError({
+      notificationType: content.notificationType,
+      templateId: content.templateId,
+      fieldMappings: content.fieldMappings,
+    })
+    if (mappingError) invalid(mappingError)
   }
 }
 function assertSnapshot(snapshot: MembershipImpactSnapshot) {

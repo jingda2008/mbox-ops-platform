@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  WECHAT_POINTS_CHANGE_TEMPLATE_ID,
+  WECHAT_POINTS_EXPIRY_TEMPLATE_ID,
+  wechatPointsChangeFieldMappings,
+  wechatPointsExpiryFieldMappings,
+} from '../../src/shared/wechat-loyalty-subscription-templates.js'
+import {
   OfficialWechatSubscriptionMessageAdapter,
   type WechatSubscriptionHttpClient,
 } from './wechat-subscription-message-adapter.js'
@@ -54,6 +60,80 @@ describe('OfficialWechatSubscriptionMessageAdapter', () => {
         number2: { value: '218' },
         time3: { value: '2026-08-16 02:01' },
       },
+    })
+  })
+
+  it('sends every mapped keyword and omits legacy keys that are not in the mapping', async () => {
+    const requests: Array<{ method: string; body?: string }> = []
+    const adapter = new OfficialWechatSubscriptionMessageAdapter({
+      appId: 'wxdb9f2dc413484f2d',
+      appSecret: '0123456789abcdef0123456789abcdef',
+      httpClient: {
+        request: vi.fn(async (_url, options) => {
+          requests.push({ method: options.method, ...(options.body === undefined ? {} : { body: options.body }) })
+          return options.method === 'GET'
+            ? { status: 200, body: { access_token: 'provider-token', expires_in: 7200 } }
+            : { status: 200, body: { errcode: 0, errmsg: 'ok', rid: 'mapped-request-001' } }
+        }),
+      },
+    })
+    await adapter.send({
+      jobId: '83000000-0000-4000-8000-000000000021',
+      recipientOpenId: 'openid-customer-self',
+      notificationType: 'loyalty_points_credited',
+      templateId: WECHAT_POINTS_CHANGE_TEMPLATE_ID,
+      pagePath: 'pages/points/index',
+      pointsDataKey: 'number2',
+      balanceDataKey: 'number4',
+      occurredAtDataKey: 'time9',
+      expiresAtDataKey: null,
+      pointsChange: 30,
+      pointsAtRisk: 0,
+      balanceAfter: 10000,
+      eventOccurredAt: '2026-08-16T02:01:00.000Z',
+      expiresAt: null,
+      fieldMappings: wechatPointsChangeFieldMappings,
+      storeName: '某某店',
+      storeTimeZone: 'Asia/Shanghai',
+    })
+    await adapter.send({
+      jobId: '83000000-0000-4000-8000-000000000022',
+      recipientOpenId: 'openid-customer-self',
+      notificationType: 'loyalty_points_expiring',
+      templateId: WECHAT_POINTS_EXPIRY_TEMPLATE_ID,
+      pagePath: 'pages/points/index',
+      pointsDataKey: 'thing4',
+      balanceDataKey: null,
+      occurredAtDataKey: 'time2',
+      expiresAtDataKey: 'time2',
+      pointsChange: 0,
+      pointsAtRisk: 40,
+      balanceAfter: null,
+      eventOccurredAt: '2021-04-21T01:00:00.000Z',
+      expiresAt: '2021-04-21T02:15:00.000Z',
+      fieldMappings: wechatPointsExpiryFieldMappings,
+      accountDisplayName: '张三丰',
+      memberNo: 'M10086',
+      lastMonthConsumedPoints: 0,
+      monthExpiringPoints: 40,
+      accountPointsBalance: 300,
+      storeTimeZone: 'Asia/Shanghai',
+    })
+    const bodies = requests.filter((request) => request.method === 'POST').map((request) => JSON.parse(request.body!))
+    expect(bodies[0].data).toEqual({
+      thing5: { value: '某某店' },
+      number2: { value: '30' },
+      number7: { value: '10000' },
+      number3: { value: '0' },
+      number4: { value: '10000' },
+    })
+    expect(bodies[0].data.time9).toBeUndefined()
+    expect(bodies[1].data).toEqual({
+      thing1: { value: '张*丰' },
+      time2: { value: '2021年4月21日 10:15' },
+      thing3: { value: '0分' },
+      thing4: { value: '40分' },
+      thing5: { value: '300分' },
     })
   })
 

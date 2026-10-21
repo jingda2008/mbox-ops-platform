@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { wechatPointsNotificationPreset } from '../../src/shared/wechat-loyalty-subscription-templates.js'
 import {
   MembershipConfigurationDraftService,
+  assertContent,
   assertMembershipConfigurationPublisherSeparation,
   buildMembershipConfigurationImpactPreview,
   type MembershipConfigurationDraftRecord,
@@ -193,6 +195,16 @@ describe('membership configuration draft impact', () => {
       expiresAtDataKey: 'expires_at', expiryLeadDays: 7, maxPerCustomerPer24h: 1,
       minimumIntervalMinutes: 60, quietHoursStart: '23:00', quietHoursEnd: '08:00',
     })).toThrow(expect.objectContaining({ code: 'MEMBERSHIP_CONFIGURATION_INVALID' }))
+
+    const credited = wechatPointsNotificationPreset('loyalty_points_credited')
+    const reversed = wechatPointsNotificationPreset('loyalty_points_reversed')
+    const expiring = wechatPointsNotificationPreset('loyalty_points_expiring')
+    expect(() => assertContent(credited)).not.toThrow()
+    expect(() => assertContent(reversed)).not.toThrow()
+    expect(() => assertContent(expiring)).not.toThrow()
+    expect(() => assertContent({ ...credited, fieldMappings: [] })).toThrow(/必须映射/)
+    expect(() => assertContent({ ...expiring, templateId: credited.templateId })).toThrow(/只能用于积分到账或积分冲回/)
+    expect(previewFor(expiring).affectedExistingMembers).toBe(18)
 
     expect(() => previewFor({
       domain: 'tier_policy', evaluationWindowMonths: 12, tierPeriodMonths: 12, downgradeGraceDays: 30,

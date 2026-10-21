@@ -1,3 +1,10 @@
+import {
+  wechatNotificationValueSourceLabels,
+  wechatPointsNotificationPreset,
+  wechatValueSourcesFor,
+  type WechatLoyaltyNotificationType,
+  type WechatNotificationFieldMapping,
+} from '../shared/wechat-loyalty-subscription-templates'
 import {MembershipPublicationForm} from './MembershipPublicationForm'
 import {beijingDateTimeInput,beijingDateTimeIso} from './membership-workflow'
 import { useCallback,useEffect,useMemo,useRef,useState } from 'react'
@@ -19,7 +26,7 @@ interface Preview{generatedAt?:string;fulfillment?:Array<{referenceCode:string;e
 const domainLabels:Record<Domain,string>={base_points:'基础积分',tier_policy:'会员等级',tier_benefits:'等级权益',redemption_catalog:'积分兑换',promotion_points:'促销积分',membership_terms:'入会条款',wechat_notifications:'微信服务通知'}
 const statusLabels:Record<string,string>={draft:'待编辑/审批',approved:'已审批待发布',published:'已发布（按生效时间执行）',paused:'已暂停',retired:'已退役'}
 const warningLabels:Record<string,string>={inventory_shortage:'库存可能不足',fulfillment_capacity_review:'需要复核人工履约能力',points_cost_review:'需要复核积分成本',benefit_cost_review:'需要复核权益成本',redemption_cost_review:'需要复核兑换成本',terms_reacceptance_not_forced:'不强迫既有会员重新同意'}
-const fieldLabels:Record<string,string>={cashRedemptionEnabled:'启用每积分抵1元，可抵至0元，不叠加优惠券；本单新积分下次使用',pointsRoundingScope:'积分零头处理',pointsNumerator:'获得积分',pointsDenominatorMinor:'消费金额（元）',growthNumerator:'获得成长值',growthDenominatorMinor:'消费金额（元）',roundingMode:'取整方式',pointsValidityMonths:'积分有效月数',evaluationWindowMonths:'评估周期（月）',tierPeriodMonths:'等级周期（月）',downgradeGraceDays:'降级宽限天数',silverUpgradeGrowth:'银卡升级值',silverRetainGrowth:'银卡保级值',goldUpgradeGrowth:'金卡升级值',goldRetainGrowth:'金卡保级值',silverPointsMultiplierNumerator:'银卡获得积分',silverPointsMultiplierDenominator:'银卡基础积分',goldPointsMultiplierNumerator:'金卡获得积分',goldPointsMultiplierDenominator:'金卡基础积分',tierPolicyVersionId:'适用等级规则',rules:'规则',items:'兑换项',ruleCode:'规则编号',eligibleTier:'适用等级',inheritToHigherTiers:'向更高等级继承',grantOnEntry:'入级发放',grantOnRetention:'保级发放',benefitDefinitionId:'发放权益',quantity:'数量',validityDays:'有效天数',revocationPolicy:'降级处理',enabled:'启用',publicId:'公开编号',itemCode:'兑换项编号',name:'名称',fulfillmentKind:'履约类型',productId:'兑换商品',activityId:'关联活动',pointsRequired:'所需积分',costAmountMinor:'成本（元）',currency:'币种',totalInventory:'总库存',dailyInventory:'日库存',memberDailyLimit:'每人每日上限',memberRolling30DayLimit:'每人30日上限',memberLifetimeLimit:'每人终身上限',minimumTier:'最低等级',requiresTableSession:'需在已开台的桌位使用',requiresEmployeeFulfillment:'需由员工交付',cancellationAllowedBeforeFulfillment:'交付前允许取消',restoreExpiredPointsDays:'退回过期积分天数',availableFrom:'可用开始时间',availableUntil:'可用结束时间',fulfillmentTimeoutMinutes:'履约时限（分钟）',status:'状态',campaignCode:'活动积分编号',stackingGroup:'叠加组',stackingMode:'叠加方式',priority:'优先级',storeBudgetPoints:'门店总预算积分',perMemberPointsLimit:'每会员上限',pointValidityDays:'积分有效天数',refundPolicy:'退款冲回规则',budgetReuseAfterRefund:'退款后释放预算',memberLimitReuseAfterRefund:'退款后释放个人限额',eligibleMemberLevels:'适用会员等级',triggerKind:'触发事实',points:'奖励积分',perMemberAwardLimit:'每人奖励次数',minimumPaidAmountMinor:'最低付款金额（元）',title:'标题',summary:'摘要',content:'正文',notificationType:'通知类型',authorizationPurpose:'授权用途',authorizationContext:'授权场景',templateId:'微信模板ID',pagePath:'到达页面',pointsDataKey:'积分字段',balanceDataKey:'余额字段',occurredAtDataKey:'发生时间字段',expiresAtDataKey:'到期时间字段',expiryLeadDays:'提前提醒天数',maxPerCustomerPer24h:'每人24小时上限',minimumIntervalMinutes:'最短发送间隔',quietHoursStart:'静默开始',quietHoursEnd:'静默结束'}
+const fieldLabels:Record<string,string>={cashRedemptionEnabled:'启用每积分抵1元，可抵至0元，不叠加优惠券；本单新积分下次使用',pointsRoundingScope:'积分零头处理',pointsNumerator:'获得积分',pointsDenominatorMinor:'消费金额（元）',growthNumerator:'获得成长值',growthDenominatorMinor:'消费金额（元）',roundingMode:'取整方式',pointsValidityMonths:'积分有效月数',evaluationWindowMonths:'评估周期（月）',tierPeriodMonths:'等级周期（月）',downgradeGraceDays:'降级宽限天数',silverUpgradeGrowth:'银卡升级值',silverRetainGrowth:'银卡保级值',goldUpgradeGrowth:'金卡升级值',goldRetainGrowth:'金卡保级值',silverPointsMultiplierNumerator:'银卡获得积分',silverPointsMultiplierDenominator:'银卡基础积分',goldPointsMultiplierNumerator:'金卡获得积分',goldPointsMultiplierDenominator:'金卡基础积分',tierPolicyVersionId:'适用等级规则',rules:'规则',items:'兑换项',ruleCode:'规则编号',eligibleTier:'适用等级',inheritToHigherTiers:'向更高等级继承',grantOnEntry:'入级发放',grantOnRetention:'保级发放',benefitDefinitionId:'发放权益',quantity:'数量',validityDays:'有效天数',revocationPolicy:'降级处理',enabled:'启用',publicId:'公开编号',itemCode:'兑换项编号',name:'名称',fulfillmentKind:'履约类型',productId:'兑换商品',activityId:'关联活动',pointsRequired:'所需积分',costAmountMinor:'成本（元）',currency:'币种',totalInventory:'总库存',dailyInventory:'日库存',memberDailyLimit:'每人每日上限',memberRolling30DayLimit:'每人30日上限',memberLifetimeLimit:'每人终身上限',minimumTier:'最低等级',requiresTableSession:'需在已开台的桌位使用',requiresEmployeeFulfillment:'需由员工交付',cancellationAllowedBeforeFulfillment:'交付前允许取消',restoreExpiredPointsDays:'退回过期积分天数',availableFrom:'可用开始时间',availableUntil:'可用结束时间',fulfillmentTimeoutMinutes:'履约时限（分钟）',status:'状态',campaignCode:'活动积分编号',stackingGroup:'叠加组',stackingMode:'叠加方式',priority:'优先级',storeBudgetPoints:'门店总预算积分',perMemberPointsLimit:'每会员上限',pointValidityDays:'积分有效天数',refundPolicy:'退款冲回规则',budgetReuseAfterRefund:'退款后释放预算',memberLimitReuseAfterRefund:'退款后释放个人限额',eligibleMemberLevels:'适用会员等级',triggerKind:'触发事实',points:'奖励积分',perMemberAwardLimit:'每人奖励次数',minimumPaidAmountMinor:'最低付款金额（元）',title:'标题',summary:'摘要',content:'正文',notificationType:'通知类型',authorizationPurpose:'授权用途',authorizationContext:'授权场景',templateId:'微信模板ID',pagePath:'到达页面',pointsDataKey:'积分字段（无字段映射时发送）',balanceDataKey:'余额字段（无字段映射时发送）',occurredAtDataKey:'发生时间字段（无字段映射时发送）',expiresAtDataKey:'到期时间字段（无字段映射时发送）',expiryLeadDays:'提前提醒天数',fieldMappings:'模板字段映射',dataKey:'微信字段名',valueSource:'取值来源',maxPerCustomerPer24h:'每人24小时上限',minimumIntervalMinutes:'最短发送间隔',quietHoursStart:'静默开始',quietHoursEnd:'静默结束'}
 
 export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:NormalizedApiClient;auth:StaffAuthView;mode?:'all'|'drafts'|'approvals'|'publish'}){
   const { confirmAction } = useConfirmationDialog()
@@ -80,6 +87,16 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
     try{const result=await api.postEndpoint<Preview>(`${path(selected)}/impact-preview`,{});setPreview(result);setNotice('已按当前会员、成本、库存与待交付事项计算，预览15分钟内有效。')}
     catch(error){setNotice(message(error,'影响预览生成失败'))}finally{setBusy('')}
   }
+  async function createNotification(notificationType:WechatLoyaltyNotificationType,createReason:string){
+    if(busy)return
+    if(createReason.trim().length<2)return setNotice('请填写新建通知草稿的原因。')
+    setBusy(`create:${notificationType}`);setNotice('');setPreview(null)
+    try{
+      const draft=await api.postEndpoint<Draft>('/api/staff/loyalty/configuration-center/wechat_notifications',{reason:createReason.trim(),content:wechatPointsNotificationPreset(notificationType)})
+      setSelected(draft);setEditing(clone(draft.content));setNotice('微信通知草稿已建立，尚未生效。请查看影响后由另一人审批、第三人发布。');await load()
+    }catch(error){setNotice(message(error,'微信通知草稿没有建立'))}
+    finally{setBusy('')}
+  }
   async function approve(){if(!selected||!preview||busy)return;const generation=selectionGeneration.current;if(reason.trim().length<2)return setNotice('请填写独立审批说明。')
     if(!(await confirmAction({title:'确认独立审批',description:'将依据当前修改影响审批。审批后内容不可直接修改，仍需第三人发布。',confirmLabel:'确认审批'})))return
     if(generation!==selectionGeneration.current)return
@@ -97,6 +114,7 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
       {mode==='all'&&canPreview && <CouponCalendarPreviewPanel key={`calendar:${auth.employee.id}`} api={api} auth={auth} />}
       {mode==='all'&&<MemberGiftCampaignPanel key={`gifts:${auth.employee.id}`} api={api} auth={auth} />}
       {notice&&<p role="status">{notice}</p>}{readError&&<p role="alert">{readError}<button type="button" disabled={loading} onClick={()=>void load()}>重新读取列表</button></p>}
+      {canEdit&&<WechatNotificationCreator disabled={busy!==''} onCreate={(notificationType,createReason)=>void createNotification(notificationType,createReason)}/>}
       <div className="membership-configuration-layout">
         <nav aria-label="配置列表"><header><strong>配置版本</strong><button type="button" disabled={loading||busy!==''} onClick={()=>void load()} aria-label="刷新配置"><RefreshCw size={15}/></button></header>
           {summaries.filter(item=>mode==='publish'?['approved','published'].includes(item.status):mode==='approvals'?item.status==='draft':true).map((item)=><button key={`${item.domain}-${item.configurationId}`} type="button" disabled={['save','approve','preview','publish'].includes(busy)} data-active={(openingTarget?.configurationId??selected?.publicId)===item.configurationId} onClick={()=>void open(item)}><span><strong>{domainLabels[item.domain]}</strong><small>{item.title} · 第{item.version}版</small></span><em>{statusLabels[item.status]??'状态待核对'}</em></button>)}
@@ -124,7 +142,10 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
   </section>
 }
 
-function fields(content:ConfigurationContent,onChange:(value:ConfigurationContent)=>void,references:ConfigurationReference[]|null){return Object.entries(content).filter(([key])=>key!=='domain'&&!isRatioField(key)).map(([key,value])=><Field key={key} fieldKey={key} value={value} references={references} onChange={(next)=>onChange({...content,[key]:next})}/>)}
+function fields(content:ConfigurationContent,onChange:(value:ConfigurationContent)=>void,references:ConfigurationReference[]|null){
+  const controls=Object.entries(content).filter(([key])=>key!=='domain'&&key!=='fieldMappings'&&!isRatioField(key)).map(([key,value])=><Field key={key} fieldKey={key} value={value} references={references} onChange={(next)=>onChange({...content,[key]:next})}/>)
+  return content.domain==='wechat_notifications'?<>{controls}<WechatFieldMappings content={content} onChange={onChange}/></>:controls
+}
 function Field({fieldKey,value,onChange,references}:{fieldKey:string;value:unknown;references:ConfigurationReference[]|null;onChange(value:unknown):void}){
   const label=fieldLabels[fieldKey]??'其他设置'
   if(['totalInventory','dailyInventory','memberLifetimeLimit','expiryLeadDays'].includes(fieldKey))return <NullableIntegerField label={label} value={typeof value==='number'?value:null} minimum={['memberLifetimeLimit','expiryLeadDays'].includes(fieldKey)?1:0} blankLabel={fieldKey==='expiryLeadDays'?'留空不提前提醒':'留空不限'} onChange={onChange}/>
@@ -142,6 +163,61 @@ function Field({fieldKey,value,onChange,references}:{fieldKey:string;value:unkno
   return <label>{label}<input value={String(value)} onChange={(event)=>onChange(event.target.value)}/></label>
 }
 const choices:Record<string,readonly (readonly [string,string])[]>={pointsRoundingScope:[['order','每笔满10元积1分，零头不累计，不加等级倍数'],['cumulative','历史规则：跨订单累计零头']],notificationType:[['loyalty_points_credited','积分到账'],['loyalty_points_reversed','积分退回或扣回'],['loyalty_points_expiring','积分即将到期']],authorizationPurpose:[['loyalty_balance_change','积分余额变动'],['loyalty_expiry_reminder','积分到期提醒']],authorizationContext:[['loyalty_accrual','消费积分到账'],['loyalty_refund','退款积分调整'],['loyalty_expiry','积分到期']],roundingMode:[['floor','向下取整'],['nearest','四舍五入']],eligibleTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],minimumTier:[['member','普通会员'],['silver','银卡'],['gold','金卡']],revocationPolicy:[['revoke_unreserved','撤回未使用权益'],['protect_until_expiry','保留至到期']],fulfillmentKind:[['product','商品'],['benefit','权益'],['activity','活动'],['service','服务']],status:[['active','启用'],['paused','暂停'],['retired','退役']],stackingMode:[['stackable','可叠加'],['exclusive_highest','同组取最高'],['exclusive_first','同组取最先']],refundPolicy:[['reverse_on_any_refund','任一退款冲回'],['reverse_on_full_refund','全额退款冲回']],triggerKind:[['activity_payment','付款成功'],['activity_check_in','完成签到'],['activity_completion','活动完成']]}
+function WechatFieldMappings({content,onChange}:{content:ConfigurationContent;onChange(value:ConfigurationContent):void}){
+  const notificationType=notificationTypeOf(content)
+  const sources=wechatValueSourcesFor(notificationType)
+  const mappings=readMappings(content)
+  const used=new Set(mappings.map((field)=>field.valueSource))
+  function write(next:WechatNotificationFieldMapping[]){onChange({...content,fieldMappings:next})}
+  return <fieldset className="wechat-field-mappings"><legend>模板字段映射</legend>
+    <p>有字段映射时只发送映射中的关键字。会员卡积分与当前积分都是这次变动后的账户可用积分；微信示例 0000 不补零。变动模板没有时间字段，发生时间列 time9 只满足原约束、不发送。到期“时间”是该批积分到期时间。上月消费与当月过期按门店时区在发送时计算。</p>
+    <div className="membership-configuration-actions">
+      {notificationType!=='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(wechatPointsNotificationPreset(notificationType))}>填入会员卡积分变动模板</button>}
+      {notificationType==='loyalty_points_expiring'&&<button type="button" onClick={()=>onChange(wechatPointsNotificationPreset(notificationType))}>填入会员积分过期模板</button>}
+      <button type="button" disabled={mappings.length>=10||sources.every((source)=>used.has(source))} onClick={()=>{const source=sources.find((item)=>!used.has(item));if(source)write([...mappings,{dataKey:'',valueSource:source}])}}>增加字段</button>
+    </div>
+    {mappings.length===0?<small>尚未配置字段映射。保存后仍按原来的四个字段发送。</small>:mappings.map((field,index)=><article key={`${field.dataKey}:${field.valueSource}:${index}`}>
+      <label>微信字段名<input value={field.dataKey} maxLength={32} autoCapitalize="none" spellCheck={false} onChange={(event)=>write(mappings.map((item,position)=>position===index?{...item,dataKey:event.target.value.trim()}:item))}/></label>
+      <label>取值来源<select value={field.valueSource} onChange={(event)=>{const value=event.target.value;if(isNotificationValueSource(value,sources))write(mappings.map((item,position)=>position===index?{...item,valueSource:value}:item))}}>{!sources.includes(field.valueSource)&&<option value={field.valueSource} disabled>原设置待核对</option>}{sources.map((source)=><option key={source} value={source}>{wechatNotificationValueSourceLabels[source]}</option>)}</select></label>
+      <button type="button" onClick={()=>write(mappings.filter((_,position)=>position!==index))}>移除</button>
+    </article>)}
+  </fieldset>
+}
+function WechatNotificationCreator({disabled,onCreate}:{disabled:boolean;onCreate(notificationType:WechatLoyaltyNotificationType,reason:string):void}){
+  const [reason,setReason]=useState('')
+  return <section className="wechat-notification-creator" aria-label="新建微信积分通知">
+    <strong>新建微信积分通知草稿</strong>
+    <small>草稿建立后尚未发送。请另一人查看影响并审批，再由第三人发布。到达页面为 pages/points/index。</small>
+    <label>新建原因<textarea minLength={2} maxLength={500} value={reason} onChange={(event)=>setReason(event.target.value)} placeholder="说明新建哪一种积分通知，以及核对了哪些模板字段"/></label>
+    <div className="membership-configuration-actions">
+      <button type="button" disabled={disabled} onClick={()=>onCreate('loyalty_points_credited',reason)}>新建积分到账通知</button>
+      <button type="button" disabled={disabled} onClick={()=>onCreate('loyalty_points_reversed',reason)}>新建积分冲回通知</button>
+      <button type="button" disabled={disabled} onClick={()=>onCreate('loyalty_points_expiring',reason)}>新建积分到期通知</button>
+    </div>
+  </section>
+}
+function notificationTypeOf(content:ConfigurationContent):WechatLoyaltyNotificationType{
+  const value=content.notificationType
+  if(value==='loyalty_points_reversed'||value==='loyalty_points_expiring')return value
+  return 'loyalty_points_credited'
+}
+function readMappings(content:ConfigurationContent):WechatNotificationFieldMapping[]{
+  const value=content.fieldMappings
+  if(!Array.isArray(value))return []
+  return value.flatMap((item)=>{
+    if(!item||typeof item!=='object')return []
+    const record=item as {dataKey?:unknown;valueSource?:unknown}
+    if(typeof record.dataKey!=='string'||typeof record.valueSource!=='string')return []
+    if(!isKnownValueSource(record.valueSource))return []
+    return [{dataKey:record.dataKey,valueSource:record.valueSource}]
+  })
+}
+function isKnownValueSource(value:string):value is WechatNotificationFieldMapping['valueSource']{
+  return Object.prototype.hasOwnProperty.call(wechatNotificationValueSourceLabels,value)
+}
+function isNotificationValueSource(value:string,sources:readonly WechatNotificationFieldMapping['valueSource'][]):value is WechatNotificationFieldMapping['valueSource']{
+  return sources.some((source)=>source===value)
+}
 function path(item:{domain:Domain;configurationId?:string;publicId?:string}){return `/api/staff/loyalty/configuration-center/${item.domain}/${encodeURIComponent(item.configurationId??item.publicId??'')}`}
 function clone<T>(value:T):T{return structuredClone(value)}
 function message(error:unknown,fallback:string){return error instanceof Error?error.message:fallback}

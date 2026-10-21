@@ -1,3 +1,4 @@
+import type { WechatNotificationValueSource } from '../../src/shared/wechat-loyalty-subscription-templates.js'
 import {
   MembershipConfigurationDraftError,
   type MembershipConfigurationContent,
@@ -449,7 +450,14 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       FROM mbox.lock_managed_notification_policy($3::uuid)
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])).rows[0]
-    return row ? record(row, 'wechat_notifications', makers, { domain: 'wechat_notifications',
+    if (!row) return null
+    const fields = await this.transaction.query<{ data_key: string; value_source: WechatNotificationValueSource }>(`
+      SELECT data_key,value_source
+      FROM mbox.wechat_notification_policy_fields
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND policy_id=$3::uuid
+      ORDER BY sort_order,data_key
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, id])
+    return record(row, 'wechat_notifications', makers, { domain: 'wechat_notifications',
       notificationType: row.notification_type, authorizationPurpose: row.authorization_purpose,
       authorizationContext: row.authorization_context, templateId: row.template_id,
       pagePath: row.page_path, pointsDataKey: row.points_data_key, balanceDataKey: row.balance_data_key,
@@ -457,7 +465,8 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       expiryLeadDays: row.expiry_lead_days, maxPerCustomerPer24h: row.max_per_customer_per_24h,
       minimumIntervalMinutes: row.minimum_interval_minutes, quietHoursStart: row.quiet_hours_start,
       quietHoursEnd: row.quiet_hours_end,
-    }) : null
+      fieldMappings: fields.rows.map((field) => ({ dataKey: field.data_key, valueSource: field.value_source })),
+    })
   }
 
   private async replaceTierBenefits(id: string, input: Parameters<MembershipConfigurationDraftSession['replaceDraft']>[0], content: Extract<MembershipConfigurationContent,{domain:'tier_benefits'}>) {

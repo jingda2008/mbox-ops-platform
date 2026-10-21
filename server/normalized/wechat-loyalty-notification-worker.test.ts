@@ -6,6 +6,7 @@ const scope = {
   tenantId: '83000000-0000-4000-8000-000000000001',
   storeId: '83000000-0000-4000-8000-000000000002',
 }
+const policyId = '83000000-0000-4000-8000-000000000099'
 
 describe('WechatLoyaltyNotificationWorker', () => {
   it('preflights, consumes one exact authorization, resolves the same customer and records an accepted receipt', async () => {
@@ -108,6 +109,80 @@ describe('WechatLoyaltyNotificationWorker', () => {
     expect(preflight).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
     expect(statements.some((sql)=>sql.includes('wechat_notification_authorization_uses'))).toBe(false)
+  })
+
+  it('attaches published field mappings and send-time loyalty facts without dropping the job', async () => {
+    const transaction = fakeTransaction((sql) => {
+      if (sql.includes("FROM (VALUES('points_accrual')")) return activeOperationalStates()
+      if (sql.includes('INSERT INTO mbox.wechat_customer_notification_jobs')) return { rows: [], rowCount: 0 }
+      if (sql.includes('wechat_notification_policy_fields')) return {
+        rows: [
+          { policy_id: policyId, data_key: 'thing5', value_source: 'store_name' },
+          { policy_id: policyId, data_key: 'number2', value_source: 'granted_points' },
+          { policy_id: policyId, data_key: 'number7', value_source: 'membership_card_points' },
+          { policy_id: policyId, data_key: 'number3', value_source: 'deducted_points' },
+          { policy_id: policyId, data_key: 'number4', value_source: 'current_points' },
+          { policy_id: policyId, data_key: 'thing8', value_source: 'not_a_source' },
+        ],
+        rowCount: 6,
+      }
+      if (sql.includes('SELECT changed.id')) return {
+        rows: [{
+          id: '83000000-0000-4000-8000-000000000030',
+          policy_id: policyId,
+          customer_id: '83000000-0000-4000-8000-000000000011',
+          identity_external_id: 'wx-identity-customer-self',
+          notification_type: 'loyalty_points_credited',
+          template_id: 'WWUaFeNQ-mHRkwMYhEKMl_WsZ3iGyoKKHdOGbtC209I',
+          page_path: 'pages/points/index',
+          points_data_key: 'number2',
+          balance_data_key: 'number4',
+          occurred_at_data_key: 'time9',
+          expires_at_data_key: null,
+          points_change: 30,
+          points_at_risk: 0,
+          balance_after: 10000,
+          event_occurred_at: '2026-08-16T02:00:00.000Z',
+          expires_at: null,
+          store_name: '某某店',
+          store_timezone: 'Asia/Shanghai',
+          account_display_name: '张三丰',
+          member_no: 'M10086',
+          account_available_points: 10000,
+          last_month_consumed_points: 12,
+          month_expiring_points: 4,
+        }],
+        rowCount: 1,
+      }
+      if (sql.includes('RETURNING notification_job_id') && sql.includes('authorization_uses')) {
+        return { rows: [], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 1 }
+    })
+    const send = vi.fn(async () => ({ outcome: 'accepted' as const, providerReference: 'mapped-rid' }))
+    const worker = new WechatLoyaltyNotificationWorker(
+      runner(transaction),
+      { resolveMiniProgramNotificationRecipient: vi.fn(async () => ({ identityExternalId: 'wx-identity-customer-self', openId: 'openid-self' })) },
+      { preflight: vi.fn(async () => undefined), send },
+    )
+
+    await expect(worker.runBatch(scope, 'worker-notification-mapped')).resolves.toMatchObject({ claimed: 1, accepted: ['83000000-0000-4000-8000-000000000030'] })
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      storeName: '某某店',
+      accountDisplayName: '张三丰',
+      memberNo: 'M10086',
+      lastMonthConsumedPoints: 12,
+      monthExpiringPoints: 4,
+      accountPointsBalance: 10000,
+      storeTimeZone: 'Asia/Shanghai',
+      fieldMappings: [
+        { dataKey: 'thing5', valueSource: 'store_name' },
+        { dataKey: 'number2', valueSource: 'granted_points' },
+        { dataKey: 'number7', valueSource: 'membership_card_points' },
+        { dataKey: 'number3', valueSource: 'deducted_points' },
+        { dataKey: 'number4', valueSource: 'current_points' },
+      ],
+    }))
   })
 })
 

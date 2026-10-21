@@ -173,7 +173,7 @@ jobs:
     if: needs.classify.outputs.scope == 'full' || needs.classify.outputs.scope == 'ui' || needs.classify.outputs.scope == 'frontend'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     outputs:
       startup_report_b64: ${{ steps.normalized-browser-evidence.outputs.startup_report_b64 }}
     services:

@@ -70,8 +70,12 @@ describe('normalized migration baseline', () => {
       '192',
       '193',
       '194',
-      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247', '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258', '259', '260', '261', '262', '263', '264', '265', '266', '267', '268', '269', '270', '271', '272', '273',
+      '195', '196', '197', '198', '199', '200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '213', '214', '215', '216', '217', '218', '219', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247', '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258', '259', '260', '261', '262', '263', '264', '265', '266', '267', '268', '269', '270', '271', '272', '273', '274',
     ])
+    const laborCategory = migrations.find((migration) => migration.version === '274')
+    expect(laborCategory?.filename).toBe('274_operating_labor_expense_category.sql')
+    expect(laborCategory?.sql).toContain("'labor','人工费用','miscellaneous',true,55")
+    expect(laborCategory?.sql).toContain("schema_version='274'")
     const enrollPhoneGrant = migrations.find((migration) => migration.version === '247')
     expect(enrollPhoneGrant?.filename).toBe('247_membership_enroll_phone_release_grants.sql')
     expect(enrollPhoneGrant?.sql).toMatch(/GRANT UPDATE \(processing_status, revocation_reason_code\)\s+ON TABLE mbox\.customer_verified_contacts TO mbox_runtime/)

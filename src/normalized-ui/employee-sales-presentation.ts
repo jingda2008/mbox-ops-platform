@@ -35,10 +35,14 @@ export function signedMinorAmount(value: number): string {
 /** Profit and employee-sales grants are independent; neither suppresses nor implies the other. */
 export async function loadOperatingReports(
   get: (path: string) => Promise<{ data: unknown }>, permissions: readonly string[],
+  anchorDate = '',
 ): Promise<{ profit: unknown; sales: EmployeeSalesView[] }> {
+  const profitPath = /^\d{4}-\d{2}-\d{2}$/.test(anchorDate)
+    ? `/api/commercial-ops/profit?period=day&anchor=${anchorDate}`
+    : '/api/commercial-ops/profit?period=day'
   const [profit, sales] = await Promise.all([
     permissions.includes('commercial.profit.view')
-      ? get('/api/commercial-ops/profit?period=day') : Promise.resolve({ data: null }),
+      ? get(profitPath) : Promise.resolve({ data: null }),
     permissions.some((permission) => ['commercial.sales.view', 'commercial.sales.view_all'].includes(permission))
       ? get('/api/commercial-ops/employee-sales') : Promise.resolve({ data: [] }),
   ])

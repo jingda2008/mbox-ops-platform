@@ -1,4 +1,4 @@
-"TC编号","优先级","情况与关键步骤","预期结果","历史状态","当前候选状态","工程覆盖度","执行版本","执行方式","责任人","证据级别","测试文件/引用","证据提交SHA","运行ID","镜像摘要","证据/待办"
+﻿"TC编号","优先级","情况与关键步骤","预期结果","历史状态","当前候选状态","工程覆盖度","执行版本","执行方式","责任人","证据级别","测试文件/引用","证据提交SHA","运行ID","镜像摘要","证据/待办"
 "PER-001","P0","新员工入职：乌鸦创建员工、分配最小岗位、四位PIN和首个班次","只能看到岗位所需页面；员工、角色、授权、班次和创建人均有审计","通过","未执行","历史通过/待本版逐条追溯","1.0.0-rc.262","历史证据/待当前回归","李艳、乌鸦","领域级历史证据","","see-ci-quality-ledger","see-ci-quality-ledger","see-release-manifest","authorization、pilot-auth、presence、multi-role及staff-access-matrix自动化回归"
 "PER-002","P0","员工离职：营业前停用账号和未来班次，再尝试登录","登录立即拒绝；历史订单、支付、赠送、任务和投诉仍显示原操作者，不被改名或删除","通过","未执行","历史通过/待本版逐条追溯","1.0.0-rc.262","历史证据/待当前回归","李艳、乌鸦","领域级历史证据","","see-ci-quality-ledger","see-ci-quality-ledger","see-release-manifest","authorization、pilot-auth、presence、multi-role及staff-access-matrix自动化回归"
 "PER-003","P1","员工临时停职后恢复","停职期间不能登录/接单；恢复必须由授权人操作并产生两次审计事件","通过","未执行","历史通过/待本版逐条追溯","1.0.0-rc.262","历史证据/待当前回归","李艳、乌鸦","领域级历史证据","","see-ci-quality-ledger","see-ci-quality-ledger","see-release-manifest","authorization、pilot-auth、presence、multi-role及staff-access-matrix自动化回归"

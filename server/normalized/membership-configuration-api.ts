@@ -6,6 +6,7 @@ import type { StaffCustomerExperienceContext } from './customer-experience-servi
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import { PostgresMembershipConfigurationDraftRepository } from './membership-configuration-draft-repository.js'
 import {
+  assertContent,
   MembershipConfigurationDraftError,
   MembershipConfigurationDraftService,
   type MembershipConfigurationContent,
@@ -37,6 +38,24 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
       return {result:value,auditEvents:[{actor:{type:'employee',employeeId:context.employeeId},action:'membership.notification.publish',objectType:'wechat_notification_policy',objectId:id,businessDate:context.businessDate,afterData:{...value,reason:input.reason}}],outboxMessages:[]}
     })
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post('/staff/loyalty/configuration-center/wechat_notifications',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorized(options,request,'loyalty.configuration.edit')
+    const body=object(request.body)
+    const content=object(body.content) as MembershipConfigurationContent
+    if(content.domain!=='wechat_notifications')throw invalid('只能在这里新建微信通知草稿')
+    assertContent(content)
+    const reason=text(body.reason,'新建原因',2,500)
+    const created=await options.transactions.run(context.scope,async(transaction)=>{
+      await transaction.query('SELECT id FROM mbox.stores WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE',[transaction.scope.tenantId,transaction.scope.storeId])
+      const inserted=(await transaction.query<{id:string}>(
+        'SELECT id FROM mbox.create_managed_notification_draft($1::uuid,$2::jsonb,$3)',
+        [context.employeeId,JSON.stringify(content),reason],
+      )).rows[0]
+      if(!inserted)throw invalid('微信通知草稿没有建立')
+      return inserted.id
+    })
+    return reply.send({data:await service(options,context).get('wechat_notifications',created)})
   }))
   app.get('/staff/loyalty/configuration-center',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')

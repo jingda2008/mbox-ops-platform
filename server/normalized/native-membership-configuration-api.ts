@@ -76,7 +76,11 @@ export const nativeMembershipConfigurationApiPlugin:FastifyPluginAsync<Options>=
      value=(await customer.draftRedemptionCatalog(ctx,{...common,items:c.items.map(item=>({...item,display:{}}))})).value
     }else if(c.domain==='promotion_points')value=(await promo.draft(ctx,{...c,...common})).value
     else if(c.domain==='membership_terms')value=(await terms.createDraft(ctx,{...c,...common})).value
-    else throw new MembershipConfigurationDraftError('MEMBERSHIP_NOTIFICATION_MANAGED','微信通知使用后台托管草稿，请选择已有版本编辑')
+    else {
+     const inserted=(await tx.query<{id:string}>('SELECT id FROM mbox.create_managed_notification_draft($1::uuid,$2::jsonb,$3)',[ctx.employeeId,JSON.stringify(c),input.reason])).rows[0]
+     if(!inserted)throw new MembershipConfigurationDraftError('MEMBERSHIP_NOTIFICATION_DRAFT_FAILED','微信通知草稿没有建立')
+     value=await drafts.get('wechat_notifications',inserted.id)
+    }
     configurationId=(value as {id:string}).id
    }else if(input.action==='edit')value=await drafts.edit({domain:input.domain,publicId:input.configurationId,expectedRevision:input.expectedRevision,employeeId:ctx.employeeId,reason:input.reason,content:input.content})
    else if(input.action==='preview')value=await drafts.preview(input.domain,input.configurationId,ctx.employeeId)

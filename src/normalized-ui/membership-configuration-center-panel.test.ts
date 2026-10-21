@@ -23,6 +23,13 @@ describe('membership configuration center operating contract',()=>{
     expect(panel).toContain("typeof value==='boolean'")
     expect(panel).toContain("typeof value==='number'")
     expect(panel).not.toMatch(/JSON\.parse|JSON\.stringify|textarea[^>]+json/i)
+    expect(panel).toContain('填入会员卡积分变动模板')
+    expect(panel).toContain('填入会员积分过期模板')
+    expect(panel).toContain('新建积分到账通知')
+    expect(panel).toContain('新建积分冲回通知')
+    expect(panel).toContain('新建积分到期通知')
+    expect(panel).toContain('key!==\'fieldMappings\'')
+    expect(css).toContain('.wechat-field-mappings button,.wechat-notification-creator button{min-height:44px}')
   })
 
   it('keeps touch targets and readable reflow at 390px and 320px',()=>{

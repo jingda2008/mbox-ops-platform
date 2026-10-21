@@ -1,3 +1,4 @@
+import { buildWechatLoyaltyTemplateData } from '../../src/shared/wechat-loyalty-subscription-templates.js'
 import type {
   WechatSubscriptionDeliveryRequest,
   WechatSubscriptionDeliveryResult,
@@ -181,6 +182,23 @@ class FetchWechatSubscriptionHttpClient implements WechatSubscriptionHttpClient 
 }
 
 function loyaltyTemplateData(request: Readonly<WechatSubscriptionDeliveryRequest>): Record<string, string> {
+  if (request.fieldMappings !== undefined && request.fieldMappings.length > 0) {
+    return buildWechatLoyaltyTemplateData(request.fieldMappings, {
+      notificationType: request.notificationType,
+      pointsChange: request.pointsChange,
+      pointsAtRisk: request.pointsAtRisk,
+      balanceAfter: request.balanceAfter,
+      eventOccurredAt: request.eventOccurredAt,
+      expiresAt: request.expiresAt,
+      storeName: request.storeName,
+      accountDisplayName: request.accountDisplayName,
+      memberNo: request.memberNo,
+      lastMonthConsumedPoints: request.lastMonthConsumedPoints,
+      monthExpiringPoints: request.monthExpiringPoints,
+      accountPointsBalance: request.accountPointsBalance,
+      storeTimeZone: request.storeTimeZone,
+    })
+  }
   const pointsValue = request.notificationType === 'loyalty_points_expiring'
     ? `${request.pointsAtRisk}积分`
     : `${request.pointsChange > 0 ? '+' : ''}${request.pointsChange}积分`

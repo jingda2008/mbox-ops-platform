@@ -242,7 +242,7 @@ interface ProfitView {
   status: string
   currency: string
   range: { startDate: string; endDate: string }
-  revenue: { cash: { netReceiptsMinor: number } }
+  revenue: { cash: { paymentReceiptsMinor: number; netReceiptsMinor: number } }
   costs: { cashPaidMinor: number; accrualAllocatedMinor: number; goodsCostMinor: number; inventoryLossMinor: number; operatingExpenseMinor: number }
   profit: { cashBalanceMinor: number; grossProfitMinor: number; operatingProfitMinor: number; cashBasisMinor: number; accrualBasisMinor: number }
   gaps: { orderItemsMissingCostCount: number; inventoryLossesMissingCostCount: number }
@@ -357,9 +357,12 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   const [data, setData] = useState<ModuleData>(emptyData)
   const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
   const [orderRefreshToken, setOrderRefreshToken] = useState(0)
+  const [profitAnchor, setProfitAnchor] = useState('')
   const loadedModule = useRef<StaffModule | null>(null)
+  const loadGeneration = useRef(0)
 
   const load = useCallback(async (quiet = false) => {
+    const generation = ++loadGeneration.current
     if (!quiet) setPhase('loading')
     setMessage(null)
     try {
@@ -398,7 +401,8 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
           setData(emptyData)
         }
       } else if (module === 'operations') {
-        const reports = await loadOperatingReports((path) => api.getEndpoint<{ data: unknown }>(path), auth.permissions)
+        const reports = await loadOperatingReports((path) => api.getEndpoint<{ data: unknown }>(path), auth.permissions, profitAnchor)
+        if (generation !== loadGeneration.current) return
         setData({ ...emptyData, profit: profitView(reports.profit), employeeSales: reports.sales })
       } else if (module === 'experience') {
         if (auth.permissions.includes('customer.experience.view')) {
@@ -442,8 +446,10 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
           setData(emptyData)
         }
       }
+      if (generation !== loadGeneration.current) return
       setPhase('ready')
     } catch (error) {
+      if (generation !== loadGeneration.current) return
       if (error instanceof NormalizedApiError && error.recovery === 'login') {
         onLoginRequired()
         return
@@ -451,7 +457,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
       setMessage(error instanceof Error ? error.message : '岗位数据暂时无法读取')
       setPhase('error')
     }
-  }, [api, auth.permissions, module, onLoginRequired])
+  }, [api, auth.permissions, module, onLoginRequired, profitAnchor])
 
   const refresh = useCallback(() => load(true), [load])
 
@@ -477,7 +483,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
-    if (module === 'operations') return <OperationsModule api={api} auth={auth} view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} />
+    if (module === 'operations') return <OperationsModule api={api} auth={auth} view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} onOverviewDateChange={setProfitAnchor} />
     if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} mode="experience" />
     if (module === 'member-fulfillment') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-fulfillment" />
     if (module === 'member-exceptions') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-exceptions" />
@@ -489,7 +495,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     if (module === 'member-management') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-management" />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
-  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, orderRefreshToken, refresh])
+  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, orderRefreshToken, refresh, setProfitAnchor])
 
   const modulePresentation = {
     orders: {title:'订单中心',icon:PackageSearch},
@@ -1328,7 +1334,35 @@ function formatEmployeeInventoryQuantity(item: InventoryItemView): string {
   )
 }
 
-export function OperationsModule({ api, auth, view, sales, canViewProfit }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean }) {
+function OperatingOverviewHeader({ date, status, totalMinor, onDateChange }: {
+  date: string
+  status: string | null
+  totalMinor: number | null
+  onDateChange(date: string): void
+}) {
+  function shift(days: number) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return
+    const next = new Date(`${date}T00:00:00Z`)
+    if (Number.isNaN(next.getTime())) return
+    next.setUTCDate(next.getUTCDate() + days)
+    onDateChange(next.toISOString().slice(0, 10))
+  }
+  return <div className="staff-module-summary staff-overview-header" aria-label="营业概览">
+    <span><BarChart3 size={18} /></span>
+    <div>
+      <div className="staff-overview-heading">
+        <label className="staff-overview-date">营业日期<input type="date" value={date} aria-label="营业概览日期" onChange={(event) => onDateChange(event.target.value)} /></label>
+        <strong>营业概览</strong>
+        <button type="button" onClick={() => shift(-1)}>前一天</button>
+        <button type="button" onClick={() => shift(1)}>后一天</button>
+      </div>
+      {status !== null && <small>{status}</small>}
+    </div>
+    {totalMinor !== null && <div className="staff-overview-total"><small title="当日已写入对账流水的收款合计，不含退款与手续费">总金额</small><strong className={totalMinor < 0 ? 'is-negative' : ''}>¥{formatSignedAmount(totalMinor)}</strong></div>}
+  </div>
+}
+
+export function OperationsModule({ api, auth, view, sales, canViewProfit, onOverviewDateChange }: { api: NormalizedApiClient; auth: StaffAuthView; view: ProfitView | null; sales: EmployeeSalesView[]; canViewProfit: boolean; onOverviewDateChange?(date: string): void }) {
   const finance = auth.permissions.some((permission) => ['commercial.cost.view', 'commercial.cost.manage', 'commercial.payroll.view', 'commercial.payroll.manage', 'commercial.payroll.post'].includes(permission))
     ? <OwnerFinancePanel api={api} auth={auth} /> : null
   const salesSection = auth.permissions.some((permission) => ['commercial.sales.view', 'commercial.sales.view_all'].includes(permission))
@@ -1336,14 +1370,28 @@ export function OperationsModule({ api, auth, view, sales, canViewProfit }: { ap
       <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>员工销售归属</strong><small>仅显示当前账号权限范围内的销售归属。</small></div></div>
       <EmployeeSalesSummary sales={sales} />
     </section> : null
+  const [overviewDate, setOverviewDate] = useState(view?.range.startDate ?? '')
+  useEffect(() => {
+    if (view?.range.startDate) setOverviewDate(view.range.startDate)
+  }, [view?.range.startDate])
+  function changeOverviewDate(value: string) {
+    setOverviewDate(value)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) onOverviewDateChange?.(value)
+  }
+  const overviewHeader = <OperatingOverviewHeader
+    date={overviewDate}
+    status={view === null ? null : view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}
+    totalMinor={view?.revenue.cash.paymentReceiptsMinor ?? null}
+    onDateChange={changeOverviewDate}
+  />
   if (!canViewProfit) return <div className="staff-module-body">
     {finance}
     {salesSection}
   </div>
-  if (view === null) return <div className="staff-module-body">{finance}<EmptyState text="本营业日暂无经营数据" />{salesSection}</div>
+  if (view === null) return <div className="staff-module-body">{finance}{overviewHeader}<EmptyState text="本营业日暂无经营数据" />{salesSection}</div>
   return <div className="staff-module-body">
     {finance}
-    <div className="staff-module-summary"><span><BarChart3 size={18} /></span><div><strong>{view.range.startDate} 营业概览</strong><small>{view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}</small></div></div>
+    {overviewHeader}
     <div className="staff-metric-grid">
       <article><small>实收净额</small><strong className={view.revenue.cash.netReceiptsMinor < 0 ? 'is-negative' : ''}>¥{signedMinorAmount(view.revenue.cash.netReceiptsMinor)}</strong></article>
       <article><small>已售商品成本</small><strong>¥{formatAmount(view.costs.goodsCostMinor)}</strong></article>
@@ -1815,7 +1863,7 @@ function purchaseReceiptViews(value: unknown): PurchaseReceiptView[] {
 function profitView(value: unknown): ProfitView | null {
   if (!isRecord(value) || !isRecord(value.range) || !isRecord(value.revenue) || !isRecord(value.costs) || !isRecord(value.profit) || !isRecord(value.gaps)) return null
   const cash = isRecord(value.revenue.cash) ? value.revenue.cash : null
-  if (cash === null || typeof cash.netReceiptsMinor !== 'number'
+  if (cash === null || typeof cash.paymentReceiptsMinor !== 'number' || typeof cash.netReceiptsMinor !== 'number'
     || typeof value.costs.cashPaidMinor !== 'number' || typeof value.costs.accrualAllocatedMinor !== 'number'
     || typeof value.costs.goodsCostMinor !== 'number' || typeof value.costs.inventoryLossMinor !== 'number' || typeof value.costs.operatingExpenseMinor !== 'number'
     || typeof value.profit.cashBasisMinor !== 'number' || typeof value.profit.accrualBasisMinor !== 'number'

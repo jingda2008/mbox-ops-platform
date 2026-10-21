@@ -22,6 +22,7 @@ import { useConfirmationDialog } from "./ConfirmationDialog";
 import { NumberInputWithUnit } from "./NumberInputWithUnit";
 import "./owner-finance-panel.css";
 import { executeRecoverableCommand } from "./recoverable-command";
+import { operatingExpenseCategories } from "./owner-finance-categories";
 
 type Mode = "dashboard" | "cost" | "recurring" | "payroll" | "settings";
 type Category = {
@@ -740,7 +741,7 @@ export function OwnerFinancePanel({
               <small>
                 {correctingCost
                   ? `正在更正“${correctingCost.name}”。原记录不会删除，更正后报表只采用最新记录。`
-                  : "房租、乐队、厨房和每日临时支出都从这里录入；工资走工资核算，酒水采购走收货入库。"}
+                  : "房租、乐队、厨房、人工费用和每日临时支出都从这里录入；正式工资走工资核算，酒水采购走收货入库。"}
               </small>
             </header>
             <label>
@@ -1211,7 +1212,7 @@ export function OwnerFinancePanel({
         <form className="owner-finance-form" onSubmit={submitSetting}>
           <header>
             <strong>自定义费用项目</strong>
-            <small>自定义名称仍映射到固定会计分类，保证报表可比较。</small>
+            <small>自定义名称仍映射到固定会计分类，保证报表可比较。人工费用已作为系统分类提供，录入费用时直接选择。</small>
           </header>
           <label>
             项目类型
@@ -1284,14 +1285,6 @@ function SelectCategory({
         ))}
       </select>
     </label>
-  );
-}
-
-function operatingExpenseCategories(items: Category[]) {
-  return items.filter(
-    (item) =>
-      item.systemCategory !== "beverage_purchase" &&
-      item.systemCategory !== "personnel",
   );
 }
 

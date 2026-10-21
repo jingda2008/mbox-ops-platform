@@ -70,7 +70,7 @@ describe('employee sales public contract', () => {
       canViewProfit: true, sales: [],
       view: {
         range: { startDate: '2026-10-05', endDate: '2026-10-05' }, status: 'complete',
-        revenue: { cash: { netReceiptsMinor: -12345 } },
+        revenue: { cash: { paymentReceiptsMinor: 80000, netReceiptsMinor: -12345 } },
         costs: { goodsCostMinor: 0, operatingExpenseMinor: 0, inventoryLossMinor: 0 },
         profit: { grossProfitMinor: -12345, operatingProfitMinor: -12345, cashBalanceMinor: -12345 },
         gaps: { orderItemsMissingCostCount: 0, inventoryLossesMissingCostCount: 0 }, caveats: [],
@@ -78,6 +78,13 @@ describe('employee sales public contract', () => {
     }
     const html = renderToStaticMarkup(createElement(OperationsModule, props))
     expect(html).toMatch(/实收净额<\/small><strong class="is-negative">¥-123\.45<\/strong>/)
+    expect(html).toContain('aria-label="营业概览"')
+    expect(html).toContain('aria-label="营业概览日期"')
+    expect(html).toContain('value="2026-10-05"')
+    expect(html).toContain('前一天')
+    expect(html).toContain('后一天')
+    expect(html).toContain('总金额')
+    expect(html).toContain('¥800.00')
   })
 })
 
@@ -98,6 +105,17 @@ describe('independent operating report permissions', () => {
     expect(reports.sales).toHaveLength(paths.some((path) => path.endsWith('employee-sales')) ? 1 : 0)
     expect(reports.profit).toEqual(permissions.includes('commercial.profit.view') ? { status: 'complete' } : null)
   })
+  it('requests the selected business day without changing the sales query', async () => {
+    const calls: string[] = []
+    await loadOperatingReports(async (path) => {
+      calls.push(path)
+      return { data: path.includes('profit') ? { status: 'complete' } : [] }
+    }, ['commercial.profit.view', 'commercial.sales.view'], '2026-10-21')
+    expect(calls).toEqual([
+      '/api/commercial-ops/profit?period=day&anchor=2026-10-21',
+      '/api/commercial-ops/employee-sales',
+    ])
+  })
   it('does not turn a failed sales read into a zero/empty success', async () => {
     await expect(loadOperatingReports(async () => { throw new Error('暂时无法读取') }, ['commercial.sales.view']))
       .rejects.toThrow('暂时无法读取')
@@ -109,7 +127,7 @@ describe('independent operating report permissions', () => {
       canViewProfit: true, sales: employeeSales([dto]),
       view: hasProfit ? {
         range: { startDate: '2026-10-05', endDate: '2026-10-05' }, status: 'complete',
-        revenue: { cash: { netReceiptsMinor: -12345 } },
+        revenue: { cash: { paymentReceiptsMinor: 80000, netReceiptsMinor: -12345 } },
         costs: { goodsCostMinor: 0, operatingExpenseMinor: 0, inventoryLossMinor: 0 },
         profit: { grossProfitMinor: -12345, operatingProfitMinor: -12345, cashBalanceMinor: -12345 },
         gaps: { orderItemsMissingCostCount: 0, inventoryLossesMissingCostCount: 0 }, caveats: [],

@@ -1,3 +1,4 @@
+import {activityRefundCommand,pendingActivityRefund,type ActivityRefundRequestBody} from './activity-refund-recovery'
 import {RefreshQueue} from './staff-actions/refresh-queue'
 import {businessStatus} from '../shared/staff-business-labels'
 import { useStaffViewState, staffLocationSearch } from './staff-view-state'
@@ -47,6 +48,7 @@ interface WorkbenchNotice {
   kind: 'success' | 'error' | 'attention'
   text: string
 }
+interface ActivityTodoSummary { pendingPayment: number; requestedRefund: number; processingRefund: number; asOf: string }
 
 interface RefundDraft {
   purpose: import('../shared/refund-purpose').RefundPurpose
@@ -92,6 +94,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
+  const [activitySummary, setActivitySummary] = useState<ActivityTodoSummary | null>(null)
+  const requestedActivityFilter = new URLSearchParams(staffLocationSearch()).get('activityFilter')
+  const activityFilter = ['unpaid', 'requested', 'processing'].includes(requestedActivityFilter ?? '') ? requestedActivityFilter! : 'all'
   const [query, setQuery] = useStaffViewState(`cashier:${staffLocationSearch()}:query`, () => new URLSearchParams(staffLocationSearch()).get('query') ?? '')
   const [areaId, setAreaId] = useStaffViewState(`cashier:${staffLocationSearch()}:area`, 'all')
   const [paymentState, setPaymentState] = useStaffViewState<'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'>(`cashier:${staffLocationSearch()}:payment-state`, 'all')
@@ -106,16 +111,26 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const read = useCallback(async (signal: AbortSignal) => {
     const searchQuery = query
     try {
-      // Keep the complete active cashier queue visible in normal store load.
-      // The API caps this at 100 and prioritizes orders that still need money.
+      // Details are capped at 100; activity totals use the separate complete-scope read.
       const search = new URLSearchParams({ limit: '100' })
       if (searchQuery.trim()) search.set('query', searchQuery.trim())
       if (areaId !== 'all') search.set('areaId', areaId)
       if (paymentState !== 'all') search.set('paymentState', paymentState)
+      if (activityFilter !== 'all') search.set('activityFilter', activityFilter)
+      const summaryRequest = api.getEndpoint<{ data: { activities: Omit<ActivityTodoSummary, 'asOf'>; asOf: string } }>('/api/payments/workbench/todo-summary', { signal }).then(result => {
+        const counts = result.data.activities
+        if (!counts || ![counts.pendingPayment, counts.requestedRefund, counts.processingRefund].every(value => Number.isSafeInteger(value) && value >= 0) || typeof result.data.asOf !== 'string') throw new Error('活动汇总不完整')
+        return { ...counts, asOf: result.data.asOf }
+      }).catch(error => {
+        if (!signal.aborted && error instanceof NormalizedApiError && error.recovery === 'login') onLoginRequired()
+        return null
+      })
       const response = await api.getEndpoint<{ data: CashierWorkbenchView }>(
         `/api/payments/workbench?${search.toString()}`, {signal},
       )
+      const completeSummary = await summaryRequest
       if(signal.aborted)return
+      setActivitySummary(completeSummary)
       setMessage(null)
       setView(response.data)
       setAreaOptions((current) => {
@@ -128,9 +143,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       const attentionCount = response.data.summary.requestedRefundCount
         + (response.data.summary.couponRefundReviewCount ?? 0)
         + response.data.summary.processingRefundCount
-        + (response.data.summary.activityRequestedRefundCount ?? 0)
-        + (response.data.summary.activityProcessingRefundCount ?? 0)
-      const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'
+        + (completeSummary?.requestedRefund ?? 0)
+        + (completeSummary?.processingRefund ?? 0)
+      const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all' && activityFilter === 'all' && completeSummary !== null
       const previousAttentionCount = attentionCountRef.current
       if (isGlobalView && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
         setNotice({
@@ -150,9 +165,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       setPhase('error')
       throw error
     }
-  }, [api, areaId, onLoginRequired, paymentState, query])
+  }, [api, areaId, onLoginRequired, paymentState, query, activityFilter])
   const refreshQueue = useMemo(() => new RefreshQueue(read), [read])
-  useEffect(() => () => refreshQueue.cancel(), [refreshQueue])
+  const activeRefreshQueue=useRef<RefreshQueue|null>(refreshQueue)
+  activeRefreshQueue.current=refreshQueue
+  useEffect(() => () => {refreshQueue.cancel();if(activeRefreshQueue.current===refreshQueue)activeRefreshQueue.current=null}, [refreshQueue])
   const load = useCallback(async (_searchQuery: string, quiet = false) => {
     if (!quiet) { setPhase('loading'); setMessage(null) }
     await refreshQueue.request(!quiet).catch(() => { /* read already displays the error */ })
@@ -190,9 +207,21 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     setBusyKey(key)
     setNotice(null)
     try {
-      const result = await mutationCoordinator.current.execute(key, body,
-        attempt => api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey }),
-        () => refreshQueue.requestConfirmed())
+      let result:unknown
+      if(key.startsWith('activity-refund-request-')){
+        const command=activityRefundCommand(auth.employee.id,key.slice('activity-refund-request-'.length),
+          (original,idempotencyKey)=>api.postEndpoint(endpoint,original,{idempotencyKey}))
+        result=await command.submit(body as ActivityRefundRequestBody)
+        await command.refresh(async()=>{
+          if(activeRefreshQueue.current!==refreshQueue)throw new Error('已切换收银查询，请回原订单恢复核对')
+          await refreshQueue.requestConfirmed()
+          if(activeRefreshQueue.current!==refreshQueue)throw new Error('已切换收银查询，请回原订单恢复核对')
+        })
+      }else{
+        result=await mutationCoordinator.current.execute(key, body,
+          attempt => api.postEndpoint(endpoint, attempt.body, { idempotencyKey: attempt.idempotencyKey }),
+          () => refreshQueue.requestConfirmed())
+      }
       setNotice({ kind: 'success', text: key.startsWith('payment-provider-query-')
         ? paymentQueryNotice(result, successMessage) : successMessage })
       return true
@@ -209,7 +238,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     } finally {
       setBusyKey(null)
     }
-  }, [api, onLoginRequired, refreshQueue])
+  }, [api, auth.employee.id, onLoginRequired, refreshQueue])
 
   const closePendingBusinessDays = useCallback(async () => {
     const key = 'business-day-close-pending'
@@ -291,6 +320,8 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     businessDayClosure={businessDayClosure}
     areaId={areaId}
     paymentState={paymentState}
+    activityFilter={activityFilter}
+      activitySummary={activitySummary}
     areaOptions={areaOptions}
     onSearch={setQuery}
     onAreaId={setAreaId}
@@ -322,6 +353,8 @@ export function CashierAfterSalesWorkbenchView({
   businessDayClosure = null,
   areaId = 'all',
   paymentState = 'all',
+  activityFilter = 'all',
+  activitySummary = null,
   areaOptions = [],
   initialExpandedOrderId = null,
   onSearch,
@@ -343,6 +376,8 @@ export function CashierAfterSalesWorkbenchView({
   businessDayClosure?: BusinessDayClosureResult | null
   areaId?: string
   paymentState?: 'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'
+  activityFilter?: string
+  activitySummary?: ActivityTodoSummary | null
   areaOptions?: readonly { id: string; name: string }[]
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
@@ -589,10 +624,8 @@ export function CashierAfterSalesWorkbenchView({
       ><b>{view.summary.processingRefundCount}</b><small>待执行</small></button>
       {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
       {(view.summary.carryoverPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverPendingPaymentCount}</b><small>待查渠道</small></span>}
-      {(view.summary.activityPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityPendingPaymentCount}</b><small>活动待收款</small></span>}
-      {(view.summary.activityRequestedRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityRequestedRefundCount}</b><small>活动待复核</small></span>}
-      {(view.summary.activityProcessingRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityProcessingRefundCount}</b><small>活动待退款</small></span>}
     </div>
+    {view.actions.canUseActivityCashier && <section aria-label="活动完整范围待办"><p>当前全部活动待办，不受上方普通订单筛选影响。{activitySummary ? `核对时间：${activitySummary.asOf}` : '完整范围汇总暂未读取，数量未知；下方明细仍可核对。'}</p>{activitySummary ? <div className="cashier-workbench-summary">{([['unpaid', '活动待收款', activitySummary.pendingPayment], ['requested', '活动待复核', activitySummary.requestedRefund], ['processing', '活动待退款', activitySummary.processingRefund]] as const).map(([filter, label, count]) => <button type="button" key={filter} className="cashier-summary-filter" aria-pressed={activityFilter === filter} disabled={!onNavigate} onClick={() => onNavigate?.(`/staff/payments?activityFilter=${filter}`)}><b>{count}</b><small>{label}</small></button>)}</div> : <button type="button" onClick={onReload}>重读完整活动待办</button>}</section>}
     {(view.summary.couponRefundReviewCount??0)>0&&<p className="cashier-guidance" role="status">
       当前列表有 {view.summary.couponRefundReviewCount} 项退款后的权益待复核。退款金额已记录，券处理由授权人员另行核对，不影响收款或桌台。
       {auth.permissions.includes('loyalty.configuration.view')&&onNavigate
@@ -604,6 +637,7 @@ export function CashierAfterSalesWorkbenchView({
       <button type="button" className="cashier-quiet-action" onClick={() => setSummaryFilter('all')}>显示全部</button>
     </p>}
 
+    {activityFilter !== 'all' && <p className="cashier-guidance">活动筛选：{activityFilter === 'unpaid' ? '待收款' : activityFilter === 'requested' ? '待复核' : '待执行或核对退款'}；普通订单保持原筛选。<button type="button" disabled={!onNavigate} onClick={() => onNavigate?.('/staff/payments')}>显示全部活动事项</button></p>}
     {view.actions.canUseActivityCashier === true && <ActivityCashierPanel
       registrations={view.activityRegistrations ?? []}
       auth={auth}
@@ -1045,7 +1079,7 @@ function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutatio
   return <section className="cashier-activity-worklist" aria-label="活动收银工作台">
     <header>
       <span><b>活动收银</b><small>仅显示报名、支付、退款和库存名额恢复状态；不显示顾客联系方式。</small></span>
-      <strong>{registrations.length} 项</strong>
+      <strong>当前已读取 {registrations.length} 项</strong>
     </header>
     {registrations.length === 0
       ? <p className="cashier-guidance">本营业日没有待处理的活动收银事项。已完成的活动收款和退款会进入日结对账。</p>
@@ -1081,13 +1115,27 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
   const [collectionConfirmed, setCollectionConfirmed] = useState(false)
   const [recollectionReason, setRecollectionReason] = useState('')
   const [refundReason, setRefundReason] = useState('')
+  const [compensation,setCompensation]=useState(false)
+  const [compensationAmount,setCompensationAmount]=useState('')
+  const [disposition,setDisposition]=useState<'retain_fulfillment'|'stop_unstarted'>('retain_fulfillment')
+  const [customerConfirmed,setCustomerConfirmed]=useState(false)
+  const [refundRecovery,setRefundRecovery]=useState<ReturnType<typeof pendingActivityRefund>>(null)
+  const [refundRecoveryError,setRefundRecoveryError]=useState('')
+  const [refundRecoveryRevision,setRefundRecoveryRevision]=useState(0)
+  useEffect(()=>{
+    try{setRefundRecovery(pendingActivityRefund(auth.employee.id,registration.id));setRefundRecoveryError('')}
+    catch(error){setRefundRecoveryError(error instanceof Error?error.message:'无法读取原活动退款，请先恢复设备存储。')}
+  },[auth.employee.id,registration.id,busyKey,refundRecoveryRevision])
+  const compensationMinor=yuanToMinor(compensationAmount)
+  const serviceV3='serviceVersion' in registration && registration.serviceVersion===3
   const payment = registration.payment
   const lateSuccessPayments = registration.lateSuccessPayments ?? []
   const hasUnrefundedLateSuccess = lateSuccessPayments.length > 0
   const refund = payment?.refunds[0] ?? null
   const recollectionAuthorization = registration.recollectionAuthorization ?? null
   const isRefunded = registration.paymentStatus === 'refunded' || registration.status === 'refunded'
-  const dueMinor = isRefunded ? registration.paidAmountMinor : registration.amountDueMinor
+  const compensatedService=serviceV3 && 'serviceRefundDisposition' in registration && !!registration.serviceRefundDisposition
+  const dueMinor = compensatedService ? 0 : isRefunded ? registration.paidAmountMinor : registration.amountDueMinor
   const onlineActionPending = payment !== null
     && (payment.provider === 'postar' || payment.provider === 'wechat')
     && (payment.status === 'created' || payment.status === 'pending')
@@ -1102,7 +1150,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
     && (!needsAuthorization)
     && (actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
   const canRequestRefund = payment !== null && payment.remainingRefundableMinor > 0
-    && refund === null && actions.canRequestRefund
+    && (!refund || ['succeeded','rejected','failed'].includes(refund.status)) && actions.canRequestRefund
   const collectionKey = provider === null ? '' : `activity-manual-payment-${provider}-${registration.id}`
 
   async function submitCollection() {
@@ -1136,7 +1184,7 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
       <section>
         <h3>活动报名记录</h3>
         <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{businessStatus(registration.status,'registration')}</small></span><strong>{registration.partySize} 人</strong></div>
-        <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。活动退款只能由店内收银处理，顾客端没有自助退款入口。</p>
+        <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。{serviceV3 ? '顾客可在小程序申请符合条件的整份退订，申请统一进入本页审核。员工代办的退款须由另一名有权限的员工复核。' : '旧版报名如需退款，请联系门店办理。员工代办的退款须由另一名有权限的员工复核。'}</p>
       </section>
       <section>
         <h3>收款、退款与再次收款</h3>
@@ -1193,16 +1241,30 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
             <div className="cashier-action-row"><button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setCollectionConfirmed(false) }}>返回</button><button type="button" className="cashier-primary-action" disabled={busyKey !== null || (provider !== 'cash' && receiptReference.trim().length < 3) || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => { if (!collectionConfirmed) setCollectionConfirmed(true); else void submitCollection() }}>{collectionConfirmed ? '确认已实际收款' : '核对并继续'}</button></div>
           </div>}
         </div>}
-        {canRequestRefund && <div className="cashier-refund-form">
+        {refundRecoveryError&&<div role="alert"><p>{refundRecoveryError}</p><button type="button" disabled={busyKey!==null} onClick={()=>setRefundRecoveryRevision(value=>value+1)}>重新读取原退款记录</button></div>}
+        {refundRecovery&&<div className="cashier-refund-form" role="status">
+          <h4>原活动退款申请待核对</h4>
+          <p>原原因：{refundRecovery.body.reason}；{refundRecovery.body.amountMinor===undefined?'未使用整份退订':`补偿 ¥${formatAmount(refundRecovery.body.amountMinor)}，${refundRecovery.body.disposition==='stop_unstarted'?'停止尚未制作部分':'按原约定继续履约'}`}。恢复原内容，不新增申请。</p>
+          <button type="button" disabled={busyKey!==null||!actions.canRequestRefund||!!refundRecoveryError} onClick={()=>void onMutation(`activity-refund-request-${registration.id}`,
+            `/api/staff/community-activity-registrations/${encodeURIComponent(registration.publicId)}/refunds`,refundRecovery.body,'原活动退款申请已核对，请按当前审核状态继续。')}>恢复原活动退款申请</button>
+        </div>}
+        {canRequestRefund && !refundRecovery && !refundRecoveryError && <div className="cashier-refund-form">
           <h4>发起活动退款</h4>
-          <p className="cashier-guidance">退款金额为本次活动实际收款 ¥{formatAmount(payment.remainingRefundableMinor)}。顾客不能自助退款，申请后需由非申请人复核。</p>
-          <label className="cashier-field"><span>退款原因</span><textarea value={refundReason} maxLength={1000} placeholder="至少2个字；说明活动、原收款和退款原因" onChange={(event) => setRefundReason(event.target.value)} /></label>
-          <button type="button" className="cashier-danger-action" disabled={busyKey !== null || refundReason.trim().length < 2} onClick={() => void onMutation(
+          <p className="cashier-guidance">本次原付款还可退 ¥{formatAmount(payment.remainingRefundableMinor)}。申请后由非申请人复核，再走原渠道执行；顾客端整份退订申请也进入原审核队列。</p>
+          {serviceV3&&<label className="cashier-field"><span>退款处理</span><select aria-label="活动退款处理" value={compensation?'compensation':'unused'} onChange={event=>{setCompensation(event.target.value==='compensation');setCustomerConfirmed(false)}}><option value="unused">未使用整份退订</option><option value="compensation">已核定的补偿退款</option></select></label>}
+          {serviceV3&&compensation&&<>
+            <label className="cashier-field"><span>本次补偿金额（元）</span><input inputMode="decimal" value={compensationAmount} onChange={event=>{setCompensationAmount(event.target.value);setCustomerConfirmed(false)}}/></label>
+            <label className="cashier-field"><span>剩余内容安排</span><select aria-label="剩余内容安排" value={disposition} onChange={event=>{setDisposition(event.target.value as typeof disposition);setCustomerConfirmed(false)}}><option value="retain_fulfillment">按原约定继续履约</option><option value="stop_unstarted">停止尚未制作部分</option></select></label>
+            <p className="cashier-guidance">已入场、已制作和已取走的事实保留。选择停止尚未制作部分前，管理者须先在活动异常处理中停妥并核对原号；仅填写退款不会代替停做。关联加购仍须按原号交接。</p>
+            <label><input type="checkbox" checked={customerConfirmed} onChange={event=>setCustomerConfirmed(event.target.checked)}/>已与顾客确认退款金额及剩余内容安排</label>
+          </>}
+          <label className="cashier-field"><span>退款原因</span><textarea value={refundReason} maxLength={1000} placeholder="至少2个字；说明活动、原收款和退款原因" onChange={(event) => {setRefundReason(event.target.value);setCustomerConfirmed(false)}} /></label>
+          <button type="button" className="cashier-danger-action" disabled={busyKey !== null || refundReason.trim().length < 2 || compensation&&(!serviceV3||!customerConfirmed||compensationMinor===null||compensationMinor<=0||compensationMinor>payment.remainingRefundableMinor)} onClick={() => void onMutation(
             `activity-refund-request-${registration.id}`,
             `/api/staff/community-activity-registrations/${encodeURIComponent(registration.publicId)}/refunds`,
-            { reason: refundReason.trim() },
+            { reason: refundReason.trim(),...(serviceV3&&compensation?{amountMinor:compensationMinor,disposition,customerConfirmed:true}:{}) },
             '活动退款申请已提交，等待非申请人复核。',
-          )}>发起全额退款</button>
+          )}>{compensation?'提交补偿退款申请':'发起整份退款'}</button>
         </div>}
         {refund !== null && <ActivityRefundBlock
           refund={refund}
@@ -1511,6 +1573,7 @@ function RefundBlock({
       <Clock3 size={17} />
     </div>
     <p>{refund.reason}</p>
+    {refund.activityDisposition&&<p className="cashier-guidance">活动补偿安排：{refund.activityDisposition==='stop_unstarted'?'停止尚未制作部分（须已由管理者停妥）':'按原约定继续履约'}；顾客确认：{refund.activityCustomerConfirmed===true?'已记录确认':'尚无确认记录，请先核对'}。已入场、已制作和已取走事实保留。</p>}
     {refund.purpose&&<p>{REFUND_PURPOSE_LABELS[refund.purpose]}</p>}
     {refund.decisionReason && <small>复核说明：{refund.decisionReason}</small>}
     {refund.receiptReference && <small>退款凭证：{refund.receiptReference}</small>}
@@ -1737,7 +1800,7 @@ function lateSuccessRefundActionLabel(status: LateSuccessPayment['refundStatus']
 }
 
 function refundStatusLabel(value: string): string {
-  return ({ requested: '待收银复核', approved: '复核通过待执行', rejected: '复核驳回', processing: '处理中', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
+  return ({ requested: '待收银复核', approved: '退款已批准，待执行，尚未确认到账', rejected: '复核驳回', processing: '退款处理中，尚未确认到账', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
 }
 function itemStatusLabel(value: string): string {
   return ({ submitted: '已下单', accepted: '已接单', preparing: '制作中', ready: '待送达', delivered: '已送达', cancelled: '已取消' } as Record<string, string>)[value] ?? value

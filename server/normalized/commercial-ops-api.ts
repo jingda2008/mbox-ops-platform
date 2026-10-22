@@ -1,3 +1,4 @@
+import { orderHistoryAccess } from './order-history-access.js'
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import {CashHandoverService,CashHandoverError,type CashHandoverCommand} from './cash-handover-service.js'
 import {VoucherOperationService,VoucherOperationError} from './voucher-operation-service.js'
@@ -173,7 +174,23 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     const query = readObject(request.query ?? {})
     const period = readPeriod(query.period)
     const anchor = readDate(query.anchor ?? context.businessDate, 'anchor')
-    return reply.send({ data: await options.queryService.getProfitReport(context.scope, period, anchor) })
+    const sourceKind = query.sourceKind
+    if (sourceKind !== undefined && !['income','cost','receipt','refund','outstanding'].includes(String(sourceKind))) throw new TypeError('sourceKind无效')
+    if (sourceKind === 'cost') await assertLivePermission(options.transactions, createAccess, context, 'commercial.cost.view')
+    const sourcePage = query.sourcePage === undefined ? 0 : Number(query.sourcePage)
+    if (!Number.isSafeInteger(sourcePage) || sourcePage < 0) throw new TypeError('sourcePage无效')
+    if (query.sourceCategory !== undefined && (typeof query.sourceCategory !== 'string' || query.sourceCategory.length > 80)) throw new TypeError('sourceCategory无效')
+    const report = await options.queryService.getProfitReport(context.scope, period, anchor, {
+      kind: sourceKind as 'income'|'cost'|'receipt'|'refund'|'outstanding'|undefined,
+      category: query.sourceCategory as string|undefined, page: sourcePage, includeCostDetails: sourceKind === 'cost',
+    })
+    const access = await resolveLiveAccess(options.transactions, createAccess, context)
+    if (!access.permissions.includes('commercial.profit.view')) throw new StaffAccessDeniedError('经营查询权限已变化，请重新核对')
+    if (sourceKind === 'cost' && !access.permissions.includes('commercial.cost.view')) throw new StaffAccessDeniedError('费用明细权限已变化，请重新核对')
+    const earliest = orderHistoryAccess(access.permissions, report.currentBusinessDate).earliestBusinessDate
+    const reason = !access.permissions.includes('order.bill.print') ? '当前账号无经营报表打印权限'
+      : earliest !== null && report.range.startDate < earliest ? '所选期间超出当前账号可打印的历史范围' : null
+    return reply.send({ data: { ...report, printAccess: { allowed: reason === null, reason } } })
   }))
 
   app.get('/commercial-ops/costs', async (request, reply) => handleRoute(reply, async () => {

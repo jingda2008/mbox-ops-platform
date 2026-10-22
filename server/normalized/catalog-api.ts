@@ -1,3 +1,5 @@
+import { parseProductServiceWindow, type ProductServiceWindow } from '../../src/shared/product-service-window.js';
+import { saveProductServiceWindow,validateProductServiceWindowOverlaps } from './product-service-window-repository.js';
 import {nativePhysicalExecutor, NativePhysicalNotCommittedError} from './native-physical-command.js';
 import { createHash } from "node:crypto";
 import { productTasteProfile } from '../../src/shared/product-taste-profile.js';
@@ -132,6 +134,7 @@ interface ProductRow extends Record<string, unknown> {
   inventory_available: boolean;
   product_snapshot: JsonObject;
   guest_visible: boolean;
+  service_window?: unknown;
   search_text: string;
   recommendation_enabled: boolean;
   recommendation_min_guests: number;
@@ -177,6 +180,7 @@ interface CatalogProduct {
   bundleChoiceGroups: BundleChoiceGroup[];
   productSnapshot: JsonObject;
   guestVisible: boolean;
+  serviceWindow?: ProductServiceWindow | null;
   searchText: string;
   recommendationEnabled: boolean;
   recommendationMinGuests: number;
@@ -678,6 +682,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           );
           const productId = result.rows[0]?.id;
           if (productId === undefined) throw new Error("Product insert did not return an id");
+          if (operational.serviceWindow) await saveProductServiceWindow(transaction, productId, operational.serviceWindow);
           await replaceBundleComponents(transaction, productId, input.bundleComponents);
           await replaceBundleChoiceGroups(transaction, productId, input.bundleChoiceGroups);
           if (input.productKind === "bundle") {
@@ -903,6 +908,8 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               ],
             );
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
+            if (patch.operationalInput.serviceWindow !== undefined) await saveProductServiceWindow(transaction, productId, patch.operationalInput.serviceWindow);
+            else if (patch.operationalInput.availableFrom !== undefined || patch.operationalInput.availableUntil !== undefined) await validateProductServiceWindowOverlaps(transaction,productId);
             if (
               targetKind === "bundle" &&
               (patch.bundleComponents !== null || patch.bundleChoiceGroups!==null || before.productKind !== targetKind)
@@ -1237,7 +1244,7 @@ async function listProducts(
       COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       COALESCE(inventory_stock.available, false) AS inventory_available,
-      product.product_snapshot, product.guest_visible, product.search_text,
+      product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
       product.recommendation_scene_tags, product.recommendation_intent_tags,
@@ -1247,9 +1254,7 @@ async function listProducts(
       product.recommendation_upgrade_product_id,
       product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
-      (product.available_from IS NULL OR product.available_until IS NULL OR
-       (product.available_from<product.available_until AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from AND (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until) OR
-       (product.available_from>=product.available_until AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from OR (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until))) AS supply_window_available,
+      (mbox.product_base_service_deadline(product.tenant_id,product.store_id,product.id) IS NOT NULL) AS supply_window_available,
       product.allowed_channels, product.max_order_quantity, product.kds_priority,
       product.fulfillment_sla_seconds,
       product.cost_amount_minor::text, product.status,
@@ -1310,6 +1315,7 @@ async function listProducts(
           'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
           'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
             AND option_inventory.configuration_complete AND option_inventory.available
+            AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -1322,6 +1328,7 @@ async function listProducts(
             WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
             WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -1334,7 +1341,8 @@ async function listProducts(
         ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
         count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
           AND option_inventory.configuration_complete AND option_inventory.available
-          AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+          AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
             OR (option_product.available_from<option_product.available_until
               AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
               AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
@@ -1508,7 +1516,7 @@ async function listProducts(
       )
       AND ($4::text IS NULL OR product.category_code = $4)
       AND ($5 = 'all' OR product.status = $5)
-      AND (NOT $8::boolean OR product.guest_visible)
+      AND (NOT $8::boolean OR (product.guest_visible AND mbox.service_window_deadline(product.tenant_id,product.store_id,product.id,NULL,true) IS NOT NULL))
     ORDER BY product.category_code, product.name, product.code, product.id
     LIMIT $6::integer OFFSET $7::integer
   `,
@@ -1593,6 +1601,7 @@ function assistedOrderCatalogProduct(
     bundleChoiceGroups: product.bundleChoiceGroups,
     productSnapshot: product.productSnapshot,
     guestVisible: product.guestVisible,
+    serviceWindow: jsonFingerprintValue(product.serviceWindow ?? null),
     recommendationEnabled: product.recommendationEnabled,
     recommendationMinGuests: product.recommendationMinGuests,
     recommendationMaxGuests: product.recommendationMaxGuests,
@@ -1644,7 +1653,7 @@ async function listCategories(
       ON store.tenant_id = product.tenant_id AND store.id = product.store_id
     WHERE product.tenant_id = $1::uuid AND product.store_id = $2::uuid
       AND product.status <> 'inactive'
-      AND (NOT $3::boolean OR product.guest_visible)
+      AND (NOT $3::boolean OR (product.guest_visible AND mbox.service_window_deadline(product.tenant_id,product.store_id,product.id,NULL,true) IS NOT NULL))
     GROUP BY product.category_code, store.currency
     ORDER BY product.category_code
   `,
@@ -2129,7 +2138,7 @@ async function getProduct(
       COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       COALESCE(inventory_stock.available, false) AS inventory_available,
-      product.product_snapshot, product.guest_visible, product.search_text,
+      product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
       product.recommendation_scene_tags, product.recommendation_intent_tags,
@@ -2139,9 +2148,7 @@ async function getProduct(
       product.recommendation_upgrade_product_id,
       product.menu_sort_order, to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
-      (product.available_from IS NULL OR product.available_until IS NULL OR
-       (product.available_from<product.available_until AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from AND (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until) OR
-       (product.available_from>=product.available_until AND ((clock_timestamp() AT TIME ZONE store.timezone)::time>=product.available_from OR (clock_timestamp() AT TIME ZONE store.timezone)::time<product.available_until))) AS supply_window_available,
+      (mbox.product_base_service_deadline(product.tenant_id,product.store_id,product.id) IS NOT NULL) AS supply_window_available,
       product.allowed_channels, product.max_order_quantity, product.kds_priority,
       product.fulfillment_sla_seconds,
       product.cost_amount_minor::text, product.status,
@@ -2202,6 +2209,7 @@ async function getProduct(
           'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
           'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
             AND option_inventory.configuration_complete AND option_inventory.available
+            AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -2214,6 +2222,7 @@ async function getProduct(
             WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
             WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -2226,7 +2235,8 @@ async function getProduct(
         ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
         count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
           AND option_inventory.configuration_complete AND option_inventory.available
-          AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+          AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
             OR (option_product.available_from<option_product.available_until
               AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
               AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
@@ -2419,7 +2429,7 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
       && row.bundle_choice_groups_available===true
     ));
   const availabilityReasons:string[]=[];
-  if(row.supply_window_available===false)availabilityReasons.push(`当前不在供应时段，供应时间为 ${row.available_from} 至 ${row.available_until}${row.available_from&&row.available_until&&row.available_from>=row.available_until?'（跨午夜）':''}`);
+  if(row.supply_window_available===false)availabilityReasons.push('当前不在指定供应日期或时段');
   if(row.allowed_channels.length===0)availabilityReasons.push('尚未开放任何点单渠道，请在商品编辑中选择销售渠道');
   if(row.status!=='active')availabilityReasons.push(`商品 ${row.name}（${row.code}）未启用，请调整销售状态`);
   if(!standardPrice)availabilityReasons.push(`商品 ${row.name} 缺少当前有效标准售价，请在价格配置补齐`);
@@ -2451,6 +2461,7 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
       ? guestProductSnapshot(sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject)
       : sanitizeProductDisplaySnapshot(row.product_snapshot) as JsonObject,
     guestVisible: row.guest_visible,
+    serviceWindow: parseProductServiceWindow(row.service_window),
     searchText: row.search_text,
     recommendationEnabled: row.recommendation_enabled,
     recommendationMinGuests: row.recommendation_min_guests,
@@ -2877,7 +2888,7 @@ const PRODUCT_OPERATIONAL_INPUT_KEYS = [
   'recommendationIntentTags', 'recommendationTasteTags', 'recommendationDwellTags',
   'recommendationSingleWaveEligible', 'recommendationExpectedPrepMinutes',
   'recommendationHoldMinutes', 'recommendationUpgradeProductId', 'menuSortOrder',
-  'availableFrom', 'availableUntil', 'allowedChannels', 'maxOrderQuantity',
+  'availableFrom', 'availableUntil', 'serviceWindow', 'allowedChannels', 'maxOrderQuantity',
   'kdsPriority', 'fulfillmentSlaSeconds', 'costAmountMinor',
 ] as const;
 
@@ -2902,6 +2913,7 @@ function strongProductOperationalFields(
     sortOrder: value('menuSortOrder', 999),
     availableFrom: value('availableFrom', null),
     availableUntil: value('availableUntil', null),
+    serviceWindow: value('serviceWindow', null),
     allowedChannels: value('allowedChannels', ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration']),
     maxOrderQuantity: value('maxOrderQuantity', 50),
     kdsPriority: value('kdsPriority', 100),
@@ -3285,6 +3297,7 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
       options:group.options.map((option)=>({ ...option })), })),
     productSnapshot: product.productSnapshot,
     guestVisible: product.guestVisible,
+    serviceWindow: jsonFingerprintValue(product.serviceWindow ?? null),
     searchText: product.searchText,
     recommendationEnabled: product.recommendationEnabled,
     recommendationMinGuests: product.recommendationMinGuests,

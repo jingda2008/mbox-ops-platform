@@ -1,3 +1,4 @@
+import { validateProductPaymentWindow } from './product-payment-window.js'
 import { IdempotencyConflictError } from './command-executor.js'
 import {normalizePaymentClientIp} from './payment-client-network.js'
 import type {
@@ -854,10 +855,11 @@ export class OnlinePaymentService {
         const claim = await repository.claim(
           input.paymentId,presentation,expiresAt,input.principal,input.idempotencyKey,
         )
-        if (!claim.claimed) return { context, payerId: null, cached: claim, simulated: true as const }
+        if (!claim.claimed) return { context, payerId: null, cached: claim, expiresAt:claim.expiresAt, simulated: true as const }
+        const actionExpiresAt=await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
         const payload = { presentation: 'simulation' }
-        await repository.complete(context.id, presentation, payload, expiresAt, null)
-        return { context, payerId: null, cached: null, simulated: true as const }
+        await repository.complete(context.id, presentation, payload, actionExpiresAt, null)
+        return { context, payerId: null, cached: null, expiresAt:actionExpiresAt, simulated: true as const }
       }
       if (context.provider !== 'postar') throw new OnlinePaymentUnavailableError()
       if (this.adapter === null || this.secrets === null || this.config === null) {
@@ -873,8 +875,9 @@ export class OnlinePaymentService {
         presentation === 'jsapi' ? clientNetworkSnapshot(input.clientIp) : {},
       )
       if (!claim.claimed) {
-        return { context, payerId: null, cached: claim, simulated: false as const }
+        return { context, payerId: null, cached: claim, expiresAt:claim.expiresAt, simulated: false as const }
       }
+      const actionExpiresAt=await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
       let payerId: string | null = null
       try {
         payerId = presentation === 'jsapi' ? await this.resolvePayerId(input) : null
@@ -885,7 +888,7 @@ export class OnlinePaymentService {
         await repository.abandonUnsubmittedClaim(input.paymentId)
         throw error
       }
-      return { context, payerId, cached: null, simulated: false as const }
+      return { context, payerId, cached: null, expiresAt:actionExpiresAt, simulated: false as const }
     })
     const presentation = providerPresentation(prepared.context.method)
     if (prepared.simulated) {
@@ -897,7 +900,7 @@ export class OnlinePaymentService {
         activityRegistrationPublicId: prepared.context.activityRegistrationPublicId,
         status: 'pending',
         presentation,
-        expiresAt: prepared.cached?.expiresAt ?? expiresAt,
+        expiresAt: prepared.expiresAt,
         payload: prepared.cached?.payload ?? { presentation: 'simulation' },
       }
     }
@@ -924,7 +927,7 @@ export class OnlinePaymentService {
         merchantId: this.config.merchantId,
         amount: prepared.context.amountMinor,
         currency: prepared.context.currency,
-        expiresAt,
+        expiresAt:prepared.expiresAt,
         presentation,
         payWay: jsapiPayWay,
         payerId: prepared.payerId ?? undefined,
@@ -943,7 +946,7 @@ export class OnlinePaymentService {
           prepared.context.id,
           presentation,
           clientPayload,
-          expiresAt,
+          prepared.expiresAt,
           result.providerTransactionId,
         )
       })
@@ -955,7 +958,7 @@ export class OnlinePaymentService {
         activityRegistrationPublicId: prepared.context.activityRegistrationPublicId,
         status: 'pending',
         presentation: clientPresentation,
-        expiresAt,
+        expiresAt:prepared.expiresAt,
         payload: clientPayload,
       }
     } catch (error) {

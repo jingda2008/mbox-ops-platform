@@ -3,6 +3,7 @@ import {OrderRepository,type OrderChannel,type SubmitOrderLineInput} from './ord
 import {calculateStackingPrice,StackingPricingError,type PricingEffect,type StackingPolicy} from './stacking-pricing.js'
 import {pricingLineFingerprint,verifyPricingLineAllocations} from './pricing-line-allocation.js'
 import {MAX_LINE_QUANTITY,MAX_CART_QUANTITY} from './guest-shared-cart-limits.js'
+import type {IssuedCouponProductLine} from './issued-coupon-product-promise.js'
 
 export class CheckoutCartPricingError extends Error{}
 /** Shared quote composition, NOT coupon ownership or order authority. The
@@ -11,11 +12,11 @@ export class CheckoutCartPricingError extends Error{}
 export async function quoteCheckoutCart(
   orders:Pick<OrderRepository,'quoteCurrent'>,
   cart:GuestSharedCart,
-  input:{expectedGeneration:number;expectedVersion:number;policy:StackingPolicy;effects:readonly PricingEffect[];channel:OrderChannel;upgradedPortionIds?:readonly string[]},
+  input:{expectedGeneration:number;expectedVersion:number;policy:StackingPolicy;effects:readonly PricingEffect[];channel:OrderChannel;upgradedPortionIds?:readonly string[];couponPromises?:readonly {portionId:string;benefitId:string}[]},
 ){
   if(cart.status!=='open'||cart.guestWritesFrozen||cart.version!==input.expectedVersion||cart.generation!==input.expectedGeneration)throw new CheckoutCartPricingError('购物车已变化或不可修改，请刷新后重新确认')
   if(!cart.lines.length)throw new CheckoutCartPricingError('购物车为空，请先添加商品')
-  const unavailable=cart.lines.filter(line=>!line.available)
+  const unavailable=cart.lines.filter(line=>!line.available&&!(line.portionIds?.length===line.quantity&&line.portionIds.every(id=>input.couponPromises?.some(p=>p.portionId===id))))
   if(unavailable.length)throw new CheckoutCartPricingError(`以下商品暂不可售：${unavailable.map(line=>line.name).join('、')}，请移除或重新选择`)
   const portionIds:string[]=[],lines:SubmitOrderLineInput[]=[]
   for(const line of cart.lines){
@@ -30,7 +31,8 @@ export async function quoteCheckoutCart(
   if(lines.length>MAX_CART_QUANTITY)throw new CheckoutCartPricingError('本次商品份数超出结算范围')
   const upgraded=input.upgradedPortionIds??[]
   if(new Set(upgraded).size!==upgraded.length||upgraded.some(id=>!portionIds.includes(id)))throw new CheckoutCartPricingError('升级份次不属于当前购物车')
-  const standard=await orders.quoteCurrent(lines,input.channel,false)
+  const promises:IssuedCouponProductLine[]=(input.couponPromises??[]).map(p=>({requestIndex:portionIds.indexOf(p.portionId),benefitId:p.benefitId}))
+  const standard=await (promises.length?orders.quoteCurrent(lines,input.channel,false,promises):orders.quoteCurrent(lines,input.channel,false))
   if(standard.items.length!==lines.length)throw new CheckoutCartPricingError('报价明细不完整')
   const units=standard.items.map((item,index)=>{
     if(item.requestIndex!==index||item.productId!==lines[index]!.productId||item.quantity!==1)throw new CheckoutCartPricingError('报价与具体份次不一致')

@@ -4,6 +4,8 @@ import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
+import { buildOperatingReportLines } from './operating-report-format.js'
+import type { OperatingProfitReport } from './profit-query-service.js'
 import type { JsonObject } from './command-executor.js'
 import {
   HardwareRepository,
@@ -365,6 +367,17 @@ export class PrintTicketSourceRepository {
       note:'金额及所选订单待收为生成时快照，不是历史时点余额。销售按订单营业日；收退款按入账营业日，包含活动款项。后续入账请重新生成新快照。',payment:null,lines,totalAmountMinor:null,currency:'CNY'})
   }
 
+  async materializeManualOperatingReport(sourceId:string, operatorLabel:string, report:OperatingProfitReport):Promise<readonly PrintJob[]> {
+    if(!this.manualRequest)throw new Error('经营汇总需要手动打印请求')
+    return this.materializeDocument(sourceId,sourceId,{
+      kind:'daily_settlement',subtitle:`经营汇总 · ${report.range.startDate} 至 ${report.range.endDate}`,test:false,
+      issuedAt:report.asOf,businessDate:report.range.startDate,ticketReference:sourceId,
+      tableCode:null,guestCount:null,operatorLabel,payment:null,totalAmountMinor:null,currency:'CNY',
+      note:'收入按原购买营业日归属；净收按收退款发生期。不代表银行余额或税后净利润。打印不结束营业日。',
+      lines:buildOperatingReportLines(report),
+    })
+  }
+
   async materializeDailySettlement(sourceId:string,boundaryId:string):Promise<readonly PrintJob[]> {
     const row=(await this.transaction.query<{business_date:string;ended_at:string;reason:string;employee_name:string;operating_snapshot:Record<string,string|number>;ledger_snapshot:Array<{provider:string;receivedMinor:string;refundedMinor:string;netMinor:string}>}>(`
       SELECT boundary.business_date::text,boundary.ended_at::text,boundary.reason,employee.display_name AS employee_name,boundary.ledger_snapshot,boundary.operating_snapshot
@@ -389,10 +402,37 @@ export class PrintTicketSourceRepository {
       operatorLabel:row.employee_name,note:row.reason,payment:null,lines,totalAmountMinor:null,currency:'CNY'})
   }
 
-  private async materializeDocument(sourceId: string, reference: string, snapshot: Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>, station: HardwareStation = 'cashier'): Promise<PrintJob[]> {
+  async materializeActivityProduction(sourceId:string,lineId:string):Promise<readonly PrintJob[]>{
+    const row=(await this.transaction.query<{number:number;business_date:string;location:string|null;name:string;quantity:number;station_code:'bar'|'kitchen';category_code:string|null;created_at:string;public_id:string;title:string;package_name:string|null;status:string;held:boolean;started_quantity:number;ready_quantity:number;taken_quantity:number;note:string|null;selection_label:string|null;remake_reason:string|null}>(`
+      SELECT meal.number,meal.business_date::text,meal.location,line.product_snapshot->>'name' AS name,
+        line.quantity-line.stopped_quantity AS quantity,line.station_code,line.created_at::text,
+        CASE WHEN line.product_snapshot ? 'categoryCode' THEN line.product_snapshot->>'categoryCode' ELSE product.category_code END AS category_code,
+        registration.public_id,activity.title,registration.activity_package_snapshot->>'name' AS package_name,
+        line.status,line.held,line.started_quantity,line.ready_quantity,line.taken_quantity,line.product_snapshot->>'note' AS note,
+        line.product_snapshot->>'selectionLabel' AS selection_label,line.product_snapshot->>'remakeReason' AS remake_reason
+      FROM mbox.activity_service_lines line
+      JOIN mbox.products product ON (product.tenant_id,product.store_id,product.id)=(line.tenant_id,line.store_id,line.product_id)
+      JOIN mbox.activity_meals meal ON (meal.tenant_id,meal.store_id,meal.id)=(line.tenant_id,line.store_id,line.meal_id)
+      JOIN mbox.community_activity_registrations registration ON (registration.tenant_id,registration.store_id,registration.id)=(line.tenant_id,line.store_id,line.registration_id)
+      JOIN mbox.community_activities activity ON (activity.tenant_id,activity.store_id,activity.id)=(registration.tenant_id,registration.store_id,registration.activity_id)
+      WHERE line.tenant_id=$1 AND line.store_id=$2 AND line.id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,lineId])).rows[0];
+    if(!row||row.status==='cancelled'||row.quantity<=0)return [];
+    if(row.held)throw new ActivityPrintHeldError();
+    const itemNote=[row.selection_label,row.note,row.remake_reason?`补做原因：${row.remake_reason}`:null,row.started_quantity>0?`制单时已开做 ${row.started_quantity}、已放好 ${row.ready_quantity}、已取走 ${row.taken_quantity}；按原任务核对余量`:null].filter(Boolean).join('；')||null;
+    return this.materializeDocument(sourceId,lineId,{
+      kind:row.station_code==='bar'?'bar_production':'kitchen_production',
+      subtitle:`活动：${row.title} · ${row.package_name??'单点加购'} · 取餐号 ${row.number}`,
+      test:false,issuedAt:row.created_at,businessDate:row.business_date,ticketReference:lineId,
+      tableCode:`餐号 ${row.number}`,guestCount:null,operatorLabel:null,
+      note:[row.location?`收餐位置：${row.location}`:null,'同一制作来源；补打只核对，不追加制作'].filter(Boolean).join('；'),payment:null,currency:'CNY',
+      lines:[{name:row.name,quantity:row.quantity,note:itemNote}],totalAmountMinor:null,
+    },row.station_code,row.category_code);
+  }
+
+  private async materializeDocument(sourceId: string, reference: string, snapshot: Omit<PrintTicketSnapshot, 'schemaVersion' | 'title'>, station: HardwareStation = 'cashier', productCategoryCode?: string | null): Promise<PrintJob[]> {
     const jobs: PrintJob[]=[]
     for(const [index,page] of paginatePrintTicket(snapshot).entries()) {
-      jobs.push(...await this.hardware.materializeFromOutbox({manualRequest:this.manualRequest,sourceOutboxMessageId:sourceId,stationCode:station,sourceType:station === 'cashier' ? 'cashier' : 'kds',
+      jobs.push(...await this.hardware.materializeFromOutbox({manualRequest:this.manualRequest,sourceOutboxMessageId:sourceId,stationCode:station,...(productCategoryCode===undefined?{}:{productCategoryCode}),sourceType:station === 'cashier' ? 'cashier' : 'kds',
         sourceReference:`${reference}:page${index+1}`,printSnapshot:ticketToJson(page),containsPriorityNote:page.note !== null || page.lines.some(l=>Boolean(l.note))}))
     }
     return jobs
@@ -1040,3 +1080,5 @@ function checkoutPointReturnLines(points?:CheckoutPointsView):PrintTicketLine[]{
 function checkoutPointLines(points?:CheckoutPointsView):PrintTicketLine[]{
   return points?[{name:`积分抵扣 ${points.used} 分（已扣除）`,quantity:1,totalAmountMinor:points.used*100},...checkoutPointReturnLines(points)]:[]
 }
+
+export class ActivityPrintHeldError extends Error {constructor(){super('活动出品已暂停，恢复后继续原制作票');this.name='ActivityPrintHeldError'}}

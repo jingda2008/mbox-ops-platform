@@ -1,3 +1,5 @@
+import {ActivityServiceRepository} from './activity-service-repository.js'
+import type {ActivityDoorCommand} from '../../src/shared/activity-service.js'
 import { createHash } from 'node:crypto'
 import type {
   AuditEvent,
@@ -30,6 +32,10 @@ export class ActivityOperationsService {
     private readonly commands: Pick<NormalizedCommandExecutor,'execute'>,
   ) {}
 
+  serviceView(context:ActivityOperationsStaffContext,publicId:string){return this.transactions.run(context.scope,tx=>new ActivityServiceRepository(tx).view(publicId),{readOnly:true})}
+  scanService(context:ActivityOperationsStaffContext,code:string){return this.transactions.run(context.scope,tx=>new ActivityServiceRepository(tx).scan(code),{readOnly:true})}
+  serviceCommand(context:ActivityOperationsStaffContext,publicId:string,command:ActivityDoorCommand,key:string){return this.commands.execute({scope:context.scope,operationScope:'activity.service.door',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,publicId,command}),resultCodec:objectCodec<import('../../src/shared/activity-service.js').ActivityServiceView>(),retainReceipt:true},async tx=>{const result=await new ActivityServiceRepository(tx).door(publicId,command,key,context.employeeId,context.businessDate);return {result,auditEvents:[audit(context,{action:`activity.service.${command.action}`,objectType:'community_activity_registration',objectId:publicId,afterData:{action:command.action,arrivedCount:command.arrivedCount??0}})],outboxMessages:[]}})}
+
   list(context: ActivityOperationsStaffContext) {
     return this.transactions.run(
       context.scope,
@@ -37,6 +43,8 @@ export class ActivityOperationsService {
       { readOnly: true },
     )
   }
+
+  productCatalog(context:ActivityOperationsStaffContext){return this.transactions.run(context.scope,tx=>new ActivityOperationsRepository(tx).productCatalog(),{readOnly:true})}
 
   componentCatalog(context: ActivityOperationsStaffContext) {
     return this.transactions.run(

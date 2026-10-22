@@ -139,9 +139,11 @@ type Overview = {
 export function OwnerFinancePanel({
   api,
   auth,
+  reportRange,
 }: {
   api: NormalizedApiClient;
   auth: StaffAuthView;
+  reportRange?: { start: string; end: string };
 }) {
   const { confirmAction } = useConfirmationDialog();
   function postCommand(endpoint: string, body: unknown, options: { idempotencyKey: string }) {
@@ -149,7 +151,8 @@ export function OwnerFinancePanel({
       (idempotencyKey) => api.postEndpoint(endpoint, body, { idempotencyKey }));
   }
   const [mode, setMode] = useState<Mode>(auth.permissions.some((p) => p.startsWith("commercial.cost.")) ? "dashboard" : "payroll");
-  const [overview, setOverview] = useState<Overview | null>(null);
+  const [loadedOverview, setOverview] = useState<Overview | null>(null);
+  const [overviewRange, setOverviewRange] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const costFormRef = useRef<HTMLFormElement>(null);
@@ -162,7 +165,9 @@ export function OwnerFinancePanel({
   const loadGeneration = useRef(0);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   const firstOfMonth = `${today.slice(0, 7)}-01`;
-  const [range, setRange] = useState({ start: firstOfMonth, end: today });
+  const [localRange, setRange] = useState({ start: firstOfMonth, end: today });
+  const range = reportRange ?? localRange;
+  const overview = overviewRange === `${range.start}:${range.end}` ? loadedOverview : null;
   const [cost, setCost] = useState({
     name: "",
     categoryId: "",
@@ -232,7 +237,7 @@ export function OwnerFinancePanel({
       const response = await api.getEndpoint<{ data: Overview }>(
         `/api/commercial-ops/owner-finance?startDate=${range.start}&endDate=${range.end}`,
       );
-      if (generation === loadGeneration.current) setOverview(response.data);
+      if (generation === loadGeneration.current) { setOverview(response.data); setOverviewRange(`${range.start}:${range.end}`); }
     } catch (error) {
       if (generation !== loadGeneration.current) return;
       setNotice((previous) => (afterWrite ? `${previous}；刷新失败，请刷新记录核对，勿重复新建。` : errorMessage(error, "经营费用暂时无法读取")));
@@ -375,7 +380,7 @@ export function OwnerFinancePanel({
         : "费用已记录并进入利润口径",
     );
     if (succeeded) {
-      if (cost.start > range.end || cost.end < range.start) setRange({ start: cost.start, end: cost.end });
+      if (!reportRange && (cost.start > range.end || cost.end < range.start)) setRange({ start: cost.start, end: cost.end });
       setMode("dashboard");
       setCorrectingCost(null);
       setCorrectionReason("");
@@ -715,10 +720,10 @@ export function OwnerFinancePanel({
         </button>}
       </nav>
       {mode === "dashboard" && <>
-          <div className="owner-finance-form">
+          {reportRange ? <p>费用记录范围随上方经营期间：{reportRange.start} 至 {reportRange.end}。这里是命中记录的原费用整笔金额，经营汇总另按归属期间分摊，不应直接相加。</p> : <div className="owner-finance-form">
             <label>记录开始日期<input type="date" value={range.start} onChange={(event) => setRange({ ...range, start: event.target.value })} /></label>
             <label>记录结束日期<input type="date" value={range.end} onChange={(event) => setRange({ ...range, end: event.target.value })} /></label>
-          </div>
+          </div>}
           {busy === "load" && <p role="status">正在读取费用记录…</p>}
           {overview && !overview.canViewCost && <p role="status">当前账号没有费用查看权限，请由管理员授权。</p>}
           {overview?.canViewCost && <FinanceSummary costs={overview.costs} />}

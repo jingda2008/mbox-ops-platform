@@ -243,7 +243,9 @@ try {
     threeScreenFixture,
     guestUrl: `/guest?table=W1#token=${tableQrToken}`,
     reservationUrl: '/reserve',
-    staffUrl: '/',
+    // Existing workflow scenarios explicitly request the workspace. Targetless
+    // '/' login routing is covered separately by normalized-staff-default-entry.
+    staffUrl: '/staff',
     dailyCredential,
     employeeCode: 'liyan',
     employeePin: '5210',

@@ -4,11 +4,13 @@ import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
 import { buildDailyReportLines, type DailyReportOptions } from './daily-report-format.js'
 import { readOperatingHistory } from './operating-history-query.js'
+import { ProfitQueryService, profitPeriodRange } from './profit-query-service.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { PRINT_TICKET_KINDS, type PrintPolicyKind } from '../../src/shared/print-ticket-policy.js'
 import { lockPrintTicketPolicy, readPrintTicketPolicies, writePrintTicketPolicy } from './print-ticket-policy-repository.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
+  NativeCommandNotCommittedError,
   IdempotencyConflictError,
   IdempotencyInProgressError,
   IdempotencyRecordError,
@@ -64,6 +66,41 @@ class HardwareAccessDeniedError extends Error {
 
 export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (app, options) => {
   await registerNativeHardware(app,options)
+  app.post('/hardware/operating-report', async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['commercial.profit.view'])
+    requireAny(context,['order.bill.print'])
+    const body=readObject(request.body??{})
+    const period=readEnum(body.period,['day','month','year']) as 'day'|'month'|'year'
+    const anchorDate=readString(body.anchorDate,'anchorDate',10,10)
+    let range:ReturnType<typeof profitPeriodRange>
+    try { range=profitPeriodRange(period,anchorDate) } catch { throw new HardwareRequestError('请选择有效经营期间') }
+    let operatorLabel=''
+    const execution=await options.commands.execute({
+      ...command(request,context,'operating.report.print',body,codec()),
+      transactionIsolation:'repeatable-read',
+      retainReceipt:true,
+    },async tx=>{
+      const report=await new ProfitQueryService(options.transactions).getProfitReportInTransaction(tx,period,anchorDate)
+      const requestId=randomUUID()
+      const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
+        eventType:'manual.operating-report.requested.v1',payload:{period,anchorDate,asOf:report.asOf,employeeId:context.employeeId}})
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOperatingReport(sourceId,operatorLabel,report)
+      if(!jobs.length)throw new HardwarePolicyError('收银打印路由不可用，请检查原打印设备；经营数据未改变')
+      return outcome(context,'manual.operating-report.queued.v1','manual_print_request',requestId,'打印经营汇总',
+        {requestId,period,anchorDate,asOf:report.asOf,jobIds:jobs.map(job=>job.id),status:'queued'})
+    },async tx=>{
+      // Replays also re-check current access; a stored receipt never grants authority.
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('commercial.profit.view')||!access.permissions.includes('order.bill.print'))throw new HardwareAccessDeniedError()
+      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
+      const policy=orderHistoryAccess(access.permissions,current)
+      if(range.startDate>current)throw new HardwareRequestError('不提供未来实际经营期间')
+      if(policy.earliestBusinessDate&&range.startDate<policy.earliestBusinessDate)throw new HardwarePolicyError('所选期间超出历史权限，请由有全历史权限的人员打印')
+      operatorLabel=access.displayName
+    })
+    return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
+  }))
   app.post('/operations/delivery-batches',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request),body=readObject(request.body)
     requireAny(context,['kds.deliver'])
@@ -249,6 +286,26 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         FROM mbox.print_jobs WHERE tenant_id=$1 AND store_id=$2 AND source_outbox_message_id=$3
         ORDER BY created_at,id
       `,[context.scope.tenantId,context.scope.storeId,source.id])).rows
+    },{readOnly:true})
+    return reply.send({data})
+  }))
+
+  app.get('/hardware/print-jobs/summary', async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveContext(request)
+    requireAny(context,['print.view','print.view_all','print.reprint','hardware.manage','printer.manage'])
+    const stations=printStationsFor(context)
+    const data=await options.transactions.run(context.scope,async tx=>{
+      const row=(await tx.query<{total:string;actionable:string;as_of:string}>(`
+        SELECT count(*)::text AS total,
+          count(*) FILTER(WHERE $4::boolean OR (job.status='failed' AND $5::boolean))::text AS actionable,
+          CURRENT_TIMESTAMP::text AS as_of
+        FROM mbox.print_jobs job JOIN mbox.devices device
+          ON (device.tenant_id,device.store_id,device.id)=(job.tenant_id,job.store_id,job.printer_device_id)
+        WHERE job.tenant_id=$1 AND job.store_id=$2 AND job.station_code=ANY($3::text[])
+          AND job.status IN ('failed','dead')`,[context.scope.tenantId,context.scope.storeId,stations,
+        hasAnyCapability(context,['print.reprint','printer.manage']),hasCapability(context,'print.retry')])).rows[0]!
+      const total=Number(row.total),action=Number(row.actionable)
+      return {total,action,waiting:total-action,asOf:row.as_of}
     },{readOnly:true})
     return reply.send({data})
   }))
@@ -644,7 +701,8 @@ class OrderStockReturnConflictError extends HardwareConflictError {}
 async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply>) {
   try {
     return await operation()
-  } catch (error) {
+  } catch (caught) {
+    const error=caught instanceof NativeCommandNotCommittedError?caught.original:caught
     if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
       return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
     }

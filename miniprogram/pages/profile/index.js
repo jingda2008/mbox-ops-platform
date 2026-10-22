@@ -25,7 +25,7 @@ const {
   logoutWechatIdentity,
 } = require('../../utils/api')
 const { restartAnonymousCustomerSession } = require('../../utils/auth')
-const { consumeMembershipLoginRedirect } = require('../../utils/membership-gate')
+const { consumeMembershipLoginRedirect, consumeMembershipLoginDestination } = require('../../utils/membership-gate')
 const { getTableConnection } = require('../../utils/session')
 const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
@@ -312,7 +312,10 @@ Page({
     const loading = this.load()
     const generation = this._memberLoadGeneration
     loading.then(() => {
-      if (!this._pageHidden && generation === this._memberLoadGeneration && shouldOpenLogin && !this.data.membership) this.openLoginSheet()
+      if (!this._pageHidden && generation === this._memberLoadGeneration && shouldOpenLogin) {
+        if (!this.data.membership) this.openLoginSheet()
+        else this.continuePendingMembershipAction()
+      }
     })
   },
 
@@ -504,6 +507,7 @@ Page({
   },
 
   closeLoginSheet() {
+    if (typeof consumeMembershipLoginDestination === 'function') consumeMembershipLoginDestination()
     this.pendingMembershipAction = ''
     this.setData({ loginSheetVisible: false, recoveryMessage: '' })
   },
@@ -512,6 +516,8 @@ Page({
     const action = this.pendingMembershipAction || ''
     this.pendingMembershipAction = ''
     if (!this.data.membership) return
+    const cardDestination = typeof consumeMembershipLoginDestination === 'function' ? consumeMembershipLoginDestination() : null
+    if (!action && cardDestination) { wx.navigateTo({ url: cardDestination }); return }
     const destinations = {
       'member-center': ['/pages/member-center/index', 'navigateTo'],
       reservations: ['/pages/reservations/index', 'switchTab'],
@@ -1055,6 +1061,7 @@ Page({
     if (!this.requireMembership()) return
     const activityId = String(event.currentTarget.dataset.id || '').trim()
     if (!activityId) return
-    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}` })
+    const registrationId = String(event.currentTarget.dataset.registrationId || '').trim()
+    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}${registrationId ? '&registrationId=' + encodeURIComponent(registrationId) : ''}` })
   },
 })

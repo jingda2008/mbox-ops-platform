@@ -1,3 +1,4 @@
+import { parseProductServiceWindow, type ProductServiceWindow } from '../../src/shared/product-service-window.js'
 import type { JsonObject, JsonValue } from './command-executor.js'
 
 const CHANNELS = ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'] as const
@@ -9,6 +10,7 @@ const DWELLS = ['one_set', 'stay_longer', 'no_rush'] as const
 export interface ProductOperationalFields {
   displaySnapshot: JsonObject
   guestVisible: boolean
+  serviceWindow?: ProductServiceWindow | null
   searchText: string
   recommendationEnabled: boolean
   recommendationMinGuests: number
@@ -69,6 +71,7 @@ export function extractProductOperationalFields(
     menuSortOrder: integerValue(snapshot.sortOrder ?? source.sortOrder, 0, 100_000, 999, 'sortOrder'),
     availableFrom,
     availableUntil,
+    serviceWindow: parseProductServiceWindow(snapshot.serviceWindow),
     allowedChannels: enumArray(snapshot.allowedChannels ?? source.allowedChannels, CHANNELS, 'allowedChannels', [...CHANNELS]),
     maxOrderQuantity: integerValue(snapshot.maxOrderQuantity ?? source.maxOrderQuantity, 1, 9_999, 50, 'maxOrderQuantity'),
     kdsPriority: integerValue(snapshot.kdsPriority ?? source.kdsPriority, 0, 1_000, 100, 'kdsPriority'),
@@ -118,7 +121,7 @@ export function hydrateProductSnapshot(
 function stripOperationalFields(snapshot: Readonly<JsonObject>): JsonObject {
   const {
     guestVisible: _guestVisible, searchText: _searchText, costAmount: _costAmount,
-    sortOrder: _sortOrder, availableFrom: _availableFrom, availableUntil: _availableUntil,
+    sortOrder: _sortOrder, availableFrom: _availableFrom, availableUntil: _availableUntil, serviceWindow: _serviceWindow,
     allowedChannels: _allowedChannels, maxOrderQuantity: _maxOrderQuantity,
     kdsPriority: _kdsPriority, fulfillmentSlaSeconds: _fulfillmentSlaSeconds,
     orderWindows: _orderWindows, recommendation: rawRecommendation, source: rawSource, ...rest

@@ -34,6 +34,45 @@ describe('ActivityPaymentService', () => {
     }
   })
 
+  it('pairs the authoritative refund identifier with its status for exact client intent recovery', async () => {
+    const service = serviceFor({ ...paymentRow(), refund_status: 'rejected', refund_public_id: 'exact-refund', refund_decision_reason: '原行程仍可继续' })
+    await expect(service.get(publicContext(), registrationPublicId)).resolves.toMatchObject({ refundPublicId: 'exact-refund', refundStatus: 'rejected', refundRejectionReason: '原行程仍可继续' })
+    await expect(serviceFor(paymentRow()).get(publicContext(), registrationPublicId)).resolves.toMatchObject({ refundPublicId: null, refundStatus: null, refundRejectionReason: null })
+    await expect(serviceFor({ ...paymentRow(), refund_status: 'approved', refund_decision_reason: '仅供员工审核' }).get(publicContext(), registrationPublicId)).resolves.toMatchObject({ refundRejectionReason: null })
+  })
+
+  it('projects full-refund eligibility from every authoritative guard without changing payment actions', async () => {
+    const paid = { ...paymentRow(), service_version: 3, registration_status: 'confirmed', payment_status: 'paid', authoritative_payment_status: 'succeeded' }
+    const cases = [
+      [{}, null],
+      [{ service_version: 1 }, 'legacy_registration'],
+      [{ payment_id: null }, 'payment_not_refundable'],
+      [{ payment_status: 'pending' }, 'payment_not_refundable'],
+      [{ authoritative_payment_status: 'partially_refunded' }, 'payment_not_refundable'],
+      [{ registration_status: 'cancelled' }, 'registration_not_active'],
+      [{ refund_rights_used: true }, 'rights_used'],
+      [{ refund_active_addons: true }, 'active_addons'],
+      [{ refund_amount_reserved: true }, 'refund_in_progress'],
+      [{ refund_compensation_reserved: true }, 'compensation_review_required'],
+      [{ refund_status: 'rejected', refund_decision_reason: '允许重新申请' }, null],
+      [{ payment_status: 'refunded', authoritative_payment_status: 'refunded', service_refund_disposition: 'retain_fulfillment' }, 'compensation_review_required'],
+    ] as const
+    for (const [overrides, reason] of cases) {
+      const state = await serviceFor({ ...paid, ...overrides }).get(publicContext(), registrationPublicId)
+      expect(state).toMatchObject({ canRequestFullRefund: reason === null, refundRequestBlockReason: reason })
+    }
+    expect(await serviceFor({ ...paid, service_refund_disposition: 'stop_unstarted' }).get(publicContext(), registrationPublicId))
+      .toMatchObject({ canRequestFullRefund: false, serviceRefundDisposition: 'stop_unstarted' })
+  })
+
+  it('returns the current registration status when a payment-only refresh completes a whole refund', async () => {
+    const row = { ...paymentRow(), service_version: 3, registration_status: 'refunded', payment_status: 'refunded', authoritative_payment_status: 'refunded', refund_status: 'succeeded' }
+    expect(await serviceFor(row).get(publicContext(), registrationPublicId))
+      .toMatchObject({ registrationStatus: 'refunded', resolutionState: 'refunded', canRequestFullRefund: false })
+    expect(await serviceFor({ ...row, registration_status: 'confirmed', service_refund_disposition: 'retain_fulfillment' }).get(publicContext(), registrationPublicId))
+      .toMatchObject({ registrationStatus: 'confirmed', serviceRefundDisposition: 'retain_fulfillment', canRequestFullRefund: false })
+  })
+
   it('whitelists WeChat payment parameters and forwards the action idempotency key', async () => {
     let calls = 0
     const rows = () => ({ ...paymentRow(), provider_action_state: calls++ === 0 ? null : 'ready' })
@@ -272,5 +311,8 @@ function paymentRow(): Record<string, unknown> {
     payment_id: paymentId, payment_public_id: 'activity-payment-service-test',
     payment_method: 'jsapi',
     authoritative_payment_status: 'pending', provider_action_state: null, refund_status: null,
+    service_version: 1, service_refund_disposition: null, refund_decision_reason: null,
+    refund_rights_used: false, refund_active_addons: false,
+    refund_amount_reserved: false, refund_compensation_reserved: false,
   }
 }

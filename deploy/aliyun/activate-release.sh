@@ -6,6 +6,8 @@ deployment_tier=${2:?deployment tier is required}
 public_url=${3:?public URL is required}
 backup_max_age_minutes=${4:?backup age is required}
 reconcile_previous_runtime=${5:-0}
+activation_attempt=${6:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}
+[[ "${activation_attempt}" =~ ^[0-9a-f]{32}$ ]]
 [[ "${reconcile_previous_runtime}" =~ ^[01]$ ]]
 
 install_root=/opt/mbox
@@ -538,6 +540,7 @@ if [ "${current_migration_digest}" != "${migration_digest}" ]; then
   migration_changed=1
 fi
 contract_migration=0
+contract_boundary=0
 candidate="mbox-candidate-${short_sha}"
 candidate_volume="mbox-data-${short_sha}-candidate"
 maintenance_container="mbox-maintenance-${short_sha}"
@@ -783,18 +786,18 @@ restore_contract_database_and_previous_app() {
 
   if [ -f "${release_dir}/.contract-write-resumed" ]; then
     current_state=$(jq -r '.current // "unknown"' "${state_file}" 2>/dev/null)
-    if [ -f "${release_dir}/.cutover-started" ] \
-      && [ "${current_state}" = cutover_started ]; then
-      docker exec "${caddy_container}" caddy reload \
-        --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1
-      if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
-        docker update --restart=no "${active_container}" >/dev/null 2>&1
-        docker stop -t 20 "${active_container}" >/dev/null 2>&1
-      fi
-    elif docker inspect "${candidate}" >/dev/null 2>&1; then
+    # Writes may have resumed before routing, or the candidate may already have
+    # been renamed after cutover_verified. Hold both identity-bound locations;
+    # never infer that only the transient cutover_started state needs draining.
+    docker exec "${caddy_container}" caddy reload \
+      --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1
+    if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
+      docker update --restart=no "${active_container}" >/dev/null 2>&1
+      docker stop -t 20 "${active_container}" >/dev/null 2>&1
+    fi
+    if [ "$(docker inspect "${candidate}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
       docker update --restart=no "${candidate}" >/dev/null 2>&1
       docker stop -t 20 "${candidate}" >/dev/null 2>&1
-      docker rm "${candidate}" >/dev/null 2>&1
     fi
     emit_release_audit rollback_failed error contract-cutover-forward-recovery-required
     write_release_failure "${exit_code}" forward-recovery-required
@@ -929,6 +932,75 @@ verify_previous_runtime_database_identity() {
       '. + {containerId:$containerId,releaseSha:$releaseSha,imageDigest:$imageDigest,environmentSha:$environmentSha}'
 }
 
+archive_release_evidence() {
+  local evidence_directory=$1
+  local object_prefix=$2
+  local verification_report=$3
+  local relay_marker=$4
+  local expected_count=0
+  local relay_verification_report="${verification_report}.${activation_attempt}"
+  local expected_sha relative_path expected_key expected_bytes ledger_sha ledger_key ledger_bytes
+
+  if [ "${external_evidence_relay}" = 0 ]; then
+    MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
+      "${uploader}" "${evidence_directory}" "${object_prefix}"
+    return
+  fi
+
+  # This runs under the release lock. Keep a failed attempt's marker for audit,
+  # and use an attempt-specific receipt so a late prior uploader cannot satisfy
+  # or overwrite this attempt's wait.
+  if [ -f "${relay_marker}" ]; then
+    cp -p "${relay_marker}" "${relay_marker}.previous-${activation_attempt}"
+  fi
+  rm -f "${relay_verification_report}"
+  jq -n --arg releaseSha "${release_sha}" --arg prefix "${object_prefix}" \
+    --arg activationAttempt "${activation_attempt}" \
+    --arg evidenceDirectory "${evidence_directory}" --arg report "${relay_verification_report}" \
+    '{schemaVersion:1,releaseSha:$releaseSha,activationAttempt:$activationAttempt,prefix:$prefix,evidenceDirectory:$evidenceDirectory,report:$report}' \
+    > "${relay_marker}.next"
+  chmod 0600 "${relay_marker}.next"
+  mv "${relay_marker}.next" "${relay_marker}"
+
+  for _ in $(seq 1 "${evidence_relay_wait_seconds}"); do
+    [ -f "${relay_verification_report}" ] && break
+    sleep 1
+  done
+  test -f "${relay_verification_report}"
+  jq -e --arg prefix "${object_prefix}" \
+    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix
+      and .completionMarker == ($prefix + "/_COMPLETE.json")
+      and .objectsManifest == ($prefix + "/_OBJECTS.json")
+      and (.objectsManifestSha256 | type == "string" and test("^[0-9a-f]{64}$"))' \
+    "${relay_verification_report}" >/dev/null
+
+  ledger_key="${object_prefix}/SHA256SUMS"
+  ledger_sha=$(sha256sum "${evidence_directory}/SHA256SUMS" | awk '{print $1}')
+  ledger_bytes=$(stat -c '%s' "${evidence_directory}/SHA256SUMS")
+  jq -e --arg key "${ledger_key}" --arg sha "${ledger_sha}" \
+    --argjson bytes "${ledger_bytes}" \
+    'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+    "${relay_verification_report}" >/dev/null
+  expected_count=$((expected_count + 1))
+
+  while read -r expected_sha relative_path; do
+    relative_path=${relative_path#\*}
+    relative_path=${relative_path#./}
+    test -n "${relative_path}"
+    expected_key="${object_prefix}/${relative_path}"
+    expected_bytes=$(stat -c '%s' "${evidence_directory}/${relative_path}")
+    jq -e --arg key "${expected_key}" --arg sha "${expected_sha}" \
+      --argjson bytes "${expected_bytes}" \
+      'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+      "${relay_verification_report}" >/dev/null
+    expected_count=$((expected_count + 1))
+  done < "${evidence_directory}/SHA256SUMS"
+  test "$(jq '.objects | length' "${relay_verification_report}")" = "${expected_count}"
+  mv -f "${relay_verification_report}" "${verification_report}"
+  rm -f "${relay_marker}"
+}
+
+
 release_state_require "${state_file}" external_preflight_passed
 if ! verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-preflight.json"; then
   echo "release blocked: prepare and validate a restricted rollback baseline; existing application is unchanged" >&2
@@ -942,7 +1014,15 @@ previous_schema_version=$(reconcile_previous_runtime_schema \
   "${previous_manifest_schema_version}" "${previous_ready_file}" \
   "${release_dir}/migration-preflight.json")
 rm -f "${previous_ready_file}"
-if [ "${previous_schema_version}" -lt 96 ] && [ "${expected_schema_version}" -ge 96 ]; then
+# The image's frozen contract, not a newer DB version exposed by that image,
+# decides compatibility. An already migrated DB behind an incompatible old
+# image requires the existing planned-maintenance forward-recovery procedure.
+if [ "$(release_contract_boundary_between "${previous_manifest_schema_version}" "${previous_schema_version}")" != 0 ]; then
+  echo "release blocked: active image predates a live application contract; use planned-maintenance forward recovery, never treat it as a rollback baseline" >&2
+  exit 2
+fi
+contract_boundary=$(release_contract_boundary_between "${previous_manifest_schema_version}" "${expected_schema_version}")
+if [ "${contract_boundary}" != 0 ]; then
   contract_migration=1
 fi
 candidate_database_identity=$(jq -er \
@@ -984,7 +1064,7 @@ if [ "${contract_migration}" = 1 ]; then
   docker run -d --name "${maintenance_container}" --restart=no --network "${network}" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,size=8m --security-opt no-new-privileges \
     --cap-drop ALL "${image_tag}" node -e \
-    'require("node:http").createServer((_,response)=>{response.writeHead(503,{"content-type":"application/json","cache-control":"no-store"});response.end(JSON.stringify({status:"maintenance",reason:"table_location_contract_cutover"}))}).listen(8787,"0.0.0.0")' \
+    'require("node:http").createServer((_,response)=>{response.writeHead(503,{"content-type":"application/json","cache-control":"no-store"});response.end(JSON.stringify({status:"maintenance",reason:"schema_contract_cutover"}))}).listen(8787,"0.0.0.0")' \
     >/dev/null
   maintenance_ip=$(docker inspect "${maintenance_container}" \
     --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
@@ -1000,7 +1080,7 @@ if [ "${contract_migration}" = 1 ]; then
     --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null
   maintenance_response="${release_dir}/maintenance-response.json"
   fetch_public_ready_response 503 "${maintenance_response}" 12
-  jq -e '.status=="maintenance" and .reason=="table_location_contract_cutover"' \
+  jq -e '.status=="maintenance" and .reason=="schema_contract_cutover"' \
     "${maintenance_response}" >/dev/null
   docker update --restart=no "${active_container}" >/dev/null
   docker stop -t 30 "${active_container}" >/dev/null
@@ -1112,8 +1192,16 @@ else
     fi
     sha256sum --check SHA256SUMS >/dev/null
   )
-  MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
-    "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+  backup_prefix="mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+  if [ "${contract_migration}" = 1 ]; then
+    # This is the frozen, post-drain backup. A pre-activation relay receipt must
+    # never authorize it; use a separate prefix and this exact stage's hashes.
+    backup_prefix="${backup_prefix}/post-drain/${activation_attempt}"
+  fi
+  archive_release_evidence \
+    "${backup_stage}" "${backup_prefix}" \
+    "${release_dir}/oss-backup-verification.json" \
+    "${release_dir}/.contract-backup-evidence-relay-ready.json"
 fi
 if [ "${contract_migration}" = 1 ]; then
   release_state_transition "${state_file}" writer_drained post_drain_backup_verified
@@ -1182,7 +1270,7 @@ rollback_on_error() {
     "${previous_manifest_schema_version}" "${candidate}" "${active_container}"; then
     emit_release_audit rollback_failed error print-policy-compatibility-blocked
     write_release_failure "${exit_code}" print-policy-compatibility-blocked-writers-stopped
-    echo "automatic rollback blocked; writers stopped; use a compatible forward release; evidence=${release_dir}/print-policy-rollback-guard.json" >&2
+    echo "automatic rollback blocked; writers stopped; use a compatible forward release; inspect ${release_dir}/application-contract-rollback-guard.json and print-policy-rollback-guard.json" >&2
     exit "${exit_code}"
   fi
 
@@ -1442,6 +1530,7 @@ jq -n \
   --argjson previousSchemaVersion "${previous_schema_version}" \
   --argjson targetSchemaVersion "${expected_schema_version}" \
   --argjson contractMigration "${contract_migration}" \
+  --argjson contractBoundary "${contract_boundary}" \
   --arg workerAdapterModule "${worker_adapter_module}" \
   --arg workerAdapterSource "${worker_adapter_source}" \
   --arg workerAdapterSha256 "${worker_adapter_sha}" \
@@ -1470,6 +1559,7 @@ jq -n \
     previousRuntimeSchemaVersion: $previousRuntimeSchemaVersion,
     previousSchemaVersion: $previousSchemaVersion,
     targetSchemaVersion: $targetSchemaVersion,
+    contractBoundary: (if $contractBoundary == 0 then null else $contractBoundary end),
     rollbackMode: (if $contractMigration == 1
       then "forward_only_after_contract_cutover" else "application_image" end),
     previousIdentityComplete: ($previousIdentityComplete == 1),
@@ -1503,61 +1593,6 @@ cp "${state_file}" "${deployment_evidence}/release-state-before-evidence.json"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
   sha256sum --check SHA256SUMS >/dev/null
 )
-archive_release_evidence() {
-  local evidence_directory=$1
-  local object_prefix=$2
-  local verification_report=$3
-  local relay_marker=$4
-  local expected_count=0
-  local expected_sha relative_path expected_key expected_bytes ledger_sha ledger_key ledger_bytes
-
-  if [ "${external_evidence_relay}" = 0 ]; then
-    MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
-      "${uploader}" "${evidence_directory}" "${object_prefix}"
-    return
-  fi
-
-  rm -f "${verification_report}" "${relay_marker}"
-  jq -n --arg releaseSha "${release_sha}" --arg prefix "${object_prefix}" \
-    --arg evidenceDirectory "${evidence_directory}" --arg report "${verification_report}" \
-    '{schemaVersion:1,releaseSha:$releaseSha,prefix:$prefix,evidenceDirectory:$evidenceDirectory,report:$report}' \
-    > "${relay_marker}.next"
-  chmod 0600 "${relay_marker}.next"
-  mv "${relay_marker}.next" "${relay_marker}"
-
-  for _ in $(seq 1 "${evidence_relay_wait_seconds}"); do
-    [ -f "${verification_report}" ] && break
-    sleep 1
-  done
-  test -f "${verification_report}"
-  jq -e --arg prefix "${object_prefix}" \
-    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
-    "${verification_report}" >/dev/null
-
-  ledger_key="${object_prefix}/SHA256SUMS"
-  ledger_sha=$(sha256sum "${evidence_directory}/SHA256SUMS" | awk '{print $1}')
-  ledger_bytes=$(stat -c '%s' "${evidence_directory}/SHA256SUMS")
-  jq -e --arg key "${ledger_key}" --arg sha "${ledger_sha}" \
-    --argjson bytes "${ledger_bytes}" \
-    'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
-    "${verification_report}" >/dev/null
-  expected_count=$((expected_count + 1))
-
-  while read -r expected_sha relative_path; do
-    relative_path=${relative_path#\*}
-    relative_path=${relative_path#./}
-    test -n "${relative_path}"
-    expected_key="${object_prefix}/${relative_path}"
-    expected_bytes=$(stat -c '%s' "${evidence_directory}/${relative_path}")
-    jq -e --arg key "${expected_key}" --arg sha "${expected_sha}" \
-      --argjson bytes "${expected_bytes}" \
-      'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
-      "${verification_report}" >/dev/null
-    expected_count=$((expected_count + 1))
-  done < "${evidence_directory}/SHA256SUMS"
-  test "$(jq '.objects | length' "${verification_report}")" = "${expected_count}"
-  rm -f "${relay_marker}"
-}
 
 archive_release_evidence \
   "${deployment_evidence}" \

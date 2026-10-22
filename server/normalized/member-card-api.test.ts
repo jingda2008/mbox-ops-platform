@@ -82,4 +82,19 @@ describe('member card HTTP security and command contracts', () => {
     const response = await app.inject({ method: 'POST', url: '/staff/member-cards/holdings/card-id/state', headers, payload: { action: 'withdraw', reason: '伪造客户退出' } })
     expect(response.statusCode).toBe(400); expect(execute).not.toHaveBeenCalled()
   })
+  it('creates a simple long-term interest card from its name and supports atomic save-and-open',async()=>{
+    const create=vi.spyOn(MemberCardRepository.prototype,'createProject').mockResolvedValue({projectId:'new-card',status:'open'})
+    const {app}=setup()
+    const response=await app.inject({method:'POST',url:'/staff/member-cards/projects',headers,payload:{name:'音乐同好卡',kind:'interest',openImmediately:true}})
+    expect(response.statusCode,response.body).toBe(200)
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({flowMode:'simple',openImmediately:true,availableUntil:null,requireSocialConfiguration:false,terms:'',cooperationConfirmed:false}))
+  })
+  it('normal approval supplies its audit reason without requiring typed remarks; rejection still needs a reason',async()=>{
+    const review=vi.spyOn(MemberCardRepository.prototype,'review').mockResolvedValue({applicationId:'apply',status:'approved',cardId:'card',replayed:false})
+    const {app}=setup()
+    expect((await app.inject({method:'POST',url:'/staff/member-cards/applications/apply/review',headers,payload:{decision:'approve'}})).statusCode).toBe(200)
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({reason:'',decision:'approve'}))
+    expect((await app.inject({method:'POST',url:'/staff/member-cards/applications/apply/review',headers,payload:{decision:'reject'}})).statusCode).toBe(400)
+  })
+
 })

@@ -86,7 +86,7 @@ for (const viewportWidth of [320, 360]) test(`staff previews stacking and calend
     try {
       const reviewer = await context.newPage()
       const origin = new URL(page.url()).origin
-      await reviewer.goto(origin)
+      await reviewer.goto(new URL(fixture.staffUrl, origin).toString())
       await reviewer.getByLabel('门店口令').fill(fixture.dailyCredential)
       await reviewer.getByRole('button', { name: /验证设备/ }).click()
       await reviewer.getByLabel('员工账号').fill(employeeCode!)

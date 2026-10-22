@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
+import { readCashierTodoSummary } from './cashier-todo-summary.js'
+import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { parseAmountSearchMinor, PostgresCashierWorkbenchQuery } from './cashier-workbench-query.js'
 import {
@@ -762,6 +764,40 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       [integrationOrderId, integrationCarryoverOrderId].toSorted(),
     )
   })
+
+  it('filters activity work on the server before pagination', async () => {
+    const input = { scope: { tenantId: integrationTenantId, storeId: integrationStoreId },
+      employeeId: integrationApproverId, businessDate: '2026-08-13', capabilities: ['community.activity.cashier'], limit: 1 }
+    expect((await query.get({ ...input, activityFilter: 'unpaid' })).activityRegistrations?.map(row => row.id)).toEqual([integrationActivityRegistrationId])
+    expect((await query.get({ ...input, activityFilter: 'requested' })).activityRegistrations).toEqual([])
+    expect((await query.get({ ...input, activityFilter: 'processing' })).activityRegistrations).toEqual([])
+  })
+  it('counts the full refund queue through restricted runtime access while preserving table and activity scope', async () => {
+    const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
+    expect(runtimeUrl, 'This security regression requires a restricted runtime login').toBeTruthy()
+    const runtime = new Pool({ connectionString: runtimeUrl, max: 2 })
+    try {
+      await assertRuntimeDatabasePool(runtime, runtimeUrl!)
+      const runner = new ScopedPostgresTransactionRunner(runtime)
+      const scope = { tenantId: integrationTenantId, storeId: integrationStoreId }
+      const read = (employee: string, capabilities: string[]) => runner.run(scope, tx => readCashierTodoSummary(tx, employee, capabilities), { readOnly: true })
+      await pool.query(`INSERT INTO mbox.refunds(tenant_id,store_id,payment_id,order_id,public_id,amount_minor,currency,status,reason,requested_by_employee_id)
+        SELECT $1,$2,$3,$4,'todo-'||$6::text||'-'||n,1,'CNY','requested','pagination fixture',$5 FROM generate_series(1,105) n`,
+        [integrationTenantId,integrationStoreId,integrationPaymentId,integrationOrderId,integrationEmployeeId,suffix])
+      const manager = await read(integrationApproverId, ['refund.approve','community.activity.cashier'])
+      expect(manager.refunds.action).toBe(105)
+      expect(manager.refunds.total).toBeGreaterThan(105)
+      expect(manager.activities).toMatchObject({ pendingPayment: 1, requestedRefund: 0, processingRefund: 0 })
+      const requester = await read(integrationEmployeeId, ['refund.request'])
+      expect(requester.refunds.total).toBe(106)
+      expect(requester.refunds.action).toBe(0)
+      expect(requester.activities.pendingPayment).toBe(0)
+      const unassigned = await read(integrationApproverId, ['refund.request'])
+      expect(unassigned.refunds.total).toBe(0)
+      expect((await runner.run({ tenantId: randomUUID(), storeId: randomUUID() }, tx => readCashierTodoSummary(tx, integrationApproverId, ['refund.approve']))).refunds.total).toBe(0)
+    } finally { await runtime.end() }
+  })
+
 })
 
 class QueryRunner {

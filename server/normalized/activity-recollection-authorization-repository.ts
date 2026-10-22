@@ -27,6 +27,7 @@ export class ActivityRecollectionAuthorizationConflictError extends Error {
 }
 
 interface RefundableRegistrationRow extends Record<string, unknown> {
+  service_version: number
   id: string
   currency: string
   payment_id: string | null
@@ -65,6 +66,7 @@ export class ActivityRecollectionAuthorizationRepository {
     const reason = requireReason(input.reason)
     const ttlMinutes = boundedTtl(input.ttlMinutes ?? 30)
     const source = await this.lockRefundedRegistration(input.activityRegistrationPublicId)
+    if (source.service_version === 3) throw new ActivityRecollectionAuthorizationConflictError('新版套餐退款后请新购一份，不能重新收取旧报名；补偿退款保留原履约')
     if (source.refund_id === null || source.refund_status !== 'succeeded'
       || source.refund_amount_minor === null || source.refund_amount_minor <= 0) {
       throw new ActivityRecollectionAuthorizationConflictError('当前活动报名没有可授权的退款后重新收款金额')
@@ -147,10 +149,10 @@ export class ActivityRecollectionAuthorizationRepository {
   }
 
   private async lockRefundedRegistration(activityRegistrationPublicId: string): Promise<{
-    id: string; currency: string; refund_id: string | null; refund_amount_minor: number | null; refund_status: string | null
+    id: string; service_version: number; currency: string; refund_id: string | null; refund_amount_minor: number | null; refund_status: string | null
   }> {
     const result = await this.transaction.query<RefundableRegistrationRow>(`
-      SELECT registration.id,registration.currency,registration.payment_id,
+      SELECT registration.id,registration.service_version,registration.currency,registration.payment_id,
         refund.id AS refund_id,refund.amount_minor AS refund_amount_minor,refund.status AS refund_status
       FROM mbox.community_activity_registrations registration
       LEFT JOIN mbox.refunds refund
@@ -164,7 +166,7 @@ export class ActivityRecollectionAuthorizationRepository {
     const row = result.rows[0]
     if (row === undefined) throw new ActivityRecollectionAuthorizationConflictError('当前活动报名不是已完成退款状态')
     return {
-      id: row.id,
+      id: row.id, service_version: row.service_version,
       currency: row.currency,
       refund_id: row.refund_id,
       refund_amount_minor: row.refund_amount_minor === null ? null : minor(row.refund_amount_minor),

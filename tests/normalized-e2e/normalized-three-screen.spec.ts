@@ -9,7 +9,7 @@ test.use({viewport:{width:1024,height:600},isMobile:false,hasTouch:true})
 test.setTimeout(300_000)
 const fixture=async()=>JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
 async function login(page:Page,code:string){
-  const f=await fixture();await page.goto('/')
+  const f=await fixture();await page.goto(f.staffUrl)
   await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill(code);await page.getByLabel('四位 PIN').fill(f.employeePin)
   await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()

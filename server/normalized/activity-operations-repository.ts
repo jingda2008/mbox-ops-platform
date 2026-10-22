@@ -1,3 +1,5 @@
+import type {ActivityPackageChoiceGroup} from '../../src/shared/activity-service.js'
+import {assertActivityUnusedRefund} from './activity-service-repository.js'
 import { createHash } from 'node:crypto'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -30,6 +32,7 @@ export interface ActivityOperationsSummary {
 }
 
 export interface ActivityOperationsActivity extends ActivityOperationsSummary {
+  mealServiceStartsAt?:string|null;mealServiceEndsAt?:string|null;addonEndsAt?:string|null;addonProductIds?:string[]
   kind: ActivityKind
   summary: string
   coverUrl: string | null
@@ -60,6 +63,7 @@ export interface ActivityOperationsActivity extends ActivityOperationsSummary {
 }
 
 export interface ActivityOperationsPackage {
+  maxParticipants?:number|null;hasMeal?:boolean;choiceGroups?:ActivityPackageChoiceGroup[];includesAdmission?:boolean;mealOnlyFeeAmountMinor?:number|null;products?:Array<{productId:string;quantity:number}>
   publicId: string
   name: string
   description: string
@@ -93,6 +97,7 @@ export interface ActivityPackageComponentCatalogItem {
 }
 
 export interface ActivityOperationsRegistration {
+  serviceVersion?: number
   publicId: string
   customerPublicId: string
   customerLabel: string
@@ -125,7 +130,7 @@ export interface ActivityOperationsRegistration {
     publicId: string
     status: string
     amountMinor: number
-    requestedByEmployeeId: string
+    requestedByEmployeeId: string | null
     approvedByEmployeeId: string | null
     createdAt: string
     updatedAt: string
@@ -144,6 +149,7 @@ export interface ActivityWaitlistRetry {
 }
 
 export interface ActivityDraftInput {
+  mealServiceStartsAt?:string|null;mealServiceEndsAt?:string|null;addonEndsAt?:string|null;addonProductIds?:readonly string[]
   kind: ActivityKind
   title: string
   summary: string
@@ -177,6 +183,7 @@ export interface ActivityDraftInput {
 }
 
 export interface ActivityPackageDraftInput {
+  maxParticipants?:number|null;hasMeal?:boolean;choiceGroups?:ActivityPackageChoiceGroup[];includesAdmission?:boolean;mealOnlyFeeAmountMinor?:number|null;products?:readonly {productId:string;quantity:number}[]
   name: string
   description: string
   imageUrl: string | null
@@ -220,6 +227,7 @@ interface ActivitySummaryRow extends Record<string, unknown> {
 }
 
 interface ActivityDetailRow extends ActivitySummaryRow {
+  meal_service_starts_at?:string|null;meal_service_ends_at?:string|null;addon_ends_at?:string|null;addon_product_ids?:string[]
   activity_kind: ActivityKind
   summary: string
   cover_url: string | null
@@ -249,6 +257,7 @@ interface ActivityDetailRow extends ActivitySummaryRow {
 }
 
 interface PackageRow extends Record<string, unknown> {
+  max_participants?:number|null;has_meal?:boolean;choice_groups?:ActivityPackageChoiceGroup[];includes_admission?:boolean;meal_only_fee_amount_minor?:string|number|null;products?:Array<{productId:string;quantity:number}>
   public_id: string
   name: string
   description: string
@@ -279,6 +288,7 @@ interface ActivityPackageComponentCatalogRow extends Record<string, unknown> {
 }
 
 interface RegistrationRow extends Record<string, unknown> {
+  service_version: number
   public_id: string
   customer_public_id: string
   customer_label: string
@@ -413,6 +423,7 @@ export class ActivityOperationsRepository {
     const row = result.rows[0]
     if (!row) throw new ActivityOperationsError('活动草稿未能建立', 'ACTIVITY_DRAFT_CREATE_FAILED', 503)
     await this.replaceDraftPackages(publicId, input.packages)
+    await this.configureServiceWindows(publicId,input)
     return (await this.detail(publicId,{limit:0})).activity
   }
 
@@ -452,7 +463,7 @@ export class ActivityOperationsRepository {
     const activityRow = activityResult.rows[0]
     if (!activityRow) throw new ActivityOperationsError('活动不存在或不属于当前门店', 'ACTIVITY_OPERATION_NOT_FOUND', 404)
     const registrations = await this.transaction.query<RegistrationRow>(`
-      SELECT registration.public_id, customer.public_id AS customer_public_id,
+      SELECT registration.public_id, registration.service_version, customer.public_id AS customer_public_id,
         COALESCE(NULLIF(btrim(profile.display_name),''),
           CASE WHEN membership.member_no IS NULL THEN '顾客 '||right(customer.public_id,6)
             ELSE '会员 '||right(membership.member_no,6) END) AS customer_label,
@@ -602,6 +613,7 @@ export class ActivityOperationsRepository {
     const row = result.rows[0]
     if (row) {
       await this.replaceDraftPackages(publicId, input.packages)
+    await this.configureServiceWindows(publicId,input)
       return (await this.detail(publicId,{limit:0})).activity
     }
     const existing = await this.transaction.query<{ status: ActivityStatus }>(`
@@ -655,8 +667,8 @@ export class ActivityOperationsRepository {
 
   async closeActivity(publicId: string, status: 'cancelled' | 'completed'): Promise<ActivityOperationsActivity> {
     const scope = this.transaction.scope
-    const locked = await this.transaction.query<{ id: string; status: ActivityStatus; started: boolean }>(`
-      SELECT id,status,starts_at<=clock_timestamp() AS started FROM mbox.community_activities
+    const locked = await this.transaction.query<{ id: string; status: ActivityStatus; started: boolean; ended:boolean }>(`
+      SELECT id,status,starts_at<=clock_timestamp() AS started,ends_at<=clock_timestamp() AS ended FROM mbox.community_activities
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3 FOR UPDATE
     `, [scope.tenantId, scope.storeId, publicId])
     const activity = locked.rows[0]
@@ -667,7 +679,9 @@ export class ActivityOperationsRepository {
     const unresolved = await this.transaction.query<{ count: string }>(`
       SELECT count(*)::text AS count FROM mbox.community_activity_registrations registration
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid AND registration.activity_id=$3::uuid
-        AND (registration.status IN ('reserved','payment_pending','confirmed','waitlisted')
+        AND (registration.status IN ('reserved','payment_pending','waitlisted')
+          OR (registration.status='confirmed' AND NOT ($4='completed' AND $5::boolean
+            AND COALESCE((to_jsonb(registration)->>'service_version')::int,1)=3))
           OR EXISTS (SELECT 1 FROM mbox.community_activity_package_fulfillment_intents intent
             WHERE intent.tenant_id=registration.tenant_id AND intent.store_id=registration.store_id
               AND intent.registration_id=registration.id AND intent.status='pending')
@@ -686,13 +700,16 @@ export class ActivityOperationsRepository {
             ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id
             WHERE payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
               AND payment.activity_registration_id=registration.id AND refund.status IN ('requested','approved','processing','failed')))
-    `, [scope.tenantId, scope.storeId, activity.id, status])
+    `, [scope.tenantId, scope.storeId, activity.id, status, activity.ended])
     if (Number(unresolved.rows[0]?.count ?? 0)>0) throw new ActivityOperationsError(
       `还有 ${unresolved.rows[0]!.count} 笔报名或收退款未处理，请先完成签到、未到、取消报名及退款核对；不会自动退款或删除记录`, 'ACTIVITY_CLOSE_BLOCKED', 409)
     await this.transaction.query(`UPDATE mbox.community_activities SET status=$4,updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid`, [scope.tenantId,scope.storeId,activity.id,status])
     return (await this.detail(publicId,{limit:0})).activity
   }
+
+  async productCatalog(){return (await this.transaction.query<{id:string;name:string;station:'bar'|'kitchen'}>(`SELECT id,name,fulfillment_station AS station FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND status='active' AND fulfillment_station IN('bar','kitchen') AND product_kind='single' ORDER BY name,id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId])).rows}
+  private async configureServiceWindows(publicId:string,input:ActivityDraftInput){await this.transaction.query(`UPDATE mbox.community_activities SET meal_service_starts_at=$4::timestamptz,meal_service_ends_at=$5::timestamptz,addon_ends_at=$6::timestamptz,addon_product_ids=$7::uuid[] WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3 AND status='draft'`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,publicId,input.mealServiceStartsAt??null,input.mealServiceEndsAt??null,input.addonEndsAt??null,input.addonProductIds??[]])}
 
   private async replaceDraftPackages(
     activityPublicId: string,
@@ -724,10 +741,10 @@ export class ActivityOperationsRepository {
           tenant_id,store_id,activity_id,public_id,name,description,image_url,included_items,
           capacity,member_purchase_limit,fee_amount_minor,deposit_amount_minor,fee_basis,
           payment_mode,payment_deadline_minutes,payment_rule_text,redemption_policy_version,
-          refund_policy_version,status,sort_order,available_from,available_until
+          refund_policy_version,status,sort_order,available_from,available_until,max_participants,includes_admission,meal_only_fee_amount_minor,has_meal,choice_groups
         ) VALUES(
           $1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8::text[],
-          $9,$10,$11::bigint,$12::bigint,$13,$14,$15,$16,$17,$18,'draft',$19,$20::timestamptz,$21::timestamptz
+          $9,$10,$11::bigint,$12::bigint,$13,$14,$15,$16,$17,$18,'draft',$19,$20::timestamptz,$21::timestamptz,$22,$23,$24,$25,$26::jsonb
         ) RETURNING id
       `, [
         this.transaction.scope.tenantId,this.transaction.scope.storeId,current.id,packagePublicId,
@@ -736,10 +753,13 @@ export class ActivityOperationsRepository {
         activityPackage.depositAmountMinor,activityPackage.feeBasis,activityPackage.paymentMode,
         activityPackage.paymentDeadlineMinutes,activityPackage.paymentRuleText,
         activityPackage.redemptionPolicyVersion,activityPackage.refundPolicyVersion,activityPackage.sortOrder,
-        activityPackage.availableFrom,activityPackage.availableUntil,
+        activityPackage.availableFrom,activityPackage.availableUntil,activityPackage.maxParticipants??null,activityPackage.includesAdmission??true,activityPackage.mealOnlyFeeAmountMinor??null,activityPackage.hasMeal??Boolean(activityPackage.products?.length||activityPackage.choiceGroups?.length),JSON.stringify(activityPackage.choiceGroups??[]),
       ])
+      const selectedProductIds=[...new Set([...(activityPackage.products??[]).map(p=>p.productId),...(activityPackage.choiceGroups??[]).flatMap(g=>g.productIds)])];
+      if(selectedProductIds.length){const valid=await this.transaction.query(`SELECT id FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) AND product_kind='single' AND status='active' AND fulfillment_station IN('bar','kitchen')`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,selectedProductIds]);if(valid.rowCount!==selectedProductIds.length)throw new ActivityOperationsError('套餐菜品必须选择本门店有效制作单品','ACTIVITY_PACKAGE_PRODUCTS_INVALID',400);}
       const packageId = inserted.rows[0]?.id
       if (packageId === undefined) throw new ActivityOperationsError('活动套餐未能保存', 'ACTIVITY_PACKAGE_SAVE_FAILED', 503)
+      for(const product of activityPackage.products??[])await this.transaction.query(`INSERT INTO mbox.activity_package_products(tenant_id,store_id,package_id,product_id,quantity) VALUES($1,$2,$3,$4,$5)`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,packageId,product.productId,product.quantity]);
       for (const component of activityPackage.components) {
         await this.transaction.query(`
           INSERT INTO mbox.community_activity_package_components(
@@ -757,7 +777,8 @@ export class ActivityOperationsRepository {
   private async packages(activityPublicId: string): Promise<ActivityOperationsPackage[]> {
     const result = await this.transaction.query<PackageRow>(`
       SELECT package.public_id,package.name,package.description,package.image_url,package.included_items,
-        package.capacity,package.member_purchase_limit,package.fee_amount_minor,package.deposit_amount_minor,
+        package.capacity,package.member_purchase_limit,package.fee_amount_minor,package.deposit_amount_minor,package.choice_groups,package.has_meal,package.max_participants,package.includes_admission,package.meal_only_fee_amount_minor,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object('productId',p.product_id,'quantity',p.quantity)),'[]'::jsonb) FROM mbox.activity_package_products p WHERE (p.tenant_id,p.store_id,p.package_id)=(package.tenant_id,package.store_id,package.id)) products,
         package.fee_basis,package.payment_mode,package.payment_deadline_minutes,package.payment_rule_text,
         package.redemption_policy_version,package.refund_policy_version,package.status,package.sort_order,
         package.available_from::text,package.available_until::text,
@@ -786,7 +807,7 @@ export class ActivityOperationsRepository {
     employeeId: string | null = null,
   ): Promise<ActivityOperationsRegistration> {
     const lockedResult = await this.transaction.query<LockedRegistrationRow>(`
-      SELECT registration.id, registration.public_id, registration.registration_cycle, registration.status,
+      SELECT registration.id,registration.service_version, registration.public_id, registration.registration_cycle, registration.status,
         registration.payment_status, registration.payment_id,
         payment.status AS payment_authoritative_status,
         provider_action.state AS provider_action_state,
@@ -809,9 +830,10 @@ export class ActivityOperationsRepository {
         AND registration.public_id=$3
       FOR UPDATE OF registration, activity
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, publicId])
-    const current = lockedResult.rows[0]
+    const current = lockedResult.rows[0] as (LockedRegistrationRow & {service_version?:number})|undefined
     if (!current) throw new ActivityOperationsError('报名不存在或不属于当前门店', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
 
+    if(current.service_version===3 && ['check_in','fulfill_package','no_show'].includes(operation))throw new ActivityOperationsError('新版套餐请使用专用扫码和出品记录，不能整体标记签到或交付','ACTIVITY_SERVICE_USE_DEDICATED_FLOW');
     if (operation === 'check_in') {
       if (current.status !== 'confirmed'
         || !['paid', 'not_required'].includes(current.payment_status)) {
@@ -834,6 +856,9 @@ export class ActivityOperationsRepository {
       }
       await this.updateRegistrationStatus(current.id, 'no_show', reason)
     } else {
+      // A free v3 ticket can still have admission, meal or dependent purchase facts.
+      // The legacy unpaid cancellation must not erase those facts or release their capacity.
+      if (current.service_version === 3) await assertActivityUnusedRefund(this.transaction, current.id)
       await this.cancelUnpaidRegistration(current, reason)
     }
     return this.registrationById(current.id)
@@ -1073,7 +1098,7 @@ export class ActivityOperationsRepository {
 
   private async registrationById(id: string): Promise<ActivityOperationsRegistration> {
     const result = await this.transaction.query<RegistrationRow>(`
-      SELECT registration.public_id, customer.public_id AS customer_public_id,
+      SELECT registration.public_id, registration.service_version, customer.public_id AS customer_public_id,
         COALESCE(NULLIF(btrim(profile.display_name),''),
           CASE WHEN membership.member_no IS NULL THEN '顾客 '||right(customer.public_id,6)
             ELSE '会员 '||right(membership.member_no,6) END) AS customer_label,
@@ -1158,10 +1183,10 @@ const ACTIVITY_SUMMARY_QUERY = `
     activity.starts_at::text, activity.ends_at::text, activity.assembly_location,
     activity.capacity, activity.registration_payment_mode, activity.fee_amount_minor,
     activity.currency,
-    COALESCE(sum(registration.party_size) FILTER (
+    COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)) FILTER (
       WHERE registration.status IN ('reserved','payment_pending','confirmed','checked_in')
     ),0)::text AS occupied_seats,
-    COALESCE(sum(registration.party_size) FILTER (
+    COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)) FILTER (
       WHERE registration.status='waitlisted'
     ),0)::text AS waitlisted_seats,
     count(registration.id)::text AS registration_count
@@ -1174,7 +1199,7 @@ const ACTIVITY_SUMMARY_QUERY = `
 `
 
 const ACTIVITY_DETAIL_QUERY = `
-  SELECT activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
+  SELECT activity.meal_service_starts_at::text,activity.meal_service_ends_at::text,activity.addon_ends_at::text,activity.addon_product_ids,activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
     activity.starts_at::text, activity.ends_at::text, activity.assembly_location,
     activity.capacity, activity.registration_payment_mode, activity.fee_amount_minor,
     activity.currency, activity.activity_kind, activity.summary, activity.cover_url,
@@ -1188,10 +1213,10 @@ const ACTIVITY_DETAIL_QUERY = `
     activity.member_benefit_text,activity.package_selection_required, activity.created_by_employee_id,
     activity.approved_by_employee_id, activity.published_at::text,
     activity.updated_at::text,
-    COALESCE(sum(registration.party_size) FILTER (
+    COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)) FILTER (
       WHERE registration.status IN ('reserved','payment_pending','confirmed','checked_in')
     ),0)::text AS occupied_seats,
-    COALESCE(sum(registration.party_size) FILTER (
+    COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)) FILTER (
       WHERE registration.status='waitlisted'
     ),0)::text AS waitlisted_seats,
     count(registration.id)::text AS registration_count
@@ -1223,6 +1248,7 @@ function summaryView(row: ActivitySummaryRow): ActivityOperationsSummary {
 function detailView(row: ActivityDetailRow): ActivityOperationsActivity {
   return {
     ...summaryView(row),
+    mealServiceStartsAt:row.meal_service_starts_at??null,mealServiceEndsAt:row.meal_service_ends_at??null,addonEndsAt:row.addon_ends_at??null,addonProductIds:row.addon_product_ids??[],
     kind: row.activity_kind,
     summary: row.summary,
     coverUrl: row.cover_url,
@@ -1267,6 +1293,7 @@ function packageView(row: PackageRow): ActivityOperationsPackage {
     return { inventoryItemId, quantity, perParticipant: component.perParticipant === true }
   }) : []
   return {
+    hasMeal:row.has_meal??false,choiceGroups:row.choice_groups??[],maxParticipants:row.max_participants??null,includesAdmission:row.includes_admission??true,mealOnlyFeeAmountMinor:row.meal_only_fee_amount_minor==null?null:Number(row.meal_only_fee_amount_minor),products:row.products??[],
     publicId: row.public_id,
     name: row.name,
     description: row.description,
@@ -1296,13 +1323,13 @@ function registrationView(row: RegistrationRow): ActivityOperationsRegistration 
     publicId: required(row.refund_public_id, 'refund public id'),
     status: required(row.refund_status, 'refund status'),
     amountMinor: money(row.refund_amount_minor, 'refund amount'),
-    requestedByEmployeeId: required(row.refund_requested_by_employee_id, 'refund requester'),
+    requestedByEmployeeId: row.refund_requested_by_employee_id,
     approvedByEmployeeId: row.refund_approved_by_employee_id,
     createdAt: required(row.refund_created_at, 'refund created at'),
     updatedAt: required(row.refund_updated_at, 'refund updated at'),
   }
   return {
-    publicId: row.public_id,
+    publicId: row.public_id, serviceVersion: row.service_version,
     customerPublicId: row.customer_public_id,
     customerLabel: row.customer_label,
     contactVersionPublicId: row.contact_version_public_id,

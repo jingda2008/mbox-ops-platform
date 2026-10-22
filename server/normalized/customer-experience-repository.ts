@@ -1,3 +1,6 @@
+import type {ActivityPackageChoiceGroup} from '../../src/shared/activity-service.js'
+import {prepareActivityPurchase,reserveActivityMealInventory,type ActivityPurchaseOptions} from './activity-purchase-support.js'
+import { ActivityServiceRepository, assertActivityUnusedRefund } from './activity-service-repository.js'
 import { allocateMemberNumber } from './member-number-policy.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
@@ -158,6 +161,10 @@ export interface PublicContentCard {
 
 export interface PublicActivity {
   registrationClosedAt?: string | null
+  mealServiceStartsAt?:string|null
+  mealServiceEndsAt?:string|null
+  addonEndsAt?:string|null
+  addonProductIds?:string[]
   publicId: string
   kind: string
   title: string
@@ -244,6 +251,7 @@ export interface PublicActivitySharePackage {
 /** One selectable ticket/plan inside an activity.  A registration can choose
  * exactly one package; it is not a customer table order. */
 export interface PublicActivityPackage {
+  maxParticipants?:number|null;hasMeal?:boolean;choiceGroups?:ActivityPackageChoiceGroup[];includesAdmission?:boolean;mealOnlyFeeAmountMinor?:number|null;products?:Array<{productId:string;quantity:number}>
   publicId: string
   name: string
   description: string
@@ -331,6 +339,16 @@ export interface PublicAnnualBenefitCalendarItem {
 
 export interface PublicActivityRegistration {
   publicId: string
+  note?:string
+  selections?:Array<{label:string;productId:string;name:string;quantity:number}>
+  registrationRequestIdempotencyKey?:string
+  serviceVersion?:number
+  serviceRefundDisposition?:string|null
+  purchaseKind?:string|null
+  parentRegistrationPublicId?:string|null
+  maxParticipants?:number|null
+  includesAdmission?:boolean
+  registeredAt?:string
   activityPublicId: string
   activityTitle: string
   startsAt: string
@@ -695,6 +713,10 @@ interface CardRow extends Record<string, unknown> {
 
 interface ActivityRow extends Record<string, unknown> {
   registration_closed_at?: string | null
+  meal_service_starts_at?:string|null
+  meal_service_ends_at?:string|null
+  addon_ends_at?:string|null
+  addon_product_ids?:string[]
   public_id: string
   activity_kind: string
   title: string
@@ -737,6 +759,7 @@ interface ActivityRow extends Record<string, unknown> {
 }
 
 interface ActivityPackageRow extends Record<string, unknown> {
+  max_participants?:number|null;has_meal?:boolean;choice_groups?:ActivityPackageChoiceGroup[];includes_admission?:boolean;meal_only_fee_amount_minor?:string|number|null
   id: string
   public_id: string
   name: string
@@ -1209,6 +1232,7 @@ export class CustomerExperienceRepository {
 
   async publicActivityRegistrations(customerId: string): Promise<PublicActivityRegistration[]> {
     const result = await this.transaction.query<{
+      service_items_snapshot:Array<{productId:string;name:string;quantity:number;note?:string;selectionLabel?:string}>;idempotency_key:string;service_refund_disposition:string|null;service_version:number;purchase_kind:string|null;parent_registration_public_id:string|null;max_participants:number|null;includes_admission:boolean;registered_at:string
       public_id: string
       activity_public_id: string
       activity_title: string
@@ -1244,7 +1268,8 @@ export class CustomerExperienceRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       )
-      SELECT registration.public_id, activity.public_id AS activity_public_id,
+      SELECT registration.public_id,registration.service_items_snapshot, registration.idempotency_key,registration.service_version,registration.service_refund_disposition,registration.purchase_kind,registration.max_participants,registration.includes_admission,registration.registered_at::text,
+ (SELECT parent.public_id FROM mbox.community_activity_registrations parent WHERE (parent.tenant_id,parent.store_id,parent.id)=(registration.tenant_id,registration.store_id,registration.parent_registration_id)) parent_registration_public_id,activity.public_id AS activity_public_id,
         activity.title AS activity_title, activity.starts_at::text,
         registration.party_size, registration.status, registration.payment_choice,
         registration.payment_status, registration.fee_amount_minor,
@@ -1287,7 +1312,7 @@ export class CustomerExperienceRepository {
         this.activityPaymentProviderConfigured && row.activity_payment_authorized,
       )
       return {
-        publicId: row.public_id,
+        publicId: row.public_id,note:row.service_items_snapshot?.find(item=>item.note)?.note??'',selections:(row.service_items_snapshot??[]).filter(item=>item.selectionLabel).map(item=>({label:item.selectionLabel!,productId:item.productId,name:item.name,quantity:item.quantity})),registrationRequestIdempotencyKey:row.idempotency_key,serviceVersion:row.service_version,serviceRefundDisposition:row.service_refund_disposition,purchaseKind:row.purchase_kind,parentRegistrationPublicId:row.parent_registration_public_id,maxParticipants:row.max_participants,includesAdmission:row.includes_admission,registeredAt:row.registered_at,
         activityPublicId: row.activity_public_id,
         activityTitle: row.activity_title,
         startsAt: row.starts_at,
@@ -1534,7 +1559,7 @@ export class CustomerExperienceRepository {
     return { membership: membershipView(row), created: true }
   }
 
-  async registerActivity(input: Readonly<{
+  async registerActivity(input: Readonly<ActivityPurchaseOptions & {
     activityPublicId: string
     activityPackagePublicId: string | null
     customerId: string
@@ -1601,7 +1626,7 @@ export class CustomerExperienceRepository {
             AND (feature.effective_until IS NULL OR feature.effective_until > clock_timestamp())
         ) AS activity_payment_authorized,
         COALESCE((
-          SELECT sum(registration.party_size)
+          SELECT sum(COALESCE(registration.reserved_seats,registration.party_size))
           FROM mbox.community_activity_registrations AS registration
           WHERE registration.tenant_id = activity.tenant_id
             AND registration.store_id = activity.store_id
@@ -1611,10 +1636,10 @@ export class CustomerExperienceRepository {
       FROM mbox.community_activities AS activity
       WHERE activity.tenant_id = $1::uuid AND activity.store_id = $2::uuid
         AND activity.public_id = $3 AND activity.status IN ('published', 'full')
-        AND activity.registration_closed_at IS NULL
+        AND (activity.registration_closed_at IS NULL OR $4::text IN('meal_package','single_dish'))
         AND activity.ends_at > clock_timestamp()
       FOR UPDATE OF activity
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityPublicId])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityPublicId,input.purchaseKind??null])
     const row = activity.rows[0]
     if (!row) throw new CustomerExperienceRequestError('这个活动已结束或暂停报名', 'ACTIVITY_UNAVAILABLE', 409)
     const registrationCustomerId = await this.canonicalCustomerId(input.customerId)
@@ -1628,15 +1653,15 @@ export class CustomerExperienceRepository {
     }
     const selectablePackages = await this.transaction.query<ActivityPackageRow>(`
       SELECT activity_package.id,activity_package.public_id,activity_package.name,
-        activity_package.description,activity_package.image_url,activity_package.included_items,
-        activity_package.capacity,activity_package.member_purchase_limit,
+        activity_package.description,activity_package.image_url,activity_package.included_items,activity_package.available_until::text,
+        activity_package.capacity,activity_package.member_purchase_limit,activity_package.choice_groups,activity_package.has_meal,activity_package.max_participants,activity_package.includes_admission,activity_package.meal_only_fee_amount_minor,
         activity_package.fee_amount_minor,activity_package.deposit_amount_minor,
         activity_package.fee_basis,activity_package.payment_mode,
         activity_package.payment_deadline_minutes,activity_package.payment_rule_text,
         activity_package.redemption_policy_version,activity_package.refund_policy_version,
         $4::char(3) AS currency,
         COALESCE((
-          SELECT sum(package_registration.party_size)
+          SELECT sum(CASE WHEN package_registration.service_version=3 THEN 1 ELSE package_registration.party_size END)
           FROM mbox.community_activity_registrations package_registration
           WHERE package_registration.tenant_id=activity_package.tenant_id
             AND package_registration.store_id=activity_package.store_id
@@ -1651,17 +1676,20 @@ export class CustomerExperienceRepository {
       ORDER BY activity_package.sort_order,activity_package.id
       FOR UPDATE OF activity_package
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, row.id, row.currency])
-    const selectedPackage = resolveActivityPackage(
+    const selectedPackage = input.purchaseKind==='single_dish' ? null : resolveActivityPackage(
       selectablePackages.rows,
       input.activityPackagePublicId ?? null,
       row.package_selection_required,
     )
+    const servicePurchase=await prepareActivityPurchase(this.transaction,{...input,customerId:registrationCustomerId,activityId:row.id,packageId:selectedPackage?.id??null,maxParticipants:selectedPackage?.max_participants??null,packageIncludesAdmission:selectedPackage?.includes_admission??true,packageHasMeal:selectedPackage?.has_meal??false,choiceGroups:selectedPackage?.choice_groups??[],mealOnlyAmount:selectedPackage?.meal_only_fee_amount_minor==null?null:Number(selectedPackage.meal_only_fee_amount_minor)});
+    if(servicePurchase){const ends=[servicePurchase.deadline,row.ends_at,selectedPackage?.available_until].filter((v):v is string=>typeof v==='string');servicePurchase.deadline=ends.sort((a,b)=>Date.parse(a)-Date.parse(b))[0]??null;}
+    const seats=servicePurchase?.reservedSeats??input.partySize;
     // A registration deliberately has one selectable add-on. A per-person
     // package consumes one member-purchase unit per attendee; a package priced
     // per registration consumes one. Check this before seats, payment and
     // stock can be held.
     if (selectedPackage !== null) {
-      const requestedPackageUnits = selectedPackage.fee_basis === 'per_person' ? input.partySize : 1
+      const requestedPackageUnits = !servicePurchase && selectedPackage.fee_basis === 'per_person' ? input.partySize : 1
       const priorUnits = await this.transaction.query<{ units: string | number }>(`
         SELECT COALESCE(sum(
           CASE WHEN registration.activity_package_snapshot->>'feeBasis'='per_person'
@@ -1692,9 +1720,9 @@ export class CustomerExperienceRepository {
       input.termsAcknowledged,
     )
     const registered = integer(row.registered_count, 'registered count')
-    const hasActivityCapacity = row.status !== 'full' && registered + input.partySize <= row.capacity
+    const hasActivityCapacity = seats===0 || (row.status !== 'full' && registered + seats <= row.capacity)
     const hasPackageCapacity = selectedPackage === null
-      || integer(selectedPackage.registered_count, 'activity package registered count') + input.partySize <= selectedPackage.capacity
+      || integer(selectedPackage.registered_count, 'activity package registered count') + (servicePurchase?1:input.partySize) <= selectedPackage.capacity
     const hasCapacity = hasActivityCapacity && hasPackageCapacity
     const activityCharge = activityChargePart({
       feeAmountMinor: money(row.fee_amount_minor, 'activity fee'),
@@ -1712,9 +1740,9 @@ export class CustomerExperienceRepository {
       paymentDeadlineMinutes: selectedPackage.payment_deadline_minutes,
       paymentRuleText: selectedPackage.payment_rule_text,
     }, input.partySize)
-    const charge = combinedActivityCharge(activityCharge, packageCharge)
+    const charge = servicePurchase ? {totalFeeAmountMinor:servicePurchase.amount??(selectedPackage?Number(selectedPackage.fee_amount_minor):activityCharge.totalFeeAmountMinor),depositAmountMinor:0,paymentMode:(servicePurchase.amount??(selectedPackage?Number(selectedPackage.fee_amount_minor):activityCharge.totalFeeAmountMinor))>0?'full_required' as const:'none' as const,paymentDeadlineMinutes:selectedPackage?.payment_deadline_minutes??row.payment_deadline_minutes,paymentRuleText:'每份固定价格，全额预付'} : combinedActivityCharge(activityCharge, packageCharge)
     const totalFeeAmountMinor = charge.totalFeeAmountMinor
-    const payment = resolveActivityRegistrationPayment(charge.paymentMode, input.paymentChoice, {
+    const payment = resolveActivityRegistrationPayment(charge.paymentMode, servicePurchase?(totalFeeAmountMinor>0?'full':'none'):input.paymentChoice, {
       totalFeeAmountMinor,
       depositAmountMinor: charge.depositAmountMinor,
     })
@@ -1733,6 +1761,7 @@ export class CustomerExperienceRepository {
         409,
       )
     }
+    if(servicePurchase&&!hasCapacity)throw new CustomerExperienceRequestError('当前名额或套餐库存不足','ACTIVITY_CAPACITY_FULL',409)
     const status = hasCapacity ? (payment.amountDueMinor > 0 ? 'payment_pending' : 'confirmed') : 'waitlisted'
     const effectiveChoice: ActivityPaymentChoice = hasCapacity ? payment.choice : 'none'
     const amountDueMinor = hasCapacity ? payment.amountDueMinor : 0
@@ -1791,7 +1820,7 @@ export class CustomerExperienceRepository {
         ON payment.tenant_id=registration.tenant_id AND payment.store_id=registration.store_id
        AND payment.id=registration.payment_id
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
-        AND registration.activity_id=$3::uuid AND registration.customer_id=$4::uuid
+        AND registration.activity_id=$3::uuid AND registration.customer_id=$4::uuid AND registration.service_version=1
       -- The payment row is optional for a free or previously cancelled
       -- registration. PostgreSQL cannot lock the nullable side of this left
       -- join; the registration row is the lifecycle lock and serializes both
@@ -1803,7 +1832,7 @@ export class CustomerExperienceRepository {
       row.id,
       registrationCustomerId,
     ])
-    const previous = existing.rows[0]
+    const previous = servicePurchase?undefined:existing.rows.find(item=>item.status!=='refunded')
     const canReuseCancelledRegistration = previous !== undefined
       && previous.status === 'cancelled'
       && money(previous.paid_amount_minor, 'registration paid amount') === 0
@@ -1897,7 +1926,7 @@ export class CustomerExperienceRepository {
           acknowledged_safety_policy_version, acknowledged_refund_policy_version,
           terms_acknowledged_at, terms_acknowledgement_source,
           requested_payment_choice,requested_payment_method,requested_amount_due_minor,
-          activity_package_id,activity_package_snapshot
+          activity_package_id,activity_package_snapshot,service_version,reserved_seats,max_participants,includes_admission,parent_registration_id,purchase_kind,service_items_snapshot,service_has_meal
         ) VALUES (
           $1::uuid, $2::uuid, $3, $25::uuid, $4::uuid, $5::uuid,
           $6, $7, $8, $9, $10::bigint, $11::bigint, 0, $12,
@@ -1905,13 +1934,14 @@ export class CustomerExperienceRepository {
           CASE WHEN $11::bigint > 0 THEN clock_timestamp()+make_interval(mins=>$16) ELSE NULL END,
           CASE WHEN $11::bigint > 0 THEN clock_timestamp()+make_interval(mins=>$16) ELSE NULL END,
           $15::jsonb, $17, $18, clock_timestamp(), $19,
-          $20,$21,$22::bigint,$23::uuid,$24::jsonb
+          $20,$21,$22::bigint,$23::uuid,$24::jsonb,$26,$27,$28,$29,$30::uuid,$31,$32::jsonb,$33
         )
         RETURNING id, public_id, status, registration_cycle,
           payment_due_at::text, seat_hold_expires_at::text
-      `, [...registrationValues, row.id])
+      `, [...registrationValues,row.id,servicePurchase?3:1,servicePurchase?.reservedSeats??null,servicePurchase?.maxParticipants??null,servicePurchase?.includesAdmission??true,servicePurchase?.parentId??null,servicePurchase?.kind??null,JSON.stringify(servicePurchase?.items??[]),servicePurchase?.hasMeal??false])
     const registration = requiredRow(inserted.rows[0], 'activity registration')
-    if (selectedPackage !== null && status !== 'waitlisted') {
+    if(servicePurchase){await reserveActivityMealInventory(this.transaction,registration.id,servicePurchase.items);if(servicePurchase.deadline){await this.transaction.query(`UPDATE mbox.community_activity_registrations SET payment_due_at=LEAST(payment_due_at,$4::timestamptz),seat_hold_expires_at=LEAST(seat_hold_expires_at,$4::timestamptz) WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,registration.id,servicePurchase.deadline]);const actual=(await this.transaction.query<{payment_due_at:string;seat_hold_expires_at:string}>('SELECT payment_due_at::text,seat_hold_expires_at::text FROM mbox.community_activity_registrations WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,registration.id])).rows[0]!;Object.assign(registration,actual)}}
+    if (!servicePurchase && selectedPackage !== null && status !== 'waitlisted') {
       await this.reserveActivityPackageInventory({
         registrationId: registration.id,
         registrationCycle: registration.registration_cycle,
@@ -1967,6 +1997,11 @@ export class CustomerExperienceRepository {
           currency: row.currency,
         })
       : null
+    // Free add-ons have no payment callback. Use the same original-number
+    // dispatch path after saving their purchase and material reservation.
+    if (servicePurchase?.kind === 'single_dish' && registration.status === 'confirmed' && amountDueMinor === 0) {
+      await new ActivityServiceRepository(this.transaction).dispatchPaidAddon(registration.id)
+    }
     return {
       id: registration.id,
       publicId: registration.public_id,
@@ -2076,6 +2111,15 @@ export class CustomerExperienceRepository {
     customerId: string
     reason: string
   }>): Promise<{ id: string; publicId: string; registrationCycle: number; status: 'cancelled' }> {
+    const owned = (await this.transaction.query<{id:string;service_version:number}>(`
+      SELECT r.id,COALESCE((to_jsonb(r)->>'service_version')::int,1) AS service_version
+      FROM mbox.community_activity_registrations r
+      WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.public_id=$3
+        AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)
+          =mbox.canonical_customer_id(r.tenant_id,r.store_id,$4::uuid)
+      FOR UPDATE OF r
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.registrationPublicId,input.customerId])).rows[0]
+    if(owned?.service_version===3)await assertActivityUnusedRefund(this.transaction,owned.id)
     const result = await this.transaction.query<{
       id: string
       public_id: string
@@ -3869,7 +3913,7 @@ export class CustomerExperienceRepository {
         payment_rule_text: string
       }>(`
         SELECT activity.public_id, activity.title, activity.status, activity.starts_at::text,
-          COALESCE(sum(registration.party_size), 0)::text AS registrations,
+          COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)), 0)::text AS registrations,
           activity.fee_amount_minor::text, activity.deposit_amount_minor::text,
           activity.fee_basis, activity.registration_payment_mode,
           activity.payment_deadline_minutes, activity.payment_rule_text
@@ -4172,7 +4216,7 @@ export class CustomerExperienceRepository {
         SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
         WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
       )
-      SELECT activity.public_id, activity.registration_closed_at::text, activity.activity_kind, activity.title,
+      SELECT activity.meal_service_starts_at::text,activity.meal_service_ends_at::text,activity.addon_ends_at::text,activity.addon_product_ids,activity.public_id, activity.registration_closed_at::text, activity.activity_kind, activity.title,
         activity.summary, activity.cover_url, activity.starts_at::text,
         activity.ends_at::text, activity.assembly_location, activity.capacity,
         activity.fee_amount_minor, activity.deposit_amount_minor, activity.fee_basis,
@@ -4196,7 +4240,7 @@ export class CustomerExperienceRepository {
             'capacity',activity_package.capacity,
             'memberPurchaseLimit',activity_package.member_purchase_limit,
             'registeredCount',COALESCE((
-              SELECT sum(package_registration.party_size)
+              SELECT sum(CASE WHEN package_registration.service_version=3 THEN 1 ELSE package_registration.party_size END)
               FROM mbox.community_activity_registrations package_registration
               WHERE package_registration.tenant_id=activity_package.tenant_id
                 AND package_registration.store_id=activity_package.store_id
@@ -4228,7 +4272,7 @@ export class CustomerExperienceRepository {
                 AND (inventory_item.status<>'active'
                   OR COALESCE(balance.on_hand_quantity,0)-COALESCE(balance.reserved_quantity,0)<component.quantity)
             ),
-            'currency',activity.currency
+            'currency',activity.currency,'choiceGroups',(SELECT COALESCE(jsonb_agg(g.value||jsonb_build_object('options',(SELECT COALESCE(jsonb_agg(jsonb_build_object('productId',p.id,'name',p.name)),'[]') FROM mbox.products p WHERE p.tenant_id=activity_package.tenant_id AND p.store_id=activity_package.store_id AND p.id::text IN(SELECT jsonb_array_elements_text(g.value->'productIds'))))),'[]') FROM jsonb_array_elements(activity_package.choice_groups) g(value)),'hasMeal',activity_package.has_meal,'maxParticipants',activity_package.max_participants,'includesAdmission',activity_package.includes_admission,'mealOnlyFeeAmountMinor',activity_package.meal_only_fee_amount_minor,'products',(SELECT COALESCE(jsonb_agg(jsonb_build_object('productId',p.product_id,'quantity',p.quantity)),'[]') FROM mbox.activity_package_products p WHERE (p.tenant_id,p.store_id,p.package_id)=(activity_package.tenant_id,activity_package.store_id,activity_package.id))
           ) ORDER BY activity_package.sort_order,activity_package.id)
           FROM mbox.community_activity_packages activity_package
           WHERE activity_package.tenant_id=activity.tenant_id AND activity_package.store_id=activity.store_id
@@ -4246,7 +4290,7 @@ export class CustomerExperienceRepository {
             AND (feature.effective_from IS NULL OR feature.effective_from <= clock_timestamp())
             AND (feature.effective_until IS NULL OR feature.effective_until > clock_timestamp())
         ) AS activity_payment_authorized,
-        COALESCE(sum(active_registration.party_size), 0)::text AS registered_count
+        COALESCE(sum(COALESCE(active_registration.reserved_seats,active_registration.party_size)), 0)::text AS registered_count
       FROM mbox.community_activities AS activity
       LEFT JOIN mbox.community_activity_registrations AS active_registration
         ON active_registration.tenant_id = activity.tenant_id
@@ -5574,7 +5618,7 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     providerConfigured && row.activity_payment_authorized,
   )
   return {
-    registrationClosedAt: row.registration_closed_at ?? null,
+    registrationClosedAt: row.registration_closed_at ?? null,mealServiceStartsAt:row.meal_service_starts_at??row.starts_at,mealServiceEndsAt:row.meal_service_ends_at??row.ends_at,addonEndsAt:row.addon_ends_at??row.ends_at,addonProductIds:row.addon_product_ids??[],
     publicId: row.public_id,
     kind: row.activity_kind,
     title: row.title,
@@ -5619,7 +5663,7 @@ function activityView(row: ActivityRow, providerConfigured: boolean): PublicActi
     availablePaymentChoices: payment.availableChoices,
     blockedPaymentChoices: payment.blockedChoices,
     availablePaymentMethods: providerConfigured && row.activity_payment_authorized
-      && payment.availableChoices.some((choice) => choice !== 'none')
+      && (payment.availableChoices.some((choice) => choice !== 'none')||packages.some(pkg=>Number(pkg.feeAmountMinor??0)>0))
       ? ['jsapi', 'native_qr'] : [],
     packageSelectionRequired: row.package_selection_required,
     packages,
@@ -5723,6 +5767,7 @@ function publicActivityPackages(
       paymentAuthorityAvailable,
     )
     return {
+      choiceGroups:Array.isArray(value.choiceGroups)?value.choiceGroups as unknown as ActivityPackageChoiceGroup[]:[],hasMeal:value.hasMeal===true,maxParticipants:typeof value.maxParticipants==='number'?value.maxParticipants:null,includesAdmission:value.includesAdmission!==false,mealOnlyFeeAmountMinor:typeof value.mealOnlyFeeAmountMinor==='number'?value.mealOnlyFeeAmountMinor:null,products:Array.isArray(value.products)?value.products as Array<{productId:string;quantity:number}>:[],
       publicId: requiredText(value.publicId, 'activity package public id'),
       name: requiredText(value.name, 'activity package name'),
       description: text(value.description) ?? '',
@@ -5747,7 +5792,7 @@ function publicActivityPackages(
       paymentBlockedReason: payment.blockedReason,
       availablePaymentChoices: payment.availableChoices,
       blockedPaymentChoices: payment.blockedChoices,
-      availablePaymentMethods: paymentAuthorityAvailable && payment.availableChoices.some((choice) => choice !== 'none')
+      availablePaymentMethods: paymentAuthorityAvailable && (payment.availableChoices.some((choice) => choice !== 'none')||packages.some(pkg=>Number(pkg.feeAmountMinor??0)>0))
         ? ['jsapi', 'native_qr'] : [],
     }
   })

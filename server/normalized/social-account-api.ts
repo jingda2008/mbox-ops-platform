@@ -1,3 +1,4 @@
+import {saveProductServiceWindow} from './product-service-window-repository.js'
 import {createHash} from 'node:crypto'
 import {z} from 'zod'
 import type {FastifyPluginAsync} from 'fastify'
@@ -55,21 +56,22 @@ export const socialAccountApiPlugin:FastifyPluginAsync<Options>=async(app,option
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage'),{readOnly:true})
   const result=await options.commands.execute({scope:ctx.scope,operationScope:'member.card.social.configure',idempotencyKey:key,requestFingerprint:JSON.stringify({id,employee:ctx.employeeId,input}),resultCodec:codec},async tx=>{
    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage')
-   const project=(await tx.query<{status:string}>('SELECT status FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[ctx.scope.tenantId,ctx.scope.storeId,id])).rows[0]
+   const project=(await tx.query<{status:string;flow_mode:string}>('SELECT status,flow_mode FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[ctx.scope.tenantId,ctx.scope.storeId,id])).rows[0]
+   if(project?.flow_mode==='simple')throw new BottleCustodyError('普通兴趣卡无需社交前置，不能添加关注门槛')
    if(project?.status!=='draft')throw new BottleCustodyError('加入门槛须在项目草稿阶段配置；已开放项目请新建版本，保留历史条款')
    const accounts=(await tx.query<{id:string;kind:string}>('SELECT id,kind FROM mbox.social_accounts WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])',[ctx.scope.tenantId,ctx.scope.storeId,[input.serviceAccountId,input.wecomAccountId]])).rows
    if(!accounts.some(a=>a.id===input.serviceAccountId&&a.kind==='service_account')||!accounts.some(a=>a.id===input.wecomAccountId&&a.kind==='wecom'))throw new BottleCustodyError('请选择对应的本店服务号和企业微信')
    await tx.query('UPDATE mbox.member_card_projects SET service_account_id=$4,wecom_account_id=$5,auto_restore=$6,artist_name=$7,icon_url=$8,require_social_conditions=true,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[ctx.scope.tenantId,ctx.scope.storeId,id,input.serviceAccountId,input.wecomAccountId,input.autoRestore,input.artistName,input.iconUrl])
-   return{result:{projectId:id,configured:true},auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'member.card.social.configured',objectType:'member_card_project',objectId:id,afterData:input}],outboxMessages:[]}
+   return{result:{projectId:id,configured:true},auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'member.card.social.configured',objectType:'member_card_project',objectId:id,afterData:JSON.parse(JSON.stringify(input)) as JsonObject}],outboxMessages:[]}
   });return{data:result.value,meta:{replayed:result.replayed}}
  })
  app.get<{Params:{id:string}}>('/staff/member-cards/projects/:id/menu',async request=>{
   const ctx=await options.resolveStaffContext(request),id=z.string().uuid().parse(request.params.id)
-  return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage');return(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.sort_order,p.name',[ctx.scope.tenantId,ctx.scope.storeId,id])).rows},{readOnly:true})}
+  return{data:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage');return(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text,mbox.product_service_window_json(mi.tenant_id,mi.store_id,mi.product_id,mi.project_id) AS service_window FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.sort_order,p.name',[ctx.scope.tenantId,ctx.scope.storeId,id])).rows},{readOnly:true})}
  })
  app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/menu',{bodyLimit:4096},async request=>{
   const ctx=await options.resolveStaffContext(request),id=z.string().uuid().parse(request.params.id)
-  const input=z.object({productId:z.string().uuid(),exclusive:z.boolean(),active:z.boolean(),sortOrder:z.number().int().min(0).max(10000),exclusivePriceMinor:z.number().int().min(0).max(100000000).nullable()}).strict().parse(request.body)
+  const input=z.object({productId:z.string().uuid(),exclusive:z.boolean(),active:z.boolean(),sortOrder:z.number().int().min(0).max(10000),exclusivePriceMinor:z.number().int().min(0).max(100000000).nullable(),serviceWindow:z.unknown().optional()}).strict().parse(request.body)
   const key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.card.manage'),{readOnly:true})
 
@@ -79,10 +81,11 @@ export const socialAccountApiPlugin:FastifyPluginAsync<Options>=async(app,option
    const product=(await tx.query<{guest_visible:boolean}>('SELECT guest_visible FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR SHARE',[ctx.scope.tenantId,ctx.scope.storeId,input.productId])).rows[0]
    if(!product)throw new BottleCustodyError('商品不存在')
    if(input.exclusive&&product.guest_visible)throw new BottleCustodyError('公共商品继续对所有人可见；请先新建非公共商品作为专属增量')
-   const project=await tx.query('SELECT id FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND require_social_conditions',[ctx.scope.tenantId,ctx.scope.storeId,id])
+   const project=await tx.query('SELECT id FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND (flow_mode=\'simple\' OR require_social_conditions)',[ctx.scope.tenantId,ctx.scope.storeId,id])
    if(!project.rows.length)throw new BottleCustodyError('请先为专属卡配置企微与服务号加入门槛')
    await tx.query('INSERT INTO mbox.member_card_menu_items(tenant_id,store_id,project_id,product_id,exclusive,active,sort_order,exclusive_price_minor) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(tenant_id,store_id,project_id,product_id) DO UPDATE SET exclusive=EXCLUDED.exclusive,active=EXCLUDED.active,sort_order=EXCLUDED.sort_order,exclusive_price_minor=EXCLUDED.exclusive_price_minor,updated_at=clock_timestamp()',[ctx.scope.tenantId,ctx.scope.storeId,id,input.productId,input.exclusive,input.active,input.sortOrder,input.exclusivePriceMinor])
-   return{result:{projectId:id,productId:input.productId,saved:true},auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'member.card.menu.configured',objectType:'member_card_project',objectId:id,afterData:input}],outboxMessages:[]}
+   if(Object.hasOwn(input,'serviceWindow')){try{await saveProductServiceWindow(tx,input.productId,input.serviceWindow,id)}catch(error){if(error instanceof TypeError)throw new BottleCustodyError(error.message);throw error}}
+   return{result:{projectId:id,productId:input.productId,saved:true},auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'member.card.menu.configured',objectType:'member_card_project',objectId:id,afterData:JSON.parse(JSON.stringify(input)) as JsonObject}],outboxMessages:[]}
   });return{data:result.value,meta:{replayed:result.replayed}}
  })
  app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/menu/remove',{bodyLimit:1024},async request=>{

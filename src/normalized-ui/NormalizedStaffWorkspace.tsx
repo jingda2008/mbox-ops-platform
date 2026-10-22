@@ -21,6 +21,7 @@ import {
   PackageCheck,
   RefreshCw,
   RotateCcw,
+  ScanLine,
   Settings,
   ShieldCheck,
   UtensilsCrossed,
@@ -75,6 +76,7 @@ const domainRoute: Record<StaffDomainKey, string> = {
 }
 
 const navigationIcon: Record<string, LucideIcon> = {
+  scan: ScanLine,
   live: LayoutDashboard,
   service: ClipboardList,
   tasks: ClipboardList,

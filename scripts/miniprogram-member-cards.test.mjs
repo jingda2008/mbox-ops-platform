@@ -8,20 +8,52 @@ const project = { id: 'fans', name: '五迷卡', version: 1, accepting_applicati
 const event = (id, action) => ({ currentTarget: { dataset: { id, action } } })
 async function harness(platform, read, write = async () => ({}), readGifts = async () => ({items:[],nextCursor:null})) {
   let page, modal
-  const runtime = { showModal(input) { modal = input }, switchTab() {} }
+  const redirects=[],navigations=[]
+  const runtime = { showModal(input) { modal = input }, switchTab(input) { navigations.push(input.url) } }
   vm.runInNewContext(await readFile(new URL('../' + platform + '/pages/profile-cards/index.js', import.meta.url), 'utf8'), {
     wx: runtime,
     Page(value) { page = value; page.setData = value => Object.assign(page.data, value) },
     require(name) {
       if (name.endsWith('/platform')) return runtime
       if (name.endsWith('/api')) return { getMemberCards: read, submitMemberCardAction: write, getMemberGiftJobs:readGifts }
+      if (name.endsWith('/membership-gate')) return { redirectToMembershipLogin: destination => redirects.push(destination) }
       if (name.endsWith('/format')) return { dateInput: value => value }
       return { customerErrorMessage: (_, fallback) => fallback }
     },
   })
-  return { page, modal: () => modal }
+  return { page, modal: () => modal, redirects, navigations }
 }
 for (const platform of ['miniprogram', 'alipay-miniprogram']) {
+
+  test(platform + ': simple card submits once without a second terms or social step, and null expiry is lifelong',async()=>{
+    let calls=0
+    const item={...project,flow_mode:'simple',available_until:null,require_social_conditions:false,social_conditions_met:true}
+    const {page}=await harness(platform,async()=>({...empty(),projects:[item],cards:[{id:'other',project_id:'other',status:'active',valid_until:null,expired:false}]}),async()=>{calls++})
+    await page.load();await page.openProject(event('fans'))
+    assert.equal(calls,1);assert.equal(page.data.selectedProject,null);assert.equal(page.data.cards[0].untilText,'长期有效')
+  })
+  test(platform + ': simple nonmember returns to the original application after necessary membership login',async()=>{
+    const id='11111111-1111-4111-8111-111111111111',item={...project,id,flow_mode:'simple',available_until:null}
+    const {page,redirects}=await harness(platform,async()=>({...empty(),activeMember:false,projects:[item]}))
+    await page.load();await page.openProject(event(id))
+    assert.deepEqual(redirects,['/pages/profile-cards/index?projectId='+id])
+    let calls=0
+    const resumed=await harness(platform,async()=>({...empty(),projects:[item]}),async()=>{calls++})
+    resumed.page.onLoad({projectId:id});await resumed.page.load();await resumed.page.load()
+    assert.equal(calls,1)
+  })
+
+  test(platform + ': membership return finds the original project beyond the first page without submitting another card',async()=>{
+    const id='22222222-2222-4222-8222-222222222222',item={...project,id,flow_mode:'simple',available_until:null},calls=[]
+    const {page}=await harness(platform,async cursors=>({...empty(),projects:cursors?[item]:[],nextCursors:{projects:cursors?null:'next'}}),async(...args)=>calls.push(args))
+    page.onLoad({projectId:id});await page.load()
+    assert.equal(calls.length,1);assert.equal(calls[0][1],id)
+  })
+  test(platform + ': simple pending card cannot apply again and valid holding opens the ordinary menu',async()=>{
+    const {page,navigations}=await harness(platform,async()=>({...empty(),projects:[{...project,flow_mode:'simple',has_current_card:true}]}))
+    await page.load();await page.openProject(event('fans'))
+    assert.equal(page.data.projects[0].buttonText,'去点单查看可用商品');assert.deepEqual(navigations,['/pages/order/index'])
+  })
   test(platform + ': gift progress failure does not clear cards or invent an empty successful gift history',async()=>{
     const {page}=await harness(platform,async()=>({...empty(),cards:[{id:'card',status:'active'}]}),undefined,async()=>{throw new Error('timeout')})
     await page.load();await page.loadGifts()

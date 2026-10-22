@@ -20,6 +20,42 @@ const apps: FastifyInstance[] = []
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
 
 describe('commercialOpsApiPlugin', () => {
+  it('withholds cost sources when their separate permission is revoked while the report is loading', async () => {
+    const access = effectiveAccess()
+    const fixture = buildFixture({ access })
+    fixture.getProfitReport.mockImplementation(async () => {
+      access.permissions = access.permissions.filter(permission => permission !== 'commercial.cost.view')
+      return { currentBusinessDate: '2026-08-11', range: { startDate: '2026-08-01', endDate: '2026-08-11' },
+        sources: { rows: [{ publicId: 'protected-cost-source' }] } }
+    })
+    const response = await fixture.app.inject('/api/commercial-ops/profit?sourceKind=cost')
+    expect(response.statusCode, response.body).toBe(403)
+    expect(response.body).not.toContain('protected-cost-source')
+    expect(fixture.assertPermission).toHaveBeenCalledWith(employeeId, 'commercial.cost.view')
+  })
+
+  it('keeps cost details separately authorized and reports actor-specific print eligibility', async () => {
+    const fixture=buildFixture()
+    fixture.getProfitReport.mockResolvedValue({currentBusinessDate:'2026-08-11',range:{startDate:'2026-08-01',endDate:'2026-08-11'}})
+    const response=await fixture.app.inject('/api/commercial-ops/profit?period=month&anchor=2026-08-11&sourceKind=cost&sourcePage=2')
+    expect(response.statusCode,response.body).toBe(200)
+    expect(fixture.assertPermission).toHaveBeenCalledWith(employeeId,'commercial.cost.view')
+    expect(fixture.getProfitReport).toHaveBeenCalledWith({tenantId,storeId},'month','2026-08-11',{
+      kind:'cost',category:undefined,page:2,includeCostDetails:true,
+    })
+    expect(response.json().data.printAccess).toEqual({allowed:false,reason:'当前账号无经营报表打印权限'})
+    expect((await fixture.app.inject('/api/commercial-ops/profit?sourcePage=-1')).statusCode).toBe(400)
+  })
+
+  it('does not let the caller grant cost detail or bypass the existing print history boundary', async () => {
+    const fixture=buildFixture({access:effectiveAccess({permissions:['commercial.profit.view','order.bill.print']})})
+    fixture.getProfitReport.mockResolvedValue({currentBusinessDate:'2026-08-11',range:{startDate:'2026-08-01',endDate:'2026-08-11'}})
+    const result=await fixture.app.inject('/api/commercial-ops/profit?includeCostDetails=true')
+    expect(result.statusCode,result.body).toBe(200)
+    expect(fixture.getProfitReport.mock.calls[0]?.[3]).toMatchObject({includeCostDetails:false})
+    expect(result.json().data.printAccess).toEqual({allowed:false,reason:'所选期间超出当前账号可打印的历史范围'})
+  })
+
   it('checks live database permission and never returns source, supplier or payroll snapshots', async () => {
     const fixture = buildFixture()
     const response = await fixture.app.inject({
@@ -265,8 +301,9 @@ function buildFixture(overrides: {
     contributionProfitMinor: 9_600, refundReversalAmountMinor: 0,
     costCoverageComplete: true, currency: 'CNY',
   }])
+  const getProfitReport=vi.fn()
   const queryService = {
-    getProfitReport: vi.fn(), listEmployeeSales,
+    getProfitReport, listEmployeeSales,
     listCosts: vi.fn(async () => []), listVouchers: vi.fn(async () => []),
   } as unknown as CommercialOpsApiOptions['queryService']
   const app = Fastify()
@@ -292,7 +329,7 @@ function buildFixture(overrides: {
     }} as Pick<import('./voucher-operation-service.js').VoucherOperationService,'list'|'find'|'redeem'|'recover'|'review'|'approve'|'reject'>):undefined,
     voucherVerification: overrides.voucherVerification,
   })
-  return { app, commands, outcomes, assertPermission, createCost, listEmployeeSales, recordAttempt: recordVoucherVerificationAttempt }
+  return { app, commands, outcomes, assertPermission, createCost, getProfitReport, listEmployeeSales, recordAttempt: recordVoucherVerificationAttempt }
 }
 
 function simulationVerification(): NonNullable<CommercialOpsApiOptions['voucherVerification']> {

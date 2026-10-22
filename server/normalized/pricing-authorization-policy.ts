@@ -2,6 +2,7 @@ import type { AuditActor } from './command-executor.js'
 import type { OrderChannel, SubmitOrderLineInput } from './order-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import {verifyPricingLineAllocations,type PricingLineAllocation} from './pricing-line-allocation.js'
+import type {IssuedCouponProductLine} from './issued-coupon-product-promise.js'
 
 export type PricingAuthorizationKind = 'discount' | 'gift'
 export type PricingAuthorizationSourceType = 'employee' | 'activity' | 'benefit' | 'checkout_quote'
@@ -23,6 +24,7 @@ export interface PricingAuthorityContext {
 }
 
 export interface PricingAuthorityDecision {
+  fulfillmentPromises?: readonly IssuedCouponProductLine[]
   lineAllocations?:readonly PricingLineAllocation[]
   authorized: boolean
   authorizationId: string
@@ -50,6 +52,7 @@ export interface PricingAuthorityPort {
 }
 
 export interface VerifiedPricingAuthorization {
+  readonly fulfillmentPromises?: readonly Readonly<IssuedCouponProductLine>[]
   readonly lineAllocations?:readonly Readonly<PricingLineAllocation>[]
   readonly authorizationId: string
   readonly kind: PricingAuthorizationKind
@@ -119,6 +122,12 @@ export class PricingAuthorizationPolicy {
       currency: decision.currency,
       authorizedByEmployeeId: decision.authorizedByEmployeeId ?? null,
       capability: decision.capability ?? null,
+      ...(decision.fulfillmentPromises === undefined ? {} : {fulfillmentPromises: decision.fulfillmentPromises.map(promise => {
+        requireUuid('fulfillment promise benefit', promise.benefitId)
+        if (!Number.isInteger(promise.requestIndex) || !context.lines[promise.requestIndex]
+          || !['benefit','checkout_quote'].includes(decision.sourceType)) throw new PricingAuthorizationDeniedError('权益履约来源不匹配')
+        return Object.freeze({...promise})
+      })}),
       ...(decision.lineAllocations===undefined?{}:{lineAllocations:verifyPricingLineAllocations(decision.lineAllocations,context.lines,decision.amountMinor)}),
     })
     verifiedAuthorizations.add(verified)

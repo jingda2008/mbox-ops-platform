@@ -133,11 +133,13 @@ const wechatPolicyTemplateDivergences = {
   // 2026-10-20: identical quantity review added on both platforms; pre-existing platform differences retained.
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
-  'pages/order/index': { "wechat": "6d72f1815c78c972fd3c4a43a40832fd5f8b1e47055700e77f7107b5f1aa849c", "alipay": "60d63e030eef1787bdcaabe38a7cb57548e8a648fa6baad78a8c16562ce842be" },
-  'pages/profile/index': {"wechat": "c8741771e41f5e04e2d22b83d216c6b8098866353e590991ba5de7b634feee65", "alipay": "2208e9552cebbf408d7f15e1ccf97873e8dc799654c67b22e58fa38fb4e5fe10", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
+  // 2026-10-23: same supply explanation and stale-menu retry added on both platforms; prior consent differences retained.
+  'pages/order/index': { "wechat": "ff8214c43a581feed9dcc2cc7a69d30fe851e3dff215d6d51600111580c12524", "alipay": "d8521148fd364968baa022f9108dea1f7546929f56a24eeb09ffaeb78553d1f4" },
+  'pages/profile/index': {"wechat": "b0ff38b0e715accef87b1a788c4ae2536417bc16692d2c39f0ff8dda602590b3", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
-  'pages/profile-cards/index': {"wechat": "35bcb245d3e93abe560a9e770a2009bb6fd08a6deda4f740bb91d1b7ac08d43b", "alipay": "385a7e6a8cc313d852944e5a17bdde388f54b573122c019e0eb45ae20c789a07"},
+  // 2026-10-23: same ordinary-menu destination copy clarified; existing platform layout retained.
+  'pages/profile-cards/index': { "wechat": "cb679e24cf35d967b41380b1fb97bc53b2aae27f58cd2710a51ee6cbc714e688", "alipay": "05ad1e0412d4c63c0889647d607387fdcb7901cf44bc61a93812b4ad7a152a7b" },
 
   'pages/profile-preferences/index': { wechat: '821b839de36340872e068bcef174a1f58d63c285160f3e2fa048d7be69508276', alipay: 'a842657e97e011a6b76259dd9c9281e8878836d42e70d3ef32a5ae06b9ff9303' },
   'pages/membership-terms/index': { wechat: 'd06727683d41d9d85ff540ad3e0c8bfb04f59c5d2cb1e11a5265401b43189926', alipay: 'e283016560ab6f27f4ec8a46825fdc748874f54e9316384314b2bb18b3f48b81' },

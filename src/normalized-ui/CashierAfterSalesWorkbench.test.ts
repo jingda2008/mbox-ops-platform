@@ -20,6 +20,35 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const otherEmployeeId = '44444444-4444-4444-8444-444444444444'
 
 describe('CashierAfterSalesWorkbenchView', () => {
+  it.each([1, 3])('explains the actual refund entry for activity service version %s without changing staff review rules', (serviceVersion) => {
+    vi.stubGlobal('window', { location: { search: '?registrationId=activity-registration-1' } })
+    try {
+      const view = workbench([])
+      view.actions.canUseActivityCashier = true
+      view.activityRegistrations = [{ ...activityRegistration([]), serviceVersion }]
+      const html = render(view)
+      expect(html).not.toContain('顾客端没有自助退款入口')
+      expect(html).toContain('员工代办的退款须由另一名有权限的员工复核')
+      if (serviceVersion === 3) {
+        expect(html).toContain('顾客可在小程序申请符合条件的整份退订，申请统一进入本页审核')
+        expect(html).not.toContain('旧版报名如需退款，请联系门店办理')
+      } else {
+        expect(html).toContain('旧版报名如需退款，请联系门店办理')
+        expect(html).not.toContain('顾客可在小程序申请符合条件的整份退订')
+      }
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('shows activity compensation arrangement and customer confirmation to the independent reviewer without allowing self approval',()=>{
+    const own={...refund('activity-compensation','requested',employeeId),activityDisposition:'stop_unstarted' as const,activityCustomerConfirmed:true}
+    const html=render(workbench([payment('wechat',[own])]))
+    expect(html).toContain('停止尚未制作部分（须已由管理者停妥）');expect(html).toContain('顾客确认：已记录确认')
+    expect(html).toContain('发起人不能审核或驳回自己的退款');expect(html).not.toContain('>复核通过</button>')
+    const other={...own,requestedByEmployeeId:otherEmployeeId,activityDisposition:'retain_fulfillment' as const,activityCustomerConfirmed:false}
+    const review=render(workbench([payment('wechat',[other])]))
+    expect(review).toContain('按原约定继续履约');expect(review).toContain('尚无确认记录，请先核对');expect(review).toContain('复核通过')
+  })
+
   it('shows original items, remaining capacity and separates requester from approver', () => {
     const html = render(workbench([
       payment('postar', [
@@ -49,6 +78,13 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('不会再次提交退款')
     expect(html).not.toContain('登记已退')
     expect(html).not.toContain('退款凭证号')
+    expect(html).toContain('退款处理中，尚未确认到账')
+  })
+
+  it('labels an approved refund as awaiting execution instead of already returned funds', () => {
+    const html = render(workbench([payment('postar', [refund('refund-approved', 'approved', otherEmployeeId)])]))
+    expect(html).toContain('退款已批准，待执行，尚未确认到账')
+    expect(html).not.toContain('最近退款：已退款')
   })
 
   it('keeps prior-day unresolved refunds visibly separated from current turnover', () => {

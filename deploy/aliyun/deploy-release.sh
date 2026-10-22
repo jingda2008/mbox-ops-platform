@@ -463,6 +463,8 @@ if [ "${uses_evidence_relay}" = 1 ] && [ "${maintenance_mode}" != 1 ]; then
 fi
 
 if [ "${uses_evidence_relay}" = 1 ]; then
+  activation_attempt=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ "${activation_attempt}" =~ ^[0-9a-f]{32}$ ]]
   activation_log=$(mktemp "${bundle_dir}/.activation-log.XXXXXX")
   if [ "${maintenance_mode}" = 1 ]; then
     ssh "${ssh_options[@]}" "${ssh_target}" "install -m 0600 /dev/null '${remote_release_dir}/.maintenance-evidence-relay'"
@@ -472,7 +474,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
   (
     set +e
     ssh "${ssh_options[@]}" "${ssh_target}" \
-      "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}' '${reconcile_previous_runtime}'" \
+      "'${remote_release_dir}/activate-release.sh' '${remote_release_dir}' '${deployment_tier}' '${public_url}' '${backup_max_age_minutes}' '${reconcile_previous_runtime}' '${activation_attempt}'" \
       > "${activation_log}" 2>&1
     printf '%s\n' "$?" > "${activation_status}"
   ) &
@@ -495,10 +497,20 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     local object_prefix=$4
     local report_name=$5
     local relay_local relay_remote report_sha staged_report
+    local requires_attempt=1 report_path relay_report_path
+    # Planned-maintenance bootstrap uses its existing receipt contract. The
+    # normal activation publishes nonce-bound backup/deployment/completion.
+    [ "${maintenance_mode}" != 1 ] || requires_attempt=0
+    report_path="${remote_release_dir}/${report_name}"
+    relay_report_path="${evidence_release_dir}/${report_name}"
+    if [ "${requires_attempt}" = 1 ]; then
+      report_path="${report_path}.${activation_attempt}"
+      relay_report_path="${relay_report_path}.${activation_attempt}"
+    fi
 
     for _ in $(seq 1 120); do
       if ssh "${ssh_options[@]}" "${ssh_target}" \
-        "test -f '${remote_release_dir}/${marker_name}'"; then
+        "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg attempt '${activation_attempt}' --argjson required '${requires_attempt}' '(\$required == 0) or .activationAttempt == \$attempt' '${remote_release_dir}/${marker_name}' >/dev/null"; then
         break
       fi
       if [ -f "${activation_status}" ]; then
@@ -508,7 +520,7 @@ if [ "${uses_evidence_relay}" = 1 ]; then
       sleep 2
     done
     ssh "${ssh_options[@]}" "${ssh_target}" \
-      "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg sha '${release_sha}' --arg prefix '${object_prefix}' --arg directory '${source_directory}' --arg report '${remote_release_dir}/${report_name}' '.releaseSha == \$sha and .prefix == \$prefix and .evidenceDirectory == \$directory and .report == \$report' '${remote_release_dir}/${marker_name}' >/dev/null"
+      "test -f '${remote_release_dir}/${marker_name}' && jq -e --arg sha '${release_sha}' --arg prefix '${object_prefix}' --arg directory '${source_directory}' --arg report '${report_path}' --arg attempt '${activation_attempt}' --argjson required '${requires_attempt}' '.releaseSha == \$sha and .prefix == \$prefix and .evidenceDirectory == \$directory and .report == \$report and ((\$required == 0) or .activationAttempt == \$attempt)' '${remote_release_dir}/${marker_name}' >/dev/null"
 
     relay_local=$(mktemp -d "${bundle_dir}/.${evidence_kind}-relay.XXXXXX")
     rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
@@ -517,29 +529,59 @@ if [ "${uses_evidence_relay}" = 1 ]; then
     (cd "${relay_local}" && shasum -a 256 -c SHA256SUMS >/dev/null)
 
     relay_remote="${evidence_release_dir}/post-cutover-${evidence_kind}"
+    [ "${requires_attempt}" = 0 ] || relay_remote="${relay_remote}-${activation_attempt}"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
       "rm -rf '${relay_remote}' && install -d -m 0700 '${relay_remote}'"
     rsync -a --no-owner --no-group --no-perms --rsync-path='umask 077 && rsync' --partial "${rsync_resume_option}" \
       -e "ssh -i '${evidence_ssh_key}' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p '${evidence_ssh_port}'" \
       "${relay_local}/" "${evidence_ssh_target}:${relay_remote}/"
     ssh "${evidence_ssh_options[@]}" "${evidence_ssh_target}" \
-      "MBOX_OSS_VERIFICATION_REPORT='${evidence_release_dir}/${report_name}' '${evidence_release_dir}/upload-oss-verified.sh' '${relay_remote}' '${object_prefix}'"
+      "MBOX_OSS_VERIFICATION_REPORT='${relay_report_path}' '${evidence_release_dir}/upload-oss-verified.sh' '${relay_remote}' '${object_prefix}'"
     scp "${evidence_scp_options[@]}" \
-      "${evidence_ssh_target}:${evidence_release_dir}/${report_name}" \
+      "${evidence_ssh_target}:${relay_report_path}" \
       "${relay_local}/${report_name}"
     jq -e --arg prefix "${object_prefix}" \
       '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
       "${relay_local}/${report_name}" >/dev/null
     report_sha=$(shasum -a 256 "${relay_local}/${report_name}" | awk '{print $1}')
     [[ "${report_sha}" =~ ^[0-9a-f]{64}$ ]]
-    staged_report="${remote_release_dir}/.${report_name}.next"
+    staged_report="${report_path}.next"
     ssh "${ssh_options[@]}" "${ssh_target}" \
       "rm -f '${staged_report}'"
     scp "${scp_options[@]}" "${relay_local}/${report_name}" \
       "${ssh_target}:${staged_report}"
     ssh "${ssh_options[@]}" "${ssh_target}" \
-      "chmod 0600 '${staged_report}' && test \"\$(sha256sum '${staged_report}' | awk '{print \$1}')\" = '${report_sha}' && mv -f '${staged_report}' '${remote_release_dir}/${report_name}'"
+      "chmod 0600 '${staged_report}' && test \"\$(sha256sum '${staged_report}' | awk '{print \$1}')\" = '${report_sha}' && jq -e --arg attempt '${activation_attempt}' --argjson required '${requires_attempt}' --arg report '${report_path}' '((\$required == 0) or .activationAttempt == \$attempt) and .report == \$report' '${remote_release_dir}/${marker_name}' >/dev/null && mv -f '${staged_report}' '${report_path}'"
     rm -rf "${relay_local}"
+  }
+
+  relay_contract_backup_if_present() {
+    local ready_kind contract_backup_prefix
+    # Activation decides the contract from the frozen previous image plus live
+    # DB identity. Wait for its first stage, not a locally guessed schema. An
+    # ordinary release advances directly to deployment evidence without ever
+    # creating a contract-backup marker.
+    for _ in $(seq 1 120); do
+      ready_kind=$(ssh "${ssh_options[@]}" "${ssh_target}" \
+        "if test -f '${remote_release_dir}/.contract-backup-evidence-relay-ready.json' && jq -e --arg attempt '${activation_attempt}' '.activationAttempt == \$attempt' '${remote_release_dir}/.contract-backup-evidence-relay-ready.json' >/dev/null; then printf contract; elif test -f '${remote_release_dir}/.deployment-evidence-relay-ready.json' && jq -e --arg attempt '${activation_attempt}' '.activationAttempt == \$attempt' '${remote_release_dir}/.deployment-evidence-relay-ready.json' >/dev/null; then printf deployment; fi")
+      if [ "${ready_kind}" = contract ]; then
+        contract_backup_prefix=$(ssh "${ssh_options[@]}" "${ssh_target}" \
+          "jq -er --arg sha '${release_sha}' --arg attempt '${activation_attempt}' 'select(.schemaVersion == 1 and .releaseSha == \$sha and .activationAttempt == \$attempt) | .prefix | select(test(\"^mbox/backups/[0-9]{4}-[0-9]{2}-[0-9]{2}/\" + \$sha + \"/post-drain/\" + \$attempt + \"\$\"))' '${remote_release_dir}/.contract-backup-evidence-relay-ready.json'")
+        relay_post_cutover_evidence \
+          contract-backup .contract-backup-evidence-relay-ready.json \
+          "${remote_release_dir}/oss-backup" "${contract_backup_prefix}" \
+          oss-backup-verification.json
+        return
+      fi
+      [ "${ready_kind}" != deployment ] || return 0
+      if [ -f "${activation_status}" ]; then
+        cat "${activation_log}" >&2
+        return 1
+      fi
+      sleep 2
+    done
+    echo 'activation did not publish contract-backup or deployment evidence; no migration/backup gate was bypassed' >&2
+    return 1
   }
 
   if [ "${maintenance_mode}" = 1 ]; then
@@ -553,6 +595,8 @@ if [ "${uses_evidence_relay}" = 1 ]; then
       "${remote_release_dir}/oss-maintenance-epoch" \
       "mbox/evidence/rc/v${release_version}/${release_sha}/maintenance-epoch" \
       oss-maintenance-epoch-verification.json
+  else
+    relay_contract_backup_if_present
   fi
   relay_post_cutover_evidence \
     deployment .deployment-evidence-relay-ready.json \

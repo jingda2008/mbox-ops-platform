@@ -136,9 +136,18 @@ for (const width of [320, 390]) test(`printer recovery is isolated and readable 
   await page.setViewportSize({width,height:480})
   await page.evaluate(()=>window.scrollTo({top:240,behavior:'instant'}))
   await expect.poll(()=>page.evaluate(()=>window.scrollY)).toBeGreaterThan(150)
-  const rememberedScroll=await page.evaluate(()=>window.scrollY)
+  // Layout/scroll anchoring can still move the page before navigation commits.
+  // Independently observe the same pagehide instant the product must persist.
+  const departureKey='test:print-recovery:pagehide'
+  await page.evaluate(key=>{
+    sessionStorage.removeItem(key)
+    window.addEventListener('pagehide',()=>sessionStorage.setItem(key,String(window.scrollY)),{once:true})
+  },departureKey)
   await page.goto('/staff/floor')
-  const savedPositions=await page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage).filter(([key])=>key.endsWith(':position'))))
+  const {departure,savedPositions}=await page.evaluate(key=>({departure:sessionStorage.getItem(key),savedPositions:Object.fromEntries(Object.entries(sessionStorage).filter(([name])=>name.endsWith(':position')))}),departureKey)
+  expect(departure).toMatch(/^\d+$/)
+  const rememberedScroll=Number(departure)
+  expect(rememberedScroll).toBeGreaterThan(150)
   expect(Object.values(savedPositions),JSON.stringify(savedPositions)).toContain(String(rememberedScroll))
   await page.goto('/staff/orders')
   await expect(page.getByRole('navigation',{name:'常用营业日'})).toContainText(selectedDate)

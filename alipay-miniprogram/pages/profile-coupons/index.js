@@ -1,3 +1,4 @@
+const runtime = require('../../utils/platform')
 const { getCustomerBenefitWallet } = require('../../utils/api')
 const { money, dateInput } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
@@ -19,6 +20,7 @@ function present(item) {
   const limitText = limits ? [['perCustomerDay', '每日'], ['perCustomerWeek', '每周'], ['perCustomerCampaign', '本活动']]
     .filter(([key]) => limits[key] != null).map(([key, label]) => label + '最多' + limits[key] + '次').join(' · ') : ''
   return {
+    canUsePriceCoupon: !!pricePromise && item.state === 'available' && item.quantityAvailable > 0,
     id: item.id, typeText: pricePromise ? '固定低价兑换券' : BENEFIT_NAMES[item.type] || '优惠券',
     stateText: STATES[item.state] || STATES.unavailable,
     quantityText: '剩余 ' + item.quantityAvailable + ' · 处理中 ' + item.quantityReserved + ' · 已用 ' + item.quantityRedeemed,
@@ -34,6 +36,10 @@ function present(item) {
 Page({
   data: { loading: true, loadingMore: false, error: '', moreError: '', coupons: [], nextCursor: null },
   onShow() { this.load() },
+  usePriceCoupon() {
+    runtime.setStorageSync('mbox.issued-coupon-entry-request.v1', true)
+    runtime.switchTab({ url: '/pages/order/index' })
+  },
   onHide() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
   onUnload() { this.loadGeneration = (this.loadGeneration || 0) + 1 },
   async load() {

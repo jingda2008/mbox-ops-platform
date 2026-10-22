@@ -3,6 +3,7 @@ import {tableSearchMatcher} from '../../shared/table-search'
 import {hasNewStaffPage} from './staff-page-version'
 import {useScreenViewport} from './use-screen-viewport'
 import {ScreenFullscreenButton} from './ScreenFullscreenButton'
+import {ActivityProductionPanel} from './ActivityProductionPanel'
 import {requiresStaffLogin} from './staff-session-error'
 import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenStartSelection,KitchenHandoffPreview,ProductionStation} from '../../shared/kitchen-production'
 import {DurableStaffCommand} from '../durable-staff-command'
@@ -40,7 +41,8 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
   const [start,setStart]=useState<StartDraft|null>(()=>stored<{start:StartDraft|null}>(storageKey,{start:null}).start)
   const [drafts,setDrafts]=useState<Drafts>(()=>stored<{drafts:Drafts}>(storageKey,{drafts:{}}).drafts)
   const [selectedBatch,setSelectedBatch]=useState<string|null>(()=>stored<{selectedBatch?:string}>(storageKey,{}).selectedBatch??null)
-  const [activePane,setActivePane]=useState<'pending'|'working'>(()=>selectedBatch?'working':'pending')
+  const [activePane,setActivePane]=useState<'pending'|'working'|'activity'>(()=>selectedBatch?'working':'pending')
+  const [activityCount,setActivityCount]=useState(0)
   const initialPaneResolved=useRef(false)
   const selectPane=(pane:'pending'|'working')=>{initialPaneResolved.current=true;setActivePane(pane)}
   useEffect(()=>{
@@ -200,8 +202,10 @@ export function KitchenProductionBoard({api,employeeId,blocked,onChanged,onLegac
     <nav className="kitchen-view-switch" aria-label="制作工序切换">
       <button type="button" aria-pressed={activePane==='pending'} onClick={()=>selectPane('pending')}>待制作 {data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</button>
       <button type="button" aria-pressed={activePane==='working'} onClick={()=>selectPane('working')}>制作中 {data?.batches.length??0} 批</button>
+      {api.loadActivityBoard&&api.runActivityProduction&&<button type="button" aria-pressed={activePane==='activity'} onClick={()=>{initialPaneResolved.current=true;setActivePane('activity')}}>活动餐号 {activityCount} 份</button>}
     </nav>
-    <div className="kitchen-columns" data-active-pane={activePane}>
+    {api.loadActivityBoard&&api.runActivityProduction&&<ActivityProductionPanel api={api} station={stationCode} scope={employeeId} active={activePane==='activity'} blocked={blocked||busy||!!unresolved} query={query} onCount={setActivityCount}/>}
+    <div className="kitchen-columns" data-active-pane={activePane} style={activePane==='activity'?{display:'none'}:undefined}>
       <section className={`kitchen-pane ${start&&group?'has-selection':'is-browsing'}`} aria-label="待制作"><h2>待制作 <span>{data?.pending.reduce((sum,item)=>sum+item.unmade,0)??0} 份</span></h2>
         <div className="kitchen-cards">{groups.filter(item=>item.items.some(row=>matchesSearch(row.tableCode,row.orderPublicId,item.name))).map(item=><button type="button" className="kitchen-group" key={item.key} aria-pressed={start?.key===item.key} disabled={locked} onClick={()=>choose(item.key)}>
           <strong>{item.name} <b>{item.total} 份</b></strong><ProductionNote text={item.notes}/><small>{!item.notes&&'无特殊备注 · '}最早 {clock(item.anchor)}</small>

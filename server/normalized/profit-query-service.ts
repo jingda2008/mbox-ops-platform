@@ -1,4 +1,6 @@
-import type { StoreScope, ScopedPostgresTransactionRunner } from './transaction-runner.js'
+import type { OperatingDashboardProjection, OperatingDashboardSourceQuery } from '../../src/shared/operating-dashboard.js'
+import { readOperatingDashboard } from './operating-dashboard-query.js'
+import type { ScopedTransaction, StoreScope, ScopedPostgresTransactionRunner } from './transaction-runner.js'
 
 export type ProfitPeriod = 'day' | 'week' | 'month' | 'quarter' | 'year'
 
@@ -7,7 +9,7 @@ export interface ProfitPeriodRange {
   endDate: string
 }
 
-export interface ProfitReport {
+export interface ProfitReport extends Partial<OperatingDashboardProjection> {
   period: ProfitPeriod
   range: ProfitPeriodRange
   currency: string
@@ -52,6 +54,8 @@ export interface ProfitReport {
   }
   caveats: string[]
 }
+
+export type OperatingProfitReport = ProfitReport & OperatingDashboardProjection
 
 export interface EmployeeSalesQuery {
   startDate: string
@@ -195,21 +199,33 @@ interface VoucherSummaryDbRow extends Record<string, unknown> {
 }
 
 export class ProfitQueryService {
-  constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+  constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>) {}
 
   async getProfitReport(
     scope: Readonly<StoreScope>,
     period: ProfitPeriod,
     anchorDate: string,
-  ): Promise<ProfitReport> {
-    const range = profitPeriodRange(period, anchorDate)
-    return this.transactions.run(scope, async (transaction) => {
-      const store = await transaction.query<{ currency: string }>(`
-        SELECT currency FROM mbox.stores
+    sourceQuery: OperatingDashboardSourceQuery = {},
+  ): Promise<OperatingProfitReport> {
+    return this.transactions.run(scope, transaction => this.getProfitReportInTransaction(transaction, period, anchorDate, sourceQuery),
+      { isolation: 'repeatable-read', readOnly: true })
+  }
+
+  /** Printing reuses this reader inside its authorized command transaction. */
+  async getProfitReportInTransaction(transaction: ScopedTransaction, period: ProfitPeriod, anchorDate: string,
+    sourceQuery: OperatingDashboardSourceQuery = {}): Promise<OperatingProfitReport> {
+      const scope = transaction.scope
+      const requestedRange = profitPeriodRange(period, anchorDate)
+      const store = await transaction.query<{ currency: string; current_business_date: string; as_of: string }>(`
+        SELECT currency,mbox.current_operating_business_date(tenant_id,id)::text current_business_date, transaction_timestamp()::text as_of FROM mbox.stores
         WHERE tenant_id = $1::uuid AND id = $2::uuid
       `, [scope.tenantId, scope.storeId])
       const currency = store.rows[0]?.currency
       if (!currency) throw new Error('Store currency was not found')
+      const currentBusinessDate = required(store.rows[0]).current_business_date
+      if (requestedRange.startDate > currentBusinessDate) throw new TypeError('不提供未来实际经营期间，请选择已发生的营业日')
+      const range = { startDate: requestedRange.startDate, endDate: requestedRange.endDate > currentBusinessDate ? currentBusinessDate : requestedRange.endDate }
+      const dashboard = await readOperatingDashboard(transaction, period, { ...range, requestedEndDate: requestedRange.endDate, currentBusinessDate }, currency, sourceQuery)
 
       const cashRevenue = await transaction.query<RevenueRow>(`
         SELECT
@@ -222,26 +238,6 @@ export class ProfitQueryService {
         WHERE tenant_id = $1::uuid AND store_id = $2::uuid
           AND business_date BETWEEN $3::date AND $4::date
           AND currency = $5
-      `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
-
-      const accrualRevenue = await transaction.query<{ net_minor: string | number }>(`
-        SELECT COALESCE(SUM(CASE WHEN payment.order_batch_id IS NULL THEN entry.amount_minor WHEN entry.entry_type='payment' THEN allocated.amount_minor WHEN entry.entry_type='refund' THEN entry.amount_minor ELSE trunc(entry.amount_minor::numeric*allocated.cumulative_minor/payment.amount_minor)-trunc(entry.amount_minor::numeric*(allocated.cumulative_minor-allocated.amount_minor)/payment.amount_minor) END), 0)::text AS net_minor
-        FROM mbox.reconciliation_entries AS entry
-        JOIN mbox.payments AS payment
-          ON payment.tenant_id = entry.tenant_id AND payment.store_id = entry.store_id
-         AND payment.id = entry.payment_id
-        LEFT JOIN mbox.refunds refund ON refund.tenant_id=entry.tenant_id AND refund.store_id=entry.store_id AND refund.id=entry.refund_id
-        LEFT JOIN LATERAL(SELECT a.order_id,a.amount_minor,sum(a.amount_minor) OVER(ORDER BY a.position) AS cumulative_minor FROM mbox.order_payment_allocations a WHERE a.tenant_id=payment.tenant_id AND a.store_id=payment.store_id AND a.batch_id=payment.order_batch_id) allocated ON true
-        JOIN mbox.orders AS order_row
-          ON order_row.tenant_id = payment.tenant_id AND order_row.store_id = payment.store_id
-         AND order_row.id = COALESCE(payment.order_id,allocated.order_id)
-         AND (entry.entry_type<>'refund' OR refund.order_id IS NULL OR refund.order_id=order_row.id)
-        JOIN mbox.table_sessions AS session
-          ON session.tenant_id = order_row.tenant_id AND session.store_id = order_row.store_id
-         AND session.id = order_row.table_session_id
-        WHERE entry.tenant_id = $1::uuid AND entry.store_id = $2::uuid
-          AND order_row.business_date BETWEEN $3::date AND $4::date
-          AND entry.currency = $5
       `, [scope.tenantId, scope.storeId, range.startDate, range.endDate, currency])
 
       const costs = await transaction.query<CostAggregateRow>(`
@@ -377,18 +373,19 @@ export class ProfitQueryService {
       const adjustmentsMinor = minor(cash.adjustment_minor)
       const providerFeesMinor = minor(cash.fee_minor)
       const netReceiptsMinor = minor(cash.net_minor)
-      const reconciledRevenueMinor = minor(required(accrualRevenue.rows[0]).net_minor)
+      const purchaseFeesMinor = dashboard.costBreakdown.find(row => row.code === 'provider_fee')?.amountMinor ?? 0
+      const reconciledRevenueMinor = dashboard.dashboard.incomeMinor - purchaseFeesMinor
       const cashPaidMinor = minor(cost.cash_cost_minor)
       const accrualAllocatedMinor = minor(cost.accrual_cost_minor)
-      const goodsCostMinor = minor(goodsCost.goods_cost_minor)
-      const inventoryLossMinor = minor(inventoryLoss.inventory_loss_minor)
+      const goodsCostMinor = dashboard.costBreakdown.filter(row => ['goods','activity_goods'].includes(row.code)).reduce((sum,row) => sum+row.amountMinor,0)
+      const inventoryLossMinor = dashboard.costBreakdown.filter(row => ['inventory_loss','activity_remake'].includes(row.code)).reduce((sum,row) => sum+row.amountMinor,0)
       const orderItemsMissingCostCount = minor(goodsCost.missing_cost_count)
       const inventoryLossesMissingCostCount = minor(inventoryLoss.missing_cost_count)
       const cashBalanceMinor = netReceiptsMinor - cashPaidMinor
       const grossProfitMinor = reconciledRevenueMinor - goodsCostMinor
       const operatingProfitMinor = grossProfitMinor - inventoryLossMinor - accrualAllocatedMinor
       const reportGaps = {
-        unreconciledCapturedPaymentsMinor: minor(gap.unreconciled_payments_minor),
+        unreconciledCapturedPaymentsMinor: minor(gap.unreconciled_payments_minor) + dashboard.unreconciledActivityPaymentsMinor,
         unsettledVoucherSettlementMinor: minor(gap.unsettled_vouchers_minor),
         unactualizedAccrualMinor: minor(cost.unactualized_accrual_minor),
         costsMissingCashDateMinor: minor(cost.missing_cash_date_minor),
@@ -396,9 +393,9 @@ export class ProfitQueryService {
         inventoryLossesMissingCostCount,
         unknownUnrecordedCostsMeasurable: false as const,
       }
-      const hasKnownGap = Object.values(reportGaps).some((value) => typeof value === 'number' && value !== 0)
+      const hasKnownGap = dashboard.knownMissingCostCount > 0 || dashboard.unassignedIncomeCount > 0 || Object.values(reportGaps).some((value) => typeof value === 'number' && value !== 0)
       return {
-        period, range, currency, asOf: new Date().toISOString(),
+        ...dashboard, period, range, currency, asOf: required(store.rows[0]).as_of,
         status: hasKnownGap ? 'provisional' : 'complete',
         revenue: {
           cash: { paymentReceiptsMinor, refundsMinor, adjustmentsMinor, providerFeesMinor, netReceiptsMinor },
@@ -418,13 +415,20 @@ export class ProfitQueryService {
         },
         gaps: reportGaps,
         caveats: [
-          '收入只采用已写入对账流水的支付、退款、费用和调整。',
+          ...([
+            ['unreconciledCapturedPaymentsMinor', '已收款但尚未完成对账入账，经营收入待核对'],
+            ['unsettledVoucherSettlementMinor', '团购券待结算金额，实际结算结果待核对'],
+            ['unactualizedAccrualMinor', '费用仍为已知估计，需财务核对实际金额'],
+            ['costsMissingCashDateMinor', '费用缺付款日期，相关现金口径待核对'],
+          ] as const).filter(([key]) => reportGaps[key] !== 0)
+            .map(([key, reason]) => `${reason}：${currency} ${(reportGaps[key] / 100).toFixed(2)}。`),
+          '经营收入按原订单和活动购买营业日归属；成功退款回原购买期间，实际净收按收退款发生日。',
+          '主屏经营收入与手续费成本分列；实际净收不扣手续费和其他调整，未分类调整需核对。',
           '现金结余按对账营业日和成本付款日计算；它不是会计利润。',
           '经营利润按订单冻结商品成本、单独损耗成本和费用服务期分摊计算；库存采购付款不会与商品成本重复扣除。',
           '尚未录入系统的未知成本无法被量化，报告不能替代月末财务关账。',
         ],
       }
-    }, { isolation: 'repeatable-read', readOnly: true })
   }
 
   async listEmployeeSales(
@@ -587,7 +591,7 @@ function validateRange(startDate: string, endDate: string): void {
 }
 
 function validateDate(value: string, label: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) {
     throw new TypeError(`${label} must use YYYY-MM-DD`)
   }
 }

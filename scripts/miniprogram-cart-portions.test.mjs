@@ -9,6 +9,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     let page;const calls=[]
     const api={replaceSharedCartBundleSelection:async(...args)=>{calls.push(args);return{lines:[]}}}
     vm.runInNewContext(await readFile(new URL(`../${platform}/pages/order/index.js`,import.meta.url),'utf8'),{
+      setTimeout,clearTimeout,
       Page:value=>{page=value},require:path=>path.endsWith('/checkout-upgrade')?loadMiniModule(new URL(`../${platform}/utils/checkout-upgrade.js`,import.meta.url)):path.endsWith('/checkout-coupons')?loadMiniModule(new URL(`../${platform}/utils/checkout-coupons.js`,import.meta.url)):path.endsWith('/api')?api:{
         randomId:()=> 'test-portion-operation',money:String,customerErrorMessage:()=> '请刷新购物车',
       },
@@ -44,6 +45,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     // The page destructures its API, so emulate rejection through a fresh VM.
     let def
     vm.runInNewContext(await readFile(new URL(`../${platform}/pages/order/index.js`,import.meta.url),'utf8'),{
+      setTimeout,clearTimeout,
       Page:value=>{def=value},require:path=>path.endsWith('/checkout-upgrade')?loadMiniModule(new URL(`../${platform}/utils/checkout-upgrade.js`,import.meta.url)):path.endsWith('/checkout-coupons')?loadMiniModule(new URL(`../${platform}/utils/checkout-coupons.js`,import.meta.url)):path.endsWith('/api')?api:{randomId:()=> 'test-operation',customerErrorMessage:()=> '请刷新购物车'},
     })
     page.refreshSharedCart=async()=>{refreshed++}

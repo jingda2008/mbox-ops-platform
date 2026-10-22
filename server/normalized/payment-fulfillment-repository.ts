@@ -137,6 +137,19 @@ export class PaymentFulfillmentRepository {
         inventoryConsumptions: [], kdsTasks: [], experiencePlan,
       }
     }
+    // Provider success is a money fact even when late. Compare the channel's
+    // success time, never callback arrival or today's product/card settings.
+    if(options.paymentId) {
+      const receipt=await this.transaction.query<{late:boolean}>(`SELECT p.succeeded_at>=a.expires_at AS late
+        FROM mbox.payments p JOIN mbox.payment_provider_actions a
+          ON a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.payment_id=p.id
+        WHERE p.tenant_id=$1::uuid AND p.store_id=$2::uuid AND p.id=$3::uuid`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,options.paymentId])
+      if(receipt.rows[0]?.late) {
+        await this.abandonGuestSelfCheckout(orderId,'渠道付款晚于购买截止，保留收款并转人工售后')
+        return {activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan()}
+      }
+    }
     if (state.fulfillment_state !== 'awaiting_payment' || !settled) {
       throw new OrderNotPayableError(orderId, 'trusted full payment is required before fulfillment')
     }

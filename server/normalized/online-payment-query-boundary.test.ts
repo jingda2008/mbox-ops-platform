@@ -181,6 +181,7 @@ function runner(saved?: Record<string, unknown>) {
       if (sql.startsWith('SELECT payment.id')) {
         return { rows: [paymentContext as Row], rowCount: 1 }
       }
+      if (sql.startsWith('SELECT item.product_id') || sql.startsWith('SELECT p.id AS product_id') || sql.startsWith('SELECT r.payment_due_at::text') || sql.startsWith('UPDATE mbox.payment_provider_actions SET expires_at')) return {rows:[],rowCount:0}
       if (sql.includes('FROM mbox.idempotency_records')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM mbox.verified_provider_observations')) return { rows: saved ? [saved as Row] : [], rowCount: saved ? 1 : 0 }
       throw new Error(`Unexpected payment query: ${sql}`)

@@ -5,7 +5,7 @@ import {pickupFixtureBoard,pickupFixtureUnit} from '../../src/normalized-ui/staf
 test.use({isMobile:false,hasTouch:true})
 async function login(page:Page,employee='wuya'){
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
-  await page.goto('/');await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
+  await page.goto(f.staffUrl);await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill(employee);await page.getByLabel('四位 PIN').fill(f.employeePin);await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()
 }
 async function reachable(button:Locator,height:number){

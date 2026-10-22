@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import {verifyIssuedCouponProductLines, legacyProductDeadlineSql,type IssuedCouponProductLine} from './issued-coupon-product-promise.js'
 import {fulfillmentDueAt} from './fulfillment-sla.js'
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -130,6 +131,8 @@ interface ProductPriceRow extends Record<string, unknown> {
   loyalty_eligible: boolean
   product_updated_at: string
   price_type: string
+  purchase_deadline?: string | null
+  standard_price_until?: string | null
   standard_amount_minor?:string|number
   amount_minor: string | number
   currency: string
@@ -157,6 +160,7 @@ interface BundleComponentRow extends Record<string, unknown> {
   component_quantity: number
   choice_group_id?: string | null
   choice_group_name?: string | null
+  component_service_deadline?: string | null
 }
 
 interface BundleChoiceOptionRow extends BundleComponentRow {
@@ -166,6 +170,7 @@ interface BundleChoiceOptionRow extends BundleComponentRow {
   option_quantity: number
   component_allowed_channels: OrderChannel[]
   component_guest_visible: boolean
+  component_service_available?: boolean
   component_available_from: string | null
   component_available_until: string | null
   store_local_time: string
@@ -270,16 +275,17 @@ export class OrderRepository {
    * stock or consume a coupon. Additional pricing must be authorized separately;
    * card pricing uses the lowest live card price. Coupon/other authorized pricing
    * explicitly requests standard prices, so discounts never compound. */
-  async quoteCurrent(lines:readonly SubmitOrderLineInput[],channel:OrderChannel,useCardPrice=true){
-    const requested=normalizeRequestedLines(lines),priced=await this.loadCurrentPrices(requested,false,this.customerId,useCardPrice)
+  async quoteCurrent(lines:readonly SubmitOrderLineInput[],channel:OrderChannel,useCardPrice=true,fulfillmentPromises:readonly IssuedCouponProductLine[]=[]){
+    await verifyIssuedCouponProductLines(this.transaction,this.customerId,lines,fulfillmentPromises)
+    const requested=normalizeRequestedLines(lines),priced=await this.loadCurrentPrices(requested,false,this.customerId,useCardPrice,fulfillmentPromises)
     const currency=requireSingleCurrency(priced)
     const gross=priced.map((price,index)=>{assertProductOrderable(price,requested[index]!,channel);return buildItem(price,requested[index]!)})
-    const components=await this.loadBundleComponents(requested,priced,channel,false)
+    const components=await this.loadBundleComponents(requested,priced,channel,false,fulfillmentPromises)
     const costed=applyConfigurableBundleCosts(gross,components)
     const items=costed.map(item=>({
       requestIndex:item.requestIndex,productId:item.productId,quantity:item.quantity,
       amountMinor:multiplySafeMoney(item.unitPriceMinor,item.quantity,'quoted line price'),
-      unitPriceMinor:item.unitPriceMinor,costMinor:item.totalCostMinorAtSubmission,
+      unitPriceMinor:item.unitPriceMinor,priceType:String(item.productSnapshot.priceType??'standard'),costMinor:item.totalCostMinorAtSubmission,
       name:String(item.productSnapshot.name??''),bundle:item.productSnapshot.productKind==='bundle',
       note:requested[item.requestIndex]!.note,
       composition:item.productSnapshot.productKind==='bundle'
@@ -291,7 +297,7 @@ export class OrderRepository {
       fulfillmentStation:item.fulfillmentStation,
       consumesInventory:item.parentOrderItemId!==null||item.fulfillmentStation!=='none',
     }))
-    return{pricingBasis:priced.some(p=>p.price_type==='member_card')?'member_card_or_standard' as const:'standard_only' as const,currency,subtotalAmountMinor:sumSafe(items.map(item=>item.amountMinor)),costAmountMinor:items.some(item=>item.costMinor===null)?null:sumSafe(items.map(item=>item.costMinor!)),items,operationalPortions}
+    return{purchaseDeadline:earliestPurchaseDeadline(priced,components),pricingBasis:priced.some(p=>p.price_type==='member_card')?'member_card_or_standard' as const:'standard_only' as const,currency,subtotalAmountMinor:sumSafe(items.map(item=>item.amountMinor)),costAmountMinor:items.some(item=>item.costMinor===null)?null:sumSafe(items.map(item=>item.costMinor!)),items,operationalPortions}
   }
 
   /**
@@ -302,13 +308,15 @@ export class OrderRepository {
   async assertCurrentOrderable(
     lines: readonly SubmitOrderLineInput[],
     channel: OrderChannel,
+    fulfillmentPromises: readonly IssuedCouponProductLine[] = [],
   ): Promise<void> {
+    await verifyIssuedCouponProductLines(this.transaction,this.customerId,lines,fulfillmentPromises)
     const requested = normalizeRequestedLines(lines)
-    const priced = await this.loadCurrentPrices(requested)
+    const priced = await this.loadCurrentPrices(requested,true,this.customerId,true,fulfillmentPromises)
     for (const [index, price] of priced.entries()) {
       assertProductOrderable(price, requested[index]!, channel)
     }
-    await this.loadBundleComponents(requested, priced, channel)
+    await this.loadBundleComponents(requested, priced, channel,true,fulfillmentPromises)
   }
 
   async createSubmitted(
@@ -319,11 +327,18 @@ export class OrderRepository {
     if (pricingAuthorization) assertVerifiedPricingAuthorization(pricingAuthorization)
     const requested = normalizeRequestedLines(input.lines)
     await this.lockOpenTableSession(input.tableSessionId)
-    const priced = await this.loadCurrentPrices(requested,true,input.createdByCustomerId??this.customerId,!pricingAuthorization)
+    const promises=pricingAuthorization?.fulfillmentPromises??[]
+    const priced = await this.loadCurrentPrices(requested,true,input.createdByCustomerId??this.customerId,!pricingAuthorization,promises)
     const currency = requireSingleCurrency(priced)
     const grossItems = priced.map((price, index) => {
       assertProductOrderable(price, requested[index]!, input.channel)
-      return buildItem(price, requested[index]!)
+      const item=buildItem(price, requested[index]!)
+      const promise=promises.find(p=>p.requestIndex===index)
+      if(promise){
+        Object.assign(item.productSnapshot,{fulfillmentBenefitId:promise.benefitId,
+          fulfillmentPromiseIndex:index,fulfillmentPricingAuthorizationId:pricingAuthorization!.authorizationId})
+      }
+      return item
     })
     const subtotalAmountMinor = sumSafe(grossItems.map((item) => item.unitPriceMinor * item.quantity))
     validatePricingAuthorization(pricingAuthorization, subtotalAmountMinor)
@@ -331,7 +346,7 @@ export class OrderRepository {
       verifyPricingLineAllocations(pricingAuthorization.lineAllocations,input.lines,pricingAuthorization.amountMinor)
     }
     const itemRows = allocatePricingAdjustment(grossItems, pricingAuthorization)
-    const bundleComponents = await this.loadBundleComponents(requested, priced, input.channel)
+    const bundleComponents = await this.loadBundleComponents(requested, priced, input.channel,true,promises)
     const costedItems=applyConfigurableBundleCosts(itemRows,bundleComponents)
     const operationalItems = expandBundleItems(costedItems, bundleComponents)
     const discountAmountMinor = sumSafe(itemRows.map((item) => item.discountAmountMinor))
@@ -376,6 +391,8 @@ export class OrderRepository {
       input.createdByCustomerId ?? null,
     ])
     const order = requireOne(insertedOrder, 'Submitted order insert')
+    const purchaseDeadline=earliestPurchaseDeadline(priced,bundleComponents)
+    if(purchaseDeadline && (input.settlementMode??'table_tab')==='immediate_payment') await this.transaction.query(`UPDATE mbox.orders SET fulfillment_expires_at=LEAST(fulfillment_expires_at,$4::timestamptz) WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,order.id,purchaseDeadline])
 
     const insertedItems: OrderItem[] = []
     for (const item of operationalItems) {
@@ -544,17 +561,17 @@ export class OrderRepository {
     if (locked.rowCount !== 1) throw new TableSessionUnavailableForOrderError(tableSessionId)
   }
 
-  private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true,customerId=this.customerId,useCardPrice=true): Promise<ProductPriceRow[]> {
+  private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true,customerId=this.customerId,useCardPrice=true,fulfillmentPromises:readonly IssuedCouponProductLine[]=[]): Promise<ProductPriceRow[]> {
     const result = await this.transaction.query<ProductPriceRow>(`
       WITH requested AS (
-        SELECT request_index, product_id
+        SELECT request_index, product_id, benefit_id
         FROM jsonb_to_recordset($3::jsonb)
-          AS line(request_index integer, product_id uuid)
+          AS line(request_index integer, product_id uuid, benefit_id uuid)
       )
       SELECT requested.request_index, product.id AS product_id,
         product.code AS product_code, product.name AS product_name,
         product.category_code, product.product_kind, product.fulfillment_station,
-        product.product_snapshot, product.inventory_control_mode, (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)) AS guest_visible, product.allowed_channels,
+        product.product_snapshot, product.inventory_control_mode, (requested.benefit_id IS NOT NULL OR mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$4::uuid)) AS guest_visible, product.allowed_channels,
         product.max_order_quantity,
         to_char(product.available_from, 'HH24:MI') AS available_from,
         to_char(product.available_until, 'HH24:MI') AS available_until,
@@ -562,7 +579,8 @@ export class OrderRepository {
         product.cost_amount_minor, product.loyalty_eligible,
         product.updated_at::text AS product_updated_at,
         CASE WHEN $5 AND mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)<price.amount_minor THEN 'member_card' ELSE price.price_type END AS price_type,
-        price.amount_minor AS standard_amount_minor,
+        price.amount_minor AS standard_amount_minor, price.valid_until::text AS standard_price_until,
+        CASE WHEN requested.benefit_id IS NOT NULL THEN (${legacyProductDeadlineSql()})::text ELSE mbox.product_quote_deadline(product.tenant_id,product.store_id,product.id,$4::uuid,CASE WHEN $5 THEN LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) ELSE price.amount_minor END,$5 AND COALESCE(mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)<price.amount_minor,false))::text END AS purchase_deadline,
         CASE WHEN $5 THEN LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) ELSE price.amount_minor END AS amount_minor, price.currency, store.timezone AS store_timezone,
         to_char(clock_timestamp() AT TIME ZONE store.timezone, 'HH24:MI') AS store_local_time,
         extract(isodow FROM clock_timestamp() AT TIME ZONE store.timezone)::integer AS store_iso_weekday
@@ -577,7 +595,7 @@ export class OrderRepository {
        AND product.id = requested.product_id
        AND product.status = 'active'
       JOIN LATERAL (
-        SELECT candidate.price_type, candidate.amount_minor, candidate.currency
+        SELECT candidate.price_type, candidate.amount_minor, candidate.currency, candidate.valid_until
         FROM mbox.product_prices AS candidate
         WHERE candidate.tenant_id = product.tenant_id
           AND candidate.store_id = product.store_id
@@ -588,7 +606,7 @@ export class OrderRepository {
         ORDER BY candidate.valid_from DESC, candidate.id DESC
         LIMIT 1
       ) AS price ON true
-      WHERE product.guest_visible OR NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.exclusive) OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)
+      WHERE requested.benefit_id IS NOT NULL OR product.guest_visible OR NOT EXISTS(SELECT 1 FROM mbox.member_card_menu_items mi WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.exclusive) OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)
       ORDER BY requested.request_index
       ${lock?'FOR SHARE OF product':''}
     `, [
@@ -597,6 +615,7 @@ export class OrderRepository {
       JSON.stringify(requested.map((line) => ({
         request_index: line.requestIndex,
         product_id: line.productId,
+        benefit_id: fulfillmentPromises.find(p=>p.requestIndex===line.requestIndex)?.benefitId??null,
       }))),
       customerId,useCardPrice,
     ])
@@ -613,6 +632,7 @@ export class OrderRepository {
     priced: readonly ProductPriceRow[],
     channel: OrderChannel,
     lock=true,
+    fulfillmentPromises: readonly IssuedCouponProductLine[] = [],
   ): Promise<BundleComponentRow[]> {
     for(const [index,price] of priced.entries()){
       if(price.product_kind==='single'&&requested[index]!.bundleSelections.length>0){
@@ -623,6 +643,7 @@ export class OrderRepository {
       ? [{
           request_index: requested[index]!.requestIndex,
           bundle_product_id: price.product_id,
+          issued_promise: fulfillmentPromises.some(p => p.requestIndex === requested[index]!.requestIndex),
           ordered_quantity: requested[index]!.quantity,
         }]
       : [])
@@ -674,9 +695,9 @@ export class OrderRepository {
     ])
     const choiceResult = await this.transaction.query<BundleChoiceOptionRow>(`
       WITH requested_bundle AS (
-        SELECT request_index,bundle_product_id,ordered_quantity,bundle_selections
+        SELECT request_index,bundle_product_id,ordered_quantity,bundle_selections,issued_promise
         FROM jsonb_to_recordset($3::jsonb) AS line(
-          request_index integer,bundle_product_id uuid,ordered_quantity integer,bundle_selections jsonb
+          request_index integer,bundle_product_id uuid,ordered_quantity integer,bundle_selections jsonb,issued_promise boolean
         )
       )
       SELECT requested_bundle.request_index,requested_bundle.bundle_product_id,
@@ -698,8 +719,10 @@ export class OrderRepository {
            AND reference_price.currency='CNY' AND reference_price.valid_from<=statement_timestamp()
            AND (reference_price.valid_until IS NULL OR reference_price.valid_until>statement_timestamp())
          ORDER BY reference_price.valid_from DESC,reference_price.id DESC LIMIT 1) AS component_reference_price_minor,
+        (requested_bundle.issued_promise OR mbox.product_base_service_deadline(product.tenant_id,product.store_id,product.id) IS NOT NULL) AS component_service_available,
+        CASE WHEN requested_bundle.issued_promise THEN (${legacyProductDeadlineSql()})::text ELSE mbox.product_base_service_deadline(product.tenant_id,product.store_id,product.id)::text END AS component_service_deadline,
         product.allowed_channels AS component_allowed_channels,
-        product.guest_visible AS component_guest_visible,
+        (requested_bundle.issued_promise OR product.guest_visible) AS component_guest_visible,
         to_char(product.available_from,'HH24:MI') AS component_available_from,
         to_char(product.available_until,'HH24:MI') AS component_available_until,
         to_char((clock_timestamp() AT TIME ZONE store.timezone)::time,'HH24:MI') AS store_local_time,
@@ -867,6 +890,7 @@ function choiceOptionOrderable(option: BundleChoiceOptionRow, channel: OrderChan
   if (option.component_product_kind !== 'single' || option.component_status !== 'active') return false
   if (!option.component_allowed_channels.includes(channel)) return false
   if (channel === 'guest_qr' && !option.component_guest_visible) return false
+  if(option.component_service_available===false) return false
   const start = option.component_available_from
   const end = option.component_available_until
   if (start === null || end === null) return true
@@ -919,6 +943,7 @@ function buildItem(price: ProductPriceRow, requested: RequestedLineRecord) {
       categoryCode: price.category_code,
       ...(price.inventory_control_mode ? { inventoryControlMode: price.inventory_control_mode } : {}),
       priceType: price.price_type,
+      purchaseRuleVersion: 3,
       ...(price.price_type==='member_card'?{standardAmountMinor:asSafeMoney(price.standard_amount_minor!,'standard price'),cardPriceMinor:unitPriceMinor,discountPolicy:'exclusive_lowest_card_price'}:{}),
       productKind: price.product_kind,
       source: toJsonObject(price.product_snapshot),
@@ -1209,6 +1234,7 @@ function assertProductOrderable(
     || (channel === 'guest_qr' && !price.guest_visible)) {
     throw new OrderProductUnavailableError(requested.productId,'该商品未开放当前点单渠道，请选择其他商品或联系服务员')
   }
+  if (price.purchase_deadline === null) throw new OrderProductUnavailableError(requested.productId,'当前不在可售时段或专属资格已失效，请刷新菜单')
   if (price.available_from === null || price.available_until === null) return
   const orderable = price.available_from < price.available_until
     ? price.store_local_time >= price.available_from && price.store_local_time < price.available_until
@@ -1252,4 +1278,12 @@ function requireOne<Row extends Record<string, unknown>>(
   const row = result.rows[0]
   if (result.rowCount !== 1 || row === undefined) throw new Error(`${operation} did not affect exactly one row`)
   return row
+}
+
+function earliestPurchaseDeadline(rows: readonly ProductPriceRow[],components:readonly BundleComponentRow[]=[]): string|null {
+  // Only configurable choices are selected from today's menu. Fixed components
+  // retain the package's promised composition and do not inherit single-dish hours.
+  const ends=[...rows.flatMap(row=>[row.purchase_deadline,row.standard_price_until]),
+    ...components.filter(component=>component.choice_group_id).map(component=>component.component_service_deadline)].filter((value): value is string=>typeof value==='string'&&Number.isFinite(Date.parse(value)))
+  return ends.length?new Date(Math.min(...ends.map(value=>Date.parse(value)))).toISOString():null
 }

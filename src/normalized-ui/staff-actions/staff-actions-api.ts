@@ -1,6 +1,9 @@
+import type { MemberGiftWallet, MemberGiftCommand, MemberGiftReceipt } from '../../shared/member-gift-redemption'
 import {ReservationReception} from './reservation-reception'
 import { AssignmentRecovery, stableAssignmentIntent, validateAssignmentReceipt, type AssignmentRecoverySummary } from './assignment-recovery'
 import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenHandoffPreview} from '../../shared/kitchen-production'
+import type { ActivityProductionCommand, ActivityProductionResult } from '../../shared/activity-service'
+import type {ActivityProductionBoard,ActivityProductionRecovery} from '../../shared/activity-production-recovery'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import type {OperatingHistory} from '../../shared/operating-history'
@@ -248,6 +251,11 @@ export interface ObservationEventReplacement {
 }
 
 export interface StaffActionsApiPort {
+  loadMemberGiftWallet?(code:string,cursor?:string,signal?:AbortSignal):Promise<MemberGiftWallet>
+  runMemberGiftCommand?(employeeId:string,command:MemberGiftCommand,key:string):Promise<MemberGiftReceipt>
+  loadActivityBoard?(station:'bar'|'kitchen'|'pickup',signal?:AbortSignal):Promise<ActivityProductionBoard>
+  runActivityProduction?(command:ActivityProductionCommand,key:string):Promise<ActivityProductionResult>
+  recoverActivityProduction?(recovery:ActivityProductionRecovery):Promise<ActivityProductionResult>
   loadMemberVisit?(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus>
   checkInMemberVisit?(code: string, businessDate: string): Promise<import('../../shared/member-visit').MemberVisit>
   cancelMemberVisit?(code: string, businessDate: string, visitId: string): Promise<import('../../shared/member-visit').MemberVisit>
@@ -427,6 +435,26 @@ export interface StaffActionsApiOptions {
 }
 
 export class StaffActionsApi implements StaffActionsApiPort {
+  async loadMemberGiftWallet(code:string,cursor?:string,signal?:AbortSignal):Promise<MemberGiftWallet> {
+    const response=await this.request('/api/staff/native-benefit-wallet/lookup',{method:'POST',signal,
+      headers:new Headers({'content-type':'application/json'}),body:JSON.stringify({code,...(cursor?{cursor}:{})})},true)
+    const payload=await readJson(response)
+    if(!isObject(payload)||!isObject(payload.data)||typeof payload.data.employeeId!=='string'||typeof payload.data.customerId!=='string'
+      ||!Array.isArray(payload.data.items)||!Array.isArray(payload.data.tables)||!Array.isArray(payload.data.permissions))
+      throw new StaffActionsApiError('赠品权益未能读取，请重试','INVALID_RESPONSE',response.status)
+    return payload.data as unknown as MemberGiftWallet
+  }
+  async runMemberGiftCommand(employeeId:string,command:MemberGiftCommand,key:string):Promise<MemberGiftReceipt> {
+    const requestKey=`native-business-${key}`
+    const response=await this.request(`/api/staff/native-benefit-wallet/commands/${command.action}`,{method:'POST',
+      headers:new Headers({'content-type':'application/json','idempotency-key':requestKey}),body:JSON.stringify(command.body)})
+    const payload=await readJson(response)
+    if(!isObject(payload)||!isObject(payload.data)||payload.data.employeeId!==employeeId
+      ||payload.data.customerId!==command.body.customerId||payload.data.requestKey!==requestKey||payload.data.action!==command.action
+      ||!isObject(payload.data.result)||typeof payload.data.result.id!=='string')
+      throw new StaffActionsApiError('原兑换回执未能核对，请恢复原操作','INVALID_RESPONSE',response.status)
+    return payload.data as unknown as MemberGiftReceipt
+  }
   async loadMemberVisit(code: string, signal?: AbortSignal): Promise<import('../../shared/member-visit').MemberVisitStatus> {
     const response = await this.request('/api/staff/member-visits/lookup', { method: 'POST', signal,
       body: JSON.stringify({ code }), headers: new Headers({ 'content-type': 'application/json' }) }, true)
@@ -502,6 +530,26 @@ export class StaffActionsApi implements StaffActionsApiPort {
     const data = await this.getData<StaffOperationsData>('/api/operations', signal)
     if (!signal?.aborted && data.actor?.id) this.employeeId = data.actor.id
     return data
+  }
+
+  async loadActivityBoard(station:'bar'|'kitchen'|'pickup',signal?:AbortSignal) {
+    return this.getData<ActivityProductionBoard>(`/api/commerce/activity-service/board?station=${station}`,signal)
+  }
+  async recoverActivityProduction(recovery:ActivityProductionRecovery):Promise<ActivityProductionResult> {
+    const response=await this.request('/api/commerce/activity-service/recovery',{
+      method:'POST',body:JSON.stringify(recovery),headers:new Headers({'content-type':'application/json'}),
+    })
+    const body=await readJson(response)
+    if(!isObject(body)||!isObject(body.data)||typeof body.data.receiptId!=='string'||!Array.isArray(body.data.lines))throw new StaffActionsApiError('原结果未能读取，请保留记录继续恢复','INVALID_RESPONSE',response.status)
+    return body.data as unknown as ActivityProductionResult
+  }
+  async runActivityProduction(command:ActivityProductionCommand,key:string):Promise<ActivityProductionResult> {
+    const response=await this.request('/api/commerce/activity-service/commands',{
+      method:'POST',body:JSON.stringify(command),headers:new Headers({'content-type':'application/json','idempotency-key':key}),
+    })
+    const body=await readJson(response)
+    if(!isObject(body)||!isObject(body.data)||typeof body.data.receiptId!=='string'||!Array.isArray(body.data.lines))throw new StaffActionsApiError('结果未能读取，请恢复原操作','INVALID_RESPONSE',response.status)
+    return body.data as unknown as ActivityProductionResult
   }
 
   async loadKitchenBoard(signal?:AbortSignal,stationCode:'bar'|'kitchen'='kitchen'):Promise<KitchenBoardData>{

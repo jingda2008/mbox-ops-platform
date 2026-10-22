@@ -92,7 +92,7 @@ export function staffTodoSources(bootstrap: StaffBootstrapView): StaffTodoSource
         const manual = ['cash', 'physical_pos', 'external_manual'].includes(provider)
         const execute = !refund.afterSalesCase && view.actions.canExecuteRefund && (refund.status === 'approved' || (refund.status === 'processing' && (manual || refund.providerSubmissionState === 'not_started')))
         const id = `refund:${refund.id}`
-        result.push({ id, domain: 'refund', title, detail: `¥${(refund.amountMinor / 100).toFixed(2)} · ${refund.status === 'requested' ? '等待独立审核' : refund.status === 'approved' ? '已审批，待退款' : refund.status === 'failed' ? '退款未完成，需核对' : '退款处理中'}`,
+        result.push({ id, domain: 'refund', title, detail: `¥${(refund.amountMinor / 100).toFixed(2)} · ${refund.status === 'requested' ? '等待独立审核' : refund.status === 'approved' ? '退款已批准，待执行，尚未确认到账' : refund.status === 'failed' ? '退款未完成，需核对' : '退款处理中，尚未确认到账'}`,
           owner: approve || execute ? '我可处理' : refund.status === 'requested' ? '其他有审批权限的同事' : '退款经办人员',
           next: refund.afterSalesCase ? '查看原售后单' : approve ? '复核申请' : execute ? '查看退款执行' : '核对退款进度',
           state: approve || execute ? 'action' : 'waiting', priority: 2, time: refund.createdAt, route: todoRoute('/staff/payments', id, parameters) })

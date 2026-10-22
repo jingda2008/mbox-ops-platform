@@ -356,10 +356,22 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
     if (validFrom > now || (validUntil !== null && validUntil <= now)) {
       throw new PricingAuthorizationDeniedError('Benefit is outside its validity period')
     }
-    if (row.currency !== basket.currency) {
+    if (row.benefit_type === 'gift_product' && context.benefitFulfillmentReservationId) {
+      const reserved = await transaction.query(`SELECT r.id FROM mbox.benefit_reservations r
+        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND r.benefit_id=$4 AND r.table_session_id=$5
+          AND r.status='reserved' AND r.expires_at>clock_timestamp() AND r.quantity=$6
+          AND NOT EXISTS(SELECT 1 FROM mbox.benefit_redemptions d WHERE d.tenant_id=r.tenant_id AND d.store_id=r.store_id AND d.benefit_reservation_id=r.id)
+        FOR UPDATE OF r`, [transaction.scope.tenantId,transaction.scope.storeId,context.benefitFulfillmentReservationId,
+        context.request.sourceId,context.tableSessionId,context.lines.reduce((sum,line)=>sum+line.quantity,0)])
+      if (reserved.rowCount!==1) throw new PricingAuthorizationDeniedError('Gift fulfillment requires the original valid reservation and exact quantity')
+    }
+    if (row.currency !== basket.currency && !(row.benefit_type === 'gift_product' && context.benefitFulfillmentReservationId && row.currency === null)) {
       throw new PricingAuthorizationDeniedError('Benefit currency does not match the order')
     }
-    const maximumAmountMinor = asMoney(row.value_amount_minor, 'benefit value')
+    // A product gift promises the selected covered product, including gifts issued
+    // without a monetary face value. Other benefit kinds retain their cash cap.
+    const maximumAmountMinor = row.benefit_type === 'gift_product' && context.benefitFulfillmentReservationId
+      ? basket.subtotalAmountMinor : asMoney(row.value_amount_minor, 'benefit value')
     const { kind, amountMinor } = benefitAdjustment(
       row.benefit_type,
       maximumAmountMinor,
@@ -411,6 +423,8 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       authorizedByEmployeeId: null,
       capability: null,
       expiresAt: row.valid_until === null ? null : toIso(row.valid_until),
+      ...(row.benefit_type === 'gift_product' && context.benefitFulfillmentReservationId
+        ? {fulfillmentPromises: context.lines.map((_line, requestIndex) => ({requestIndex, benefitId: context.request.sourceId}))} : {}),
     }
   }
 

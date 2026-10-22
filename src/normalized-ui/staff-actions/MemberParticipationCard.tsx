@@ -1,3 +1,4 @@
+import { MemberGiftRedemptionPanel } from './MemberGiftRedemptionPanel'
 import { useEffect, useState } from 'react'
 import type { MemberParticipation } from '../../shared/member-participation'
 import type { StaffActionsApiPort } from './staff-actions-api'
@@ -8,6 +9,7 @@ export function MemberParticipationCard({ code, api, onClose }: {
   code: string; api: StaffActionsApiPort; onClose: () => void
 }) {
   const [revision, setRevision] = useState(0)
+  const [giftOpen,setGiftOpen]=useState(false)
   const [mode, setMode] = useState<'overview' | 'visit' | 'activity'>('overview')
   const [result, setResult] = useState<{ api: StaffActionsApiPort; revision: number; data?: MemberParticipation; error?: string } | null>(null)
   useEffect(() => {
@@ -53,6 +55,8 @@ export function MemberParticipationCard({ code, api, onClose }: {
       </>}
       </>}
       <h4>当前可用券与权益</h4>
+      {api.loadMemberGiftWallet && <button type="button" onClick={()=>setGiftOpen(value=>!value)}>{giftOpen?'收起赠品办理':'办理赠品券'}</button>}
+      {giftOpen && <MemberGiftRedemptionPanel key={data.memberNo} code={data.memberNo} api={api}/>}
       {data.benefits.length === 0 && <p>当前没有剩余可用券；已暂留的领取申请请查看下方权益待办。</p>}
       {data.benefits.map(item => <article key={item.id}><strong>{item.title} · 可用 {item.quantity} 份</strong>
         <small>{item.validUntil ? `有效期至 ${dateText(item.validUntil)}` : '有效期以券面规则为准'}</small><p>{item.guidance}</p></article>)}

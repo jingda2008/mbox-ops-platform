@@ -1,4 +1,5 @@
 const reasons:Record<string,string>={
+ activity_service_held:'本菜已暂停；由领班核清并恢复后沿原制作来源继续出票，不需反复补打。',
  payment_before_policy_change:'此到账事件早于自动收据规则启用时间，不自动补出历史票据；如需纸票请从原订单手动打印',
   print_policy_disabled:'此类自动打印已在配置中关闭，本次正常跳过；不补出关闭期间的历史票。',
  print_route_missing:'当前没有已启用且连接有效设备的对应打印路由，请到设备路由配置补齐。',

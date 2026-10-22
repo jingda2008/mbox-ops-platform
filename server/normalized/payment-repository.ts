@@ -1,3 +1,4 @@
+import {ActivityServiceRepository} from './activity-service-repository.js'
 import {localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {allocateOrderPayment} from '../../src/shared/order-payment-allocation.js'
 import { randomUUID } from 'node:crypto'
@@ -574,6 +575,7 @@ export class PaymentRepository {
     validateManualActivityInput(input)
     const registrationResult = await this.transaction.query<{
       id: string
+      service_version: number
       status: string
       payment_status: string
       payment_id: string | null
@@ -585,7 +587,7 @@ export class PaymentRepository {
       party_size: number
       registration_cycle: number
     }>(`
-      SELECT id,status,payment_status,payment_id,amount_due_minor,paid_amount_minor,currency,
+      SELECT id,service_version,status,payment_status,payment_id,amount_due_minor,paid_amount_minor,currency,
         activity_id,activity_package_id,party_size,registration_cycle
       FROM mbox.community_activity_registrations
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
@@ -595,6 +597,7 @@ export class PaymentRepository {
     if (registration === undefined) throw new OrderNotPayableError(input.registrationPublicId, 'activity registration was not found')
 
     const isRefunded = registration.status === 'refunded' || registration.payment_status === 'refunded'
+    if (isRefunded && registration.service_version === 3) throw new OrderNotPayableError(registration.id, '新版套餐退款记录不能重新收款，请新购一份；补偿退款保留原履约')
     const amountMinor = isRefunded
       ? toSafeMinor(registration.paid_amount_minor, 'refunded activity payment')
       : toSafeMinor(registration.amount_due_minor, 'activity amount due')
@@ -1280,6 +1283,24 @@ export class PaymentRepository {
       throw new TypeError('payment does not target an activity registration')
     }
     if (payment.status === 'succeeded' || payment.status === 'partially_refunded') {
+      // A late callback is not a late payment. Compare the verified channel time
+      // with the original held deadline, and keep real funds even when fulfilment is no longer valid.
+      const service = (await this.transaction.query<{status:string;deadline:string|null}>(`
+        SELECT r.status,LEAST(r.payment_due_at,(SELECT action.expires_at FROM mbox.payment_provider_actions action
+          WHERE action.tenant_id=r.tenant_id AND action.store_id=r.store_id AND action.payment_id=$4 LIMIT 1))::text deadline
+        FROM mbox.community_activity_registrations r WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3
+          AND r.payment_id=$4 AND r.service_version=3 FOR UPDATE OF r`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activityRegistrationId,payment.id])).rows[0];
+      if(service && (service.status==='cancelled' || (service.status==='payment_pending' && service.deadline!==null
+        && Date.parse(payment.succeededAt??new Date().toISOString())>=Date.parse(service.deadline)))){
+        await this.transaction.query(`UPDATE mbox.community_activity_registrations SET status='cancelled',payment_status='paid',
+          paid_amount_minor=LEAST(fee_amount_minor,$4::bigint),amount_due_minor=0,cancelled_at=COALESCE(cancelled_at,clock_timestamp()),
+          payment_due_at=NULL,seat_hold_expires_at=NULL WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+          [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activityRegistrationId,payment.amountMinor]);
+        await this.transaction.query(`UPDATE mbox.payments SET provider_snapshot=provider_snapshot||'{"activityLateCaptureRefundRequired":true}'::jsonb
+          WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.id]);
+        return;
+      }
       const updated = await this.transaction.query(`
         UPDATE mbox.community_activity_registrations
         SET status='confirmed', payment_status='paid',
@@ -1315,6 +1336,7 @@ export class PaymentRepository {
         }
       }
       await this.extendPaidActivityPackageReservationToActivityEnd(payment.activityRegistrationId, payment.id)
+      await new ActivityServiceRepository(this.transaction).dispatchPaidAddon(payment.activityRegistrationId)
       return
     }
     if (payment.status === 'failed' || payment.status === 'closed') {
@@ -1330,23 +1352,33 @@ export class PaymentRepository {
   }
 
   async syncActivityRegistrationRefundStatus(paymentId: string): Promise<void> {
-    const result = await this.transaction.query<{ activity_registration_id: string | null; status: PaymentStatus }>(`
-      SELECT activity_registration_id, status FROM mbox.payments
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-      FOR UPDATE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    const result = await this.transaction.query<{activity_registration_id:string|null;status:PaymentStatus}>(`
+      SELECT activity_registration_id,status FROM mbox.payments
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])
     const payment = result.rows[0]
-    if (payment?.activity_registration_id === null || payment?.activity_registration_id === undefined) {
-      throw new TypeError('payment does not target an activity registration')
+    if (!payment?.activity_registration_id) throw new TypeError('payment does not target an activity registration')
+    if (!['partially_refunded','refunded'].includes(payment.status)) return
+    const compensation = (await this.transaction.query<{activity_disposition:string}>(`
+      SELECT activity_disposition FROM mbox.refunds WHERE tenant_id=$1 AND store_id=$2 AND payment_id=$3
+        AND status='succeeded' AND activity_disposition IS NOT NULL
+      ORDER BY completed_at DESC,id DESC LIMIT 1`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])).rows[0]
+    if (compensation) {
+      // Keep the original reserved seats and immutable admission/production facts. Only money was returned.
+      await this.transaction.query(`UPDATE mbox.community_activity_registrations
+        SET service_refund_disposition=$5,payment_status=CASE WHEN $6='refunded' THEN 'refunded' ELSE 'paid' END,
+          amount_due_minor=0,updated_at=clock_timestamp()
+        WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND payment_id=$4 AND service_version=3`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id,paymentId,compensation.activity_disposition,payment.status])
+      return
     }
     if (payment.status !== 'refunded') return
-    await this.transaction.query(`
-      UPDATE mbox.community_activity_registrations
-      SET status='refunded', payment_status='refunded', amount_due_minor=0,
-        cancelled_at=COALESCE(cancelled_at, clock_timestamp()), updated_at=clock_timestamp()
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-        AND payment_id=$4::uuid AND payment_status='paid'
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, payment.activity_registration_id, paymentId])
+    await this.transaction.query(`UPDATE mbox.community_activity_registrations
+      SET status='refunded',payment_status='refunded',amount_due_minor=0,
+        cancelled_at=COALESCE(cancelled_at,clock_timestamp()),updated_at=clock_timestamp()
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND payment_id=$4 AND payment_status='paid'`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id,paymentId])
   }
 
   /**

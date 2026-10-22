@@ -111,6 +111,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const [submittingOrder, setSubmittingOrder] = useState(false)
   const [orderResult, setOrderResult] = useState<GuestOrderResult | null>(null)
   const [tableOrders, setTableOrders] = useState<GuestTableOrder[]>([])
+  const [tableOrdersLoaded, setTableOrdersLoaded] = useState(false)
   const [tableOrdersLoading, setTableOrdersLoading] = useState(false)
   const [performance, setPerformance] = useState<GuestDailyPerformanceView | null>(null)
   const [performanceLoading, setPerformanceLoading] = useState(false)
@@ -124,6 +125,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
   const menuRequest = useRef(0)
   const cartState = useRef(new GuestCartState())
   const tableOrdersRequest = useRef(new GuestReadSequence())
+  const initialHistoryEpoch = useRef(0)
   const [paymentBusyIds,setPaymentBusyIds]=useState<readonly string[]>([])
   const sharedCartInFlight = useRef<Promise<GuestSharedCart | null> | null>(null)
   const sharedCartPollFailures = useRef(0)
@@ -152,6 +154,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   const blockForSession = useCallback((error: unknown) => {
     if (error instanceof GuestApiError && (error.status === 401 || error.code === 'TABLE_SESSION_ENDED')) {
+      // Cancel queued history synchronously; React effect cleanup may run later.
+      initialHistoryEpoch.current++
       setPhase('blocked')
       setGateReason(error.code.includes('ENDED') ? 'session_ended' : 'scan_required')
       setGateMessage('这桌的服务时段已经结束，请重新扫描桌面二维码。')
@@ -187,7 +191,10 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     if (!quiet) setTableOrdersLoading(true)
     try {
       const orders=await api.loadTableOrders()
-      if(cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current&&reads.accept(request))setTableOrders(orders)
+      if(cartState.current.isCurrent(scope)&&reads===tableOrdersRequest.current&&reads.accept(request)){
+        setTableOrders(orders)
+        setTableOrdersLoaded(true)
+      }
     } catch (error) {
       if(!cartState.current.isCurrent(scope)||reads!==tableOrdersRequest.current||!reads.isLatest(request))return
       if (!blockForSession(error)) {
@@ -334,6 +341,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     menuRequest.current++
     tableOrdersRequest.current=new GuestReadSequence()
     setTableOrders([])
+    setTableOrdersLoaded(false)
     setTableOrdersLoading(false)
     orderSubmittingRef.current=false
     setSubmittingOrder(false)
@@ -449,10 +457,18 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
 
   useEffect(() => {
     if (phase !== 'ready') return
-    void loadMenu()
-    void loadTableOrders(true)
+    const scope=cartState.current.scope
+    const historyEpoch=initialHistoryEpoch.current
+    let cancelled=false
+    const menu=loadMenu()
+    const cart=cartProtocolVersion===2?loadSharedCart(true):Promise.resolve()
     void loadPerformance()
-    if (cartProtocolVersion === 2) void loadSharedCart(true)
+    // These reads share the same table-session authority lock on the server.
+    // Keep history out of the first menu/cart path; explicit reads stay immediate.
+    void Promise.all([menu,cart]).then(()=>{
+      if(!cancelled&&historyEpoch===initialHistoryEpoch.current&&cartState.current.isCurrent(scope))void loadTableOrders(true)
+    })
+    return ()=>{cancelled=true}
   }, [cartProtocolVersion, loadMenu, loadPerformance, loadSharedCart, loadTableOrders, phase])
 
   useEffect(() => {
@@ -758,7 +774,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
-          <small>历史已下单 · {tableOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)}件</small>
+          <small>{tableOrdersLoaded?`历史已下单 · ${tableOrders.reduce((sum, order) => sum + order.items.reduce((count, item) => count + item.quantity, 0), 0)}件`:'查看历史已下单'}</small>
           <strong>{table?.displayName ?? table?.code}</strong>
         </button>
       </header>
@@ -845,7 +861,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       )}
 
       {panel !== null && <GuestPanel title={panelTitle(panel)} onClose={() => panel !== 'checkout' && setPanel(null)} dismissible={panel !== 'checkout'}>
-        {panel === 'orders' && <TableOrdersPanel orders={tableOrders} loading={tableOrdersLoading} onRefresh={() => void loadTableOrders()} onPay={(orderId) => void payTableOrder(orderId)} />}
+        {panel === 'orders' && <TableOrdersPanel orders={tableOrders} loaded={tableOrdersLoaded} loading={tableOrdersLoading} onRefresh={() => void loadTableOrders()} onPay={(orderId) => void payTableOrder(orderId)} />}
         {(panel === 'complaint' || panel === 'custom') && <ServicePanel
           kind={panel}
           detail={serviceDetail}
@@ -1006,9 +1022,9 @@ function GuestPanel({ title, dismissible, onClose, children }: { title: string; 
   </div>
 }
 
-export function TableOrdersPanel({ orders, loading, onRefresh, onPay }: { orders: GuestTableOrder[]; loading: boolean; onRefresh: () => void; onPay: (orderPublicId: string) => void }) {
+export function TableOrdersPanel({ orders, loaded, loading, onRefresh, onPay }: { orders: GuestTableOrder[]; loaded: boolean; loading: boolean; onRefresh: () => void; onPay: (orderPublicId: string) => void }) {
   return <div className="guest-table-orders">
-    <div className="guest-table-orders-toolbar"><span>{orders.length === 0 ? '还没有已确认的订单' : `共 ${orders.length} 轮`}</span><button type="button" onClick={onRefresh} disabled={loading}><RefreshCw className={loading ? 'is-spinning' : ''} />刷新</button></div>
+    <div className="guest-table-orders-toolbar"><span>{!loaded ? loading ? '正在读取历史订单…' : '历史订单尚未读取，请刷新核对' : orders.length === 0 ? '还没有已确认的订单' : `共 ${orders.length} 轮`}</span><button type="button" onClick={onRefresh} disabled={loading}><RefreshCw className={loading ? 'is-spinning' : ''} />刷新</button></div>
     {orders.map((order) => <article key={order.publicId} data-testid={`guest-table-order-${order.publicId}`}>
       <header><strong>{`本桌第 ${order.round} 轮 · ${orderSourceCopy(order)}`}</strong><span>{orderStatusCopy(order)}</span></header>
       <div>{order.items.map((item, index) => <div key={item.id ?? `${item.productId}:${index}`}><p><span>{item.name} × {item.quantity}</span><small>{item.progressText || itemStatusCopy(item.status)}</small></p>

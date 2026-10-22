@@ -1,3 +1,4 @@
+import {ActivityServiceError,assertActivityUnusedRefund} from './activity-service-repository.js'
 import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
 import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
 import type { JsonObject } from './command-executor.js'
@@ -32,7 +33,8 @@ export interface Refund {
   currency: string
   status: RefundStatus
   reason: string
-  requestedByEmployeeId: string
+  requestedByEmployeeId: string | null
+  requestedByCustomerId?: string | null
   approvedByEmployeeId: string | null
   decisionReason: string | null
   allocations: RefundAllocation[]
@@ -54,11 +56,17 @@ export interface RequestRefundInput {
   requestEvidence?: JsonObject
 }
 
+export type ActivityRefundDisposition = 'retain_fulfillment' | 'stop_unstarted'
+
 export interface RequestActivityRefundInput {
+  amountMinor?: number
+  disposition?: ActivityRefundDisposition
+  customerConfirmed?: boolean
   paymentId: string
   publicId: string
   reason: string
-  requestedByEmployeeId: string
+  requestedByEmployeeId?: string
+  requestedByCustomerId?: string
   requestEvidence?: JsonObject
 }
 
@@ -95,7 +103,8 @@ interface RefundStoredRow extends Record<string, unknown> {
   currency: string
   status: RefundStatus
   reason: string
-  requested_by_employee_id: string
+  requested_by_employee_id: string | null
+  requested_by_customer_id?: string | null
   approved_by_employee_id: string | null
   decision_reason: string | null
   provider_snapshot: JsonObject
@@ -153,6 +162,9 @@ export const RESERVING_REFUND_STATUSES: readonly RefundStatus[] = [
   'processing',
   'succeeded',
 ]
+// Activity compensation has no item-after-sales case; its approved failed request
+// keeps the original amount reserved until the existing refund workflow resolves it.
+const ACTIVITY_REFUND_RESERVES_AMOUNT_SQL = "(status=ANY($4::text[]) OR (status='failed' AND approved_by_employee_id IS NOT NULL))"
 
 export class RefundNotFoundError extends Error {
   constructor(id: string) {
@@ -349,27 +361,64 @@ export class RefundRepository {
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
       throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
     }
+    if(input.requestedByCustomerId) {
+      const owner=await this.transaction.query(`SELECT r.id FROM mbox.community_activity_registrations r
+        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND r.service_version=3
+          AND r.payment_status='paid' AND r.status IN('confirmed','checked_in')
+          AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$4)
+        FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id,input.requestedByCustomerId])
+      if(owner.rowCount!==1||payment.status!=='succeeded')throw new ActivityServiceError('仅能申请本人的未使用整份套餐退订，请联系门店核对原单','ACTIVITY_REFUND_NOT_ALLOWED')
+    }
+    if (input.disposition) {
+      if (!input.requestedByEmployeeId || input.requestedByCustomerId || input.customerConfirmed !== true
+          || !Number.isSafeInteger(input.amountMinor) || input.amountMinor! <= 0)
+        throw new ActivityServiceError('补偿退款须由授权员工填写金额并确认已与顾客核对', 'ACTIVITY_COMPENSATION_CONFIRMATION_REQUIRED', 400)
+      const registration = (await this.transaction.query<{service_version:number;status:string;remaining_unstarted:boolean}>(`
+        SELECT r.service_version,r.status,
+          EXISTS(SELECT 1 FROM mbox.activity_service_lines line WHERE (line.tenant_id,line.store_id,line.registration_id)=(r.tenant_id,r.store_id,r.id)
+            AND line.status='active' AND line.quantity>line.started_quantity+line.stopped_quantity) OR (jsonb_array_length(r.service_items_snapshot)>0 AND NOT EXISTS(SELECT 1 FROM mbox.activity_service_lines line WHERE (line.tenant_id,line.store_id,line.registration_id)=(r.tenant_id,r.store_id,r.id))) AS remaining_unstarted
+        FROM mbox.community_activity_registrations r
+        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 FOR UPDATE OF r`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id])).rows[0]
+      if (registration?.service_version !== 3 || !['confirmed','checked_in'].includes(registration.status))
+        throw new ActivityServiceError('此报名不能使用新版补偿退款，请按原售后规则核对','ACTIVITY_COMPENSATION_NOT_ALLOWED')
+      if (input.disposition === 'stop_unstarted' && registration.remaining_unstarted)
+        throw new ActivityServiceError('请先在原餐号停止本份未做菜品，再提交补偿退款；已制作和已取走记录保留','ACTIVITY_COMPENSATION_STOP_REQUIRED')
+    } else {
+      if (input.amountMinor !== undefined || input.customerConfirmed !== undefined)
+        throw new ActivityServiceError('部分退款必须明确补偿处理方式和顾客确认','ACTIVITY_COMPENSATION_DISPOSITION_REQUIRED',400)
+      const compensation = await this.transaction.query(`SELECT 1 FROM mbox.refunds
+        WHERE tenant_id=$1 AND store_id=$2 AND payment_id=$3
+          AND ${ACTIVITY_REFUND_RESERVES_AMOUNT_SQL} AND activity_disposition IS NOT NULL LIMIT 1`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.id,RESERVING_REFUND_STATUSES])
+      if (compensation.rowCount)
+        throw new ActivityServiceError('原单已有补偿退款，请继续明确保留履约或停止未做的售后方案，不能按普通整份退订处理','ACTIVITY_COMPENSATION_DISPOSITION_REQUIRED')
+      await assertActivityUnusedRefund(this.transaction,payment.activity_registration_id)
+    }
     const existing = await this.transaction.query<ExistingRefundTotalRow>(`
       SELECT COALESCE(SUM(amount_minor), 0)::text AS reserved_total_minor
       FROM mbox.refunds
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND payment_id=$3::uuid
-        AND status=ANY($4::text[])
+        AND ${ACTIVITY_REFUND_RESERVES_AMOUNT_SQL}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
       payment.id,
       RESERVING_REFUND_STATUSES,
     ])
-    const amountMinor = toSafeMinor(payment.amount_minor, 'activity payment amount')
+    const remainingMinor = toSafeMinor(payment.amount_minor, 'activity payment amount')
       - toSafeMinor(existing.rows[0]?.reserved_total_minor ?? 0, 'activity refund reserved amount')
+    const amountMinor = input.disposition ? input.amountMinor! : remainingMinor
+    if (amountMinor > remainingMinor) throw new RefundLimitError('Activity refund exceeds the remaining original payment balance')
+    if(input.requestedByCustomerId && amountMinor!==toSafeMinor(payment.amount_minor,'activity payment amount')) throw new ActivityServiceError('原单已有退款申请，请查看处理状态，不要重复申请','ACTIVITY_REFUND_PENDING')
     if (amountMinor <= 0) throw new RefundLimitError('Activity payment has no refundable balance')
     const inserted = await this.transaction.query<RefundStoredRow>(`
       INSERT INTO mbox.refunds (
         tenant_id, store_id, payment_id, public_id, amount_minor, currency,
-        status, reason, requested_by_employee_id, provider_snapshot
+        status, reason, requested_by_employee_id, provider_snapshot, requested_by_customer_id, activity_disposition, activity_customer_confirmed
       ) VALUES (
         $1::uuid, $2::uuid, $3::uuid, $4, $5::bigint, $6,
-        'requested', $7, $8::uuid, $9::jsonb
+        'requested', $7, $8::uuid, $9::jsonb, $10::uuid, $11, $12
       ) RETURNING ${REFUND_BASE_COLUMNS}
     `, [
       this.transaction.scope.tenantId,
@@ -379,8 +428,10 @@ export class RefundRepository {
       amountMinor,
       payment.currency,
       input.reason.trim(),
-      input.requestedByEmployeeId,
+      input.requestedByEmployeeId??null,
       JSON.stringify({ requestEvidence: input.requestEvidence ?? {}, targetKind: 'activity_registration' }),
+      input.requestedByCustomerId??null,
+      input.disposition??null, input.customerConfirmed===true,
     ])
     const row = inserted.rows[0]
     if (inserted.rowCount !== 1 || row === undefined) {
@@ -774,9 +825,14 @@ export class RefundRepository {
 
 type PaymentRefundStatus = 'succeeded' | 'partially_refunded' | 'refunded'
 
+// Historical money commands also run while reconstructing pre-extension
+// upgrade fixtures. Read the optional customer actor without requiring that
+// column; current activity requests still persist and return the real actor.
 const REFUND_BASE_COLUMNS = `
   id, payment_id, public_id, provider_refund_id, amount_minor, currency,
-  status, reason, purpose, requested_by_employee_id, approved_by_employee_id, decision_reason,
+  status, reason, purpose, requested_by_employee_id,
+  to_jsonb(refunds)->>'requested_by_customer_id' AS requested_by_customer_id,
+  approved_by_employee_id, decision_reason,
   provider_snapshot, provider_submission_state, completed_at::text, created_at::text, updated_at::text
 `
 
@@ -785,7 +841,9 @@ const JOINED_REFUND_COLUMNS = `
   p.provider AS payment_provider,
   p.provider_transaction_id AS payment_provider_transaction_id,
   r.public_id, r.provider_refund_id, r.amount_minor, r.currency,
-  r.status, r.reason, r.purpose, r.requested_by_employee_id, r.approved_by_employee_id, r.decision_reason,
+  r.status, r.reason, r.purpose, r.requested_by_employee_id,
+  to_jsonb(r)->>'requested_by_customer_id' AS requested_by_customer_id,
+  r.approved_by_employee_id, r.decision_reason,
   r.provider_snapshot, r.provider_submission_state, r.completed_at::text, r.created_at::text, r.updated_at::text,
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
@@ -821,9 +879,8 @@ function validateActivityRequest(input: Readonly<RequestActivityRefundInput>): v
   if (input.reason.trim().length < 2 || input.reason.trim().length > 1_000) {
     throw new TypeError('activity refund reason must contain between 2 and 1000 characters')
   }
-  if (input.requestedByEmployeeId.trim().length === 0) {
-    throw new TypeError('requestedByEmployeeId must not be blank')
-  }
+  if (input.disposition !== undefined && !['retain_fulfillment','stop_unstarted'].includes(input.disposition)) throw new TypeError('Invalid activity refund disposition')
+  if (Number(Boolean(input.requestedByEmployeeId?.trim()))+Number(Boolean(input.requestedByCustomerId?.trim()))!==1) throw new TypeError('Activity refund requires one real requester')
 }
 
 function normalizeAllocations(allocations: readonly RefundAllocation[]): RefundAllocation[] {
@@ -922,6 +979,7 @@ function mapRefund(row: RefundRow): Refund {
     status: row.status,
     reason: row.reason,
     requestedByEmployeeId: row.requested_by_employee_id,
+    requestedByCustomerId: row.requested_by_customer_id??null,
     approvedByEmployeeId: row.approved_by_employee_id,
     decisionReason: row.decision_reason,
     allocations: readAllocations(row.allocations),

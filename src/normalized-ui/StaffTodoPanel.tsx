@@ -4,6 +4,9 @@ import type { StaffBootstrapView } from '../shared/normalized-contracts'
 import { staffTodoSources, uniqueStaffTodos, type StaffTodo } from './staff-todo-model'
 import { useStaffViewState } from './staff-view-state'
 
+interface TodoCount { total: number; action: number; waiting: number; asOf: string; activities?: { pendingPayment: number; requestedRefund: number; processingRefund: number } }
+interface CountResult { id: string; label: string; count: TodoCount | null; error: boolean }
+
 interface SourceResult { id: string; label: string; route: string; items: StaffTodo[]; error: string | null; limited: boolean }
 const domainLabels = { service: '服务', member: '会员', refund: '退款', print: '打印' }
 
@@ -15,6 +18,7 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
   latest.current = bootstrap
   const sources = useMemo(() => staffTodoSources(latest.current), [signature])
   const [results, setResults] = useState<SourceResult[]>([])
+  const [counts, setCounts] = useState<CountResult[]>([])
   const [loading, setLoading] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
   const [filter, setFilter] = useStaffViewState<'all' | StaffTodo['domain']>('home:todo-domain', 'all')
@@ -28,12 +32,21 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
     const controller = new AbortController()
     request.current = controller
     setLoading(true)
+    const countedSources = sources.filter(source => source.id === 'refunds' || source.id === 'printing')
+    const countsPromise = Promise.allSettled(countedSources.map(async source => {
+      const response = await api.getEndpoint<{ data: TodoCount & { refunds?: Omit<TodoCount, 'asOf'> } }>(source.id === 'refunds' ? '/api/payments/workbench/todo-summary' : '/api/hardware/print-jobs/summary', { signal: controller.signal })
+      const count = source.id === 'refunds' ? { ...response.data.refunds!, asOf: response.data.asOf, activities: response.data.activities } : response.data
+      if (!count || ![count.total, count.action, count.waiting, ...(count.activities ? [count.activities.pendingPayment, count.activities.requestedRefund, count.activities.processingRefund] : [])].every(value => Number.isSafeInteger(value) && value >= 0) || typeof count.asOf !== 'string') throw new Error('待办汇总不完整')
+      return count
+    }))
     const settled = await Promise.allSettled(sources.map(async source => {
       const response = await api.getEndpoint<{ data: unknown }>(source.endpoint, { signal: controller.signal })
       return source.map(response.data)
     }))
+    const countResults = await countsPromise
     if (controller.signal.aborted) return
-    if (settled.some(result => result.status === 'rejected' && result.reason instanceof NormalizedApiError && result.reason.recovery === 'login')) {
+    setCounts(countedSources.map((source, index) => ({ id: source.id, label: source.label, count: countResults[index].status === 'fulfilled' ? countResults[index].value : null, error: countResults[index].status === 'rejected' })))
+    if ([...settled, ...countResults].some(result => result.status === 'rejected' && result.reason instanceof NormalizedApiError && result.reason.recovery === 'login')) {
       login.current?.(); return
     }
     setResults(previous => sources.map((source, index) => {
@@ -45,7 +58,7 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
         error: denied ? '当前权限已变更，请刷新工作台核对' : failed ? '读取失败，当前结果可能不完整' : null, limited: source.limit !== undefined }
     }))
     setLoading(false)
-    if (settled.every(result => result.status === 'fulfilled')) {
+    if ([...settled, ...countResults].every(result => result.status === 'fulfilled')) {
       setUpdatedAt(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))
     }
   }, [api, sources])
@@ -65,6 +78,9 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
   const staleIds = new Set(errors.flatMap(result => result.items.map(item => item.id)))
   return <section className="normalized-section staff-unified-todos" aria-labelledby="staff-todo-title">
     <div className="normalized-section-heading"><div><h2 id="staff-todo-title">待办事项</h2><small>{updatedAt ? `最近全部核对成功 ${updatedAt} · 当前已读取 ${todos.length} 项` : loading ? '正在读取各业务待办' : `尚未完整读取各业务待办 · 当前已读取 ${todos.length} 项`}</small></div><button type="button" disabled={loading} onClick={() => void load()}>{loading ? '读取中…' : '刷新待办'}</button></div>
+    {counts.filter(item => sources.some(source => source.id === item.id)).map(item => <div key={item.id} className="staff-todo-authoritative-summary">
+      {item.count ? <><p>{item.label}完整授权范围：共 {item.count.total} 项，当前可处理 {item.count.action} 项、等待处理 {item.count.waiting} 项；截至 {item.count.asOf}。</p>{item.count.activities && <div>{([['unpaid', '活动待收款', item.count.activities.pendingPayment], ['requested', '活动待复核', item.count.activities.requestedRefund], ['processing', '活动待退款', item.count.activities.processingRefund]] as const).map(([filter, label, count]) => <button type="button" key={filter} disabled={!onNavigate} onClick={() => onNavigate?.(`/staff/payments?activityFilter=${filter}`)}>{label} {count} 项</button>)}</div>}</> : <p role="alert">{item.label}完整范围汇总暂未读取，数量未知；下方仅保留已读明细。<button type="button" onClick={() => void load()}>重读待办汇总</button></p>}
+    </div>)}
     <div className="staff-todo-filters">
       <div role="group" aria-label="待办处理状态">
         <button type="button" aria-pressed={stateFilter === 'action'} onClick={() => setStateFilter('action')}>现在可处理</button>

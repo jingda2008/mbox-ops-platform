@@ -391,7 +391,7 @@ describe('customer experience activity contact API', () => {
       paymentPublicId: 'activity-payment-api-test',
       resolutionState: 'unknown', paymentStatus: 'pending', amountDueMinor: 2000,
       paidAmountMinor: 0, currency: 'CNY', expiresAt: '2026-08-16T12:00:00.000Z',
-      allowedActions: ['query_payment'], refundStatus: null,
+      allowedActions: ['query_payment'], refundStatus: null, refundPublicId: null,
     } as const
     const get = vi.fn(async () => state)
     const createAction = vi.fn(async () => ({

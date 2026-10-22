@@ -72,3 +72,13 @@ it('blocks persistent commands on corrupt journals or silently discarded writes'
     expect(send).not.toHaveBeenCalled()
   }
 })
+
+it('releases an unknown native intent only when the retained original command proves it did not commit',async()=>{
+  const saved=storage(),namespace=crypto.randomUUID(),keys:string[]=[]
+  const first=new DurableStaffCommand(namespace,async(_body:{quantity:number},key:string)=>{keys.push(key);throw Error('lost')},saved)
+  await expect(first.submit({quantity:2})).rejects.toThrow('lost')
+  const uncertain=new DurableStaffCommand(namespace,async()=>{throw {status:409,code:'NATIVE_BUSINESS_NOT_COMMITTED'}},saved)
+  await expect(uncertain.recover()).rejects.toMatchObject({status:409});expect(uncertain.pending()).not.toBeNull()
+  const proven=new DurableStaffCommand(namespace,async(_body:{quantity:number},key:string)=>{keys.push(key);throw {status:409,code:'NATIVE_BUSINESS_NOT_COMMITTED',commitDisposition:'not_committed'}},saved)
+  await expect(proven.recover()).rejects.toMatchObject({commitDisposition:'not_committed'});expect(proven.pending()).toBeNull();expect(keys[1]).toBe(keys[0])
+})

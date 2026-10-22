@@ -105,7 +105,7 @@
 
     <view wx:if="{{registrations.length}}" id="registered-activities" class="module-card registered-activity-module">
       <view class="module-head"><view><text class="module-eyebrow">超嗨</text><text class="module-title">已报名的超嗨活动</text></view><text class="module-link" bindtap="openSuperhighTab">更多活动 ›</text></view>
-      <button wx:for="{{registrations}}" wx:key="publicId" class="list-row activity-registration-row" data-id="{{item.activityPublicId}}" bindtap="openCommunity">
+      <button wx:for="{{registrations}}" wx:key="publicId" class="list-row activity-registration-row" data-id="{{item.activityPublicId}}" data-registration-id="{{item.publicId}}" bindtap="openCommunity">
         <image class="list-row__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" />
         <view><text>{{item.title}}</text><text>{{item.startsText}} · {{item.partySize}}人</text></view>
         <text>{{item.statusText}} ›</text>

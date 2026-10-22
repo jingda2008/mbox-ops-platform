@@ -14,6 +14,7 @@
           <text wx:if="{{item.calendarText}}" class="coupon-copy">{{item.calendarText}}</text>
           <text wx:if="{{item.calendarNextText}}" class="coupon-copy">{{item.calendarNextText}}</text>
           <text wx:if="{{item.calendarLimitText}}" class="coupon-copy">{{item.calendarLimitText}}</text>
+          <button wx:if="{{item.canUsePriceCoupon}}" class="secondary-button" bindtap="usePriceCoupon">去点单使用已有兑换券</button>
           <view class="coupon-foot"><text wx:if="{{item.valueText}}">{{item.valueText}}</text><text>{{item.validText}}</text></view>
         </view>
       </view>

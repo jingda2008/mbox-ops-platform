@@ -45,6 +45,8 @@ export type CashierRefundProviderSubmissionState =
   | 'manual_review'
 
 export interface CashierWorkbenchRefund {
+  activityDisposition?: 'retain_fulfillment' | 'stop_unstarted' | null
+  activityCustomerConfirmed?: boolean
   afterSalesCase?: {caseId:string;orderItemId:string;status:string} | null
   purpose?: import('./refund-purpose.js').RefundPurpose
   id: string
@@ -56,7 +58,8 @@ export interface CashierWorkbenchRefund {
   status: CashierRefundStatus
   providerSubmissionState: CashierRefundProviderSubmissionState
   reason: string
-  requestedByEmployeeId: string
+  requestedByEmployeeId: string | null
+  requestedByCustomerId?: string | null
   requestedByEmployeeName: string
   approvedByEmployeeId: string | null
   approvedByEmployeeName: string | null
@@ -127,6 +130,8 @@ export interface CashierWorkbenchPayment {
  * They intentionally expose no attendee contact fields in the cashier view.
  */
 export interface CashierWorkbenchActivityRegistration {
+  serviceVersion?: number
+  serviceRefundDisposition?: 'retain_fulfillment' | 'stop_unstarted' | null
   id: string
   publicId: string
   activityPublicId: string

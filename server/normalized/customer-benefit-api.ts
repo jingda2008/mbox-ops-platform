@@ -1,3 +1,6 @@
+import { OrderProductUnavailableError, OrderProductCostUnavailableError } from './order-repository.js'
+import { InsufficientInventoryError, InventoryRecipeMissingError, InventoryBalanceMissingError } from './inventory-repository.js'
+import { giftBundleSelectionsSchema } from './gift-bundle-selections.js'
 import { registerNativeBenefitWallet } from './native-benefit-wallet-api.js'
 import { z } from 'zod'
 import { NativeCommandNotCommittedError, IdempotencyConflictError } from './command-executor.js'
@@ -663,6 +666,7 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
       const customerId = readString(body.customerId, '客户', 64, 8)
       const tableSessionId = readString(body.tableSessionId, '桌次', 64, 8)
       const selectedProductId = optionalUuid(body.selectedProductId, '兑付商品')
+      const bundleSelections = body.bundleSelections === undefined ? undefined : giftBundleSelectionsSchema.parse(body.bundleSelections)
       const substitutionReason = body.substitutionReason === undefined || body.substitutionReason === null
         ? null : readString(body.substitutionReason, '替换原因', 240, 2)
       const result = await options.benefits.redeem({
@@ -674,11 +678,12 @@ export const customerBenefitApiPlugin: FastifyPluginAsync<CustomerBenefitApiOpti
         customerId,
         tableSessionId,
         selectedProductId,
+        bundleSelections,
         substitutionReason,
         redeemedByEmployeeId: context.employeeId,
         authorizationSource: { kind: 'employee', employeeId: context.employeeId },
         redemptionIdempotencyKey: idempotencyKey,
-        redemptionFingerprint: fingerprint({ benefitId, reservationId, customerId, tableSessionId, selectedProductId, substitutionReason }),
+        redemptionFingerprint: fingerprint({ benefitId, reservationId, customerId, tableSessionId, selectedProductId, substitutionReason, ...(bundleSelections ? {bundleSelections} : {}) }),
       })
       return reply.send({ data: result.value, meta: { replayed: result.replayed } })
     }))
@@ -1023,7 +1028,9 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
   try { return await operation() } catch (error) {
     if (error instanceof NativeCommandNotCommittedError) return reply.code(409).send({error: {
       code: 'NATIVE_BUSINESS_NOT_COMMITTED', message: error.original instanceof CustomerBenefitRequestError
-        ? error.original.message : error.original instanceof BenefitUnavailableError || error.original instanceof BenefitAuthorizationError ? benefitReasonMessage(error.original.message) : '本次权益操作未提交，请刷新原暂留及库存后核对', commitDisposition: 'not_committed'}})
+        ? error.original.message : error.original instanceof OrderProductUnavailableError ? '所选商品或套餐选款已变化，请重新选择原券允许的商品与每份选款'
+        : error.original instanceof InsufficientInventoryError ? '所选商品库存不足，本次未核销，请核对后选择其他允许的商品'
+        : error.original instanceof BenefitUnavailableError || error.original instanceof BenefitAuthorizationError ? benefitReasonMessage(error.original.message) : '本次权益操作未提交，请刷新原暂留及库存后核对', commitDisposition: 'not_committed'}})
     const mapped = mapError(error)
     return reply.code(mapped.statusCode).send(mapped.body)
   }
@@ -1051,6 +1058,8 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof BenefitOwnershipError) {
     return apiError(403, 'BENEFIT_OWNERSHIP_MISMATCH', '该权益不属于当前桌次客户')
   }
+  if (error instanceof OrderProductUnavailableError || error instanceof OrderProductCostUnavailableError) return apiError(422, 'BENEFIT_PRODUCT_UNAVAILABLE', '所选商品或套餐选款已变化，请重新核对每份选款')
+  if (error instanceof InsufficientInventoryError || error instanceof InventoryRecipeMissingError || error instanceof InventoryBalanceMissingError) return apiError(422, 'BENEFIT_INVENTORY_UNAVAILABLE', '所选商品库存不足或出品配置未完成，本次未核销')
   if (error instanceof BenefitUnavailableError) {
     return apiError(409, 'BENEFIT_UNAVAILABLE', benefitReasonMessage(error.message))
   }

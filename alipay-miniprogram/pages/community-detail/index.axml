@@ -12,6 +12,7 @@
     </view>
     <view a:if="{{error}}" class="error-banner">{{error}}</view>
     <view a:if="{{success}}" class="success-banner">{{success}}</view>
+    <view a:if="{{pendingPurchaseRecovery}}" class="detail-summary"><text>原提交结果待核对；菜品停售或时段结束不代表原订单失败。</text><button class="status-secondary" onTap="queryOriginalPurchase" disabled="{{busy}}" loading="{{busy}}">查询原提交结果</button></view>
 
     <view class="detail-facts">
       <view><text>{{activity.feeText}}</text><text>活动费用</text></view>
@@ -48,51 +49,112 @@
       </view>
       <view a:if="{{activity.paymentBlockedText}}" class="rule-card"><text class="blocked-copy">{{activity.paymentBlockedText}}</text></view>
     </view>
-    <view a:if="{{activity.packages.length}}" class="section detail-section">
+    <view a:if="{{registrations.length}}" class="section detail-section">
+      <text class="detail-heading">我的本场订单（{{registrations.length}} 份）</text>
+      <text class="detail-summary">每份独立付款、独立查看；请选中本次要出示或加购的订单。</text>
+      <button a:for="{{registrations}}" a:key="publicId" class="activity-order-row {{registration && registration.publicId === item.publicId && !creatingPurchase ? 'activity-order-row--selected' : ''}}" data-registration-id="{{item.publicId}}" onTap="selectRegistration" disabled="{{busy}}"><text>{{item.packageText || item.purchaseText}} · {{item.referenceText}}</text><text>{{item.statusText}} · {{item.partySize}} 人</text></button>
+      <view a:if="{{!creatingPurchase && (activity.hasServicePackages || registration.hasServiceFlow)}}" class="activity-purchase-actions">
+        <button a:if="{{activity.hasServicePackages}}" data-kind="admission_package" onTap="beginPurchase" disabled="{{busy || activity.registrationBlocked}}">再买一份含入场套餐</button>
+        <button a:if="{{registration.canAddPurchase && registration.hasServiceFlow && activity.hasServicePackages}}" data-kind="meal_package" onTap="beginPurchase" disabled="{{busy || activity.addonBlocked}}">加购套餐（仅加餐）</button>
+        <button a:if="{{registration.canAddPurchase && (serviceCode.service.hasMeal || serviceCode.service.includesAdmission) && serviceCode.service.purchaseKind !== 'single_dish'}}" data-kind="single_dish" onTap="beginPurchase" disabled="{{busy || activity.addonBlocked}}">给本份加购菜品</button>
+      </view>
+    </view>
+    <view a:if="{{!previewOnly && (!creatingPurchase || parentCredentialRequired)}}" class="section detail-section">
+      <button class="status-secondary" onTap="scanParentForAddon" disabled="{{busy || activity.addonBlocked}}">{{parentCredentialRequired ? '重新扫码恢复原加购' : '扫码给同行人的这一份加菜'}}</button>
+      <text class="detail-summary">经原票持有人同意，扫描其活动票核销码。只关联送餐，本人付款并使用本人的可用权益，不增加入场资格。</text>
+    </view>
+    <view a:if="{{creatingPurchase}}" class="section detail-section">
+      <text class="detail-heading">{{purchaseKind === 'single_dish' ? '加购单点菜品' : purchaseKind === 'meal_package' ? '加购套餐 · 仅加餐' : '新买一份含入场套餐'}}</text>
+      <text class="detail-summary">{{purchaseKind === 'single_dish' ? '单独付款，沿用所选套餐取餐号；不会新增入场名额。' : purchaseKind === 'meal_package' ? '单独付款，核销后另领一个取餐号；不会新增入场名额。' : '一次购买一份，需要多份可在本份付款完成后继续购买。'}}</text>
+      <text a:if="{{parentRegistrationPublicId && !parentCredentialRequired}}" class="detail-summary">关联报名 {{registration.referenceText}}{{serviceCode.service.meal ? ' · 取餐号 ' + serviceCode.service.meal.number : ''}}</text>
+      <text a:if="{{parentCredentialRequired}}" class="detail-summary">关联 {{parentPreview.packageName || '原活动票'}}{{parentPreview.number ? ' · 取餐号 ' + parentPreview.number : ' · 尚未领号，请原票持有人到服务点核销领牌'}}。原票持有人仍保留入场和核销权限。</text>
+      <button class="status-secondary" onTap="stopCreatingPurchase" disabled="{{busy}}">返回订单</button>
+    </view>
+    <view a:if="{{creatingPurchase && purchaseKind === 'single_dish'}}" class="section detail-section">
+      <text a:if="{{!serviceCode.service.hasMeal && serviceCode.service.includesAdmission}}" class="detail-summary">首次加菜付款后，请到服务点出示原活动票核销码，核销后领取号码牌；付款不会提前发号或制作。</text>
+      <text class="detail-heading">当前可加购菜品</text>
+      <text a:if="{{!addonProducts.length}}" class="detail-summary">当前没有可加购菜品，可能尚未开售、已停售或售罄。</text>
+      <button a:for="{{addonProducts}}" a:key="id" class="activity-order-row {{selectedAddonProduct.id === item.id ? 'activity-order-row--selected' : ''}}" data-product-id="{{item.id}}" onTap="chooseAddonProduct" disabled="{{busy || !item.sellable}}"><image a:if="{{item.imageUrl}}" class="activity-addon-image" src="{{item.imageUrl}}" mode="aspectFill" /><text>{{item.name}}</text><text>{{item.priceText}}</text><text>{{item.statusText}}</text></button>
+      <text a:if="{{selectedAddonProduct.supplyDescription}}" class="detail-summary">{{selectedAddonProduct.supplyDescription}}</text><text a:if="{{activity.addonCutoffText}}" class="detail-summary">加购截止 {{activity.addonCutoffText}}，同时受菜品供应时段限制。</text>
+      <view a:if="{{selectedAddonProduct}}" class="party-row"><view><text>菜品数量</text></view><view class="stepper"><button data-delta="-1" disabled="{{addonQuantity <= 1 || busy}}" onTap="changeAddonQuantity">−</button><text>{{addonQuantity}}</text><button data-delta="1" disabled="{{addonQuantity >= 99 || busy}}" onTap="changeAddonQuantity">＋</button></view></view>
+    </view>
+    <view a:if="{{activity.packages.length && purchaseKind !== 'single_dish'}}" class="section detail-section">
       <text class="detail-heading">可选活动套餐<text a:if="{{activity.packageSelectionRequired}}">（需选择一档）</text></text>
-      <text class="detail-summary">活动票可{{activity.packageSelectionRequired ? '搭配下列其中一档套餐' : '单独报名，也可加购下列其中一档套餐'}}；价格与内容会在报名时固定。</text>
-      <view a:if="{{!activity.packageSelectionRequired}}" class="activity-package {{!selectedPackagePublicId ? 'activity-package--selected' : ''}}" onTap="clearPackageSelection">
+      <text class="detail-summary">{{activity.hasServicePackages ? (purchaseKind === 'meal_package' ? '请选择可纯加餐的套餐；单独领取取餐号。' : '每份套餐按整份价格购买，可在允许范围内填写实际参加人数。') : '活动票与套餐的费用以本次费用合计为准。'}}</text>
+      <view a:if="{{!activity.packageSelectionRequired && purchaseKind === 'admission_package'}}" class="activity-package {{!selectedPackagePublicId ? 'activity-package--selected' : ''}}" onTap="clearPackageSelection">
         <view><text>不加购套餐</text><text>仅报名活动票</text></view><text>已选</text>
       </view>
-      <view a:for="{{activity.packages}}" a:key="publicId" class="activity-package {{selectedPackagePublicId === item.publicId ? 'activity-package--selected' : ''}} {{item.availability !== 'available' ? 'activity-package--disabled' : ''}}" data-package-id="{{item.publicId}}" onTap="choosePackage">
+      <view a:for="{{activity.packages}}" a:key="publicId" a:if="{{purchaseKind === 'meal_package' ? (item.includesAdmission === false || item.mealOnlyFeeAmountMinor != null) : (!item.isServicePackage || item.includesAdmission !== false)}}" class="activity-package {{selectedPackagePublicId === item.publicId ? 'activity-package--selected' : ''}} {{item.availability !== 'available' ? 'activity-package--disabled' : ''}}" data-package-id="{{item.publicId}}" onTap="choosePackage">
         <image a:if="{{item.imageUrl}}" class="activity-package__image" src="{{item.imageUrl}}" mode="aspectFill" />
-        <view class="activity-package__main"><view><text>{{item.name}}</text><text>{{item.feeText}}</text></view><text a:if="{{item.description}}">{{item.description}}</text><text a:if="{{item.includedItems.length}}">含：<text a:for="{{item.includedItems}}" a:for-item="included" a:key="*this">{{included}} </text></text><text a:if="{{previewOnly}}">{{item.availabilityText}}；限购与名额以入会后页面为准</text><text a:else>每会员限购 {{item.memberPurchaseLimit}} 份 · 剩余 {{item.remainingCapacity}} 位 · {{item.availabilityText}}</text></view>
+        <view class="activity-package__main"><view><text>{{item.name}}</text><text>{{purchaseKind === 'meal_package' ? item.mealOnlyFeeText : item.feeText}}</text></view><text a:if="{{item.description}}">{{item.description}}</text><text a:if="{{item.includedItems.length}}">含：<text a:for="{{item.includedItems}}" a:for-item="included" a:key="*this">{{included}} </text></text><text a:if="{{previewOnly}}">{{item.availabilityText}}；限购与名额以入会后页面为准</text><text a:else>每会员限购 {{item.memberPurchaseLimit}} 份 · 剩余 {{item.remainingCapacity}} {{item.isServicePackage ? '份' : '位'}} · {{item.availabilityText}}<text a:if="{{item.isServicePackage}}"> · 每份最多 {{item.maxParticipants}} 人</text></text></view>
         <text a:if="{{selectedPackagePublicId === item.publicId}}">已选</text>
       </view>
+    </view>
+    <view a:if="{{(creatingPurchase || !registration || registration.canReRegister) && selectedChoiceGroups.length && purchaseKind !== 'single_dish'}}" class="section detail-section">
+      <text class="detail-heading">确认本份套餐选择</text>
+      <view a:for="{{selectedChoiceGroups}}" a:for-item="group" a:key="id" class="activity-choice-group">
+        <text>{{group.name}} · 固定 {{group.quantity}} 份，选择一种</text>
+        <button a:for="{{group.options}}" a:for-item="option" a:key="productId" class="activity-order-row {{group.selectedProductId === option.productId ? 'activity-order-row--selected' : ''}}" data-group-id="{{group.id}}" data-product-id="{{option.productId}}" onTap="choosePackageOption" disabled="{{busy}}">{{option.name}}{{group.selectedProductId === option.productId ? ' · 已选' : ''}}</button>
+      </view>
+      <text class="detail-summary">各组份数已包含在套餐总价内，实际人数不改变菜量。付款后不自行更换已确认内容。</text>
     </view>
     <view a:if="{{activity.participationRequirements.length}}" class="section detail-section"><text class="detail-heading">参加条件</text><view class="bullet-list"><view a:for="{{activity.participationRequirements}}" a:key="*this"><text>•</text><text>{{item}}</text></view></view></view>
     <view class="section detail-section"><text class="detail-heading">安全与参加要求</text><view a:if="{{activity.safetyFacts.length}}" class="safety-facts"><text a:for="{{activity.safetyFacts}}" a:key="*this">{{item}}</text></view><view a:if="{{activity.safetyRequirements.length}}" class="bullet-list"><view a:for="{{activity.safetyRequirements}}" a:key="*this"><text>!</text><text>{{item}}</text></view></view><text a:else class="detail-summary">请根据自身健康和出行情况决定是否参加，并遵守现场指引。</text></view>
     <view a:if="{{activity.contactInstructions}}" class="section detail-section"><text class="detail-heading">报名后联系与集合</text><text class="detail-summary">{{activity.contactInstructions}}</text></view>
 
-    <view a:if="{{!registration || registration.canReRegister}}" class="registration-panel">
-      <view class="party-row"><view><text>报名人数</text><text>{{previewOnly ? '加入会员后可按实际人数调整' : '按实际参加人数选择'}}</text></view><view a:if="{{previewOnly}}" class="preview-party-size"><text>{{partySize}} 人</text><text>暂按 1 人预览</text></view><view a:else class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" onTap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= partySizeLimit}}" onTap="changePartySize">＋</button></view></view>
+    <view a:if="{{creatingPurchase || !registration || registration.canReRegister}}" class="registration-panel">
+      <view a:if="{{purchaseKind !== 'single_dish'}}" class="party-row"><view><text>{{purchaseKind === 'meal_package' ? '本份用餐人数（不增加入场名额）' : '本份实际参加人数'}}</text><text>{{previewOnly ? '加入会员后可按实际人数调整' : selectedPackage.isServicePackage ? '在本份套餐允许范围内填写，不改变套餐价格' : '按实际参加人数选择'}}</text></view><view a:if="{{previewOnly}}" class="preview-party-size"><text>{{partySize}} 人</text><text>暂按 1 人预览</text></view><view a:else class="stepper"><button data-delta="-1" disabled="{{partySize <= 1}}" onTap="changePartySize">−</button><text>{{partySize}}</text><button data-delta="1" disabled="{{partySize >= partySizeLimit}}" onTap="changePartySize">＋</button></view></view>
       <block a:if="{{!previewOnly}}"><label id="activity-registration-contact" class="field registration-contact {{contactAttention ? 'registration-contact--attention' : ''}}"><text class="field__label">本次活动联系手机号</text><input class="field__input" type="number" value="{{contact}}" maxlength="11" focus="{{contactFocused}}" placeholder="请输入 11 位手机号，仅用于本次活动联系" onInput="onContactInput" /><text class="registration-contact__note">仅用于活动通知、集合与必要的报名确认。</text><text a:if="{{contactAttention}}" class="registration-contact__hint">请在这里填写后继续报名</text></label>
+      <label a:if="{{selectedPackage.isServicePackage || purchaseKind === 'single_dish'}}" class="field"><text class="field__label">必要备注（选填，不改变套餐内容）</text><textarea class="field__input" value="{{packageNote}}" maxlength="200" onInput="onPackageNoteInput" disabled="{{busy}}" placeholder="例如必要的制作提醒；特殊安排请联系门店确认" /></label>
       <checkbox-group id="activity-registration-acknowledgement" onChange="onAcknowledgementChange"><label class="ack-row {{acknowledgementAttention ? 'ack-row--attention' : ''}}"><checkbox value="ack" checked="{{ruleAcknowledged}}" color="#7b5a35" /><text>{{activity.acknowledgementText}}</text></label></checkbox-group></block>
     </view>
 
-    <view a:if="{{registration}}" class="registration-status">
+    <view a:if="{{registration && !creatingPurchase}}" class="registration-status">
       <view class="registration-status__head"><text>{{registration.statusText}}</text><text a:if="{{registration.resolutionText}}">付款：{{registration.resolutionText}}</text></view>
       <text a:if="{{registration.stateGuide}}" class="registration-state-guide">{{registration.stateGuide}}</text>
       <text>报名编号 {{registration.referenceText}}</text>
+      <text a:for="{{registration.selectionSummary}}" a:key="*this">本份已选：{{item}}</text>
+      <text a:if="{{registration.note}}">本份备注：{{registration.note}}</text>
+      <view a:if="{{!creatingPurchase && registration.hasServiceFlow && registration.canUseService}}" class="activity-service-card">
+        <text class="detail-heading">{{registration.purchaseKind === 'single_dish' ? '本份加菜配送信息' : '本份核销码'}}</text>
+        <text a:if="{{registration.purchaseKind !== 'single_dish'}}" class="detail-summary">到门口出示此码，请勿出示会员码。仅供工作人员核销。</text>
+        <text a:else class="detail-summary">单点沿用原票的取餐号。尚无号码时，请原票持有人到服务点出示原票核销码，核销后领牌；付款不会提前发号或制作。</text>
+        <button a:if="{{registration.purchaseKind === 'single_dish' && ownParentRegistrationPublicId}}" class="status-secondary" data-registration-id="{{ownParentRegistrationPublicId}}" onTap="selectRegistration" disabled="{{busy}}">查看我的原票核销码</button>
+        <image a:if="{{serviceCode.qrDataUrl && registration.purchaseKind !== 'single_dish'}}" class="activity-service-qr" src="{{serviceCode.qrDataUrl}}" mode="aspectFit" />
+        <text a:if="{{serviceCode.service.meal}}" class="activity-meal-number">取餐号 {{serviceCode.service.meal.number}}</text>
+        <text a:if="{{serviceCode.service.meal}}">{{serviceCode.service.meal.plaqueState === 'pending' ? '请到门口领取同号号码牌' : serviceCode.service.meal.plaqueState === 'returned' ? '号码牌已归还' : '请保管同号号码牌，供送餐时核对'}}</text>
+        <text a:elif="{{serviceCode}}">{{serviceCode.service.hasMeal ? '核销成功后生成取餐号，届时领取同号牌。' : '本份没有餐食，不生成取餐号。'}}</text>
+        <text a:if="{{serviceCode.service.includesAdmission}}">实际参加 {{serviceCode.service.partySize}} 人 · 已入场 {{serviceCode.service.admittedCount}} 人</text>
+        <view a:if="{{serviceCode.service.includesAdmission && !serviceCode.service.meal}}" class="activity-party-edit">
+          <text>实际参加人数（{{serviceCode.service.admittedCount > 0 ? serviceCode.service.admittedCount : 1}} 至 {{serviceCode.service.maxParticipants}} 人）</text>
+          <input type="number" value="{{registeredPartySizeDraft}}" maxlength="3" onInput="onRegisteredPartySizeInput" disabled="{{busy}}" />
+          <button class="status-secondary" onTap="saveRegisteredPartySize" loading="{{busy}}" disabled="{{busy}}">保存本份实际人数</button>
+        </view>
+        <text a:if="{{serviceError}}" class="blocked-copy">{{serviceError}}</text>
+        <button class="status-secondary" loading="{{serviceBusy}}" disabled="{{serviceBusy || busy}}" onTap="loadServiceCode">刷新本份核销码与取餐号</button>
+      </view>
+
       <text a:if="{{registration.paymentAmountMinor > 0}}">本次应付 {{registration.amountDueText}}<text a:if="{{registration.paymentMethodText}}"> · {{registration.paymentMethodText}}</text></text>
       <text a:if="{{registration.seatHoldText}}">名额保留至 {{registration.seatHoldText}}</text>
       <text a:if="{{registration.paymentDueText}}">付款截止 {{registration.paymentDueText}}</text>
       <text a:if="{{registration.refundStatusText}}" class="refund-state">{{registration.refundStatusText}}</text>
-      <text a:if="{{registration.requiresManualCancellation}}">如需退款，请联系门店；退款进展会显示在这里。</text>
+      <button a:if="{{!creatingPurchase && (registration.showFullRefundRequest || registration.hasUnconfirmedRefundAttempt)}}" class="status-secondary" onTap="requestRegistrationRefund" disabled="{{busy}}" loading="{{busy}}">{{registration.hasUnconfirmedRefundAttempt ? '核对原退订申请' : '申请本份整单退订'}}</button>
+      <text a:if="{{registration.refundRejectionReason}}" class="refund-state">未通过原因：{{registration.refundRejectionReason}}</text>
+      <text a:if="{{registration.refundGuidance}}">{{registration.refundGuidance}}</text>
       <button a:if="{{registration.canCancelDirectly && registration.canStartPayment}}" class="status-secondary" loading="{{busy}}" onTap="cancelRegistration">不再参加，取消未付报名</button>
     </view>
 
       </view>
     </scroll-view>
     <view class="detail-dock">
-      <view><text>{{previewOnly ? '活动公开预览' : (registration ? registration.statusText : (activity.registrationBlocked ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText)))}}</text><text>{{previewOnly ? '加入会员后查看真实名额与付款' : (registration ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : (activity.registrationBlocked ? '报名条件暂未开放' : activity.remainingCapacity > 0 ? ('剩余 ' + activity.remainingCapacity + ' 位') : '名额已满，可加入候补'))}}</text></view>
+      <view><text>{{previewOnly ? '活动公开预览' : (registration && !creatingPurchase ? registration.statusText : ((purchaseKind === 'admission_package' ? activity.registrationBlocked : activity.addonBlocked) ? '暂不开放' : (selectedPricing ? selectedPricing.feeText : activity.feeText)))}}</text><text>{{previewOnly ? '加入会员后查看真实名额与付款' : (registration && !creatingPurchase ? (registration.stateGuide || registration.resolutionText || '请在“我的活动”中查看状态') : ((purchaseKind === 'admission_package' ? activity.registrationBlocked : activity.addonBlocked) ? '购买条件暂未开放' : purchaseKind !== 'admission_package' ? '本次仅加餐，不增加入场名额' : activity.remainingCapacity > 0 ? ('剩余入场名额 ' + activity.remainingCapacity + ' 位') : '入场名额已满，可加入候补'))}}</text></view>
       <button a:if="{{previewOnly}}" disabled="{{busy}}" loading="{{busy}}" onTap="openMembershipInvite">查看报名与入会</button>
       <button a:elif="{{alipayIdentityRefreshRequired}}" class="payment-button" loading="{{busy}}" onTap="refreshAlipayIdentityAndRetry">{{registration && registration.canStartPayment ? '刷新身份后付款' : '刷新身份后提交'}}</button>
-      <button a:elif="{{!registration || registration.canReRegister}}" disabled="{{busy}}" loading="{{busy}}" onTap="register">{{activity.registrationBlocked || (selectedPricing && selectedPricing.paymentAvailability === 'blocked') ? '暂不开放' : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : selectedPricing && selectedPricing.requiresPaymentOnSubmit ? '提交报名并支付' : selectedPricing && selectedPricing.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
+      <button a:elif="{{creatingPurchase || !registration || registration.canReRegister}}" disabled="{{busy || (purchaseKind === 'single_dish' && (!selectedAddonProduct || selectedAddonProduct.sellable === false))}}" loading="{{busy}}" onTap="register">{{(purchaseKind === 'admission_package' ? activity.registrationBlocked : activity.addonBlocked) || (selectedPricing && selectedPricing.paymentAvailability === 'blocked') ? '暂不开放' : creatingPurchase ? (purchaseKind === 'admission_package' ? '购买本份并支付' : '提交加购并支付') : registration && registration.canReRegister ? '重新报名' : activity.remainingCapacity <= 0 ? '加入候补' : selectedPricing && selectedPricing.requiresPaymentOnSubmit ? '提交报名并支付' : selectedPricing && selectedPricing.feeAmountMinor > 0 ? '提交报名' : '免费报名'}}</button>
       <button a:elif="{{registration.canStartPayment}}" class="payment-button" loading="{{busy}}" onTap="startPayment">继续付款</button>
       <button a:elif="{{registration.canQueryPayment}}" loading="{{busy}}" onTap="queryPayment">查询付款结果</button>
       <button a:elif="{{registration.canCancelDirectly}}" class="cancel-button" loading="{{busy}}" onTap="cancelRegistration">取消报名</button>
-      <button a:elif="{{registration.requiresManualCancellation}}" class="cancel-button" onTap="showCancellationHelp">退款与联系</button>
+      <button a:elif="{{registration.showRefundContact}}" class="cancel-button" onTap="showCancellationHelp">退款与联系</button>
       <button a:else disabled>{{registration.statusText}}</button>
     </view>
   </block>

@@ -24,7 +24,7 @@ import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner,type PostgresPool} from './transaction-runner.js'
 import {MemberGiftCampaignRepository} from './member-gift-campaign-repository.js'
 import {CouponCalendarRepository} from './coupon-calendar-repository.js'
-import {CustomerRepository} from './customer-repository.js'
+import {CustomerRepository,CustomerCommandService} from './customer-repository.js'
 import {MemberGiftDeliveryWorker} from './member-gift-delivery-worker.js'
 import {MemberCardRepository} from './member-card-repository.js'
 import {StackingPricingDraftRepository} from './stacking-pricing-draft-repository.js'
@@ -34,7 +34,9 @@ import {CheckoutUpgradePricingRepository} from './checkout-upgrade-pricing-repos
 import {CheckoutUpgradeManagementRepository} from './checkout-upgrade-management-repository.js'
 import {CheckoutUpgradeEvaluationRepository} from './checkout-upgrade-evaluation-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
-import {BenefitRepository} from './benefit-repository.js'
+import {BenefitRepository,BenefitCommandService} from './benefit-repository.js'
+import {customerBenefitApiPlugin} from './customer-benefit-api.js'
+import {createGiftOrderPort} from './gift-order-fulfillment.js'
 import type {GuestSharedCart} from './guest-shared-cart-repository.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {GuestSharedCartRepository} from './guest-shared-cart-repository.js'
@@ -42,6 +44,9 @@ import {seedActiveGuestTableAuthority} from './guest-table-authority.test-helper
 import {PricingAuthorizationPolicy} from './pricing-authorization-policy.js'
 import {PostgresPricingAuthority} from './postgres-pricing-authority.js'
 import {OrderRepository} from './order-repository.js'
+import {saveProductServiceWindow} from './product-service-window-repository.js'
+import {DEFAULT_PRODUCT_SERVICE_WINDOW} from '../../src/shared/product-service-window.js'
+import {validateProductPaymentWindow} from './product-payment-window.js'
 import {CheckoutCouponLifecycleRepository,noCouponFulfillmentHistorySql} from './checkout-coupon-lifecycle-repository.js'
 import {PaymentRepository} from './payment-repository.js'
 import {PaymentCommandService} from './payment-command-service.js'
@@ -64,7 +69,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     for(const [id,code] of [[editor,'EDITOR'],[approver,'APPROVER'],[publisher,'PUBLISHER'],[denied,'DENIED']])await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)',[id,tenantId,storeId,code])
     await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'GIFT_REVIEW','Gift review')",[role,tenantId,storeId])
     for(const employeeId of [editor,approver,publisher])await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 minute')",[tenantId,storeId,employeeId,role])
-    for(const code of ['loyalty.configuration.edit','loyalty.configuration.view','loyalty.configuration.approve','loyalty.policy.publish','member.card.manage','member.card.review']){
+    for(const code of ['loyalty.configuration.edit','loyalty.configuration.view','loyalty.configuration.approve','loyalty.policy.publish','member.card.manage','member.card.review','loyalty.redemption.fulfill','table.view_all','loyalty.account.view']){
       await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT(tenant_id,store_id,code) DO NOTHING',[tenantId,storeId,code])
       await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4',[tenantId,storeId,role,code])
     }
@@ -422,6 +427,21 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     for(const job of jobs)await run(repo=>repo.deliver(job.jobId))
     expect((await pool.query("SELECT count(*)::int AS n,sum(estimated_cost_minor)::int AS cost FROM mbox.member_gift_delivery_jobs WHERE campaign_version_id=$1 AND status='issued'",[versionId])).rows[0]).toEqual({n:1,cost:100})
   })
+
+  it('long-term simple cards keep reward deduplication by member and campaign cycle across revoke and reapply',async()=>{
+    const customerId=await customer(),code=`SIMPLE_${randomUUID().slice(0,8).toUpperCase()}`
+    const project=await runner.run(scope,tx=>new MemberCardRepository(tx).createProject({flowMode:'simple',openImmediately:true,code,name:'长期测试卡',terms:'',kind:'interest',availableFrom:new Date(Date.now()-3600000).toISOString(),availableUntil:null,cooperationConfirmed:false,cooperationValidUntil:null,cooperationReference:null,employeeId:editor,businessDate}))
+    const applyAndReview=()=>runner.run(scope,async tx=>{const repo=new MemberCardRepository(tx),application=await repo.apply({projectId:project.projectId,customerId,acceptedProjectVersion:1,businessDate});return repo.review({applicationId:application.applicationId,decision:'approve',employeeId:editor,businessDate,reason:''})})
+    const first=await applyAndReview()
+    const versionId=await campaign({audience:{minimumTier:null,cardCodes:[code],cardMatch:'any',tierAndCards:'and'}})
+    const one=await run(repo=>repo.enqueue({versionId,customerId,cycleKey:'period-1'}));expect((await run(repo=>repo.deliver(one.jobId))).status).toBe('issued')
+    await runner.run(scope,tx=>new MemberCardRepository(tx).changeCard({cardId:first.cardId!,action:'revoke',employeeId:editor,businessDate,reason:'核实后重申'}))
+    await applyAndReview()
+    expect(await run(repo=>repo.enqueue({versionId,customerId,cycleKey:'period-1'}))).toMatchObject({jobId:one.jobId,replayed:true})
+    const two=await run(repo=>repo.enqueue({versionId,customerId,cycleKey:'period-2'}));expect(two.jobId).not.toBe(one.jobId)
+    expect((await run(repo=>repo.deliver(two.jobId))).status).toBe('issued')
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.benefits WHERE customer_id=$1',[customerId])).rows[0].n).toBe(2)
+  })
   it('recovers a committed approval after campaign stop, retains a visible obligation and never rewrites the card',async()=>{
     const customerId=await customer()
     const project=await runner.run(scope,tx=>new MemberCardRepository(tx).createProject({code:`ENTRY_${randomUUID().slice(0,8).toUpperCase()}`,name:'入卡礼测试',terms:'领取资格与营销许可独立，赠券以审批活动为准。',kind:'interest',availableFrom:new Date(Date.now()-3600000).toISOString(),availableUntil:new Date(Date.now()+86400000).toISOString(),cooperationConfirmed:false,cooperationValidUntil:null,cooperationReference:null,employeeId:editor,businessDate}))
@@ -688,6 +708,196 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     const published=await experience.publishLoyaltyPolicy(staff(publisher),{policyId:draft.value.id,effectiveFrom:new Date(Date.now()+60_000).toISOString(),effectiveUntil:null,reason:'隔离库发布规则验证',idempotencyKey:randomUUID()})
     expect(published.value.status).toBe('published')
     expect((await experience.listLoyaltyPolicies(staff(editor))).find(p=>p.id===draft.value.id)).toMatchObject({cashRedemptionEnabled:true,pointsRoundingScope:'order'})
+  })
+
+  async function promisedCouponFixture(fixed:boolean,bundle=false){
+    const customerId=await customer(),product=randomUUID(),area=randomUUID(),table=randomUUID(),session=randomUUID()
+    await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,cost_amount_minor,inventory_control_mode) VALUES($1::uuid,$2,$3,$1::text,'原券菜品','snack','kitchen',100,'not_managed')",[product,tenantId,storeId])
+    await pool.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1000,'CNY',clock_timestamp()-interval '1 day')",[tenantId,storeId,product])
+    let component:string|null=null,group:string|null=null
+    if(bundle){
+      component=randomUUID();group=randomUUID()
+      await pool.query("UPDATE mbox.products SET product_kind='bundle',fulfillment_station='none' WHERE id=$1",[product])
+      await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,cost_amount_minor,inventory_control_mode) VALUES($1::uuid,$2,$3,$1::text,'原券自选子菜','snack','kitchen',100,'not_managed')",[component,tenantId,storeId])
+      await pool.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1200,'CNY',clock_timestamp()-interval '1 day')",[tenantId,storeId,component])
+      await pool.query("INSERT INTO mbox.product_bundle_choice_groups(id,tenant_id,store_id,bundle_product_id,code,display_name,selection_count) VALUES($1,$2,$3,$4,'CHOICE','选择菜品',1)",[group,tenantId,storeId,product])
+      await pool.query('INSERT INTO mbox.product_bundle_choice_options(tenant_id,store_id,choice_group_id,component_product_id,quantity) VALUES($1,$2,$3,$4,1)',[tenantId,storeId,group,component])
+    }
+    const extra:Record<string,unknown>={productIds:[product]}
+    if(fixed){
+      const stacking=await runner.run(scope,tx=>new StackingPricingDraftRepository(tx).save({code:`PROMISE_${randomUUID().slice(0,8).toUpperCase()}`,policy:{...DEFAULT_STACKING_POLICY,allowBundlePrice:bundle},employeeId:editor,businessDate,reason:'原券报价测试',requestKey:randomUUID(),expectedVersion:0}))
+      for(const [action,employeeId] of [['approve',approver],['publish',publisher]] as const)await runner.run(scope,tx=>new StackingPricingDraftRepository(tx).decide({versionId:stacking.id,action,employeeId,businessDate,reason:'原券报价测试'}))
+      Object.assign(extra,{pricingKind:'fixed_price',fixedPriceMinor:990,stackingVersionId:stacking.id})
+    }
+    const versionId=await campaign(extra),job=await run(repo=>repo.enqueue({versionId,customerId,cycleKey:'original'}))
+    expect((await run(repo=>repo.deliver(job.jobId))).status).toBe('issued')
+    const benefitId=(await pool.query('SELECT benefit_id FROM mbox.member_gift_delivery_jobs WHERE id=$1',[job.jobId])).rows[0].benefit_id as string
+    await pool.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($1::uuid,$2,$3,'PROM_'||upper(substr($1::text,1,8)),'Promise','indoor')",[area,tenantId,storeId])
+    await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1::uuid,$2,$3,$4,'PR'||upper(substr($1::text,1,8)),'Promise',2)",[table,tenantId,storeId,area])
+    await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1::uuid,$2,$3,$4,$1::text,CURRENT_DATE,2,'open')",[session,tenantId,storeId,table])
+    await pool.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[tenantId,storeId,session,customerId])
+    const actorRef=await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId:session,customerId})
+    await runner.run(scope,tx=>saveProductServiceWindow(tx,product,{...DEFAULT_PRODUCT_SERVICE_WINDOW,dateFrom:'2100-01-01'}))
+    await pool.query('UPDATE mbox.products SET guest_visible=false WHERE id=$1',[product])
+    if(component){
+      await runner.run(scope,tx=>saveProductServiceWindow(tx,component!,{...DEFAULT_PRODUCT_SERVICE_WINDOW,dateFrom:'2100-01-01'}))
+      await pool.query('UPDATE mbox.products SET guest_visible=false WHERE id=$1',[component])
+    }
+    return{customerId,product,benefitId,session,actorRef,component,bundleSelections:group&&component?[{groups:[{groupId:group,productIds:[component]}]}]:[]}
+  }
+
+  it('fulfills an already issued gift under its original calendar after new menu hiding and sale windows',async()=>{
+    const f=await promisedCouponFixture(false)
+    await expect(runner.run(scope,tx=>new OrderRepository(tx,f.customerId).quoteCurrent([{productId:f.product,quantity:1}],'guest_qr'))).rejects.toThrow()
+    const reservation=await runner.run(scope,tx=>new BenefitRepository(tx).reserve({benefitId:f.benefitId,customerId:f.customerId,tableSessionId:f.session,quantity:1,expiresAt:new Date(Date.now()+60_000).toISOString(),reservationIdempotencyKey:randomUUID(),reservationFingerprint:'original-gift'},f.actorRef))
+    const input={benefitId:f.benefitId,benefitReservationId:reservation.id,customerId:f.customerId,tableSessionId:f.session,quantity:1,selectedProductId:f.product,redeemedByEmployeeId:editor,businessDate,redemptionIdempotencyKey:randomUUID(),redemptionFingerprint:'original-gift',authorizationSource:{kind:'employee',employeeId:editor}}
+    const redeem=()=>runner.run(scope,tx=>new BenefitRepository(tx).redeem(input,{createGiftOrder:async(transaction)=>{
+      const policy=new PricingAuthorizationPolicy(new PostgresPricingAuthority()),lines=[{productId:f.product,quantity:1}]
+      const authority=await policy.authorize(transaction,{scope,actor:{type:'employee',employeeId:editor},tableSessionId:f.session,channel:'cashier',lines,benefitFulfillmentReservationId:reservation.id},{sourceType:'benefit',sourceId:f.benefitId})
+      const order=await new OrderRepository(transaction).createSubmitted({tableSessionId:f.session,publicId:`old-gift-${randomUUID()}`,channel:'cashier',settlementMode:'immediate_payment',createdByEmployeeId:editor,lines},authority)
+      await policy.consume(transaction,authority!,order.id)
+      await new PaymentFulfillmentRepository(transaction).activateComplimentaryBenefitOrder(order.id,f.benefitId)
+      return{reference:order.publicId}
+    }},undefined,editor))
+    const redeemed=await redeem()
+    expect(await redeem()).toMatchObject({id:redeemed.id})
+    expect((await pool.query('SELECT quantity_redeemed FROM mbox.benefits WHERE id=$1',[f.benefitId])).rows[0].quantity_redeemed).toBe(1)
+    expect((await pool.query("SELECT total_amount_minor FROM mbox.orders WHERE public_id=$1",[redeemed.giftOrderReference])).rows[0].total_amount_minor).toBe('0')
+  })
+
+  it.each([false,true])('keeps an original fixed-price coupon usable through cart, quote, order and payment (bundle=%s) without admitting an uncovered portion',async(bundle)=>{
+    const f=await promisedCouponFixture(true,bundle)
+    const awaitedOtherCustomer=await customer()
+    let cart=await runner.run(scope,tx=>new GuestSharedCartRepository(tx,f.customerId).readOpen(f.session,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`))
+    const input={productId:f.product,bundleSelections:f.bundleSelections,delta:1,expectedGeneration:cart.generation,expectedVersion:cart.version,actorSessionRef:f.actorRef,operationId:randomUUID()}
+    await expect(runner.run(scope,tx=>new GuestSharedCartRepository(tx,f.customerId).adjust(f.session,cart.publicId,input))).rejects.toThrow()
+    await expect(runner.run(scope,tx=>new OrderRepository(tx,awaitedOtherCustomer).quoteCurrent([{productId:f.product,quantity:1,bundleSelections:f.bundleSelections}],'guest_qr',false,[{requestIndex:0,benefitId:f.benefitId}]))).rejects.toThrow()
+    cart=await runner.run(scope,tx=>new GuestSharedCartRepository(tx,f.customerId).adjust(f.session,cart.publicId,{...input,operationId:randomUUID(),issuedCouponBenefitId:f.benefitId}))
+    const replay=await runner.run(scope,async tx=>new GuestSharedCartRepository(tx,f.customerId).adjust(f.session,cart.publicId,{...input,operationId:(await tx.query<{id:string}>("SELECT scope_operation_id AS id FROM mbox.guest_shared_cart_operations WHERE cart_id=$1 AND payload ? 'issuedCouponBenefitId'",[cart.id])).rows[0]!.id,issuedCouponBenefitId:f.benefitId}))
+    expect(replay.issuedCouponPortionId).toBe(cart.issuedCouponPortionId)
+    expect(replay.lines[0]!.quantity).toBe(1)
+    expect(cart.issuedCouponPortionId).toBe(cart.lines[0]!.portionIds![0])
+    const wallet=await runner.run(scope,tx=>new BenefitRepository(tx).listWalletForCustomer(f.customerId,null,20))
+    if(bundle)expect(wallet.items.find(b=>b.id===f.benefitId)?.pricePromise?.products[0]?.bundleChoiceGroups[0]?.options[0]).toMatchObject({productId:f.component,available:true})
+    expect(cart.lines[0]).toMatchObject({available:false,couponReviewAvailable:true})
+    await expect(runner.run(scope,tx=>new OrderRepository(tx,f.customerId).quoteCurrent([{productId:f.product,quantity:2,bundleSelections:bundle?[...f.bundleSelections,...f.bundleSelections]:[]}],'guest_qr',false,[{requestIndex:0,benefitId:f.benefitId}]))).rejects.toThrow('次数不足')
+    const selection={benefitId:f.benefitId,portionId:cart.lines[0]!.portionIds![0]!}
+    const quote=await runner.run(scope,tx=>new CheckoutCouponQuoteRepository(tx).prepare({customerId:f.customerId,tableSessionId:f.session,expectedGeneration:cart.generation,expectedVersion:cart.version,selections:[selection],requestKey:randomUUID()}))
+    expect(quote.payableMinor).toBe(990)
+    const extraPortion=randomUUID(),mixed={...cart,lines:[{...cart.lines[0]!,quantity:2,portionIds:[selection.portionId,extraPortion]}]}
+    await expect(runner.run(scope,tx=>new CheckoutCouponRepository(tx).quote({customerId:f.customerId,cart:mixed,expectedGeneration:cart.generation,expectedVersion:cart.version,selections:[selection],channel:'guest_qr'}))).rejects.toThrow('暂不可售')
+    await expect(runner.run(scope,tx=>new GuestSharedCartRepository(tx,f.customerId).beginCheckout(f.session,cart.publicId,{expectedGeneration:cart.generation,expectedVersion:cart.version,operationId:randomUUID(),actorSessionRef:f.actorRef}))).rejects.toThrow('暂不可售')
+    const inventoryId=randomUUID(),recipeId=randomUUID(),stockProduct=f.component??f.product
+    await pool.query("UPDATE mbox.products SET inventory_control_mode='tracked' WHERE id=$1",[stockProduct])
+    await pool.query("INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit) VALUES($1::uuid,$2,$3,$1::text,'原券用料','ingredient','ml')",[inventoryId,tenantId,storeId])
+    await pool.query("INSERT INTO mbox.recipes(id,tenant_id,store_id,product_id,version,yield_quantity,status,effective_at) VALUES($1,$2,$3,$4,1,1,'active',clock_timestamp()-interval '1 day')",[recipeId,tenantId,storeId,stockProduct])
+    await pool.query('INSERT INTO mbox.recipe_items(tenant_id,store_id,recipe_id,inventory_item_id,quantity) VALUES($1,$2,$3,$4,1)',[tenantId,storeId,recipeId,inventoryId])
+    await pool.query('INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity) VALUES($1,$2,$3,0)',[tenantId,storeId,inventoryId])
+    const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority(),{inventoryEnforcementMode:'strict'})
+    await expect(runner.run(scope,async tx=>{
+      await new GuestSharedCartRepository(tx,f.customerId).beginCheckout(f.session,cart.publicId,{expectedGeneration:cart.generation,expectedVersion:cart.version,operationId:randomUUID(),actorSessionRef:f.actorRef,couponQuoteId:quote.id})
+      return commerce.submitOrderInTransaction(tx,{scope,actor:{type:'guest',ref:f.actorRef},businessDate,idempotencyKey:randomUUID(),tableSessionId:f.session,publicId:`old-stock-${randomUUID()}`,channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:f.customerId,lines:[{productId:f.product,quantity:1,bundleSelections:f.bundleSelections}],pricingAuthorization:{sourceType:'checkout_quote',sourceId:quote.id}})
+    })).rejects.toThrow(/库存|Insufficient/)
+    expect((await pool.query('SELECT quantity_reserved FROM mbox.benefits WHERE id=$1',[f.benefitId])).rows[0].quantity_reserved).toBe(0)
+    await pool.query("UPDATE mbox.products SET inventory_control_mode='not_managed' WHERE id=$1",[stockProduct])
+    const order=await runner.run(scope,async tx=>{
+      await new GuestSharedCartRepository(tx,f.customerId).beginCheckout(f.session,cart.publicId,{expectedGeneration:cart.generation,expectedVersion:cart.version,operationId:randomUUID(),actorSessionRef:f.actorRef,couponQuoteId:quote.id})
+      const policy=new PricingAuthorizationPolicy(new PostgresPricingAuthority()),lines=[{productId:f.product,quantity:1,bundleSelections:f.bundleSelections}]
+      const authority=await policy.authorize(tx,{scope,actor:{type:'guest',ref:f.actorRef},tableSessionId:f.session,channel:'guest_qr',lines},{sourceType:'checkout_quote',sourceId:quote.id})
+      const order=await new OrderRepository(tx).createSubmitted({tableSessionId:f.session,publicId:`old-price-${randomUUID()}`,channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:f.customerId,lines},authority)
+      await policy.consume(tx,authority!,order.id)
+      return order
+    })
+    expect(order.totalAmountMinor).toBe(990)
+    const payment=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:order.id,publicId:`old-price-pay-${randomUUID()}`,provider:'simulation',method:'jsapi',initialStatus:'pending',principal:{type:'guest',tableSessionId:f.session,customerId:f.customerId,guestSessionId:f.actorRef.slice('guest-session:'.length)}}))
+    const deadline=await runner.run(scope,tx=>validateProductPaymentWindow(tx,payment.id,new Date(Date.now()+300_000).toISOString()))
+    expect(Date.parse(deadline)).toBeLessThanOrEqual(Date.parse(quote.expiresAt))
+    await pool.query('UPDATE mbox.product_prices SET amount_minor=1500 WHERE product_id=$1',[f.product])
+    expect(Date.parse(await runner.run(scope,tx=>validateProductPaymentWindow(tx,payment.id,new Date(Date.now()+300_000).toISOString())))).toBeLessThanOrEqual(Date.parse(quote.expiresAt))
+    if(bundle){
+      await pool.query("UPDATE mbox.products SET status='sold_out' WHERE id=$1",[f.component])
+      await expect(runner.run(scope,tx=>validateProductPaymentWindow(tx,payment.id,new Date(Date.now()+300_000).toISOString()))).rejects.toThrow('商品供应时间')
+      await pool.query("UPDATE mbox.products SET status='active' WHERE id=$1",[f.component])
+    }
+    await pool.query("UPDATE mbox.products SET status='inactive' WHERE id=$1",[f.product])
+    await expect(runner.run(scope,tx=>validateProductPaymentWindow(tx,payment.id,new Date(Date.now()+300_000).toISOString()))).rejects.toThrow('商品供应时间')
+    await pool.query("UPDATE mbox.products SET status='active',guest_visible=true WHERE id=$1",[f.product])
+    await pool.query('UPDATE mbox.product_prices SET amount_minor=1000 WHERE product_id=$1',[f.product])
+    await runner.run(scope,tx=>saveProductServiceWindow(tx,f.product,DEFAULT_PRODUCT_SERVICE_WINDOW))
+    if(f.component){
+      await pool.query('UPDATE mbox.products SET guest_visible=true WHERE id=$1',[f.component])
+      await runner.run(scope,tx=>saveProductServiceWindow(tx,f.component!,DEFAULT_PRODUCT_SERVICE_WINDOW))
+    }
+    await pool.query("UPDATE mbox.benefits SET status='revoked' WHERE id=$1",[f.benefitId])
+    // Ordinary product eligibility must never salvage a now-invalid discounted promise.
+    await expect(runner.run(scope,tx=>validateProductPaymentWindow(tx,payment.id,new Date(Date.now()+300_000).toISOString()))).rejects.toThrow('商品供应时间')
+  })
+
+  it('does not restore revoked or expired coupons, sold-out products or legacy daily hours',async()=>{
+    const f=await promisedCouponFixture(true)
+    const quote=()=>runner.run(scope,tx=>new OrderRepository(tx,f.customerId).quoteCurrent([{productId:f.product,quantity:1}],'guest_qr',false,[{requestIndex:0,benefitId:f.benefitId}]))
+    await pool.query("UPDATE mbox.products SET status='sold_out' WHERE id=$1",[f.product])
+    await expect(quote()).rejects.toThrow()
+    await pool.query("UPDATE mbox.products SET status='active',available_from=((clock_timestamp() AT TIME ZONE 'Asia/Shanghai')+interval '1 hour')::time,available_until=((clock_timestamp() AT TIME ZONE 'Asia/Shanghai')+interval '2 hours')::time WHERE id=$1",[f.product])
+    await expect(quote()).rejects.toThrow()
+    await pool.query('UPDATE mbox.products SET available_from=NULL,available_until=NULL WHERE id=$1',[f.product])
+    await pool.query("UPDATE mbox.benefits SET status='revoked' WHERE id=$1",[f.benefitId])
+    await expect(quote()).rejects.toThrow('已失效')
+    const expired=await promisedCouponFixture(true)
+    await pool.query("UPDATE mbox.benefits SET valid_from=clock_timestamp()-interval '2 days',valid_until=clock_timestamp()-interval '1 day' WHERE id=$1",[expired.benefitId])
+    await expect(runner.run(scope,tx=>new OrderRepository(tx,expired.customerId).quoteCurrent([{productId:expired.product,quantity:1}],'guest_qr',false,[{requestIndex:0,benefitId:expired.benefitId}]))).rejects.toThrow('已失效')
+  })
+
+  it('redeems a hidden issued configurable gift through the real staff wallet endpoint and production adapter exactly once',async()=>{
+    const f=await promisedCouponFixture(false,true)
+    const commands=new NormalizedCommandExecutor(runner)
+    const commerce=new CommerceCommandService(commands,new PostgresPricingAuthority(),{inventoryEnforcementMode:'strict'})
+    const app=Fastify()
+    await app.register(customerBenefitApiPlugin,{prefix:'/api',transactions:runner,
+      customers:new CustomerCommandService(commands),benefits:new BenefitCommandService(commands,createGiftOrderPort(commerce)),
+      resolveStaffContext:()=>({scope,employeeId:editor,businessDate}),
+      resolveSelfContext:()=>({scope,customerId:f.customerId,tableSessionId:f.session,businessDate,actorRef:f.actorRef}),
+      resolveGuestContext:()=>({scope,customerId:f.customerId,tableSessionId:f.session,businessDate,actorRef:f.actorRef})})
+    try{
+      const memberNo=(await pool.query('SELECT member_no FROM mbox.customer_memberships WHERE customer_id=$1',[f.customerId])).rows[0].member_no
+      const lookup=await app.inject({method:'POST',url:'/api/staff/native-benefit-wallet/lookup',payload:{code:memberNo}})
+      expect(lookup.statusCode,lookup.body).toBe(200)
+      const gift=lookup.json().data.items.find((item:{id:string})=>item.id===f.benefitId)
+      expect(gift.products[0].bundleChoiceGroups[0].options[0]).toMatchObject({productId:f.component,available:true})
+      const command=(action:string,payload:unknown,key=`native-business-${randomUUID()}`)=>app.inject({method:'POST',url:`/api/staff/native-benefit-wallet/commands/${action}`,headers:{'idempotency-key':key},payload})
+      const base={benefitId:f.benefitId,customerId:f.customerId,tableSessionId:f.session,quantity:1}
+      const reserve=await command('reserve',{...base,expectedVersion:gift.version})
+      expect(reserve.statusCode,reserve.body).toBe(200)
+      const input={...base,reservationId:reserve.json().data.result.id,selectedProductId:f.product,bundleSelections:f.bundleSelections}
+      for(const patch of [
+        {bundleSelections:undefined},
+        {selectedProductId:productId},
+        {bundleSelections:[{groups:[{groupId:f.bundleSelections[0]!.groups[0]!.groupId,productIds:[productId]}]}]},
+      ]){
+        const denied=await command('redeem',{...input,...patch})
+        expect(denied.statusCode,denied.body).toBeGreaterThanOrEqual(400)
+        expect(denied.statusCode,denied.body).toBeLessThan(500)
+      }
+      await pool.query("UPDATE mbox.products SET status='sold_out' WHERE id=$1",[f.component])
+      const unavailable=await command('redeem',input)
+      expect(unavailable.statusCode,unavailable.body).toBeGreaterThanOrEqual(400)
+      expect(unavailable.statusCode,unavailable.body).toBeLessThan(500)
+      expect((await pool.query('SELECT quantity_redeemed FROM mbox.benefits WHERE id=$1',[f.benefitId])).rows[0].quantity_redeemed).toBe(0)
+      expect((await pool.query('SELECT count(*)::int AS count FROM mbox.orders WHERE table_session_id=$1',[f.session])).rows[0].count).toBe(0)
+      await pool.query("UPDATE mbox.products SET status='active' WHERE id=$1",[f.component])
+      const key=`native-business-${randomUUID()}`,success=await command('redeem',input,key)
+      expect(success.statusCode,success.body).toBe(200)
+      const replay=await command('redeem',input,key)
+      expect(replay.statusCode,replay.body).toBe(200)
+      expect(replay.json().meta.replayed).toBe(true)
+      const order=(await pool.query('SELECT id,total_amount_minor,fulfillment_state FROM mbox.orders WHERE public_id=$1',[success.json().data.result.giftOrderReference])).rows[0]
+      expect(order).toMatchObject({total_amount_minor:'0',fulfillment_state:'active'})
+      const child=(await pool.query('SELECT product_id,quantity,product_snapshot FROM mbox.order_items WHERE order_id=$1 AND parent_order_item_id IS NOT NULL',[order.id])).rows
+      expect(child).toHaveLength(1)
+      expect(child[0]).toMatchObject({product_id:f.component,quantity:1,product_snapshot:{bundleChoiceGroupId:f.bundleSelections[0]!.groups[0]!.groupId}})
+      expect((await pool.query('SELECT quantity_redeemed FROM mbox.benefits WHERE id=$1',[f.benefitId])).rows[0].quantity_redeemed).toBe(1)
+      expect((await pool.query('SELECT count(*)::int AS count FROM mbox.orders WHERE table_session_id=$1',[f.session])).rows[0].count).toBe(1)
+    }finally{await app.close()}
   })
 
 })

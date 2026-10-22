@@ -9,7 +9,7 @@
   <view a:if="{{error}}" class="cards-error"><text>{{error}}</text><button class="cards-button" onTap="load" disabled="{{busy}}">刷新核对</button></view>
   <state-panel a:if="{{loading}}" type="loading" title="正在读取本人卡片" />
   <block a:elif="{{selectedProject}}">
-    <view class="cards-box"><text class="cards-title">{{selectedProject.name}}</text><text class="cards-copy">有效至 {{selectedProject.untilText}}（北京时间）</text><text class="cards-terms">{{selectedProject.terms}}</text>
+    <view class="cards-box"><text class="cards-title">{{selectedProject.name}}</text><text class="cards-copy">{{selectedProject.available_until === null ? selectedProject.untilText : '有效至 ' + selectedProject.untilText + '（北京时间）'}}</text><text class="cards-terms">{{selectedProject.terms}}</text>
       <checkbox-group onChange="acknowledge"><label class="cards-ack"><checkbox value="agree" checked="{{acknowledged}}" color="#315d46" disabled="{{busy}}"/>我已阅读并同意本卡申请说明</label></checkbox-group>
       <view class="cards-actions"><button class="cards-button" disabled="{{busy}}" onTap="closeProject">返回</button><button class="cards-button primary" disabled="{{busy || !acknowledged}}" loading="{{busy}}" onTap="apply">提交申请</button></view>
     </view>
@@ -24,11 +24,11 @@
     <button a:if="{{giftCursor}}" class="cards-button" data-more="true" onTap="loadGifts" disabled="{{giftLoading}}">更多赠券记录</button>
     <button class="cards-button" onTap="openGiftWallet">查看优惠券包</button>
     <text class="cards-section">我的卡片</text>
-    <view a:for="{{cards}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">有效至 {{item.untilText}}（北京时间）</text><button a:if="{{item.canWithdraw}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-card" onTap="withdraw">退出此卡</button></view>
+    <view a:for="{{cards}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">{{item.valid_until === null ? item.untilText : '有效至 ' + item.untilText + '（北京时间）'}}</text><text class="cards-copy">可用商品与价格以当前菜单为准；已发赠券请在优惠券包查看，持卡不代表必有赠券或随时可买。</text><button a:if="{{item.status === 'active' && !item.expired}}" class="cards-button" onTap="openBenefits">去点单查看可用商品</button><button a:if="{{item.canWithdraw}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-card" onTap="withdraw">退出此卡</button></view>
     <text a:if="{{!cards.length}}" class="cards-copy">暂无持卡记录。</text>
     <button a:if="{{nextCursors.cards}}" class="cards-button" disabled="{{busy}}" data-kind="cards" onTap="loadMore">加载更多卡片</button>
     <text class="cards-section">可申请项目</text>
-    <view a:for="{{projects}}" a:key="id" class="cards-box"><text>{{item.name}}</text><text class="cards-copy">{{item.kind === 'interest' ? '同好身份' : '联名身份'}} · 有效至 {{item.untilText}}</text><button class="cards-button primary" disabled="{{busy || !item.canApply}}" data-id="{{item.id}}" onTap="openProject">{{item.buttonText}}</button></view>
+    <view a:for="{{projects}}" a:key="id" class="cards-box"><text>{{item.name}}</text><text class="cards-copy">{{item.kind === 'interest' ? '同好身份' : '联名身份'}} · {{item.available_until === null ? item.untilText : '有效至 ' + item.untilText}}</text><text a:if="{{item.flow_mode === 'simple'}}" class="cards-terms">{{item.terms}}</text><button class="cards-button primary" disabled="{{busy || (!item.canApply && !item.has_current_card)}}" data-id="{{item.id}}" onTap="openProject">{{item.buttonText}}</button></view>
     <text a:if="{{!projects.length}}" class="cards-copy">当前没有开放申请的项目。</text>
     <button a:if="{{nextCursors.projects}}" class="cards-button" disabled="{{busy}}" data-kind="projects" onTap="loadMore">加载更多项目</button>
     <text class="cards-section">申请记录</text>

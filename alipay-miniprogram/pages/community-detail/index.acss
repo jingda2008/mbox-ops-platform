@@ -246,3 +246,15 @@
     transform: translateX(-50%);
   }
 }
+
+.activity-order-row { width:100%; margin-top:14rpx; padding:18rpx; display:flex; flex-direction:column; align-items:flex-start; gap:8rpx; white-space:normal; text-align:left; line-height:1.5; font-size:25rpx; color:#4d493f; background:#faf8f3; border:1rpx solid #ddd6c8; border-radius:14rpx; }
+.activity-order-row--selected { border-color:#7b5a35; background:#f2ebdf; }
+.activity-purchase-actions { display:flex; flex-direction:column; gap:12rpx; margin-top:20rpx; }
+.activity-purchase-actions button { width:100%; white-space:normal; font-size:25rpx; line-height:1.5; padding:18rpx; }
+.activity-service-card { display:flex; flex-direction:column; align-items:center; gap:14rpx; padding:22rpx 12rpx; margin-top:20rpx; border-top:1rpx solid #ddd6c8; text-align:center; }
+.activity-service-qr { width:360rpx; height:360rpx; max-width:100%; background:#fff; }
+.activity-meal-number { font-size:56rpx; font-weight:700; color:#3d493c; }
+.activity-party-edit { width:100%; display:flex; flex-direction:column; gap:12rpx; }
+.activity-party-edit input { min-height:72rpx; border:1rpx solid #d9d0c2; border-radius:12rpx; text-align:center; background:#fff; }
+
+.activity-addon-image { width: 96rpx; height: 96rpx; flex: none; border-radius: 12rpx; }

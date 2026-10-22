@@ -10,6 +10,9 @@ import { ProfitQueryService, profitPeriodRange } from './profit-query-service.js
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
 describe('profitPeriodRange', () => {
+  it('rejects impossible calendar dates instead of silently moving their period', () => {
+    expect(() => profitPeriodRange('month','2026-02-31')).toThrow('YYYY-MM-DD')
+  })
   it('uses Monday weeks and calendar day, month, quarter and year boundaries', () => {
     expect(profitPeriodRange('day', '2026-08-11')).toEqual({ startDate: '2026-08-11', endDate: '2026-08-11' })
     expect(profitPeriodRange('week', '2026-08-11')).toEqual({ startDate: '2026-08-10', endDate: '2026-08-16' })
@@ -78,6 +81,10 @@ integration('ProfitQueryService PostgreSQL accounting correctness', () => {
     })
     expect(report.status).toBe('provisional')
     expect(report.caveats.join(' ')).toContain('未知成本无法被量化')
+    expect(report.caveats.some(note => note.startsWith('已收款但尚未完成对账入账'))).toBe(report.gaps.unreconciledCapturedPaymentsMinor !== 0)
+    expect(report.caveats).toContain('团购券待结算金额，实际结算结果待核对：CNY 188.00。')
+    expect(report.caveats.join(' ')).toContain('费用仍为已知估计')
+    expect(report.caveats.some(note => note.startsWith('费用缺付款日期'))).toBe(report.gaps.costsMissingCashDateMinor !== 0)
   })
 
   it('allocates integer minor units exactly across a full month', async () => {

@@ -150,23 +150,24 @@ restore_failed_release_on_error() {
     "${failed_schema_version}" "${failed_deployment_tier}" 5 >/dev/null 2>&1; then
     recovery_verified=true
   fi
-  if [ -f "${release_dir}/print-policy-rollback-guard.json" ]; then
-    local recovery_evidence
-    recovery_evidence=$(mktemp "${release_dir}/.print-rollback-recovery.XXXXXX")
+  local recovery_evidence guard_evidence
+  for guard_evidence in "${release_dir}/application-contract-rollback-guard.json" "${release_dir}/print-policy-rollback-guard.json"; do
+    [ -f "${guard_evidence}" ] || continue
+    recovery_evidence=$(mktemp "${release_dir}/.rollback-recovery.XXXXXX")
     jq --argjson verified "${recovery_verified}" --arg sha "${failed_sha}" \
       '.recovery={action:"restore_current_release_keep_previous_workers_stopped",releaseSha:$sha,verified:$verified}' \
-      "${release_dir}/print-policy-rollback-guard.json" > "${recovery_evidence}" \
-      && mv "${recovery_evidence}" "${release_dir}/print-policy-rollback-guard.json"
-  fi
-  echo "rollback aborted: restored current release attempted for ${failed_sha}; verified=${recovery_verified}; previous workers stopped; inspect ${release_dir}/print-policy-rollback-guard.json" >&2
+      "${guard_evidence}" > "${recovery_evidence}" \
+      && mv "${recovery_evidence}" "${guard_evidence}"
+  done
+  echo "rollback aborted: restored current release attempted for ${failed_sha}; verified=${recovery_verified}; previous workers stopped; inspect ${release_dir}/*rollback-guard.json" >&2
   exit "${exit_code}"
 }
 trap 'restore_failed_release_on_error $?' ERR
 trap 'restore_failed_release_on_error 130' INT
 trap 'restore_failed_release_on_error 143' TERM
 
-# Drain new writers before the compatibility query, closing the policy-save
-# race between a read-only check and the first old-worker execution.
+# Refuse a crossed application contract even if rollbackMode was mislabelled.
+# For older print-policy boundaries, drain before the scoped compatibility query.
 release_assert_print_rollback_safe "${release_dir}" "${failed_platform_image_digest}" \
   "${previous_schema_version}" "${active_container}" "${rollback_container}"
 

@@ -1,10 +1,10 @@
-import { PrintTicketSourceRepository } from './print-ticket-source.js'
+import { PrintTicketSourceRepository,ActivityPrintHeldError } from './print-ticket-source.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
 export interface PrintSourceBatch { examined: number; completed: number; skipped: number; retrying: number; dead: number }
 interface SourceRow extends Record<string, unknown> {
   id: string; source_outbox_message_id: string; aggregate_id: string; attempts: number
-  ticket_kind: 'production' | 'settlement' | 'payment' | 'activity_payment' | 'refund' | 'activity_refund' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement' | 'delivery_batch' | 'production_notice'
+  ticket_kind: 'production' | 'settlement' | 'payment' | 'activity_payment' | 'refund' | 'activity_refund' | 'activity_production' | 'order_summary' | 'delivery' | 'table_settlement' | 'daily_settlement' | 'delivery_batch' | 'production_notice'
 }
 
 /** No device I/O. A rendering/routing failure is retained after rolling back
@@ -39,7 +39,7 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
   try {
     const repository = new PrintTicketSourceRepository(tx)
     const method = {
-      production_notice: 'materializeProductionNotice',
+      activity_production:'materializeActivityProduction',production_notice: 'materializeProductionNotice',
       production: 'materializeOrderProduction', settlement: 'materializeCashierSettlement',
       payment: 'materializeCashierPayment', activity_payment: 'materializeActivityCashierPayment',
       refund: 'materializeCashierRefund', activity_refund: 'materializeActivityCashierRefund',
@@ -54,8 +54,13 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3`, [tx.scope.tenantId, tx.scope.storeId, id, status, jobs.length,status==='skipped'?repository.skipReason:null])
     await tx.query('RELEASE SAVEPOINT print_materialization')
     return status
-  } catch {
+  } catch (error) {
     await tx.query('ROLLBACK TO SAVEPOINT print_materialization')
+    if(error instanceof ActivityPrintHeldError){
+      await tx.query(`UPDATE mbox.print_source_jobs SET status='retry',next_attempt_at=clock_timestamp()+interval '30 seconds',last_error_code='activity_service_held' WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[tx.scope.tenantId,tx.scope.storeId,id]);
+      await tx.query('RELEASE SAVEPOINT print_materialization');
+      return 'retrying';
+    }
     const dead = Number(source.attempts) + 1 >= 8
     await tx.query(`UPDATE mbox.print_source_jobs SET status=$4,attempts=attempts+1,
       next_attempt_at=clock_timestamp() + ($5::integer * interval '1 second'),

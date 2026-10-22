@@ -12,6 +12,7 @@ const {
   getCustomerBenefitWallet,
   getSharedCart,
   adjustSharedCart,
+  addIssuedCouponProduct,
   replaceSharedCartBundleSelection,
   removeSharedCartLine,
   clearSharedCart,
@@ -241,6 +242,7 @@ function menuAvailability(item) {
     return { text: '暂不可点', detail: '这款暂时售罄' }
   }
   if (item.availabilityStatus === 'scheduled') {
+    if (item.availabilityDetail) return { text: '暂不可点', detail: item.availabilityDetail }
     const range = item.availableFrom && item.availableUntil ? `供应时间 ${item.availableFrom}-${item.availableUntil}` : '当前不在供应时段'
     return { text: '暂不可点', detail: range }
   }
@@ -485,6 +487,7 @@ function sharedCartView(sharedCart, products) {
       priceText: available ? money(amountMinor) : '价格待确认',
       subtotalText: available ? money(subtotalAmountMinor) : '暂不可结算',
       available: available && Boolean(product && product.available),
+      couponReviewAvailable: line.couponReviewAvailable === true,
       unavailableReason: available && Boolean(product && product.available)
         ? '' : cartUnavailableReason(line.unavailableReason, product),
       bundleSelections:Array.isArray(line.bundleSelections)?line.bundleSelections:[],
@@ -534,7 +537,7 @@ function applyBundleUnitSelection(product,unit){
   return Object.assign(selected,selectedBundleValuePresentation(selected))
 }
 
-const { initialCheckoutCoupons, checkoutCouponMethods } = require('../../utils/checkout-coupons')
+const { initialCheckoutCoupons, checkoutCouponMethods, couponPortions } = require('../../utils/checkout-coupons')
 const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
 const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
 const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
@@ -588,6 +591,9 @@ Page({
     performance: null,
     performanceError: '',
     products: [],
+    menuUpdatePending: false,
+    menuUpdateBusy: false,
+    menuUpdatedAt: '',
     visibleProducts: [],
     detailProduct: null,
     detailInformationExpanded: false,
@@ -629,6 +635,7 @@ Page({
     cartTotal: '¥0.00',
     cartTotalCompact: '¥0',
     cartCount: 0,
+    couponReviewRequired: false,
     cartExpanded: false,
     checkoutConfirmVisible: false,
     quantityReviewVisible: false,
@@ -654,6 +661,11 @@ Page({
     if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/order/index') }
     enablePublicShareMenu()
     await this.preparePage()
+    this.restoreIssuedCouponAttempt()
+    if (wx.getStorageSync('mbox.issued-coupon-entry-request.v1')) {
+      if (this.data.orderReady && this.data.connectionState === 'active') { wx.removeStorageSync('mbox.issued-coupon-entry-request.v1'); await this.openIssuedCouponEntry() }
+      else this.setData({ error: '请先扫码确认桌台，再使用已有兑换券。' })
+    }
     const resumeScope = this.checkoutMemberReturnScope
     this.checkoutMemberReturnScope = null
     const request = this.currentTableRequest()
@@ -681,14 +693,14 @@ Page({
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
-    this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
+    this.stopMenuWindowRefresh(); this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
   onUnload() {
     this.invalidateCheckoutCoupons(true, false)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
-    this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
+    this.stopMenuWindowRefresh(); this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
 
   ensureTableRequestGuard() {
@@ -886,7 +898,7 @@ Page({
     if (request && !this.isCurrentTableRequest(request)) return
     const products = menuProducts(menu)
     this.menuDisplayStartedAt = Date.now()
-    this.setData({ loading: false, browseOnly: false, products,
+    this.setData({ loading: false, browseOnly: false, products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       menuImageGeneration: this.data.menuImageGeneration + 1,
       ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
     this.applyFilters(() => {
@@ -895,20 +907,67 @@ Page({
     this.firstScreenImages = new Set(this.data.visibleProducts.slice(0,4).filter(item => item.listImageUrl || item.imageUrl).map(item => item.productId))
   },
 
+  stopMenuWindowRefresh() {
+    if (this.menuWindowTimer) clearTimeout(this.menuWindowTimer)
+    this.menuWindowTimer = null
+  },
+  startMenuWindowRefresh(request) {
+    this.stopMenuWindowRefresh()
+    if (!request || !this.isCurrentTableRequest(request)) return
+    // Configured boundaries are whole store-local minutes. Refresh without
+    // restarting the page or changing the customer's cart/selection.
+    this.menuWindowTimer = setTimeout(async () => {
+      this.menuWindowTimer = null
+      if (!this.isCurrentTableRequest(request)) return
+      await this.refreshMenuWindow(request)
+      if (this.isCurrentTableRequest(request)) this.startMenuWindowRefresh(request)
+    }, 60000 - Date.now() % 60000 + 50)
+    if (this.menuWindowTimer && typeof this.menuWindowTimer.unref === 'function') this.menuWindowTimer.unref()
+  },
+
+  async refreshMenuWindow(request) {
+    if (!request || !this.isCurrentTableRequest(request)) return false
+    const readVersion = (this.menuWindowReadVersion || 0) + 1
+    this.menuWindowReadVersion = readVersion
+    try {
+      const menu = await (this.data.browseOnly ? getPublicMenu({}) : getMenu({}))
+      if (!this.isCurrentTableRequest(request) || this.menuWindowReadVersion !== readVersion) return false
+      const products = menuProducts(menu)
+      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
+      this.applyFilters()
+      if (!this.data.browseOnly) await this.refreshSharedCart(true, request)
+      return true
+    } catch (_error) {
+      if (this.isCurrentTableRequest(request) && this.menuWindowReadVersion === readVersion) this.setData({ menuUpdatePending: true })
+      return false
+    }
+  },
+
+  async retryMenuWindow() {
+    if (this.data.menuUpdateBusy) return
+    const request = this.currentTableRequest()
+    if (!this.isCurrentTableRequest(request)) return
+    this.setData({ menuUpdateBusy: true })
+    try { await this.refreshMenuWindow(request) }
+    finally { if (this.isCurrentTableRequest(request)) this.setData({ menuUpdateBusy: false }) }
+  },
+
   async preparePage(silent) {
+    this.stopMenuWindowRefresh()
     this.stopWaitingPoll()
     this.stopSharedCartPolling()
     this.stopServicePolling()
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
+    this.setData({ menuUpdateBusy: false, orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
     const scopeChanged = this.visibleTableScope !== request.scope
     const retainedCartScope = !scopeChanged && session.cartScope
       && this.data.connectionState === 'active' && this.cartSnapshotScope === tableSessionCacheScope()
     this.visibleTableScope = request.scope
     this.cartRecovery = null
     if (scopeChanged) {
+      this.setData({ menuUpdatePending: false, menuUpdateBusy: false, menuUpdatedAt: '' })
       this.checkoutOperation = null
       this.recommendationOperation = null
       this.stopShakeRecommendation()
@@ -918,7 +977,7 @@ Page({
         busy: false, recommendationBusy: false, checkoutUpgradeNeedsRefresh: false,
         cartSyncing: false, clearingCart: false, quickServiceBusy: '',
         checkoutLocked: false, pendingPayment: null, paymentResult: null, cart: [], cartVersion: 0, cartGeneration: 0,
-        cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, cartWritesFrozen: false,
+        cartTotal: '¥0.00', cartTotalCompact: '¥0', cartCount: 0, cartExpanded: false, checkoutConfirmVisible: false, couponEntryOpen: false, issuedCouponPending: null, cartWritesFrozen: false,
         detailProduct: null,
         detailEditUnitIndex: -1,
         recommendations: [], recommendationPublicId: '', recommendationAttribution: null, recommendationEmpty: false, recommendationError: '', performance: null, performanceError: '',
@@ -1027,6 +1086,7 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
+        menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
         browseCatalogLoaded: true,
         connectionState: browseView.connectionState,
         connectionMessage: browseView.connectionMessage,
@@ -1040,6 +1100,7 @@ Page({
       })
       this.applyFilters()
       this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
+      this.startMenuWindowRefresh(request)
       void this.loadOrderExtra('performance', request)
       void this.loadOrderExtra('membership', request)
       return true
@@ -1048,6 +1109,7 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
+        menuUpdatePending: false, menuUpdatedAt: '',
         browseCatalogLoaded: false,
         connectionState: browseView.connectionState,
         connectionMessage: browseView.connectionMessage,
@@ -1095,6 +1157,7 @@ Page({
       loading: false,
       orderReady: true,
       browseOnly: false,
+      menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       products,
       ...categoryState,
       recommendations,
@@ -1105,6 +1168,7 @@ Page({
     this.applyFilters()
     this.recordOrderTiming('ready', this.orderLoadStartedAt, true)
     this.loadOrderExtras(request)
+    this.startMenuWindowRefresh(request)
     this.startSharedCartPolling(request)
     this.startServicePolling(request)
     void this.refreshOrderPaymentState(request, tableOrdersPromise)
@@ -1428,7 +1492,7 @@ Page({
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
-  closeProductDetail() { this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1 }); this.maybeShowMembershipInvite() },
+  closeProductDetail() { const issued = this.data.detailProduct && this.data.detailProduct.issuedCouponBenefitId; this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1, ...(issued ? { checkoutConfirmVisible: true, couponEntryOpen: true } : {}) }); if (!issued) this.maybeShowMembershipInvite() },
   toggleDetailInformation() { this.setData({ detailInformationExpanded: !this.data.detailInformationExpanded }) },
   keepProductDetailOpen() {},
   previewProductImage() {
@@ -1684,7 +1748,9 @@ Page({
       if(updated)this.closeProductDetail()
       return
     }
-    const added=await this.commitProductAdd(product.productId,product.selectionSource||'bundle_detail',groups.length?[{ groups }]:[])
+    const added=product.issuedCouponBenefitId
+      ? await this.commitIssuedCouponProduct({ productId:product.productId, issuedCouponBenefitId:product.issuedCouponBenefitId, bundleSelections:groups.length?[{ groups }]:[] })
+      : await this.commitProductAdd(product.productId,product.selectionSource||'bundle_detail',groups.length?[{ groups }]:[])
     if(added)this.closeProductDetail()
   },
 
@@ -1915,8 +1981,9 @@ Page({
       cartTotal: money(total),
       cartTotalCompact: compactMoney(total),
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
+      couponReviewRequired: cart.some(item => !item.available),
       cartExpanded: false,
-      checkoutConfirmVisible: cart.length ? this.data.checkoutConfirmVisible : false,
+      checkoutConfirmVisible: cart.length || this.data.couponEntryOpen ? this.data.checkoutConfirmVisible : false,
       checkoutMemberInviteVisible: cart.length ? this.data.checkoutMemberInviteVisible : false,
       cartVersion: sharedCart ? Number(sharedCart.version || 0) : this.data.cartVersion,
       cartGeneration: sharedCart ? Number(sharedCart.generation || 0) : this.data.cartGeneration,
@@ -1958,6 +2025,7 @@ Page({
     const refreshed = await this.refreshSharedCart(true, request)
     if (!this.isCurrentTableRequest(request) || !ownsOperation()) return false
     this.setData({ error: refreshed ? message : '购物车暂未刷新，请点此重试，核对最新商品和桌账后再提交。' })
+    this.startMenuWindowRefresh(request)
     this.startSharedCartPolling(request)
     return refreshed
   },
@@ -2130,6 +2198,77 @@ Page({
     return false
   },
 
+  issuedCouponAttemptStorageKey() {
+    const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
+    return 'mbox.issued-coupon-add.v1:' + tableSessionCacheScope() + ':' + (principal.principalId || principal.memberId || 'guest')
+  },
+  restoreIssuedCouponAttempt() {
+    if (this.data.orderReady === false || !this.currentTableRequest()) return
+    let attempt
+    try { attempt = wx.getStorageSync(this.issuedCouponAttemptStorageKey()) } catch (_error) { return }
+    if (attempt && !attempt.resolved && typeof attempt.productId === 'string' && typeof attempt.issuedCouponBenefitId === 'string' && Array.isArray(attempt.bundleSelections)) {
+      this.setData({ issuedCouponPending: attempt, cartSyncing: false, couponEntryOpen: true, checkoutConfirmVisible: true, couponPickerOpen: true,
+        couponError: '原加入结果未确认，请先核对原加入；不会重复增加一份。' })
+    } else this.setData({ issuedCouponPending: null, ...(this.data.issuedCouponPending ? { cartSyncing: false } : {}) })
+  },
+  async openIssuedCouponEntry() {
+    if (this.data.orderReady === false || this.data.busy || this.data.cartSyncing || this.data.checkoutLocked || this.data.cartWritesFrozen) return
+    const request = this.currentTableRequest()
+    if (!request || !this.isCurrentTableRequest(request)) return
+    this.restoreIssuedCouponAttempt()
+    this.setData({ checkoutConfirmVisible: true, couponEntryOpen: true, cartExpanded: false, error: '' })
+    await this.openCheckoutCoupons()
+    if (this.isCurrentTableRequest(request)) this.setData({ couponEntryOpen: true })
+  },
+  chooseIssuedCouponProduct(event) {
+    if (this.data.busy || this.data.cartSyncing || this.data.issuedCouponPending) return
+    const product = this.data.couponProducts.find(item => item.id === event.currentTarget.dataset.product && item.benefitId === event.currentTarget.dataset.benefit)
+    if (!product) return
+    if (product.productKind === 'bundle' && (product.bundleChoiceGroups || []).length) {
+      this.setData({ checkoutConfirmVisible: false, detailProduct: Object.assign(resetBundleChoiceSelections(product), {
+        productId: product.id, available: true, issuedCouponBenefitId: product.benefitId, selectionSource: 'issued_coupon',
+        priceText: product.priceText, tasteLabels: [], bundleComponents: [], description: '使用已有兑换券，确认选款后核对原券价格。',
+      }), detailInformationExpanded: false, detailSelectionsComplete: false, detailEditUnitIndex: -1 })
+      return
+    }
+    return this.commitIssuedCouponProduct({ productId: product.id, issuedCouponBenefitId: product.benefitId, bundleSelections: [] })
+  },
+  retryIssuedCouponProduct() {
+    if (this.data.issuedCouponPending) return this.commitIssuedCouponProduct(this.data.issuedCouponPending)
+  },
+  async commitIssuedCouponProduct(attempt) {
+    if (this.data.orderReady === false || this.data.busy || this.data.cartSyncing || this.data.checkoutLocked || this.data.cartWritesFrozen) return false
+    const request = this.currentTableRequest()
+    if (!request || !this.isCurrentTableRequest(request)) return false
+    if (this.data.issuedCouponPending && JSON.stringify(this.data.issuedCouponPending) !== JSON.stringify(attempt)) return false
+    const storageKey = this.issuedCouponAttemptStorageKey()
+    try { wx.setStorageSync(storageKey, attempt) } catch (_error) { this.setData({ couponError: '无法保存原加入请求，请稍后重试。' }); return false }
+    const guard = this.ensureTableRequestGuard(), write = guard.beginWrite(request.scope, 'cart')
+    this.setData({ issuedCouponPending: attempt, cartSyncing: true, couponError: '' })
+    try {
+      const cart = await addIssuedCouponProduct(attempt.productId, attempt.issuedCouponBenefitId, this.data.cartGeneration, this.data.cartVersion, attempt.bundleSelections)
+      try { wx.setStorageSync(storageKey, { ...attempt, resolved: true }); wx.removeStorageSync(storageKey) } catch (_error) { /* A resolved marker prevents stale intent replay after reload. */ }
+      if (!guard.isCurrentWrite(write) || storageKey !== this.issuedCouponAttemptStorageKey()) return false
+      this.updateCart(sharedCartView(cart, this.data.products), cart)
+      const portionId = cart.issuedCouponPortionId
+      const present = cart.generation === this.data.cartGeneration && this.data.cart.some(line => line.productId === attempt.productId && (line.portionIds || []).includes(portionId))
+      const selections = present ? this.data.couponSelections.filter(item => item.portionId !== portionId).concat([{ portionId, benefitId: attempt.issuedCouponBenefitId }]) : this.data.couponSelections
+      this.setData({ issuedCouponPending: null, couponEntryOpen: true, checkoutConfirmVisible: true, couponPickerOpen: true,
+        couponSelections: selections, couponPortions: couponPortions(this.data.cart, this.data.couponItems, selections, money),
+        couponQuote: null, couponQuoteTotal: '', couponNeedsReview: true,
+        couponError: present ? '已加入一份并选中原券，请核对用券后金额。' : '原加入已查回，请核对当前份数并选择原券；不会再次增加商品。' })
+      return true
+    } catch (error) {
+      const status = Number(error && (error.statusCode || error.status)), definite = status >= 400 && status < 500 && ![408, 409, 429].includes(status)
+      if (definite) wx.removeStorageSync(storageKey)
+      if (!guard.isCurrentWrite(write) || storageKey !== this.issuedCouponAttemptStorageKey()) return false
+      this.setData({ issuedCouponPending: definite ? null : attempt, couponEntryOpen: true, checkoutConfirmVisible: true,
+        couponError: customerErrorMessage(error, definite ? '原券商品暂不能加入，请核对权益或联系服务人员。' : '原加入结果未确认，请核对原加入，不要重新增加商品。') })
+      if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') await this.recoverSharedCart('购物车已更新，请核对原加入。', () => guard.isCurrentWrite(write))
+      return false
+    } finally { if (guard.finishWrite(write)) this.setData({ cartSyncing: false }) }
+  },
+
   async openCheckout() {
     if (this.data.orderReady === false) return false
     if (this.data.busy || this.data.checkoutMemberInviteVisible) return
@@ -2144,7 +2283,7 @@ Page({
       this.setData({ error: '服务人员正在核对本桌点单，完成后才能付款。' })
       return
     }
-    if (this.data.cart.some((item) => !item.available)) {
+    if (this.data.cart.some((item) => !item.available && !item.couponReviewAvailable)) {
       this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
       return
     }
@@ -2157,7 +2296,7 @@ Page({
     if (this.data.busy) return
     this.invalidateCheckoutUpgrade()
     this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-    this.setData({ checkoutConfirmVisible: false, couponLoading: false, pointsLoading: false })
+    this.setData({ checkoutConfirmVisible: false, couponEntryOpen: false, couponLoading: false, pointsLoading: false })
   },
 
   checkoutDraft(offerPublicId) {
@@ -2221,7 +2360,7 @@ Page({
         this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
         return
       }
-      if (this.data.cart.some((item) => !item.available)) {
+      if (this.data.cart.some((item) => !item.available && !item.couponReviewAvailable)) {
         this.setData({ error: '购物车中有暂不可用商品，请先移除后再结账。' })
         return
       }

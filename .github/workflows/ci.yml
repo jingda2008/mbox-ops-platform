@@ -422,7 +422,17 @@ jobs:
 
           platform_image_digest=$(tar -xOf "${archive}" "blobs/sha256/${platform_manifest_digest#sha256:}" \
             | jq -er '.config.digest')
-          test "${platform_image_digest}" = "$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')"
+          # buildx --load sometimes reports ImageID as the manifest digest instead of the
+          # config digest; accept either so packaging still seals a real config blob.
+          docker_image_id=$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')
+          case "${docker_image_id}" in
+            "${platform_image_digest}"|"${platform_manifest_digest}"|"${image_digest}") ;;
+            *)
+              echo "platform config ${platform_image_digest} does not match docker Id ${docker_image_id} (manifest ${platform_manifest_digest})" >&2
+              exit 1
+              ;;
+          esac
+
           node scripts/generate-migration-manifest.mjs \
             --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null

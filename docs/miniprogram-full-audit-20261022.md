@@ -115,4 +115,6 @@
 - 本轮不发起真实顾客付款/退款、发券/积分或营销通知；数据库测试为可销毁环境。真实手机授权、真实支付退款、打印出纸和消息送达仍需现场验收。
 - 微信开发版本上传不等于体验版选定、提审或正式发布；不把这些平台步骤标记完成。
 - 官方 CLI 编译上传成功：`1.0.0-rc.266-ui.2`，1,082,652 字节；源提交 `1fde7ff2b1c636a07df7367afa915bbfb4cab62e`，正式 AppID `wxdb9f2dc413484f2d`、API `https://mbox.shmbox.com`；172 个受版本管理源文件与提交一致，候选 170 个上传文件在上传后完整性校验为 `ready`。官方日志 `wechat-rc266-ui2/upload.log`、平台包大小 `upload-info.json` 与本地完整性 `verify-after.json` 分别保留。
-- CI/合并：以本分支 PR 的完整检查及最终合并记录为准；最终机器证据保存在本轮证据目录。
+- 完整 [CI 39751373176](https://github.com/jingda2008/mbox-ops-platform/actions/runs/39751373176) 全部通过：727项小程序测试、3365项数据库回归、真实HTTP接口联验、性能及浏览器检查。浏览器基线141通过/42条件skip；7个专用组49通过/0skip/0flaky，`skip-coverage.json`再次证明42/42有通过记录，未覆盖0。
+- [PR391](https://github.com/jingda2008/mbox-ops-platform/pull/391) 已合并，主线功能提交 `6b91bf8b39147033096e9c722ceb5412e2287585`。其完整文件树与CI受测合并提交 `4d2b75f499b62a9f5fce2156d0c8e3ec1a3281dd` 完全相同；小程序树 `e7acccc7f38cf06b1a3ad7f59ab71d4127b85986` 与官方上传源一致。后续仅补齐本报告与清单，不改变上传包。
+- 最终机器证据：`delivery-verification.json`、`ci-final.json`、`ci-extended/skip-coverage.json`、`pr391-merged.json`及上传子目录，均位于本轮证据根目录。线上readiness复查仍为rc266/4880b733、schema274、ready，本轮无需后端重新部署。

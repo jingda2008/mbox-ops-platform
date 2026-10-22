@@ -41,7 +41,10 @@ export function customerSupplyCopy(value:unknown) {
   }))].join(' 或 ')}`)
   const description=parts.length?`供应条件（${zone==='Asia/Shanghai'?'北京时间':zone}，须同时满足）：${parts.join('；')}`:''
   let reason='当前不在可购时段'
-  const inactive=rules.find(rule=>!serviceWindowState(rule,now,zone).active)
+  // Date/weekday restrictions explain the next eligible occasion. A recurring
+  // legacy daily closure must not hide them when both rules currently fail.
+  const inactive=base&&!serviceWindowState(base,now,zone).active
+    ?base:rules.find(rule=>!serviceWindowState(rule,now,zone).active)
   if(inactive){
     const dateParts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now)
     const part=(name:string)=>dateParts.find(p=>p.type===name)?.value??'0'

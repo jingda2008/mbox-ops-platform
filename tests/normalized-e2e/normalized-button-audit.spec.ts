@@ -6,7 +6,7 @@ test.use({viewport:{width:1024,height:600},isMobile:false,hasTouch:true})
 test('取餐异常由受限账号明确交接，有权限账号可进入原任务且不扩大取餐权限',async({page},testInfo)=>{
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
   test.skip(!f.threeScreenFixture,'requires isolated three-screen fixture')
-  await page.goto('/')
+  await page.goto(f.staffUrl)
   await page.getByLabel('门店口令').fill(f.dailyCredential)
   await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill('wuya')

@@ -89,7 +89,11 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   await admin.query("UPDATE mbox.products SET available_from='18:00',available_until='02:00' WHERE id=$1",[id])
   const data=(await q(`SELECT ${customerSupplyProjection('product','$4')} FROM mbox.products product WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[id,customer])).rows[0]!.supply_presentation
   expect(data.cards).toEqual([]);expect(data.window).toEqual(base)
-  expect(customerSupplyCopy(data)).toMatchObject({description:expect.stringContaining('2100-01-01至2100-01-01 周五 22:00–次日02:00'),unavailableText:expect.stringContaining('供应日期尚未开始')})
+  // Exercise both sides of the legacy 02:00 close and its 18:00 reopening;
+  // presentation assertions must not depend on when the PostgreSQL suite runs.
+  for(const at of ['2026-10-22T17:59:00Z','2026-10-22T18:00:00Z','2026-10-23T10:00:00Z']){
+   expect(customerSupplyCopy({...data,at})).toMatchObject({description:expect.stringContaining('2100-01-01至2100-01-01 周五 22:00–次日02:00'),unavailableText:expect.stringMatching(/^供应日期尚未开始。/)})
+  }
   expect(JSON.stringify(data)).not.toContain(c.project)
  })
  async function paymentOrder(withChoice=false,simulation=false) {

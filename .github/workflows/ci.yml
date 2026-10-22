@@ -359,6 +359,8 @@ jobs:
           context: .
           file: Dockerfile
           load: true
+          provenance: false
+          sbom: false
           platforms: linux/amd64
           tags: ${{ steps.metadata.outputs.image_tag }}
           build-args: |

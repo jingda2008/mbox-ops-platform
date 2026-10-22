@@ -31,6 +31,7 @@ export interface CashierWorkbenchQueryInput {
   query?: string
   areaId?: string
   paymentState?: 'unpaid' | 'processing' | 'completed' | 'refunded'
+  activityFilter?: 'unpaid' | 'requested' | 'processing'
   limit: number
 }
 
@@ -609,6 +610,10 @@ export class PostgresCashierWorkbenchQuery {
                 OR refund.provider_refund_id ILIKE '%' || $4 || '%'
               )
               AND ${historyTableIdSql('$4','$6')} IS NULL
+              AND ($7::text IS NULL
+                OR ($7='unpaid' AND (registration.status='payment_pending' OR registration.payment_status='pending'))
+                OR ($7='requested' AND refund.status='requested')
+                OR ($7='processing' AND refund.status IN ('approved','processing')))
             ORDER BY (registration.status='payment_pending') DESC,
               COALESCE(payment.succeeded_at,registration.created_at) DESC,registration.id DESC
             LIMIT $5
@@ -619,6 +624,7 @@ export class PostgresCashierWorkbenchQuery {
             normalizedQuery,
             input.limit,
             canonicalTableCode(normalizedQuery),
+            input.activityFilter ?? null,
           ])
         : { rows: [] as ActivityRegistrationRow[] }
       const orderIds = orderResult.rows.map((row) => row.id)
@@ -1191,6 +1197,9 @@ function validateInput(input: Readonly<CashierWorkbenchQueryInput>): void {
   if ((input.query?.trim().length ?? 0) > 64) throw new TypeError('cashier workbench query is too long')
   if (input.areaId !== undefined && !uuid.test(input.areaId)) {
     throw new TypeError('cashier workbench areaId is invalid')
+  }
+  if (input.activityFilter !== undefined && !['unpaid', 'requested', 'processing'].includes(input.activityFilter)) {
+    throw new TypeError('cashier activity filter is invalid')
   }
   if (input.paymentState !== undefined
     && !['unpaid', 'processing', 'completed', 'refunded'].includes(input.paymentState)) {

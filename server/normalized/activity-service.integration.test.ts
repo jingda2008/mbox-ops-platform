@@ -289,13 +289,14 @@ const database = process.env.TEST_NORMALIZED_DATABASE_URL;
     });
     it('keeps a visible unsaleable add-on in the menu without a quote and still rejects its purchase',async()=>{
       const parent=await registration([],{free:true}),p=await product();
+      await admin.query("UPDATE mbox.products SET product_snapshot=jsonb_build_object('imageUrl','/menu/b06-dish.webp') WHERE id=$1",[p]);
       await admin.query('UPDATE mbox.community_activities SET addon_product_ids=array_append(addon_product_ids,$2::uuid) WHERE id=$1',[activity,p]);
       await admin.query(`INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1200,'CNY',clock_timestamp()-interval '1 hour')`,[scope.tenantId,scope.storeId,p]);
       const minute=Number((await admin.query("SELECT floor(extract(epoch FROM (clock_timestamp() AT TIME ZONE 'Asia/Shanghai')::time)/60)::int AS current_minute")).rows[0].current_minute);
       const sale=minute<720?{saleStartMinute:1080,saleEndMinute:1200}:{saleStartMinute:60,saleEndMinute:120};
       await runner.run(scope,tx=>saveProductServiceWindow(tx,p,{...DEFAULT_PRODUCT_SERVICE_WINDOW,...sale}));
       const menu=()=>runner.run(scope,tx=>activityAddonProducts(tx,customer,activity));
-      expect((await menu()).find(row=>row.id===p)).toMatchObject({sellable:false,priceAmountMinor:null,purchaseDeadline:null,statusText:'当前未开售或已结束'});
+      expect((await menu()).find(row=>row.id===p)).toMatchObject({sellable:false,priceAmountMinor:null,purchaseDeadline:null,statusText:expect.stringMatching(/本时段尚未开售|本时段已结束/),imageUrl:'/menu/b06-dish.webp',supplyDescription:expect.stringContaining('每天')});
       await expect(buy(null,1,{purchaseKind:'single_dish',parentRegistrationPublicId:parent.id,productId:p})).rejects.toThrow();
       await runner.run(scope,tx=>saveProductServiceWindow(tx,p,{...DEFAULT_PRODUCT_SERVICE_WINDOW,dateFrom:'2100-01-01'}));
       expect((await menu()).find(row=>row.id===p)).toBeUndefined();

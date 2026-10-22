@@ -538,6 +538,7 @@ if [ "${current_migration_digest}" != "${migration_digest}" ]; then
   migration_changed=1
 fi
 contract_migration=0
+contract_boundary=0
 candidate="mbox-candidate-${short_sha}"
 candidate_volume="mbox-data-${short_sha}-candidate"
 maintenance_container="mbox-maintenance-${short_sha}"
@@ -783,18 +784,18 @@ restore_contract_database_and_previous_app() {
 
   if [ -f "${release_dir}/.contract-write-resumed" ]; then
     current_state=$(jq -r '.current // "unknown"' "${state_file}" 2>/dev/null)
-    if [ -f "${release_dir}/.cutover-started" ] \
-      && [ "${current_state}" = cutover_started ]; then
-      docker exec "${caddy_container}" caddy reload \
-        --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1
-      if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
-        docker update --restart=no "${active_container}" >/dev/null 2>&1
-        docker stop -t 20 "${active_container}" >/dev/null 2>&1
-      fi
-    elif docker inspect "${candidate}" >/dev/null 2>&1; then
+    # Writes may have resumed before routing, or the candidate may already have
+    # been renamed after cutover_verified. Hold both identity-bound locations;
+    # never infer that only the transient cutover_started state needs draining.
+    docker exec "${caddy_container}" caddy reload \
+      --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null 2>&1
+    if [ "$(docker inspect "${active_container}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
+      docker update --restart=no "${active_container}" >/dev/null 2>&1
+      docker stop -t 20 "${active_container}" >/dev/null 2>&1
+    fi
+    if [ "$(docker inspect "${candidate}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)" = "${release_sha}" ]; then
       docker update --restart=no "${candidate}" >/dev/null 2>&1
       docker stop -t 20 "${candidate}" >/dev/null 2>&1
-      docker rm "${candidate}" >/dev/null 2>&1
     fi
     emit_release_audit rollback_failed error contract-cutover-forward-recovery-required
     write_release_failure "${exit_code}" forward-recovery-required
@@ -942,7 +943,15 @@ previous_schema_version=$(reconcile_previous_runtime_schema \
   "${previous_manifest_schema_version}" "${previous_ready_file}" \
   "${release_dir}/migration-preflight.json")
 rm -f "${previous_ready_file}"
-if [ "${previous_schema_version}" -lt 96 ] && [ "${expected_schema_version}" -ge 96 ]; then
+# The image's frozen contract, not a newer DB version exposed by that image,
+# decides compatibility. An already migrated DB behind an incompatible old
+# image requires the existing planned-maintenance forward-recovery procedure.
+if [ "$(release_contract_boundary_between "${previous_manifest_schema_version}" "${previous_schema_version}")" != 0 ]; then
+  echo "release blocked: active image predates a live application contract; use planned-maintenance forward recovery, never treat it as a rollback baseline" >&2
+  exit 2
+fi
+contract_boundary=$(release_contract_boundary_between "${previous_manifest_schema_version}" "${expected_schema_version}")
+if [ "${contract_boundary}" != 0 ]; then
   contract_migration=1
 fi
 candidate_database_identity=$(jq -er \
@@ -984,7 +993,7 @@ if [ "${contract_migration}" = 1 ]; then
   docker run -d --name "${maintenance_container}" --restart=no --network "${network}" \
     --read-only --tmpfs /tmp:rw,noexec,nosuid,size=8m --security-opt no-new-privileges \
     --cap-drop ALL "${image_tag}" node -e \
-    'require("node:http").createServer((_,response)=>{response.writeHead(503,{"content-type":"application/json","cache-control":"no-store"});response.end(JSON.stringify({status:"maintenance",reason:"table_location_contract_cutover"}))}).listen(8787,"0.0.0.0")' \
+    'require("node:http").createServer((_,response)=>{response.writeHead(503,{"content-type":"application/json","cache-control":"no-store"});response.end(JSON.stringify({status:"maintenance",reason:"schema_contract_cutover"}))}).listen(8787,"0.0.0.0")' \
     >/dev/null
   maintenance_ip=$(docker inspect "${maintenance_container}" \
     --format "{{with index .NetworkSettings.Networks \"${network}\"}}{{.IPAddress}}{{end}}")
@@ -1000,7 +1009,7 @@ if [ "${contract_migration}" = 1 ]; then
     --config /tmp/Caddyfile.contract-maintenance --adapter caddyfile >/dev/null
   maintenance_response="${release_dir}/maintenance-response.json"
   fetch_public_ready_response 503 "${maintenance_response}" 12
-  jq -e '.status=="maintenance" and .reason=="table_location_contract_cutover"' \
+  jq -e '.status=="maintenance" and .reason=="schema_contract_cutover"' \
     "${maintenance_response}" >/dev/null
   docker update --restart=no "${active_container}" >/dev/null
   docker stop -t 30 "${active_container}" >/dev/null
@@ -1182,7 +1191,7 @@ rollback_on_error() {
     "${previous_manifest_schema_version}" "${candidate}" "${active_container}"; then
     emit_release_audit rollback_failed error print-policy-compatibility-blocked
     write_release_failure "${exit_code}" print-policy-compatibility-blocked-writers-stopped
-    echo "automatic rollback blocked; writers stopped; use a compatible forward release; evidence=${release_dir}/print-policy-rollback-guard.json" >&2
+    echo "automatic rollback blocked; writers stopped; use a compatible forward release; inspect ${release_dir}/application-contract-rollback-guard.json and print-policy-rollback-guard.json" >&2
     exit "${exit_code}"
   fi
 
@@ -1442,6 +1451,7 @@ jq -n \
   --argjson previousSchemaVersion "${previous_schema_version}" \
   --argjson targetSchemaVersion "${expected_schema_version}" \
   --argjson contractMigration "${contract_migration}" \
+  --argjson contractBoundary "${contract_boundary}" \
   --arg workerAdapterModule "${worker_adapter_module}" \
   --arg workerAdapterSource "${worker_adapter_source}" \
   --arg workerAdapterSha256 "${worker_adapter_sha}" \
@@ -1470,6 +1480,7 @@ jq -n \
     previousRuntimeSchemaVersion: $previousRuntimeSchemaVersion,
     previousSchemaVersion: $previousSchemaVersion,
     targetSchemaVersion: $targetSchemaVersion,
+    contractBoundary: (if $contractBoundary == 0 then null else $contractBoundary end),
     rollbackMode: (if $contractMigration == 1
       then "forward_only_after_contract_cutover" else "application_image" end),
     previousIdentityComplete: ($previousIdentityComplete == 1),

@@ -327,7 +327,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   for(const status of ['requested','approved','processing']){
    const value=h.viewRegistration({...confirmed,...refundState(status,'refund'),canRequestFullRefund:false,refundRequestBlockReason:'refund_in_progress'})
    assert.equal(value.showFullRefundRequest,false);assert.equal(value.showRefundContact,false)
-   assert.match(value.refundStatusText,status==='requested'?/等待门店审核/:/退款处理中，尚未确认到账/)
+   assert.match(value.refundStatusText,status==='requested'?/等待门店审核/:status==='approved'?/退款已批准，待执行，尚未确认到账/:/退款处理中，尚未确认到账/)
    assert.doesNotMatch(value.refundStatusText,/已经到账|已完成/)
   }
   const failed=h.viewRegistration({...confirmed,...refundState('failed','refund'),canRequestFullRefund:false})
@@ -388,7 +388,7 @@ for(const platform of ['miniprogram','alipay-miniprogram'])test(platform+': init
  },queryActivityRegistrationPayment:async()=>({...refundState('approved','refund-second'),refundRejectionReason:null,canRequestFullRefund:false})})
  await page.load();assert.deepEqual(reads,['first']);assert.equal(page.data.registration.refundStatusText,'退款已完成')
  await page.selectRegistration(event({registrationId:'second'}));assert.deepEqual(reads,['first','second']);assert.equal(page.data.registration.refundRejectionReason,'门店已核对，请补充退订原因');assert.equal(page.data.registration.showFullRefundRequest,true)
- await page.performPaymentQuery();assert.match(page.data.registration.refundStatusText,/退款处理中，尚未确认到账/);assert.equal(page.data.registration.refundRejectionReason,'');assert.equal(page.data.registration.showFullRefundRequest,false)
+ await page.performPaymentQuery();assert.match(page.data.registration.refundStatusText,/退款已批准，待执行，尚未确认到账/);assert.equal(page.data.registration.refundRejectionReason,'');assert.equal(page.data.registration.showFullRefundRequest,false)
 })
 
 for(const platform of ['miniprogram','alipay-miniprogram'])test(platform+': payment-only refresh changes a confirmed full refund to refunded but leaves compensation fulfillment active',async()=>{
@@ -412,3 +412,38 @@ for(const platform of ['miniprogram','alipay-miniprogram'])test(platform+': unkn
  const resolved=h.viewRegistration({...confirmed,...refundState('rejected','exact-new-refund'),refundRejectionReason:'已核对本次原因'})
  assert.equal(resolved.hasUnconfirmedRefundAttempt,false);assert.equal(resolved.refundRejectionReason,'已核对本次原因')
 })
+for(const platform of ['miniprogram','alipay-miniprogram'])test(platform+': add-on cutoff uses the earliest applicable boundary and preserves image and supply explanation',async()=>{
+ const {page,helpers:h}=await fixture(platform,{getActivityAddonProducts:async()=>[{id:'dish',name:'小食',imageUrl:'/menu/snack.jpg',sellable:true,priceAmountMinor:1200,supplyDescription:'周五 18:00–次日02:00'}]})
+ const activity=h.viewActivity({...rawActivity,remainingCapacity:0,addonEndsAt:'2099-01-01T00:00:00Z',mealServiceEndsAt:'2000-01-01T00:00:00Z'})
+ assert.equal(activity.addonBlocked,true);assert.equal(activity.addonCutoffText,'2000-01-01T00:00:00.000Z')
+ page.setData({creatingPurchase:true,purchaseKind:'single_dish',addonQuantity:2});await page.loadAddonProducts()
+ assert.equal(page.data.selectedAddonProduct.imageUrl,'/menu/snack.jpg');assert.match(page.data.selectedAddonProduct.supplyDescription,/次日02:00/)
+ const source=await readFile(new URL('../'+platform+'/pages/community-detail/index.'+(platform==='miniprogram'?'wxml':'axml'),import.meta.url),'utf8')
+ assert.match(source,/purchaseKind !== 'admission_package' \? '本次仅加餐，不增加入场名额'/)
+ assert.match(source,/activity-addon-image/)
+})
+
+for(const platform of ['miniprogram','alipay-miniprogram']) {
+ test(platform+': a stopped add-on retains an explicit read-only original-result query and finds only its exact request',async()=>{
+  let records=[{...confirmed,publicId:'different',registrationRequestIdempotencyKey:'other-key'}],writes=0,outcomes=0
+  const {page,storage}=await fixture(platform,{getActivityAddonProducts:async()=>[{id:'dish',name:'已关窗菜',sellable:false,priceAmountMinor:null}],getActivityRegistrations:async()=>records,registerActivity:async()=>{writes++},startActivityRegistrationPayment:async()=>{writes++}})
+  const original={idempotencyKey:'original-closed-dish-key',payload:{purchaseKind:'single_dish',productId:'dish',quantity:2,parentRegistrationPublicId:'old',partySize:1}}
+  storage.set(attemptsKey,{activity:original});await page.restorePurchaseAttempt(original);page.showRegistrationOutcome=async()=>{outcomes++}
+  assert.equal(page.data.pendingPurchaseRecovery,true);assert.equal(page.data.selectedAddonProduct.sellable,false)
+  const template=await readFile(new URL('../'+platform+'/pages/community-detail/index.'+(platform==='miniprogram'?'wxml':'axml'),import.meta.url),'utf8')
+  const button=template.match(/<button\b[^>]*(?:bindtap|onTap)="queryOriginalPurchase"[^>]*>/)[0]
+  assert.equal(vm.runInNewContext(button.match(/disabled="{{([^}]+)}}"/)[1],page.data),false)
+  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,/暂未查到原提交结果/);assert.equal(writes,0)
+  records=[{...confirmed,publicId:'original-result',purchaseKind:'single_dish',registrationRequestIdempotencyKey:original.idempotencyKey}]
+  await page.queryOriginalPurchase();assert.equal(page.data.registration.publicId,'original-result');assert.equal(page.data.pendingPurchaseRecovery,false);assert.equal(storage.get(attemptsKey).activity,undefined);assert.equal(writes,0);assert.equal(outcomes,0)
+ })
+ test(platform+': a failed or late original-result query keeps its old body and key without exposing another page result',async()=>{
+  let release,fail=true
+  const {page,storage}=await fixture(platform,{getActivityRegistrations:async()=>{if(fail)throw Error('offline');return new Promise(resolve=>{release=resolve})}})
+  const original={idempotencyKey:'original-unknown-key',payload:{purchaseKind:'single_dish',productId:'dish',quantity:2,parentRegistrationPublicId:'old',partySize:1}}
+  storage.set(attemptsKey,{activity:original});page.data.pendingPurchaseRecovery=true
+  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,/原请求已保留/)
+  fail=false;const pending=page.queryOriginalPurchase();page.onHide();release([{...confirmed,publicId:'old-late',registrationRequestIdempotencyKey:original.idempotencyKey}]);await pending
+  assert.equal(storage.get(attemptsKey).activity,original);assert.notEqual(page.data.registration?.publicId,'old-late');assert.equal(page.data.busy,false)
+ })
+}

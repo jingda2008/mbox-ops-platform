@@ -245,6 +245,7 @@ function menuAvailability(item) {
     return { text: '暂不可点', detail: '这款暂时售罄' }
   }
   if (item.availabilityStatus === 'scheduled') {
+    if (item.availabilityDetail) return { text: '暂不可点', detail: item.availabilityDetail }
     const range = item.availableFrom && item.availableUntil ? `供应时间 ${item.availableFrom}-${item.availableUntil}` : '当前不在供应时段'
     return { text: '暂不可点', detail: range }
   }
@@ -577,6 +578,9 @@ Page({
     performance: null,
     performanceError: '',
     products: [],
+    menuUpdatePending: false,
+    menuUpdateBusy: false,
+    menuUpdatedAt: '',
     visibleProducts: [],
     detailProduct: null,
     detailInformationExpanded: false,
@@ -868,7 +872,7 @@ Page({
     if (request && !this.isCurrentTableRequest(request)) return
     const products = menuProducts(menu)
     this.menuDisplayStartedAt = Date.now()
-    this.setData({ loading: false, browseOnly: false, products,
+    this.setData({ loading: false, browseOnly: false, products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       menuImageGeneration: this.data.menuImageGeneration + 1,
       ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
     this.applyFilters(() => {
@@ -897,15 +901,29 @@ Page({
 
   async refreshMenuWindow(request) {
     if (!request || !this.isCurrentTableRequest(request)) return false
+    const readVersion = (this.menuWindowReadVersion || 0) + 1
+    this.menuWindowReadVersion = readVersion
     try {
       const menu = await (this.data.browseOnly ? getPublicMenu({}) : getMenu({}))
-      if (!this.isCurrentTableRequest(request)) return false
+      if (!this.isCurrentTableRequest(request) || this.menuWindowReadVersion !== readVersion) return false
       const products = menuProducts(menu)
-      this.setData({ products, ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
+      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
       this.applyFilters()
       if (!this.data.browseOnly) await this.refreshSharedCart(true, request)
       return true
-    } catch (_error) { return false }
+    } catch (_error) {
+      if (this.isCurrentTableRequest(request) && this.menuWindowReadVersion === readVersion) this.setData({ menuUpdatePending: true })
+      return false
+    }
+  },
+
+  async retryMenuWindow() {
+    if (this.data.menuUpdateBusy) return
+    const request = this.currentTableRequest()
+    if (!this.isCurrentTableRequest(request)) return
+    this.setData({ menuUpdateBusy: true })
+    try { await this.refreshMenuWindow(request) }
+    finally { if (this.isCurrentTableRequest(request)) this.setData({ menuUpdateBusy: false }) }
   },
 
   async preparePage(silent) {
@@ -916,11 +934,12 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ orderReady: false })
+    this.setData({ menuUpdateBusy: false, orderReady: false })
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     this.cartRecovery = null
     if (scopeChanged) {
+      this.setData({ menuUpdatePending: false, menuUpdateBusy: false, menuUpdatedAt: '' })
       this.checkoutOperation = null
       this.recommendationOperation = null
       this.stopShakeRecommendation()
@@ -1030,6 +1049,7 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
+        menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
         browseCatalogLoaded: true,
         connectionState: browseView.connectionState,
         connectionMessage: browseView.connectionMessage,
@@ -1051,6 +1071,7 @@ Page({
       this.setData({
         loading: false,
         browseOnly: true,
+        menuUpdatePending: false, menuUpdatedAt: '',
         browseCatalogLoaded: false,
         connectionState: browseView.connectionState,
         connectionMessage: browseView.connectionMessage,
@@ -1185,6 +1206,7 @@ Page({
       orderReady: true,
       paymentStateReady: tableOrdersAvailable,
       browseOnly: false,
+      menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       products,
       ...categoryState,
       recommendations,

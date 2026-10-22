@@ -4,6 +4,8 @@ import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
+import { buildOperatingReportLines } from './operating-report-format.js'
+import type { OperatingProfitReport } from './profit-query-service.js'
 import type { JsonObject } from './command-executor.js'
 import {
   HardwareRepository,
@@ -363,6 +365,17 @@ export class PrintTicketSourceRepository {
     return this.materializeDocument(sourceId,sourceId,{kind:'daily_settlement',subtitle:`${businessDate} 至 ${endDate} · ${options.mode === 'summary' ? '汇总' : options.mode === 'details' ? '明细' : '汇总及明细'} · 模板2 · 打印不结束营业日`,test:false,
       issuedAt:source.occurred_at,businessDate,ticketReference:sourceId,tableCode:null,guestCount:null,operatorLabel,
       note:'金额及所选订单待收为生成时快照，不是历史时点余额。销售按订单营业日；收退款按入账营业日，包含活动款项。后续入账请重新生成新快照。',payment:null,lines,totalAmountMinor:null,currency:'CNY'})
+  }
+
+  async materializeManualOperatingReport(sourceId:string, operatorLabel:string, report:OperatingProfitReport):Promise<readonly PrintJob[]> {
+    if(!this.manualRequest)throw new Error('经营汇总需要手动打印请求')
+    return this.materializeDocument(sourceId,sourceId,{
+      kind:'daily_settlement',subtitle:`经营汇总 · ${report.range.startDate} 至 ${report.range.endDate}`,test:false,
+      issuedAt:report.asOf,businessDate:report.range.startDate,ticketReference:sourceId,
+      tableCode:null,guestCount:null,operatorLabel,payment:null,totalAmountMinor:null,currency:'CNY',
+      note:'收入按原购买营业日归属；净收按收退款发生期。不代表银行余额或税后净利润。打印不结束营业日。',
+      lines:buildOperatingReportLines(report),
+    })
   }
 
   async materializeDailySettlement(sourceId:string,boundaryId:string):Promise<readonly PrintJob[]> {

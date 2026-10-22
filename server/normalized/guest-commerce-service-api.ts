@@ -1,3 +1,4 @@
+import { customerSupplyProjection, customerSupplyCopy } from './product-supply-presentation.js'
 import {IssuedCouponPromiseError} from './issued-coupon-product-promise.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
@@ -167,6 +168,7 @@ interface CatalogMenuRow extends Record<string, unknown> {
   available_from: string | null
   available_until: string | null
   max_order_quantity: number
+  supply_presentation?: unknown
   within_availability: boolean
   cost_amount_minor: string | null
   status: string
@@ -1159,7 +1161,7 @@ export async function searchGuestCatalog(
       product.recommendation_upgrade_product_id, product.menu_sort_order,
       to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
-      product.max_order_quantity,
+      product.max_order_quantity, ${customerSupplyProjection('product','$9')},
       (mbox.product_purchase_deadline(product.tenant_id,product.store_id,product.id,$9::uuid) IS NOT NULL) AS within_availability,
       product.cost_amount_minor::text, product.status,
       LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$9::uuid))::text AS amount_minor, price.currency,
@@ -1634,6 +1636,8 @@ export function publicCatalogProduct(row: CatalogMenuRow) {
     savingsAmountMinor,
     savingsFromMinor,
     recommendation: publicRecommendation(row, amountMinor),
+    supplyDescription: customerSupplyCopy(row.supply_presentation).description,
+    availabilityDetail: availabilityStatus === 'scheduled' && row.supply_presentation ? customerSupplyCopy(row.supply_presentation).unavailableText : null,
     availabilityStatus,
     available: availabilityStatus === 'available',
   }

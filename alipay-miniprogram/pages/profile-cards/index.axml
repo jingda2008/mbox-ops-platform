@@ -24,7 +24,7 @@
     <button a:if="{{giftCursor}}" class="cards-button" data-more="true" onTap="loadGifts" disabled="{{giftLoading}}">更多赠券记录</button>
     <button class="cards-button" onTap="openGiftWallet">查看优惠券包</button>
     <text class="cards-section">我的卡片</text>
-    <view a:for="{{cards}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">{{item.valid_until === null ? item.untilText : '有效至 ' + item.untilText + '（北京时间）'}}</text><text class="cards-copy">指定商品按菜单时段、库存及原权益规则供应。</text><button a:if="{{item.status === 'active' && !item.expired}}" class="cards-button" onTap="openBenefits">查看权益与商品</button><button a:if="{{item.canWithdraw}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-card" onTap="withdraw">退出此卡</button></view>
+    <view a:for="{{cards}}" a:key="id" class="cards-box"><view class="cards-row"><text>{{item.name}}</text><text class="cards-status">{{item.stateText}}</text></view><text class="cards-copy">{{item.valid_until === null ? item.untilText : '有效至 ' + item.untilText + '（北京时间）'}}</text><text class="cards-copy">可用商品与价格以当前菜单为准；已发赠券请在优惠券包查看，持卡不代表必有赠券或随时可买。</text><button a:if="{{item.status === 'active' && !item.expired}}" class="cards-button" onTap="openBenefits">去点单查看可用商品</button><button a:if="{{item.canWithdraw}}" class="cards-button" disabled="{{busy}}" data-id="{{item.id}}" data-action="withdraw-card" onTap="withdraw">退出此卡</button></view>
     <text a:if="{{!cards.length}}" class="cards-copy">暂无持卡记录。</text>
     <button a:if="{{nextCursors.cards}}" class="cards-button" disabled="{{busy}}" data-kind="cards" onTap="loadMore">加载更多卡片</button>
     <text class="cards-section">可申请项目</text>

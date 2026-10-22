@@ -48,6 +48,7 @@ interface WorkbenchNotice {
   kind: 'success' | 'error' | 'attention'
   text: string
 }
+interface ActivityTodoSummary { pendingPayment: number; requestedRefund: number; processingRefund: number; asOf: string }
 
 interface RefundDraft {
   purpose: import('../shared/refund-purpose').RefundPurpose
@@ -93,6 +94,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
+  const [activitySummary, setActivitySummary] = useState<ActivityTodoSummary | null>(null)
+  const requestedActivityFilter = new URLSearchParams(staffLocationSearch()).get('activityFilter')
+  const activityFilter = ['unpaid', 'requested', 'processing'].includes(requestedActivityFilter ?? '') ? requestedActivityFilter! : 'all'
   const [query, setQuery] = useStaffViewState(`cashier:${staffLocationSearch()}:query`, () => new URLSearchParams(staffLocationSearch()).get('query') ?? '')
   const [areaId, setAreaId] = useStaffViewState(`cashier:${staffLocationSearch()}:area`, 'all')
   const [paymentState, setPaymentState] = useStaffViewState<'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'>(`cashier:${staffLocationSearch()}:payment-state`, 'all')
@@ -107,16 +111,26 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const read = useCallback(async (signal: AbortSignal) => {
     const searchQuery = query
     try {
-      // Keep the complete active cashier queue visible in normal store load.
-      // The API caps this at 100 and prioritizes orders that still need money.
+      // Details are capped at 100; activity totals use the separate complete-scope read.
       const search = new URLSearchParams({ limit: '100' })
       if (searchQuery.trim()) search.set('query', searchQuery.trim())
       if (areaId !== 'all') search.set('areaId', areaId)
       if (paymentState !== 'all') search.set('paymentState', paymentState)
+      if (activityFilter !== 'all') search.set('activityFilter', activityFilter)
+      const summaryRequest = api.getEndpoint<{ data: { activities: Omit<ActivityTodoSummary, 'asOf'>; asOf: string } }>('/api/payments/workbench/todo-summary', { signal }).then(result => {
+        const counts = result.data.activities
+        if (!counts || ![counts.pendingPayment, counts.requestedRefund, counts.processingRefund].every(value => Number.isSafeInteger(value) && value >= 0) || typeof result.data.asOf !== 'string') throw new Error('活动汇总不完整')
+        return { ...counts, asOf: result.data.asOf }
+      }).catch(error => {
+        if (!signal.aborted && error instanceof NormalizedApiError && error.recovery === 'login') onLoginRequired()
+        return null
+      })
       const response = await api.getEndpoint<{ data: CashierWorkbenchView }>(
         `/api/payments/workbench?${search.toString()}`, {signal},
       )
+      const completeSummary = await summaryRequest
       if(signal.aborted)return
+      setActivitySummary(completeSummary)
       setMessage(null)
       setView(response.data)
       setAreaOptions((current) => {
@@ -129,9 +143,9 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       const attentionCount = response.data.summary.requestedRefundCount
         + (response.data.summary.couponRefundReviewCount ?? 0)
         + response.data.summary.processingRefundCount
-        + (response.data.summary.activityRequestedRefundCount ?? 0)
-        + (response.data.summary.activityProcessingRefundCount ?? 0)
-      const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all'
+        + (completeSummary?.requestedRefund ?? 0)
+        + (completeSummary?.processingRefund ?? 0)
+      const isGlobalView = searchQuery.trim() === '' && areaId === 'all' && paymentState === 'all' && activityFilter === 'all' && completeSummary !== null
       const previousAttentionCount = attentionCountRef.current
       if (isGlobalView && previousAttentionCount !== null && attentionCount > previousAttentionCount) {
         setNotice({
@@ -151,7 +165,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       setPhase('error')
       throw error
     }
-  }, [api, areaId, onLoginRequired, paymentState, query])
+  }, [api, areaId, onLoginRequired, paymentState, query, activityFilter])
   const refreshQueue = useMemo(() => new RefreshQueue(read), [read])
   const activeRefreshQueue=useRef<RefreshQueue|null>(refreshQueue)
   activeRefreshQueue.current=refreshQueue
@@ -306,6 +320,8 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     businessDayClosure={businessDayClosure}
     areaId={areaId}
     paymentState={paymentState}
+    activityFilter={activityFilter}
+      activitySummary={activitySummary}
     areaOptions={areaOptions}
     onSearch={setQuery}
     onAreaId={setAreaId}
@@ -337,6 +353,8 @@ export function CashierAfterSalesWorkbenchView({
   businessDayClosure = null,
   areaId = 'all',
   paymentState = 'all',
+  activityFilter = 'all',
+  activitySummary = null,
   areaOptions = [],
   initialExpandedOrderId = null,
   onSearch,
@@ -358,6 +376,8 @@ export function CashierAfterSalesWorkbenchView({
   businessDayClosure?: BusinessDayClosureResult | null
   areaId?: string
   paymentState?: 'all' | 'unpaid' | 'processing' | 'completed' | 'refunded'
+  activityFilter?: string
+  activitySummary?: ActivityTodoSummary | null
   areaOptions?: readonly { id: string; name: string }[]
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
@@ -604,10 +624,8 @@ export function CashierAfterSalesWorkbenchView({
       ><b>{view.summary.processingRefundCount}</b><small>待执行</small></button>
       {(view.summary.carryoverOrderCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverOrderCount}</b><small>交班遗留</small></span>}
       {(view.summary.carryoverPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.carryoverPendingPaymentCount}</b><small>待查渠道</small></span>}
-      {(view.summary.activityPendingPaymentCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityPendingPaymentCount}</b><small>活动待收款</small></span>}
-      {(view.summary.activityRequestedRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityRequestedRefundCount}</b><small>活动待复核</small></span>}
-      {(view.summary.activityProcessingRefundCount ?? 0) > 0 && <span className="has-attention"><b>{view.summary.activityProcessingRefundCount}</b><small>活动待退款</small></span>}
     </div>
+    {view.actions.canUseActivityCashier && <section aria-label="活动完整范围待办"><p>当前全部活动待办，不受上方普通订单筛选影响。{activitySummary ? `核对时间：${activitySummary.asOf}` : '完整范围汇总暂未读取，数量未知；下方明细仍可核对。'}</p>{activitySummary ? <div className="cashier-workbench-summary">{([['unpaid', '活动待收款', activitySummary.pendingPayment], ['requested', '活动待复核', activitySummary.requestedRefund], ['processing', '活动待退款', activitySummary.processingRefund]] as const).map(([filter, label, count]) => <button type="button" key={filter} className="cashier-summary-filter" aria-pressed={activityFilter === filter} disabled={!onNavigate} onClick={() => onNavigate?.(`/staff/payments?activityFilter=${filter}`)}><b>{count}</b><small>{label}</small></button>)}</div> : <button type="button" onClick={onReload}>重读完整活动待办</button>}</section>}
     {(view.summary.couponRefundReviewCount??0)>0&&<p className="cashier-guidance" role="status">
       当前列表有 {view.summary.couponRefundReviewCount} 项退款后的权益待复核。退款金额已记录，券处理由授权人员另行核对，不影响收款或桌台。
       {auth.permissions.includes('loyalty.configuration.view')&&onNavigate
@@ -619,6 +637,7 @@ export function CashierAfterSalesWorkbenchView({
       <button type="button" className="cashier-quiet-action" onClick={() => setSummaryFilter('all')}>显示全部</button>
     </p>}
 
+    {activityFilter !== 'all' && <p className="cashier-guidance">活动筛选：{activityFilter === 'unpaid' ? '待收款' : activityFilter === 'requested' ? '待复核' : '待执行或核对退款'}；普通订单保持原筛选。<button type="button" disabled={!onNavigate} onClick={() => onNavigate?.('/staff/payments')}>显示全部活动事项</button></p>}
     {view.actions.canUseActivityCashier === true && <ActivityCashierPanel
       registrations={view.activityRegistrations ?? []}
       auth={auth}
@@ -1060,7 +1079,7 @@ function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutatio
   return <section className="cashier-activity-worklist" aria-label="活动收银工作台">
     <header>
       <span><b>活动收银</b><small>仅显示报名、支付、退款和库存名额恢复状态；不显示顾客联系方式。</small></span>
-      <strong>{registrations.length} 项</strong>
+      <strong>当前已读取 {registrations.length} 项</strong>
     </header>
     {registrations.length === 0
       ? <p className="cashier-guidance">本营业日没有待处理的活动收银事项。已完成的活动收款和退款会进入日结对账。</p>
@@ -1781,7 +1800,7 @@ function lateSuccessRefundActionLabel(status: LateSuccessPayment['refundStatus']
 }
 
 function refundStatusLabel(value: string): string {
-  return ({ requested: '待收银复核', approved: '复核通过待执行', rejected: '复核驳回', processing: '处理中', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
+  return ({ requested: '待收银复核', approved: '退款已批准，待执行，尚未确认到账', rejected: '复核驳回', processing: '退款处理中，尚未确认到账', succeeded: '已退款', failed: '退款失败', cancelled: '已取消' } as Record<string, string>)[value] ?? value
 }
 function itemStatusLabel(value: string): string {
   return ({ submitted: '已下单', accepted: '已接单', preparing: '制作中', ready: '待送达', delivered: '已送达', cancelled: '已取消' } as Record<string, string>)[value] ?? value

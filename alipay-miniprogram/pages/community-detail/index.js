@@ -57,7 +57,7 @@ const RESOLUTION_STATE_NAMES = {
   refunding: '退款处理中', refunded: '退款已经完成',
 }
 const REFUND_STATUS_NAMES = {
-  requested: '退款申请已提交，等待门店审核', approved: '退款处理中，尚未确认到账', processing: '退款处理中，尚未确认到账',
+  requested: '退款申请已提交，等待门店审核', approved: '退款已批准，待执行，尚未确认到账', processing: '退款处理中，尚未确认到账',
   succeeded: '退款已完成', failed: '退款暂未完成，尚未确认到账，请联系门店核对', rejected: '退款申请未通过', cancelled: '退款申请已撤销',
 }
 
@@ -347,6 +347,8 @@ function viewActivity(raw) {
     && !availablePaymentMethods.some((method) => ['alipay_jsapi', 'trade_pay'].includes(method))
   const registrationStopped = Boolean(raw.registrationClosedAt)
   const registrationBlocked = !isSharePreview && (registrationStopped || providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion)
+  const addonCutoffs = [raw.addonEndsAt, raw.mealServiceEndsAt, raw.endsAt].filter(Boolean).map(value => Date.parse(value)).filter(Number.isFinite)
+  const addonCutoffAt = addonCutoffs.length ? Math.min(...addonCutoffs) : null
   const safetyFacts = []
   if (safety.difficulty) safetyFacts.push(`难度：${safety.difficulty}`)
   if (safety.ageRequirement) safetyFacts.push(`年龄：${safety.ageRequirement}`)
@@ -385,7 +387,8 @@ function viewActivity(raw) {
     requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,
     registrationBlocked,
-    addonBlocked: !safetyPolicyVersion || !refundPolicyVersion || (raw.addonEndsAt || raw.mealServiceEndsAt || raw.endsAt ? Date.parse(raw.addonEndsAt || raw.mealServiceEndsAt || raw.endsAt) <= Date.now() : true),
+    addonCutoffText: addonCutoffAt !== null ? dateTime(new Date(addonCutoffAt).toISOString()) : '',
+    addonBlocked: !safetyPolicyVersion || !refundPolicyVersion || addonCutoffAt === null || addonCutoffAt <= Date.now(),
     paymentBlockedText: isSharePreview ? '' : paymentBlockedText,
     acknowledgementText: safetyPolicyVersion && refundPolicyVersion
       ? `我已阅读并确认安全规则 ${safetyPolicyVersion} 与退款规则 ${refundPolicyVersion}`
@@ -508,7 +511,7 @@ Page({
     partySize: 1, partySizeLimit: 1, contact: '', contactFocused: false, contactAttention: false,
     acknowledgementAttention: false, ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
     selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null, selectedChoiceGroups: [], packageNote: '',
-    registrations: [], registrationReadFailed: false, selectedRegistrationPublicId: '', creatingPurchase: false,
+    registrations: [], registrationReadFailed: false, pendingPurchaseRecovery: false, selectedRegistrationPublicId: '', creatingPurchase: false,
     purchaseKind: 'admission_package', parentRegistrationPublicId: '', parentCredentialRequired: false, parentPreview: null, ownParentRegistrationPublicId: '', addonProducts: [], selectedAddonProduct: null, selectedAddonProductId: '', addonQuantity: 1,
     serviceCode: null, serviceBusy: false, serviceError: '', registeredPartySizeDraft: '',
     previewOnly: false, memberAccessRequested: false,
@@ -576,7 +579,7 @@ Page({
 
   async load() {
     const generation = this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ loading: true, error: '', success: '', membership: null, registration: null, loyaltyBenefits: [] })
+    this.setData({ loading: true, pendingPurchaseRecovery: Boolean(storageObject(REGISTRATION_ATTEMPTS_KEY)[this.data.id]), error: '', success: '', membership: null, registration: null, loyaltyBenefits: [] })
     try {
       if (!this.data.id) {
         this.setData({ loading: false, activity: null, membershipInviteVisible: false, error: '活动入口无效，请返回活动列表重新选择' })
@@ -873,7 +876,7 @@ Page({
     if (!payload.purchaseKind) return
     const selection = activitySelection(this.data.activity, payload.activityPackagePublicId || '', payload.partySize)
     const kind = payload.purchaseKind
-    this.setData({ ...selection, selectedChoiceGroups: packageChoiceGroups(selection.selectedPackage, payload.selections), packageNote: payload.note || '', creatingPurchase: true, purchaseKind: kind,
+    this.setData({ pendingPurchaseRecovery: true, ...selection, selectedChoiceGroups: packageChoiceGroups(selection.selectedPackage, payload.selections), packageNote: payload.note || '', creatingPurchase: true, purchaseKind: kind,
       parentRegistrationPublicId: payload.parentRegistrationPublicId || '', parentCredentialRequired: payload.parentCredentialRequired === true, parentPreview: null, addonQuantity: Number(payload.quantity || 1),
       error: '有一份提交结果尚未核对。请重新填写原手机号，按原内容恢复；不会另建一份。' })
     if (kind === 'single_dish') await this.loadAddonProducts(payload.productId)
@@ -990,7 +993,7 @@ Page({
     try {
       const rows = await getActivityAddonProducts(this.data.id)
       if (generation !== (this.pageGeneration || 0) || menuGeneration !== this.addonMenuGeneration || this.data.purchaseKind !== 'single_dish') return
-      const addonProducts = (Array.isArray(rows) ? rows : []).map((item) => Object.assign({}, item, { sellable: item.sellable !== false && item.priceAmountMinor != null, priceText: item.sellable !== false && item.priceAmountMinor != null ? money(Number(item.priceAmountMinor)) : '', statusText: item.statusText || (item.sellable === false || item.priceAmountMinor == null ? '当前不可购买' : '') }))
+      const addonProducts = (Array.isArray(rows) ? rows : []).map((item) => Object.assign({}, item, { imageUrl: publicImageUrl(item.imageUrl), sellable: item.sellable !== false && item.priceAmountMinor != null, priceText: item.sellable !== false && item.priceAmountMinor != null ? money(Number(item.priceAmountMinor)) : '', statusText: item.statusText || (item.sellable === false || item.priceAmountMinor == null ? '当前不可购买' : '') }))
       const product = addonProducts.find((item) => item.id === requestedSelection) || (!requestedSelection && addonProducts.find(item => item.sellable)) || null
       this.setData({ addonProducts, selectedAddonProduct: product, selectedAddonProductId: requestedSelection || product && product.id || '',
         selectedPricing: pricingFor(this.data.activity, null, 1, 'single_dish', product, this.data.addonQuantity),
@@ -1276,6 +1279,7 @@ Page({
       }
       attempts[activity.publicId] = attempt
       runtime.setStorageSync(REGISTRATION_ATTEMPTS_KEY, attempts)
+      this.setData({ pendingPurchaseRecovery: true })
     }
     let shouldAutoStartPayment = false
     this.setData({ busy: true, error: '', success: '', alipayIdentityRefreshRequired: false })
@@ -1424,10 +1428,24 @@ Page({
     }
   },
 
-  async recoverRegistration(activityPublicId, attempt) {
+  async queryOriginalPurchase() {
+    if (this.data.busy || this._registrationPending) return
+    const activityId = this.data.id
+    const attempt = storageObject(REGISTRATION_ATTEMPTS_KEY)[activityId]
+    if (!attempt || !attempt.payload || !attempt.payload.purchaseKind) return this.load()
+    const generation = this.pageGeneration || 0
+    this.setData({ busy: true, error: '', success: '' })
+    try {
+      const found = await this.recoverRegistration(activityId, attempt, true)
+      if (!found && generation === (this.pageGeneration || 0)) this.setData({ error: '暂未查到原提交结果，原请求已保留。请稍后再查或联系门店核对，不要另建购买。' })
+    } finally { this.setData({ busy: false }) }
+  },
+
+  async recoverRegistration(activityPublicId, attempt, readOnly) {
     const generation = this.pageGeneration || 0
     try {
       const registrations = await getActivityRegistrations()
+      if (generation !== (this.pageGeneration || 0)) return false
       const candidates = (registrations || []).filter((item) => item.activityPublicId === activityPublicId)
       const found = attempt && attempt.payload && attempt.payload.purchaseKind
         ? candidates.find((item) => item.registrationRequestIdempotencyKey === attempt.idempotencyKey)
@@ -1435,13 +1453,14 @@ Page({
       if (!found) return false
       if (attempt && attempt.previousRegistrationPublicId === found.publicId && found.status === 'cancelled') return false
       const registration = await this.readPaymentState(found)
+      if (generation !== (this.pageGeneration || 0)) return false
       this.clearRegistrationAttempt(activityPublicId)
       this.rememberRegistration(registration, activityPublicId)
       if (generation !== (this.pageGeneration || 0)) return true
       this.setData({ registration, creatingPurchase: false, selectedRegistrationPublicId: registration.publicId, success: '已找回刚才的报名记录，没有重复提交。', error: '' })
       await this.loadServiceCode()
       await this.refreshActivityAvailability()
-      if (generation === (this.pageGeneration || 0)) await this.showRegistrationOutcome(registration)
+      if (!readOnly && generation === (this.pageGeneration || 0)) await this.showRegistrationOutcome(registration)
       return true
     } catch (_error) { return false }
   },
@@ -1614,6 +1633,7 @@ Page({
     const attempts = storageObject(REGISTRATION_ATTEMPTS_KEY)
     delete attempts[activityPublicId]
     runtime.setStorageSync(REGISTRATION_ATTEMPTS_KEY, attempts)
+    if (activityPublicId === this.data.id) this.setData({ pendingPurchaseRecovery: false })
   },
 
   rememberRegistration(registration, activityPublicId) {

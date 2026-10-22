@@ -1,3 +1,4 @@
+import { useStaffViewState } from './staff-view-state'
 import { ServiceWindowFields } from './ServiceWindowFields'
 import { parseProductServiceWindow, type ProductServiceWindow } from '../shared/product-service-window'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -204,11 +205,11 @@ export function CatalogManagementPanel({
   const canManageInventory = auth.permissions.includes('inventory.manage')
   const canViewInventoryCost = auth.permissions.includes('inventory.cost.view')
   const canConfigurePerformancePhase = auth.permissions.includes('recommendation.phase.configure')
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useStaffViewState('catalog:list:expanded', false)
   const [products, setProducts] = useState<CatalogProduct[]>([])
   const [menuCategories, setMenuCategories] = useState<MenuCategory[]>([])
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useStaffViewState('catalog:list:query', '')
   const [choiceProductQuery,setChoiceProductQuery]=useState('')
   const [choiceProductCategory,setChoiceProductCategory]=useState('')
   const [choiceProductStatus,setChoiceProductStatus]=useState<'all'|'active'|'ready'>('all')
@@ -266,7 +267,7 @@ export function CatalogManagementPanel({
       .then(response => { if (current) setRecipeCost(readRecipeCostPreview(response.data, productId)) })
       .catch(() => { if (current) setNotice({ kind: 'error', text: '原商品成本暂未读到，请点击重新核算成本；未保存内容已保留。' }) })
     return () => { current = false }
-  }, [api, canViewInventoryCost, draft?.id, openRequest])
+  }, [api, canViewInventoryCost, draft?.id, openRequest, setExpanded])
 
   const visibleProducts = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('zh-CN')

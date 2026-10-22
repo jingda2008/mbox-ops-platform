@@ -78,6 +78,13 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).toContain('不会再次提交退款')
     expect(html).not.toContain('登记已退')
     expect(html).not.toContain('退款凭证号')
+    expect(html).toContain('退款处理中，尚未确认到账')
+  })
+
+  it('labels an approved refund as awaiting execution instead of already returned funds', () => {
+    const html = render(workbench([payment('postar', [refund('refund-approved', 'approved', otherEmployeeId)])]))
+    expect(html).toContain('退款已批准，待执行，尚未确认到账')
+    expect(html).not.toContain('最近退款：已退款')
   })
 
   it('keeps prior-day unresolved refunds visibly separated from current turnover', () => {

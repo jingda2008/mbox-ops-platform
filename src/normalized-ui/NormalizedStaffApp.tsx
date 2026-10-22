@@ -2,12 +2,13 @@ import { TableServiceLauncher, TableServiceDirectory } from './staff-actions/Tab
 import {StaffReservationNotice} from './staff-actions/StaffReservationNotice'
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
 import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
+import { ownerDashboardEntry } from './staff-navigation-model'
 import { StaffObjectFocus } from './StaffObjectFocus'
 import { StaffViewStateProvider, StaffRouteRestoration } from './staff-view-state'
 import { StaffMemberNavigation } from './StaffMemberNavigation'
 import { reconcileStaffAuth } from './staff-auth-update'
 import { STAFF_SESSION_CHANGE_KEY } from '../shared/staff-session-binding'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, KeyRound, LoaderCircle, LogOut, Repeat2, ShieldCheck, UserRound, X } from 'lucide-react'
 import { NormalizedApiClient, NormalizedApiError, type StaffAuthView } from '../normalized-api'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
@@ -42,6 +43,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const dedicatedScreen=threeScreenMode(locationUrl.pathname,locationUrl.search)??pickupOnlyEntry(locationUrl.pathname,locationUrl.search,auth?.permissions??[])
   const [navigationError, setNavigationError] = useState<string | null>(null)
   const [navigationAttempt, setNavigationAttempt] = useState(0)
+  const defaultEntryChecked = useRef<string | null>(null)
   const [staffNavigation, setStaffNavigation] = useState<StaffBootstrapView['navigation'] | null>(null)
   const loginRequired = useCallback(() => {
     setAuth(null); setStaffNavigation(null); setInitialBootstrap(null); setPhase('login')
@@ -159,6 +161,17 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     return () => controller.abort()
   }, [api, authenticatedEmployeeId, authenticatedSessionId, phase, staffNavigation, staffRoute, navigationAttempt])
 
+  useEffect(() => {
+    if (phase !== 'ready' || !auth || staffNavigation === null || defaultEntryChecked.current === auth.session.id) return
+    defaultEntryChecked.current = auth.session.id
+    const target = ownerDashboardEntry({ location: staffLocation, hash: window.location.hash, roleCodes: auth.employee.roleCodes,
+      permissions: auth.permissions, navigation: staffNavigation, returningInSession: window.history.state?.staffSession === auth.session.id })
+    if (target) {
+      window.history.replaceState({ staffSession: auth.session.id }, '', target)
+      setStaffLocation(target)
+    }
+  }, [auth, phase, staffNavigation, staffLocation])
+
   if (phase === 'checking') return <StaffGateLoading />
   if (phase === 'credential') {
     return <DeviceCredentialForm api={api} onReady={() => { setMessage(null); setPhase('login') }} message={message} />
@@ -170,16 +183,18 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   }
   if (auth === null) return <StaffGateLoading />
   const switchReady = (session: StaffAuthView) => {
-    window.history.replaceState({}, '', '/')
-    setStaffLocation('/')
+    const next = dedicatedScreen ? `/staff/fulfillment?screen=${dedicatedScreen}` : '/'
+    window.history.replaceState({}, '', next)
+    setStaffLocation(next)
     setMessage(null)
     setStaffNavigation(null)
     setInitialBootstrap(null)
     setAuth(session)
   }
   const logoutReady = () => {
-    window.history.replaceState({}, '', '/')
-    setStaffLocation('/')
+    const next = dedicatedScreen ? `/staff/fulfillment?screen=${dedicatedScreen}` : '/'
+    window.history.replaceState({}, '', next)
+    setStaffLocation(next)
     setMessage(null)
     loginRequired()
   }

@@ -1,5 +1,6 @@
+import { OperatingDashboardPanel } from './OperatingDashboardPanel'
 import { EmployeeSalesSummary } from './EmployeeSalesSummary'
-import { loadOperatingReports, signedMinorAmount, type EmployeeSalesView } from './employee-sales-presentation'
+import { signedMinorAmount, type EmployeeSalesView } from './employee-sales-presentation'
 import { StaffPermissionReceiptPanel } from './StaffPermissionReceiptPanel'
 import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {InventoryWastePanel,InventoryWasteReviewPanel} from './InventoryWastePanel'
@@ -357,7 +358,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   const [data, setData] = useState<ModuleData>(emptyData)
   const [paymentRefreshToken, setPaymentRefreshToken] = useState(0)
   const [orderRefreshToken, setOrderRefreshToken] = useState(0)
-  const [profitAnchor, setProfitAnchor] = useState('')
+  const [operationsRevision, setOperationsRevision] = useState(0)
   const loadedModule = useRef<StaffModule | null>(null)
   const loadGeneration = useRef(0)
 
@@ -401,9 +402,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
           setData(emptyData)
         }
       } else if (module === 'operations') {
-        const reports = await loadOperatingReports((path) => api.getEndpoint<{ data: unknown }>(path), auth.permissions, profitAnchor)
-        if (generation !== loadGeneration.current) return
-        setData({ ...emptyData, profit: profitView(reports.profit), employeeSales: reports.sales })
+        setData(emptyData)
       } else if (module === 'experience') {
         if (auth.permissions.includes('customer.experience.view')) {
           const response = await api.getEndpoint<{ data: unknown }>('/api/staff/customer-experience/dashboard')
@@ -457,7 +456,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
       setMessage(error instanceof Error ? error.message : '岗位数据暂时无法读取')
       setPhase('error')
     }
-  }, [api, auth.permissions, module, onLoginRequired, profitAnchor])
+  }, [api, auth.permissions, module, onLoginRequired])
 
   const refresh = useCallback(() => load(true), [load])
 
@@ -483,7 +482,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />
-    if (module === 'operations') return <OperationsModule api={api} auth={auth} view={data.profit} sales={data.employeeSales} canViewProfit={auth.permissions.includes('commercial.profit.view')} onOverviewDateChange={setProfitAnchor} />
+    if (module === 'operations') return <OperatingDashboardPanel api={api} auth={auth} revision={operationsRevision} onNavigate={onNavigate} onLoginRequired={onLoginRequired}/>
     if (module === 'experience') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={data.customerExperience} mode="experience" />
     if (module === 'member-fulfillment') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-fulfillment" />
     if (module === 'member-exceptions') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-exceptions" />
@@ -495,7 +494,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     if (module === 'member-management') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-management" />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
-  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, orderRefreshToken, refresh, setProfitAnchor])
+  }, [api, auth, data, module, onLoginRequired, onNavigate, paymentRefreshToken, orderRefreshToken, refresh, operationsRevision])
 
   const modulePresentation = {
     orders: {title:'订单中心',icon:PackageSearch},
@@ -525,7 +524,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
         type="button"
         aria-label={`刷新${title}`}
         onClick={() => module === 'payments' ? setPaymentRefreshToken((value) => value + 1)
-          : module === 'orders' ? setOrderRefreshToken(value=>value+1) : void load()}
+          : module === 'orders' ? setOrderRefreshToken(value=>value+1) : module === 'operations' ? setOperationsRevision(value=>value+1) : void load()}
         disabled={phase === 'loading'}
       >
         <RefreshCw size={18} className={phase === 'loading' ? 'is-spinning' : ''} />
@@ -1380,7 +1379,7 @@ export function OperationsModule({ api, auth, view, sales, canViewProfit, onOver
   }
   const overviewHeader = <OperatingOverviewHeader
     date={overviewDate}
-    status={view === null ? null : view.status === 'complete' ? '数据已完整核对' : '当日数据暂估，后补成本会自动更新'}
+    status={view === null ? null : view.status === 'complete' ? '按已入账数据计算' : '当日数据暂估，后补成本会自动更新'}
     totalMinor={view?.revenue.cash.paymentReceiptsMinor ?? null}
     onDateChange={changeOverviewDate}
   />
@@ -1860,18 +1859,6 @@ function purchaseReceiptViews(value: unknown): PurchaseReceiptView[] {
   })
 }
 
-function profitView(value: unknown): ProfitView | null {
-  if (!isRecord(value) || !isRecord(value.range) || !isRecord(value.revenue) || !isRecord(value.costs) || !isRecord(value.profit) || !isRecord(value.gaps)) return null
-  const cash = isRecord(value.revenue.cash) ? value.revenue.cash : null
-  if (cash === null || typeof cash.paymentReceiptsMinor !== 'number' || typeof cash.netReceiptsMinor !== 'number'
-    || typeof value.costs.cashPaidMinor !== 'number' || typeof value.costs.accrualAllocatedMinor !== 'number'
-    || typeof value.costs.goodsCostMinor !== 'number' || typeof value.costs.inventoryLossMinor !== 'number' || typeof value.costs.operatingExpenseMinor !== 'number'
-    || typeof value.profit.cashBasisMinor !== 'number' || typeof value.profit.accrualBasisMinor !== 'number'
-    || typeof value.profit.cashBalanceMinor !== 'number' || typeof value.profit.grossProfitMinor !== 'number' || typeof value.profit.operatingProfitMinor !== 'number'
-    || typeof value.gaps.orderItemsMissingCostCount !== 'number' || typeof value.gaps.inventoryLossesMissingCostCount !== 'number'
-    || typeof value.range.startDate !== 'string' || typeof value.range.endDate !== 'string') return null
-  return value as unknown as ProfitView
-}
 
 function hardwareDevices(value: unknown): HardwareDeviceView[] {
   if (!Array.isArray(value)) return []

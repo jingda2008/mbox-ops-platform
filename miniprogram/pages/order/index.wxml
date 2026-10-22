@@ -12,6 +12,7 @@
   </view>
 
   <button wx:if="{{connectionState === 'active'}}" class="secondary-button" bindtap="openIssuedCouponEntry" disabled="{{!orderReady || busy || cartSyncing || checkoutLocked || cartWritesFrozen}}">使用已有兑换券</button>
+  <view wx:if="{{menuUpdatePending}}" class="error-banner"><text>菜单暂未更新，选择已保留。{{menuUpdatedAt ? '上次成功更新：' + menuUpdatedAt : ''}}</text><button class="secondary-button" bindtap="retryMenuWindow" loading="{{menuUpdateBusy}}" disabled="{{menuUpdateBusy}}">点此核对菜单</button></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
 
   <view wx:elif="{{connectionState === 'needs_scan' || connectionState === 'waiting' || connectionState === 'upgrade_required'}}" class="gate-wrap">
@@ -186,6 +187,7 @@
           <text wx:if="{{detailProduct.specification}}" class="product-detail-specification">规格：{{detailProduct.specification}}</text>
           <button wx:if="{{detailProduct.selectionSource && detailProduct.bundleChoiceGroups.length}}" class="detail-info-toggle" bindtap="toggleDetailInformation">{{detailInformationExpanded ? '收起介绍，选择酒水' : '展开套餐介绍与固定组成'}}</button>
           <text wx:if="{{!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded}}" class="product-detail-description">{{detailProduct.description || '详情以当晚正式菜单为准'}}</text>
+          <text wx:if="{{detailProduct.supplyDescription}}" class="product-detail-browse-note">{{detailProduct.supplyDescription}}</text>
           <view wx:if="{{detailProduct.productKind === 'bundle' && detailProduct.bundleComponents.length && (!detailProduct.selectionSource || !detailProduct.bundleChoiceGroups.length || detailInformationExpanded)}}" class="product-detail-components">
             <text class="product-detail-section-title">组合内容</text>
             <view wx:for="{{detailProduct.bundleComponents}}" wx:key="productId" class="product-detail-component"><text>{{item.name}}</text><text>× {{item.quantity}}</text></view>

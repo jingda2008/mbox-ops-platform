@@ -193,7 +193,7 @@ printf 'public-verifier %s\\n' "$*" >> "$OPERATIONS_LOG"
 `)
   chmodSync(restorer, 0o700)
   chmodSync(verifier, 0o700)
-  writeFileSync(join(release, 'release-state.json'), JSON.stringify({ current: 'migrated' }))
+  writeFileSync(join(release, 'release-state.json'), JSON.stringify({ current: options.state ?? 'migrated' }))
   writeFileSync(join(release, '.database-write-started'), '')
   if (options.writeResumed) writeFileSync(join(release, '.contract-write-resumed'), '')
   if (options.cutoverStarted) writeFileSync(join(release, '.cutover-started'), '')
@@ -246,8 +246,12 @@ verify_previous_runtime_database_identity() {
 docker() {
   printf 'docker %s\\n' "$*" >> "\${OPERATIONS_LOG}"
   if [ "$1" = inspect ]; then
-    if [ "$2" = mbox-candidate ]; then return 1; fi
-    if [[ "$*" == *org.opencontainers.image.revision* ]]; then printf '%s\\n' "\${previous_release_sha}"; return 0; fi
+    if [ "$2" = mbox-candidate ] && [ "${options.candidateExists ? 'true' : 'false'}" = false ]; then return 1; fi
+    if [[ "$*" == *org.opencontainers.image.revision* ]]; then
+      if [ "$2" = mbox-candidate ] || [ "${options.activeIsNew ? 'true' : 'false'}" = true ]; then printf '%s\\n' "\${release_sha}";
+      else printf '%s\\n' "\${previous_release_sha}"; fi
+      return 0
+    fi
     if [[ "$*" == *'{{.State.Running}}'* ]]; then
       printf '%s\\n' "\${active_running}"
       return 0
@@ -330,5 +334,20 @@ test('forward-only failure after writes resume never restores the database or st
   const log = runScenario('forward-only', { writeResumed: true })
   assert.doesNotMatch(log, /restorer/)
   assert.doesNotMatch(log, /docker start mbox-app/)
+  assert.match(log, /forward-recovery-required/)
+})
+
+test('forward-only failure drains the new writer before public cutover', () => {
+  const log = runScenario('new-writer-before-cutover', { writeResumed: true, candidateExists: true })
+  assert.match(log, /Caddyfile\.contract-maintenance/)
+  assert.match(log, /docker stop -t 20 mbox-candidate/)
+  assert.doesNotMatch(log, /restorer|docker start mbox-app/)
+})
+
+test('late contract failure after rename and cutover verification still holds writes without restoring stale data', () => {
+  const log = runScenario('late-forward-only', { writeResumed: true, cutoverStarted: true, activeIsNew: true, state: 'cutover_verified' })
+  assert.match(log, /Caddyfile\.contract-maintenance/)
+  assert.match(log, /docker stop -t 20 mbox-app/)
+  assert.doesNotMatch(log, /restorer|docker start mbox-app/)
   assert.match(log, /forward-recovery-required/)
 })

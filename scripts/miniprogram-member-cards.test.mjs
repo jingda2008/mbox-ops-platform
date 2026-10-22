@@ -52,7 +52,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
   test(platform + ': simple pending card cannot apply again and valid holding opens the ordinary menu',async()=>{
     const {page,navigations}=await harness(platform,async()=>({...empty(),projects:[{...project,flow_mode:'simple',has_current_card:true}]}))
     await page.load();await page.openProject(event('fans'))
-    assert.equal(page.data.projects[0].buttonText,'查看权益');assert.deepEqual(navigations,['/pages/order/index'])
+    assert.equal(page.data.projects[0].buttonText,'去点单查看可用商品');assert.deepEqual(navigations,['/pages/order/index'])
   })
   test(platform + ': gift progress failure does not clear cards or invent an empty successful gift history',async()=>{
     const {page}=await harness(platform,async()=>({...empty(),cards:[{id:'card',status:'active'}]}),undefined,async()=>{throw new Error('timeout')})

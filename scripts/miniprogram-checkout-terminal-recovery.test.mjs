@@ -19,7 +19,10 @@ function harness(platform, getOrders) {
   let nativeCalls = 0, abandonCalls = 0, presents = 0
   const runtime = { getStorageSync: (key) => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), removeStorageSync: (key) => storage.delete(key),
     requestPayment: () => { nativeCalls++ }, tradePay: () => { nativeCalls++ } }
+  const formatModule={exports:{}}
+  vm.runInNewContext(readFileSync(new URL('../'+platform+'/utils/format.js',import.meta.url),'utf8').replace(/export\s*\{([^}]*)\}/g,'module.exports = {$1}'),{module:formatModule,Date})
   const actions = vm.runInNewContext(`({${methods.map((node) => node.getText(tree)).join(',')}})`, {
+    dateTime: formatModule.exports.dateTime,
     wx: runtime, runtime, PENDING_PAYMENT_KEY, CHECKOUT_ATTEMPT_KEY, PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
     tableSessionCacheScope: () => 'original-scope', getTableOrders: () => orderSource(),
     getMenu: async () => [], getSharedCart: async () => ({}), menuProducts: () => [], menuCategoryState: () => ({}), sharedCartView: () => [], menuRecommendations: () => [],

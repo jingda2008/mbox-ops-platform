@@ -20,3 +20,11 @@ export function quickStaffEntries(entries: StaffBootstrapView['navigation'], mod
   })
   return sorted.slice(0, 4)
 }
+
+/** Default entry is only a suggestion for an ordinary, targetless login. */
+export function ownerDashboardEntry(input: { location: string; hash?: string; roleCodes: readonly string[]; permissions: readonly string[]; navigation: StaffBootstrapView['navigation']; returningInSession?: boolean }): string | null {
+  if (input.location !== '/' || input.hash || input.returningInSession) return null
+  if (!input.roleCodes.some(code => ['OWNER', 'ADMIN', 'MANAGER', 'STORE_MANAGER'].includes(code))) return null
+  if (!input.permissions.includes('commercial.profit.view')) return null
+  return input.navigation.some(item => item.code === 'operations' && item.route === '/staff/operations') ? '/staff/operations' : null
+}

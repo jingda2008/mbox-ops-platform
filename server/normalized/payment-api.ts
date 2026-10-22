@@ -1,3 +1,4 @@
+import { readCashierTodoSummary } from './cashier-todo-summary.js'
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
 import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import { safePaymentErrorCode, safePaymentErrorLocation } from './pending-online-payment-reconciliation.js'
@@ -824,6 +825,17 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     return reply.send({ data: result.entries, meta: { nextCursor: result.nextCursor } })
   }))
 
+  app.get('/payments/workbench/todo-summary', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveStaffContext(options, request)
+    requireAnyStaffCapability(context, ['reconciliation.view', 'reconciliation.manage', 'payment.settlement.view',
+      'payment.manual.cash.record', 'payment.manual.pos.record', 'payment.manual.external.record',
+      'refund.request', 'refund.approve', 'refund.execute', 'community.activity.cashier', 'business_day.close'])
+    if (!options.transactions) throw new Error('待办汇总读取暂不可用')
+    const data = await options.transactions.run(context.scope,
+      tx => readCashierTodoSummary(tx, context.employeeId, context.capabilities), { readOnly: true, isolation: 'repeatable-read' })
+    return reply.send({ data })
+  }))
+
   app.get('/payments/workbench', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveStaffContext(options, request)
     requireAnyStaffCapability(context, [
@@ -850,6 +862,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       query: readOptionalString(query.query, 'query', 64) ?? undefined,
       areaId: query.areaId === undefined ? undefined : readUuid(query.areaId, 'areaId'),
       paymentState: readOptionalPaymentState(query.paymentState),
+      activityFilter: readOptionalActivityFilter(query.activityFilter),
       limit: query.limit === undefined ? 50 : readInteger(query.limit, 'limit', 1, 100),
     })
     const onlinePaymentEnabled = options.onlinePaymentProvider !== null
@@ -1871,4 +1884,10 @@ async function receiveProviderNotification(
   reply.log.info({ event: 'provider_fee_notification_recorded', receiptId, eventId: fee.eventId,
     requestId: request.id }, 'Verified fee receipt persisted without changing payment status')
   return reply.send(providerAcknowledgement())
+}
+
+function readOptionalActivityFilter(value: unknown): CashierWorkbenchQueryInput['activityFilter'] {
+  if (value === undefined || value === '') return undefined
+  if (value === 'unpaid' || value === 'requested' || value === 'processing') return value
+  throw new PaymentApiRequestError('请选择有效活动待办类型')
 }

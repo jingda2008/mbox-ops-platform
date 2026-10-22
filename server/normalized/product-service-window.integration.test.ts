@@ -10,6 +10,7 @@ import {validateProductPaymentWindow} from './product-payment-window.js'
 import {PaymentProviderActionRepository} from './payment-provider-action-repository.js'
 import {OnlinePaymentService} from './online-payment-service.js'
 import {DEFAULT_PRODUCT_SERVICE_WINDOW as all} from '../../src/shared/product-service-window.js'
+import {customerSupplyCopy,customerSupplyProjection} from './product-supply-presentation.js'
 const database=process.env.TEST_NORMALIZED_DATABASE_URL
 ;(database?describe:describe.skip)('product time rules in PostgreSQL',()=>{
  const scope={tenantId:randomUUID(),storeId:randomUUID()},employee=randomUUID(),customer=randomUUID()
@@ -26,11 +27,11 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const id=randomUUID();await admin.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,guest_visible) VALUES($1::uuid,$2,$3,$1::text,'定时菜品','test','none',$4)",[id,scope.tenantId,scope.storeId,visible])
   await admin.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',1000,'CNY',clock_timestamp()-interval '1 day')",[scope.tenantId,scope.storeId,id]);return id
  }
- async function card(productId:string,amount=700){
+ async function card(productId:string,amount=700,owner=customer){
   const project=randomUUID(),app=randomUUID(),holding=randomUUID()
   await admin.query("INSERT INTO mbox.member_card_projects(id,tenant_id,store_id,code,name,kind,terms,available_from,available_until,status,created_by_employee_id,flow_mode,require_social_conditions,social_configuration_required) VALUES($1,$2,$3,$4,'兴趣卡','interest','测试条款',clock_timestamp()-interval '1 day',NULL,'closed',$5,'simple',false,false)",[project,scope.tenantId,scope.storeId,'W'+project.replaceAll('-','').toUpperCase(),employee])
-  await admin.query("INSERT INTO mbox.member_card_applications(id,tenant_id,store_id,project_id,customer_id,accepted_project_version,status,reviewed_by_employee_id,resolved_at) VALUES($1,$2,$3,$4,$5,1,'approved',$6,clock_timestamp())",[app,scope.tenantId,scope.storeId,project,customer,employee])
-  await admin.query("INSERT INTO mbox.member_cards(id,tenant_id,store_id,project_id,customer_id,application_id,valid_from,valid_until) VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()-interval '1 day',NULL)",[holding,scope.tenantId,scope.storeId,project,customer,app])
+  await admin.query("INSERT INTO mbox.member_card_applications(id,tenant_id,store_id,project_id,customer_id,accepted_project_version,status,reviewed_by_employee_id,resolved_at) VALUES($1,$2,$3,$4,$5,1,'approved',$6,clock_timestamp())",[app,scope.tenantId,scope.storeId,project,owner,employee])
+  await admin.query("INSERT INTO mbox.member_cards(id,tenant_id,store_id,project_id,customer_id,application_id,valid_from,valid_until) VALUES($1,$2,$3,$4,$5,$6,clock_timestamp()-interval '1 day',NULL)",[holding,scope.tenantId,scope.storeId,project,owner,app])
   await admin.query('INSERT INTO mbox.member_card_menu_items(tenant_id,store_id,project_id,product_id,exclusive_price_minor,exclusive) VALUES($1,$2,$3,$4,$5,true)',[scope.tenantId,scope.storeId,project,productId,amount]);return {project,holding}
  }
  const q=(sql:string,params:unknown[])=>runner.run(scope,tx=>tx.query(sql,[scope.tenantId,scope.storeId,...params]))
@@ -65,6 +66,31 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const id=await product(false),cheap=await card(id,500);await card(id,700)
   await admin.query('INSERT INTO mbox.product_service_windows(tenant_id,store_id,product_id,card_project_id,date_from,weekdays,sale_start_minute,sale_end_minute,visible_start_minute,visible_end_minute) VALUES($1,$2,$3,$4,$5,$6,0,1440,0,1440)',[scope.tenantId,scope.storeId,id,cheap.project,'2100-01-01',[1,2,3,4,5,6,7]])
   expect((await q('SELECT mbox.customer_card_price($1,$2,$3,$4)::text AS price',[id,customer])).rows[0]?.price).toBe('700')
+ })
+ it('projects only the current customer usable visible card conditions and never another customer card rule',async()=>{
+  const id=await product(false),mine=await card(id),stranger=randomUUID()
+  await admin.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1::uuid,$2,$3,$1::text)",[stranger,scope.tenantId,scope.storeId])
+  const other=await card(id,700,stranger)
+  await runner.run(scope,tx=>saveProductServiceWindow(tx,id,{...all,saleStartMinute:1080,saleEndMinute:1200},mine.project))
+  await runner.run(scope,tx=>saveProductServiceWindow(tx,id,{...all,saleStartMinute:600,saleEndMinute:720},other.project))
+  const presentation=async(owner:string|null)=>(await q(`SELECT ${customerSupplyProjection('product','$4')} FROM mbox.products product WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[id,owner])).rows[0]!.supply_presentation
+  const own=await presentation(customer),anonymous=await presentation(null)
+  expect(own.cards).toHaveLength(1);expect(own.cards[0].window.saleStartMinute).toBe(1080)
+  expect(customerSupplyCopy(own).description).toContain('18:00–20:00')
+  expect(customerSupplyCopy(own).description).not.toContain('10:00–12:00')
+  expect(JSON.stringify(own)).not.toContain(other.project);expect(anonymous.cards).toEqual([])
+  await admin.query("UPDATE mbox.member_cards SET status='suspended' WHERE id=$1",[mine.holding])
+  expect((await presentation(customer)).cards).toEqual([])
+ })
+ it('uses the real base date/weekday/overnight rules and keeps ordinary menu copy independent of card-only schedules',async()=>{
+  const id=await product(),c=await card(id)
+  const base={...all,dateFrom:'2100-01-01',dateThrough:'2100-01-01',weekdays:[5],saleStartMinute:1320,saleEndMinute:1560,visibleStartMinute:1320,visibleEndMinute:1560}
+  await runner.run(scope,tx=>saveProductServiceWindow(tx,id,base))
+  await admin.query("UPDATE mbox.products SET available_from='18:00',available_until='02:00' WHERE id=$1",[id])
+  const data=(await q(`SELECT ${customerSupplyProjection('product','$4')} FROM mbox.products product WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[id,customer])).rows[0]!.supply_presentation
+  expect(data.cards).toEqual([]);expect(data.window).toEqual(base)
+  expect(customerSupplyCopy(data)).toMatchObject({description:expect.stringContaining('2100-01-01至2100-01-01 周五 22:00–次日02:00'),unavailableText:expect.stringContaining('供应日期尚未开始')})
+  expect(JSON.stringify(data)).not.toContain(c.project)
  })
  async function paymentOrder(withChoice=false,simulation=false) {
   const p=await product(),area=randomUUID(),table=randomUUID(),session=randomUUID(),payment=randomUUID()

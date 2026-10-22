@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
+import type { ScopedTransaction, StoreScope, TransactionIsolation } from './transaction-runner.js'
 import { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 
 export type JsonPrimitive = boolean | number | string | null
@@ -77,6 +77,8 @@ export interface IdempotentCommand<Result> {
   resultCodec: JsonCodec<Result>
   /** Opt-in native command receipts survive routine idempotency cleanup. */
   retainReceipt?: boolean
+  /** Snapshot reports opt in without changing existing business command isolation. */
+  transactionIsolation?: TransactionIsolation
   ttlMs?: number
   lockMs?: number
   // Only explicitly non-final outcomes may resume, under the original row lock
@@ -173,7 +175,7 @@ export class NormalizedCommandExecutor {
         if (command.retainReceipt) throw new NativeCommandNotCommittedError(error)
         throw error
       }
-    })
+    }, command.transactionIsolation ? { isolation: command.transactionIsolation } : undefined)
   }
 }
 

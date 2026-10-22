@@ -94,6 +94,10 @@ jobs:
         run: npm run check && npm run release:system:test
       - name: Verify activity, cashier and gift recovery in real browser components
         run: npm run test:activity-recovery
+      - name: Verify operating dashboard periods, permissions and recovery
+        run: node scripts/operating-dashboard-browser.mjs
+      - name: Verify customer purchase, card entry and scan feedback
+        run: node scripts/customer-experience-b06-browser.mjs
       - name: Verify candidate, upload and release gate semantics
         run: npm run release:miniprogram:test
 

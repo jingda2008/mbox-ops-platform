@@ -1,0 +1,37 @@
+import '../../../src/normalized-base.css'
+import React, { useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { OperatingDashboardPanel } from '../../../src/normalized-ui/OperatingDashboardPanel'
+import { CatalogManagementPanel } from '../../../src/normalized-ui/CatalogManagementPanel'
+import { CashierAfterSalesWorkbench } from '../../../src/normalized-ui/CashierAfterSalesWorkbench'
+import { StaffViewStateProvider } from '../../../src/normalized-ui/staff-view-state'
+import { ConfirmationDialogProvider } from '../../../src/normalized-ui/ConfirmationDialog'
+import { NormalizedApiError } from '../../../src/normalized-api'
+import '../../../src/normalized-ui/staff-module-panel.css'
+import '../../../src/normalized-ui/normalized-staff-login.css'
+import type { StaffAuthView } from '../../../src/normalized-api'
+import { dashboardRange, type DashboardReport } from '../../../src/normalized-ui/operating-dashboard-presentation'
+const owner='11111111-1111-4111-8111-111111111111'
+const permissions=['commercial.profit.view','commercial.sales.view_all','commercial.cost.view','catalog.product.manage']
+const state={employee:owner,permissions,route:'/staff/operations',failProfit:false,failSales:false,failCounts:false,holdMonth:false,revision:0,printAllowed:true,printUnknown:false,printAccessMissing:false}
+const calls:string[]=[],writes:unknown[]=[],printCalls:Array<{path:string;body:unknown;options:{idempotencyKey:string}}>=[],releases:Array<()=>void>=[]
+let update=()=>{}
+const auth=():StaffAuthView=>({employee:{id:state.employee,code:'fixture',displayName:'测试管理者',roleCodes:['OWNER']},session:{id:`session-${state.employee}`,employeeId:state.employee,issuedAt:'2026-10-23T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',onlineLeaseUntil:'2099-01-01T00:00:00Z',isOnline:true},permissions:state.permissions,deniedPermissions:[]})
+const bootstrap=()=>({staff:{id:state.employee},access:{permissions:state.permissions},store:{id:'store',name:'隔离门店'},businessDay:{date:'2026-10-23'},navigation:[{code:'payments',route:'/staff/payments'}]})
+function report(url:URL):DashboardReport{const period=(url.searchParams.get('period')??'day') as 'day'|'month'|'year',anchor=url.searchParams.get('anchor')??'';const range=dashboardRange({period,anchor},'2026-10-23')!;const page=Number(url.searchParams.get('sourcePage')??0);return {period,range:{startDate:range.start,endDate:range.end},asOf:'2026-10-23T04:00:00Z',currency:'CNY',status:'provisional',caveats:['财务费用按服务期分摊'],currentBusinessDate:'2026-10-23',effectiveEndDate:range.end,requestedEndDate:range.end,incomeBasis:'purchase_business_date',...(state.printAccessMissing?{}:{printAccess:{allowed:state.printAllowed,reason:state.printAllowed?null:'当前账号不能打印此历史期间；请由具备历史权限的人员处理。'}}),knownMissingCostCount:2,unassignedIncomeCount:0,unreconciledActivityPaymentsMinor:0,coverage:['普通订单','活动套餐与加购'],dashboard:{incomeMinor:period==='year'?202600:-1000,totalCostMinor:5000,operatingProfitMinor:period==='year'?197600:-6000,actualReceiptsMinor:1000,successfulRefundsMinor:2000,actualNetReceiptsMinor:-1000,periodOutstandingMinor:100,currentAllOutstandingMinor:99900,validOrderCount:151,paidOrderCount:150},trend:[{businessDate:range.start,label:range.start,incomeMinor:-1000,costMinor:5000,actualNetReceiptsMinor:-1000,provisional:true}],incomeBreakdown:[{code:'ordinary_orders',label:'普通订单',amountMinor:-1000,count:151,missingCount:0}],costBreakdown:[{code:'operating_expenses',label:'经营费用',amountMinor:5000,count:2,missingCount:0}],sources:{rows:[{id:`source-${page}`,kind:url.searchParams.get('sourceKind')==='cost'?'cost':'income',category:url.searchParams.get('sourceKind')==='cost'?'operating_expenses':'ordinary_order',sourceType:url.searchParams.get('sourceKind')==='cost'?'expense':'order',publicId:`原记录-${page+1}`,label:url.searchParams.get('sourceKind')==='cost'?`房租来源第${page+1}页`:`订单来源第${page+1}页`,businessDate:range.start,occurredAt:'2026-10-23T00:00:00Z',amountMinor:page===0?5000:null,originalAmountMinor:150000,missingCount:page===0?0:1}],page,pageSize:50,total:151,hasMore:page<3}}}
+const api={
+ getStaffBootstrap:async()=>({data:bootstrap()}),
+ getEndpoint:async(path:string)=>{calls.push(path);const url=new URL(path,'http://fixture');
+ if(path.includes('/profit?')){const value=report(url);if(state.holdMonth&&url.searchParams.get('period')==='month')await new Promise<void>(resolve=>releases.push(resolve));if(state.failProfit)throw Error('经营接口读取中断');if(!state.permissions.includes('commercial.profit.view'))throw new NormalizedApiError('无经营权限','http','none',403);return {data:value}}
+ if(path.includes('/employee-sales')){if(state.failSales)throw Error('销售归属读取中断');return {data:[{employeeCode:'public',employeeDisplayName:'测试员工',productCode:'tea',productName:'茶',quantity:'1',salesAmountMinor:500,currency:'CNY'}]}}
+ if(path.includes('/owner-finance'))return {data:{businessDate:'2026-10-23',categories:[],costCenters:[],employees:[],compensationRules:[],costs:[],recurringRules:[],payrollRuns:[],payrollLines:[],canViewCost:true,canViewPayroll:false}}
+ if(path.includes('/todo-summary')){if(state.failCounts)throw Error('待办汇总读取中断');return {data:{refunds:{total:201,action:200,waiting:1},activities:{pendingPayment:125,requestedRefund:101,processingRefund:100},asOf:'2026-10-23T04:01:00Z'}}}
+ if(path.includes('/payments/workbench'))return {data:{businessDate:'2026-10-23',query:'',actions:{canUseActivityCashier:true,canApproveRefund:false,canExecuteRefund:false},summary:{orderCount:1,capturedPaymentCount:1,requestedRefundCount:0,processingRefundCount:0,activityPendingPaymentCount:1,activityRequestedRefundCount:0,activityProcessingRefundCount:0},orders:[],activityRegistrations:[]}}
+ if(path.includes('/catalog/'))return {data:[]}
+ throw Error(`Fixture endpoint missing ${path}`)
+ },postEndpoint:async(path:string,body:unknown,options:{idempotencyKey:string})=>{if(path==='/api/hardware/operating-report'){printCalls.push({path,body,options});if(state.printUnknown)throw Error('打印结果未知');return {requestId:'fixture-print-request',jobIds:['fixture-job'],asOf:'2026-10-23T04:02:00Z'}}writes.push([path,body,options]);throw Error('不允许真实写入')},patchEndpoint:async(...args:unknown[])=>{writes.push(args);throw Error('不允许真实写入')},
+}
+function navigate(route:string){state.route=route;history.pushState({},'',route);update()}
+Object.assign(window,{dashboardHarness:{state,calls,writes,printCalls,render:(next:Partial<typeof state>)=>{Object.assign(state,next);update()},release:()=>{state.holdMonth=false;releases.splice(0).forEach(fn=>fn())},navigate}})
+function App(){const[,tick]=useState(0);update=()=>tick(n=>n+1);return <ConfirmationDialogProvider><StaffViewStateProvider key={state.employee}><main className="normalized-staff-action-shell"><nav><button onClick={()=>navigate('/staff/operations')}>返回经营仪表盘</button><button onClick={()=>navigate('/staff/catalog')}>商品管理入口</button></nav><section className="staff-module-panel">{state.route.startsWith('/staff/operations')?<OperatingDashboardPanel api={api as never} auth={auth()} revision={state.revision} onNavigate={navigate} onLoginRequired={()=>{}}/>:state.route.startsWith('/staff/payments')?<CashierAfterSalesWorkbench key={state.route} api={api as never} auth={auth()} onNavigate={navigate} onLoginRequired={()=>{}} refreshToken={0}/>:<CatalogManagementPanel api={api as never} auth={auth()}/>}</section></main></StaffViewStateProvider></ConfirmationDialogProvider>}
+createRoot(document.getElementById('root')!).render(<App/> )

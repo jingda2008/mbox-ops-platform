@@ -1,3 +1,5 @@
+import { customerSupplyProjection, customerSupplyCopy } from './product-supply-presentation.js';
+import { publicMiniProgramImageUrl } from './media-asset-url.js';
 import { ActivityServiceError, ActivityServiceRepository, parseActivityCredential, activityCredential, assertActivityServiceAvailable } from './activity-service-repository.js';
 import { CustomerRepository } from './customer-repository.js';
 import { OrderRepository } from './order-repository.js';
@@ -35,19 +37,22 @@ export async function activityAddonProducts(tx: ScopedTransaction, customerId: s
         name: string;
         fulfillment_station: 'bar' | 'kitchen';
         sellable: boolean;
-    }>(`SELECT p.id,p.name,p.fulfillment_station,
+        supply_presentation: unknown;
+        image_url: string | null;
+    }>(`SELECT p.id,p.name,p.fulfillment_station,COALESCE(p.product_snapshot->>'imageUrl',p.product_snapshot->'source'->>'imageUrl') AS image_url,${customerSupplyProjection('p','$4')},
         mbox.product_purchase_deadline(p.tenant_id,p.store_id,p.id,$4::uuid) IS NOT NULL AS sellable
         FROM mbox.community_activities a JOIN mbox.products p ON p.tenant_id=a.tenant_id AND p.store_id=a.store_id AND p.id=ANY(a.addon_product_ids) WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.public_id=$3 AND a.status IN('published','full') AND clock_timestamp()<LEAST(COALESCE(a.addon_ends_at,a.ends_at),COALESCE(a.meal_service_ends_at,a.ends_at)) AND p.status='active' AND p.product_kind='single' AND p.fulfillment_station IN('bar','kitchen') AND mbox.product_visible_now(p.tenant_id,p.store_id,p.id,$4::uuid) ORDER BY p.name,p.id`, [tx.scope.tenantId, tx.scope.storeId, publicId, customerId])).rows;
     const result = [];
     for (const row of rows) {
+        const display = { imageUrl: publicMiniProgramImageUrl(row.image_url), supplyDescription: customerSupplyCopy(row.supply_presentation).description };
         if (!row.sellable) {
-            result.push({ id: row.id, name: row.name, station: row.fulfillment_station, sellable: false,
-                statusText: '当前未开售或已结束', priceAmountMinor: null, purchaseDeadline: null });
+            result.push({ ...display, id: row.id, name: row.name, station: row.fulfillment_station, sellable: false,
+                statusText: customerSupplyCopy(row.supply_presentation).unavailableText, priceAmountMinor: null, purchaseDeadline: null });
             continue;
         }
         try {
             const quote = await new OrderRepository(tx, customerId).quoteCurrent([{ productId: row.id, quantity: 1 }], 'guest_qr', true);
-            result.push({ id: row.id, name: row.name, station: row.fulfillment_station, sellable: true,
+            result.push({ ...display, id: row.id, name: row.name, station: row.fulfillment_station, sellable: true,
                 statusText: '', priceAmountMinor: quote.subtotalAmountMinor, purchaseDeadline: quote.purchaseDeadline });
         }
         catch (error) {

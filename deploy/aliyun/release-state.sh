@@ -89,12 +89,66 @@ release_state_transition_allowed() {
   esac
 }
 
+# Explicit application contracts, not every additive schema migration. 275
+# introduces independent activity purchases/production and removes the old
+# single-registration invariant. Older applications/workers are not eligible to
+# run after cutover has resumed writes. 96 is the original table contract.
+# 282 is additive: reports use the existing frozen daily_settlement print
+# snapshot and cost capture runs in DB triggers, so it adds no contract boundary.
+release_contract_boundary_between() {
+  local from_schema=$1 to_schema=$2 boundary result=0
+  [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
+  [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
+  for boundary in 96 275; do
+    if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
+      result=${boundary}
+    fi
+  done
+  printf '%s\n' "${result}"
+}
+
+# Defence in depth for an old/mislabelled deployment manifest that claims an
+# application-only rollback. No DB/table-emptiness heuristic can restore a lost
+# source contract. Keep old workers stopped even if no new task is pending now.
+release_assert_application_rollback_safe() {
+  local release_dir=$1 target_schema=$2 source_schema boundary writer evidence existing
+  shift 2
+  source_schema=$(jq -er '.migration.count' "${release_dir}/release-manifest.json") || return 2
+  boundary=$(release_contract_boundary_between "${target_schema}" "${source_schema}") || return 2
+  [ "${boundary}" != 0 ] || return 0
+  evidence=${release_dir}/application-contract-rollback-guard.json
+  jq -n --argjson sourceSchema "${source_schema}" --argjson targetSchema "${target_schema}" \
+    --argjson contractBoundary "${boundary}" \
+    '{status:"blocked",reason:"incompatible_application_contract",sourceSchema:$sourceSchema,targetSchema:$targetSchema,contractBoundary:$contractBoundary,action:"keep_previous_workers_stopped",writerDrainVerified:false}' > "${evidence}" || return 2
+  chmod 0600 "${evidence}"
+  for writer in "$@"; do
+    [ -n "${writer}" ] || continue
+    if docker inspect "${writer}" >/dev/null 2>&1; then
+      docker update --restart=no "${writer}" >/dev/null || return 2
+      docker stop -t 20 "${writer}" >/dev/null || return 2
+      test "$(docker inspect "${writer}" --format '{{.State.Running}}')" = false || return 2
+    else
+      # An unavailable daemon is not evidence that the writer is absent.
+      existing=$(docker ps -a --filter "name=^/${writer}$" --format '{{.Names}}') || return 2
+      test -z "${existing}" || return 2
+    fi
+  done
+  local temporary
+  temporary=$(mktemp "${release_dir}/.application-rollback-guard.XXXXXX") || return 2
+  jq --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '.writerDrainVerified=true | .checkedAt=$checkedAt' "${evidence}" > "${temporary}" || return 2
+  mv "${temporary}" "${evidence}"
+  echo "rollback refused: application contract ${boundary}; keep previous workers stopped and use a compatible forward release; evidence=${evidence}" >&2
+  return 2
+}
+
 # New print inheritance stores the cashier-payment cut-off separately. Before
 # starting pre-259 workers, drain every candidate writer, then inspect the live
 # scoped policy. Never convert route-specific copies into a guessed override.
 release_assert_print_rollback_safe() {
   local release_dir=$1 image_digest=$2 target_schema=$3
   shift 3
+  release_assert_application_rollback_safe "${release_dir}" "${target_schema}" "$@" || return 2
   [[ "${target_schema}" =~ ^[0-9]+$ ]] || return 2
   [ "${target_schema}" -lt 259 ] || return 0
   local source_schema writer evidence temporary

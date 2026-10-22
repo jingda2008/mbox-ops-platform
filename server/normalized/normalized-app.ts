@@ -1189,6 +1189,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         membershipRecovery,
         membershipTerms,
         ...(membershipEnrollment === undefined ? {} : { membershipEnrollment }),
+        resolveVerifiedWechatPrincipalHash: (request: FastifyRequest) => resolveVerifiedWechatPrincipalHash(request, scope),
         ...(recoveryPhoneAuthorization === undefined
           ? {}
           : { recoveryPhoneAuthorization }),
@@ -1370,6 +1371,28 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       const created = await customers.createAnonymous({ publicId: `wechat-${principalHash.slice(0, 40)}` })
       return (await customers.linkIdentity(created.customer.id, 'wechat', principalHash)).id
     })
+  }
+
+  /**
+   * 入会/认领时可选携带 x-mbox-wechat-identity（code2session 换来的 wechat session token）。
+   * 只认服务端可校验、未撤销、未过期且属于本店本 app 的 session；否则返回 null，绝不信任客户端自报 openid。
+   */
+  async function resolveVerifiedWechatPrincipalHash(
+    request: FastifyRequest,
+    currentScope: Readonly<StoreScope>,
+  ): Promise<string | null> {
+    if (wechatIdentity === null || options.config.wechatIdentity === null) return null
+    const header = request.headers['x-mbox-wechat-identity']
+    if (typeof header !== 'string') return null
+    const token = header.trim()
+    if (!/^[A-Za-z0-9_-]{32,256}$/.test(token)) return null
+    const tokenHash = createHash('sha256').update(token).digest('base64url')
+    const session = await wechatIdentity.findSession(tokenHash)
+    if (session === null || session.revokedAt !== null || session.expiresAt <= Date.now()) return null
+    const principal = session.principal
+    if (principal.tenantId !== currentScope.tenantId || principal.storeId !== currentScope.storeId
+      || principal.appId !== options.config.wechatIdentity.appId) return null
+    return createHash('sha256').update(`wechat:${principal.principalId}`).digest('hex')
   }
 
   async function authenticateReservationGuest(request: FastifyRequest) {

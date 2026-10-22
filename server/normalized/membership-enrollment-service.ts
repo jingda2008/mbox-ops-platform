@@ -42,6 +42,8 @@ export class MembershipEnrollmentService {
       phoneAuthorizationCode: string
       phoneAuthorizationProvider?: MiniProgramPhoneAuthorizationProvider
       idempotencyKey: string
+      /** 服务端已校验的微信身份 principal hash（来自 wechat session），绝不信任客户端自报。 */
+      wechatPrincipalHash?: string | null
     }>,
   ) {
     const memberNo = memberNumber(context.customerId)
@@ -135,6 +137,9 @@ export class MembershipEnrollmentService {
       }
       const enrolled = await experience.enrollMembership(enrollCustomerId)
       const assignedMemberNo = enrolled.membership!.memberNo
+      const wechatIdentityBinding = input.wechatPrincipalHash
+        ? await bindVerifiedWechatIdentityToMember(transaction, enrollCustomerId, input.wechatPrincipalHash)
+        : 'not_provided'
       if (enrolled.created) {
         await new MembershipTermsRepository(transaction).acceptCurrentEnrollment({
           customerId: enrollCustomerId,
@@ -152,6 +157,7 @@ export class MembershipEnrollmentService {
         memberNo: assignedMemberNo,
         created: enrolled.created,
         verifiedPhoneRecorded: true,
+        wechatIdentityBinding,
         ...(enrolled.created ? {
           termsVersion: input.termsVersion,
           acknowledgementSource: input.acknowledgementSource,
@@ -188,6 +194,49 @@ export class MembershipEnrollmentService {
       }
     })
   }
+}
+
+export type WechatIdentityBindingOutcome =
+  | 'not_provided'
+  | 'linked'
+  | 'already_linked'
+  | 'moved_from_guest'
+  | 'conflict_other_member'
+
+/**
+ * 认领/开通会员时，把本次会话里服务端已校验的微信身份绑定到会员顾客。
+ * - 未绑定：直接 link。
+ * - 已绑在该会员（含合并族）：幂等，不动。
+ * - 绑在另一个没有有效会员的访客顾客上：把这条身份移到会员顾客（访客无会员资产可丢）。
+ * - 绑在另一位有效会员上：不抢，记录 conflict，开通/认领本身照常成功。
+ */
+export async function bindVerifiedWechatIdentityToMember(
+  transaction: ScopedTransaction,
+  memberCustomerId: string,
+  wechatPrincipalHash: string,
+): Promise<WechatIdentityBindingOutcome> {
+  if (!/^[0-9a-f]{64}$/.test(wechatPrincipalHash)) throw new Error('invalid wechat principal hash')
+  const customers = new CustomerRepository(transaction)
+  const member = await customers.resolveCanonical(memberCustomerId)
+  const owner = await customers.findByIdentity('wechat', wechatPrincipalHash)
+  if (owner === null) {
+    await customers.linkIdentity(member.id, 'wechat', wechatPrincipalHash)
+    return 'linked'
+  }
+  if (owner.id === member.id) return 'already_linked'
+  const ownerMembership = await transaction.query(`
+    SELECT 1 FROM mbox.customer_memberships
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND customer_id = $3::uuid
+    LIMIT 1
+  `, [transaction.scope.tenantId, transaction.scope.storeId, owner.id])
+  if (ownerMembership.rows.length > 0) return 'conflict_other_member'
+  await transaction.query(`
+    UPDATE mbox.customer_identities
+    SET customer_id = $4::uuid
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      AND identity_kind = 'wechat' AND identity_hash = $3
+  `, [transaction.scope.tenantId, transaction.scope.storeId, wechatPrincipalHash, member.id])
+  return 'moved_from_guest'
 }
 
 function memberNumber(customerId: string): string {

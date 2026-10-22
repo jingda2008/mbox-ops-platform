@@ -702,9 +702,18 @@ Page({
   },
 
   async enableExpiryReminder() {
-    const option = this.data.expiryNotificationOption
+    let option = this.data.expiryNotificationOption
     if (!option || typeof wx.requestSubscribeMessage !== 'function') return
     try {
+      try {
+        const fresh = await getWechatNotificationAuthorizations()
+        const match = ((fresh && fresh.authorizations) || []).find((item) => (
+          item.notificationType === 'loyalty_points_expiring'
+          && Number(item.usesRemaining || 0) <= 0
+          && item.platformResult !== 'ban'
+        ))
+        if (match) option = match
+      } catch (_freshError) {}
       const options = mergeWechatNotificationPromptOptions(
         [Object.assign({}, option, { apiKind: 'loyalty' })],
         this.data.wechatMemberCardPresentationOptions,
@@ -1014,7 +1023,22 @@ Page({
   },
   async openCoupons() {
     if (!this.requireMembership('coupons')) return
-    await requestWechatSubscription(this.data.wechatSubscriptionPresentationOptions || [])
+    let options = this.data.wechatSubscriptionPresentationOptions || []
+    try {
+      const prompt = await getWechatNotificationPrompt('coupon_open')
+      options = extractPromptPresentation(prompt) || options
+      this.setData({
+        wechatSubscriptionPresentationOptions: options,
+        wechatNotificationPromptOptions: mergeWechatNotificationPromptOptions(
+          prompt && prompt.authorizations,
+          this.data.wechatMemberCardPresentationOptions,
+        ),
+      })
+      rememberPresentationOptions('coupon_open', options)
+    } catch (_error) {
+      // Fall back to the options already loaded with the profile page.
+    }
+    await requestWechatSubscription(options)
     wx.navigateTo({ url: '/pages/profile-coupons/index' })
   },
   openNotificationSettings() {

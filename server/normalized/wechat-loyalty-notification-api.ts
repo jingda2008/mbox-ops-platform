@@ -84,6 +84,11 @@ export const wechatLoyaltyNotificationApiPlugin: FastifyPluginAsync<WechatLoyalt
             objectType: 'wechat_notification_authorization',
             objectId: recorded.id,
             businessDate: context.businessDate,
+            afterData: {
+              notificationType: recorded.notificationType,
+              decision: recorded.decision ?? null,
+              authorizationVersion: recorded.authorizationVersion,
+            },
             metadata: {
               notificationType: recorded.notificationType,
               purpose: recorded.purpose,

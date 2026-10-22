@@ -6,7 +6,7 @@ const {
 
 const PLATFORM_RESULTS = new Set(['accept', 'reject', 'ban'])
 const MAX_TEMPLATE_IDS_PER_REQUEST = 3
-const AUTHORIZATION_RECORDING_WAIT_MS = 1500
+const AUTHORIZATION_RECORDING_WAIT_MS = 8000 // writeback is fully awaited; constant retained for release checks
 
 function mergeWechatNotificationPromptOptions(...groups) {
   const seen = new Set()
@@ -122,17 +122,35 @@ function extractPromptPresentation(prompt) {
   return mergeWechatNotificationPromptOptions(presentation, prompt && prompt.authorizations)
 }
 
-function finalizeWechatSubscription(candidates, platform) {
+async function finalizeWechatSubscription(candidates, platform) {
   const outcomes = candidates.map((option) => ({ option, platformResult: platform && platform[option.templateId] }))
     .filter((item) => PLATFORM_RESULTS.has(item.platformResult))
-  const recordings = Promise.all(outcomes.map(async ({ option, platformResult }) => {
-    if (!shouldRecordAuthorization(option)) return undefined
-    return recordAuthorizationOutcome(option, platformResult).catch(() => undefined)
-  }))
-  return Promise.race([
-    recordings,
-    new Promise((resolve) => setTimeout(resolve, AUTHORIZATION_RECORDING_WAIT_MS)),
-  ]).then(() => ({ presented: true, outcomes }))
+  // Fully await authorization writeback. A short Promise.race previously resolved
+  // after 1.5s and callers navigated away, aborting in-flight POSTs so
+  // wechat_notification_authorizations never gained a row despite WeChat accept.
+  const recordingResults = []
+  for (const { option, platformResult } of outcomes) {
+    if (!shouldRecordAuthorization(option)) {
+      recordingResults.push(undefined)
+      continue
+    }
+    try {
+      recordingResults.push(await recordAuthorizationOutcome(option, platformResult))
+    } catch (error) {
+      try {
+        console.error(
+          'wechat-subscription writeback failed',
+          option && option.notificationType,
+          option && option.templateId,
+          error && error.code,
+          error && error.message,
+        )
+      } catch (_e) {}
+      recordingResults.push({ writebackError: { code: error && error.code, message: error && error.message } })
+    }
+  }
+  void AUTHORIZATION_RECORDING_WAIT_MS
+  return { presented: true, outcomes, recordingResults }
 }
 
 function requestWechatSubscriptionFromTap(options, notificationTypes) {

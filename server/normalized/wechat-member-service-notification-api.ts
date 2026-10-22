@@ -52,6 +52,7 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
         return {result,auditEvents:[{
           actor:{type:'guest',ref:context.actorRef},action:'customer.wechat-member-service-notification-authorization.recorded',
           objectType:'wechat_member_service_notification_authorization',objectId:authorization.id,businessDate:context.businessDate,
+          afterData:{notificationType:authorization.notificationType,decision:authorization.decision??null,authorizationVersion:authorization.authorizationVersion},
           metadata:{notificationType:authorization.notificationType,purpose:authorization.purpose,
             authorizationContext:authorization.authorizationContext,policyVersion:authorization.policyVersion,decision:authorization.decision},
         }],outboxMessages:[]}

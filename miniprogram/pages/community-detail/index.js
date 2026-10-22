@@ -438,8 +438,19 @@ Page({
     const source = options && options.source === 'share' ? 'share' : ''
     this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false })
   },
-  onUnload() { if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer) },
-  onShow() { enablePublicShareMenu(); this.load() },
+  onHide() { this.pageVisible = false; this.invalidateReads() },
+  onUnload() { this.pageVisible = false; this.invalidateReads() },
+  invalidateReads() {
+    this.pageGeneration = (this.pageGeneration || 0) + 1
+    this.readGeneration = (this.readGeneration || 0) + 1
+    this.presentationGeneration = (this.presentationGeneration || 0) + 1
+    if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer)
+    this._presentationOptions = []
+    // An already-issued payment must retain its registration for reconciliation.
+    // New reads and pre-submit continuations are invalidated independently.
+    if (!this.data.busy) this.setData({ membership: null, registration: null, loyaltyBenefits: [], membershipInviteBusy: false })
+  },
+  onShow() { this.pageVisible = true; enablePublicShareMenu(); if (!this.data.busy) this.load() },
 
   activitySharePayload() {
     const activity = this.data.activity
@@ -472,17 +483,19 @@ Page({
   },
 
   async load() {
-    this.setData({ loading: true, error: '', success: '' })
+    const generation = this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ loading: true, error: '', success: '', membership: null, registration: null, loyaltyBenefits: [] })
     try {
       if (!this.data.id) {
         this.setData({ loading: false, activity: null, membershipInviteVisible: false, error: '活动入口无效，请返回活动列表重新选择' })
         return
       }
       if (this.data.shareSource === 'share' && !this.data.memberAccessRequested) {
-        await this.loadAnonymousSharePreview(false)
+        await this.loadAnonymousSharePreview(false, generation)
         return
       }
       const bootstrap = await getMiniBootstrap()
+      if (generation !== this.readGeneration) return
       const membership = bootstrap.membership || null
       const membershipTerms = bootstrap.membershipTerms || null
       this.setData({ membership, membershipTerms })
@@ -492,12 +505,12 @@ Page({
           return
         }
         if (this.data.shareSource === 'share') {
-          await this.loadAnonymousSharePreview(Boolean(membershipTerms))
+          await this.loadAnonymousSharePreview(Boolean(membershipTerms), generation)
           if (!membershipTerms) this.setData({ error: '当前会员协议暂时无法读取，请稍后再试。' })
           return
         }
         // Verify the public activity exists before asking the guest to join.
-        await this.loadAnonymousSharePreview(true)
+        await this.loadAnonymousSharePreview(true, generation)
         return
       }
       const [raw, activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
@@ -507,6 +520,7 @@ Page({
         getWechatNotificationPrompt('coupon_open').catch(() => ({ authorizations: [] })),
         this.preloadWechatSubscriptionPresentationOptions(),
       ])
+      if (generation !== this.readGeneration) return
       const notificationPrompt = {
         authorizations: mergeWechatNotificationPromptOptions(
           activityPrompt.authorizations,
@@ -526,9 +540,11 @@ Page({
       } catch (_error) {
         loyaltyBenefits = []
       }
+      if (generation !== this.readGeneration) return
       let registrations = []
       let registrationReadError = ''
       try { registrations = await getActivityRegistrations() } catch (error) { registrationReadError = customerErrorMessage(error, '报名记录暂时无法读取') }
+      if (generation !== this.readGeneration) return
       const local = storageObject(LOCAL_REGISTRATIONS_KEY)
       const authoritative = (registrations || []).find((item) => item.activityPublicId === raw.publicId)
       let registrationRaw = authoritative || local[raw.publicId] || null
@@ -541,6 +557,7 @@ Page({
           })
         } catch (error) { paymentReadError = customerErrorMessage(error, '付款状态暂时无法读取') }
       }
+      if (generation !== this.readGeneration) return
       const pendingAttempt = storageObject(REGISTRATION_ATTEMPTS_KEY)[raw.publicId]
       const sameCancelledRegistration = authoritative && authoritative.status === 'cancelled' && (
         typeof pendingAttempt === 'string'
@@ -560,6 +577,7 @@ Page({
       })
       rememberPresentationOptions('activity_registration', notificationPrompt.presentation || [])
     } catch (error) {
+      if (generation !== this.readGeneration) return
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
         this.setData({
           loading: false,
@@ -579,8 +597,9 @@ Page({
     }
   },
 
-  async loadAnonymousSharePreview(showMembershipInvite) {
+  async loadAnonymousSharePreview(showMembershipInvite, generation = this.readGeneration) {
     const raw = await getActivityPreview(this.data.id)
+    if (generation !== this.readGeneration) return
     if (!raw) throw new Error('活动已结束、暂停或当前不可分享')
     const activity = viewActivity(raw)
     this.setData({
@@ -641,9 +660,11 @@ Page({
       wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
+    const generation = this.pageGeneration || 0
     this.setData({ membershipInviteBusy: true, error: '' })
     try {
       const result = await enrollMembership(terms.version, 'mini_community', authorization.code)
+      if (generation !== (this.pageGeneration || 0)) return
       if (!result.membership) throw new Error('会员状态暂时未刷新，请稍后重试')
       this.setData({
         membership: result.membership,
@@ -654,6 +675,7 @@ Page({
       wx.showToast({ title: '入会成功', icon: 'success' })
       await this.load()
     } catch (error) {
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({ membershipInviteBusy: false, error: customerErrorMessage(error, '入会暂时没有完成') })
       wx.showToast({ title: customerErrorMessage(error, '入会未完成'), icon: 'none' })
     }
@@ -728,6 +750,7 @@ Page({
   },
 
   async preloadWechatSubscriptionPresentationOptions() {
+    const generation = this.presentationGeneration = (this.presentationGeneration || 0) + 1
     try {
       const empty = { presentation: [], authorizations: [] }
       const [activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
@@ -735,6 +758,7 @@ Page({
         getWechatNotificationPrompt('member_card').catch(() => empty),
         getWechatNotificationPrompt('coupon_open').catch(() => empty),
       ])
+      if (generation !== this.presentationGeneration) return []
       const options = buildActivitySubscriptionPresentation(
         extractPromptPresentation(activityPrompt),
         extractPromptPresentation(memberPrompt),
@@ -750,12 +774,21 @@ Page({
   },
 
   async offerActivityRegistrationNotifications() {
+    const generation = this.pageGeneration || 0
     const options = this._presentationOptions || this.data.wechatSubscriptionPresentationOptions || []
     await requestWechatSubscription(options, ACTIVITY_REGISTRATION_SUBSCRIBE_TYPES)
-    this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
+    if (generation === (this.pageGeneration || 0)) this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
   },
 
   async register() {
+    if (this._registrationPending || this.data.busy) return
+    this._registrationPending = true
+    try { return await this.completeRegistration(this.pageGeneration || 0) }
+    finally { this._registrationPending = false }
+  },
+
+  async completeRegistration(generation) {
+    const current = () => generation === (this.pageGeneration || 0)
     const activity = this.data.activity
     if (!activity || this.data.busy) return
     if (!this.data.membership) {
@@ -781,7 +814,7 @@ Page({
     const previous = attempts[activity.publicId]
     if (typeof previous === 'string') {
       const recovered = await this.recoverRegistration(activity.publicId, null)
-      if (recovered) return
+      if (!current() || recovered) return
       this.clearRegistrationAttempt(activity.publicId)
       this.setData({ error: '上一次报名记录已失效，请重新填写手机号后报名。' })
       return
@@ -798,7 +831,7 @@ Page({
     }
     if (attempt && registrationAttemptExpired(attempt)) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
-      if (recovered) return
+      if (!current() || recovered) return
       this.clearRegistrationAttempt(activity.publicId)
       this.setData({ error: '上次未完成报名已超过 15 分钟，请重新填写手机号后报名。' })
       return
@@ -817,8 +850,9 @@ Page({
       // Keep the native subscription sheet in this direct customer tap.  Do
       // not wait for the confirmation dialog or a payment/network callback.
       await this.offerActivityRegistrationNotifications()
+      if (!current()) return
       const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；我们会避免重复报名。')
-      if (!confirmed) return
+      if (!confirmed || !current()) return
     } else {
       contact = registrationContact(this.data.contact)
       if (!contact) {
@@ -833,8 +867,9 @@ Page({
       // This precedes the payment-choice sheet so it remains a request from
       // the customer's original registration action, as required by WeChat.
       await this.offerActivityRegistrationNotifications()
+      if (!current()) return
       const payment = await this.choosePayment(pricing)
-      if (!payment) return
+      if (!payment || !current()) return
       const payload = {
         activityPackagePublicId: chosenPackage?.publicId || null,
         partySize: this.data.partySize,
@@ -874,14 +909,16 @@ Page({
       if (result.payment && !registrationRaw.amountDueMinor) registrationRaw.amountDueMinor = result.payment.amountMinor
       const registration = await this.readPaymentState(registrationRaw)
       this.rememberRegistration(registration, activity.publicId)
+      if (!current()) return
       this.setData({ registration })
       await this.refreshActivityAvailability()
+      if (!current()) return
       // A required online-payment choice is made before the registration is
       // created. Once the service returns its idempotent registration record,
       // immediately present the matching WeChat payment sheet instead of
       // making the customer tap a second “continue payment” button.
       shouldAutoStartPayment = Boolean(registration && registration.canStartPayment && payload.paymentChoice !== 'none')
-      if (shouldAutoStartPayment) {
+      if (current() && shouldAutoStartPayment) {
         this.setData({ success: '名额已暂留，正在打开微信支付。' })
       } else {
         const success = result.status === 'waitlisted'
@@ -893,8 +930,9 @@ Page({
         await this.showRegistrationOutcome(registration)
       }
     } catch (error) {
+      if (!current()) return
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
-      if (recovered) return
+      if (!current() || recovered) return
       if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
         // Paid-activity identity is checked before any registration, capacity,
         // inventory, or payment write. Do not leave a misleading retry record.
@@ -913,8 +951,11 @@ Page({
       }
       // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
       this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后再试；我们会避免重复报名。` })
-    } finally { this.setData({ busy: false }) }
-    if (shouldAutoStartPayment) await this.startPayment()
+    } finally {
+      this.setData({ busy: false })
+      if (!current() && this.pageVisible) this.load()
+    }
+    if (current() && shouldAutoStartPayment) await this.startPayment()
   },
 
   async choosePayment(item) {
@@ -946,6 +987,7 @@ Page({
 
   showRegistrationOutcome(registration) {
     if (!registration) return Promise.resolve()
+    const generation = this.pageGeneration || 0
     const status = registration.status
     const content = status === 'confirmed'
       ? '报名成功，名额已为您确认。活动详情与签到安排可在“我的活动”中查看。'
@@ -961,7 +1003,7 @@ Page({
       confirmText: '我的活动',
       cancelText: '留在本页',
       success: (result) => {
-        if (result.confirm) wx.switchTab({ url: '/pages/profile/index' })
+        if (result.confirm && generation === (this.pageGeneration || 0)) wx.switchTab({ url: '/pages/profile/index' })
         resolve()
       },
       fail: () => resolve(),
@@ -980,15 +1022,17 @@ Page({
   },
 
   async refreshActivityAvailability() {
+    const generation = this.pageGeneration || 0
     try {
       const raw = await getActivity(this.data.id)
-      if (raw) this.setData({ activity: viewActivity(raw) })
+      if (raw && generation === (this.pageGeneration || 0)) this.setData({ activity: viewActivity(raw) })
     } catch (_error) {
       // 报名状态已由报名接口确认；名额显示会在下次进入页面时再以服务端数据刷新。
     }
   },
 
   async recoverRegistration(activityPublicId, attempt) {
+    const generation = this.pageGeneration || 0
     try {
       const registrations = await getActivityRegistrations()
       const found = (registrations || []).find((item) => item.activityPublicId === activityPublicId)
@@ -997,9 +1041,10 @@ Page({
       const registration = await this.readPaymentState(found)
       this.clearRegistrationAttempt(activityPublicId)
       this.rememberRegistration(registration, activityPublicId)
+      if (generation !== (this.pageGeneration || 0)) return true
       this.setData({ registration, success: '已找回刚才的报名记录，没有重复提交。', error: '' })
       await this.refreshActivityAvailability()
-      await this.showRegistrationOutcome(registration)
+      if (generation === (this.pageGeneration || 0)) await this.showRegistrationOutcome(registration)
       return true
     } catch (_error) { return false }
   },

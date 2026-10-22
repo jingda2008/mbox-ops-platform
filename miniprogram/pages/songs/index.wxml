@@ -10,13 +10,13 @@
     <view wx:if="{{schedules.length}}" class="panel song-form">
       <label class="field">
         <text class="field__label">希望哪一场安排</text>
-        <picker mode="selector" range="{{schedules}}" range-key="performerStageName" value="{{scheduleIndex}}" bindchange="onScheduleChange">
+        <picker disabled="{{submitting}}" mode="selector" range="{{schedules}}" range-key="performerStageName" value="{{scheduleIndex}}" bindchange="onScheduleChange">
           <view class="picker-field"><view><text>{{schedules[scheduleIndex].performerStageName}}</text><text>{{schedules[scheduleIndex].statusText}} · {{schedules[scheduleIndex].timeText}}</text></view><text>选择</text></view>
         </picker>
       </label>
-      <label class="field"><text class="field__label">想听的歌</text><input class="field__input" maxlength="200" value="{{songTitle}}" placeholder="输入歌曲名称" bindinput="onSongInput" /></label>
-      <label class="field"><text class="field__label">祝福语或说明（选填）</text><textarea class="field__textarea song-note" auto-height maxlength="300" value="{{note}}" placeholder="例如生日祝福、纪念日；不要填写敏感隐私" bindinput="onNoteInput" /></label>
-      <label class="extension-row"><switch checked="{{requestExtension}}" bindchange="onExtensionChange" color="#9a7130" /><view><text>场次时间不足时，允许工作人员沟通延长方案</text><text>只表达意愿，不代表加时或收费已经确认</text></view></label>
+      <label class="field"><text class="field__label">想听的歌</text><input disabled="{{submitting}}" class="field__input" maxlength="200" value="{{songTitle}}" placeholder="输入歌曲名称" bindinput="onSongInput" /></label>
+      <label class="field"><text class="field__label">祝福语或说明（选填）</text><textarea disabled="{{submitting}}" class="field__textarea song-note" auto-height maxlength="300" value="{{note}}" placeholder="例如生日祝福、纪念日；不要填写敏感隐私" bindinput="onNoteInput" /></label>
+      <label class="extension-row"><switch disabled="{{submitting}}" checked="{{requestExtension}}" bindchange="onExtensionChange" color="#9a7130" /><view><text>场次时间不足时，允许工作人员沟通延长方案</text><text>只表达意愿，不代表加时或收费已经确认</text></view></label>
       <button class="primary-button" disabled="{{submitting}}" bindtap="submitIntent">{{submitting ? '正在提交' : '提交点歌意向'}}</button>
     </view>
     <state-panel wx:else type="empty" title="当前没有可选演出场次" message="排班未发布或今晚演出已经结束" />

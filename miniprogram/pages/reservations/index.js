@@ -100,6 +100,20 @@ Page({
     this.setData({ isDevelopment: getRuntimeConfig().isDevelopment, minimumDate: shanghaiDate(0), reservationDate: shanghaiDate(1) })
   },
   onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/reservations/index') } enablePublicShareMenu(); this.loadData() },
+  onHide() { this.invalidateReservationReads() },
+  onUnload() { this.invalidateReservationReads() },
+  invalidateReservationReads() {
+    this.pageGeneration = (this.pageGeneration || 0) + 1
+    this._reservationSubmitPending = false
+    this._presentationOptions = []
+    this.loadGeneration = (this.loadGeneration || 0) + 1
+    this.availabilityGeneration = (this.availabilityGeneration || 0) + 1
+    this.performanceGeneration = (this.performanceGeneration || 0) + 1
+    this.presentationGeneration = (this.presentationGeneration || 0) + 1
+    this.setData({ reservations: [], performanceImpacts: [], pendingReservation: null, reservationRecoveryReady: false,
+      wechatSubscriptionPresentationOptions: [], availability: null, performances: [], loading: false, submitting: false, checking: false, loadingShows: false,
+      cancelBusyId: '', impactBusyId: '', notificationBusyId: '' })
+  },
 
   onShareAppMessage() {
     return publicSharePayload({
@@ -117,6 +131,7 @@ Page({
   onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
   async loadData() {
+    const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
     this.setData({ loading: true, error: '', reservationRecoveryReady: false, pendingReservation: null })
     try {
       const [reservationResult, impactResult, notificationResult, preloadResult, pendingResult] = await Promise.allSettled([
@@ -125,6 +140,7 @@ Page({
         this.preloadWechatSubscriptionPresentationOptions(),
         getPendingCustomerReservation(),
       ])
+      if (generation !== this.loadGeneration) return
       if (preloadResult.status === 'fulfilled' && preloadResult.value.length) {
         this.setData({ wechatSubscriptionPresentationOptions: preloadResult.value })
       }
@@ -179,7 +195,7 @@ Page({
         showForm: !pendingReservation && reservations.length === 0,
       })
       await Promise.all([this.checkAvailability(), this.loadPerformances()])
-    } catch (error) { this.setData({ loading: false, error: customerErrorMessage(error, '预约信息载入失败') }) }
+    } catch (error) { if (generation === this.loadGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '预约信息载入失败') }) }
   },
 
   retryImpacts() { this.loadData() },
@@ -192,6 +208,7 @@ Page({
     const decision = event.currentTarget.dataset.decision
     const selectedScheduleId = event.currentTarget.dataset.schedule || null
     if (!impactId || this.data.impactBusyId) return
+    const generation = this.pageGeneration || 0
     const signature = `${decision}:${selectedScheduleId || ''}`
     const previous = this.data.impactAttempts[impactId]
     const attempt = previous && previous.signature === signature
@@ -204,6 +221,7 @@ Page({
       await acknowledgeReservationPerformanceImpact(
         impactId, decision, selectedScheduleId, attempt.key,
       )
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({
         impactNotice: decision === 'reselect' ? '已更新演出偏好，预约仍然有效。' : '已确认演出调整，预约仍然有效。',
         expandedImpactId: '',
@@ -211,8 +229,9 @@ Page({
       })
       await this.loadData()
     } catch (error) {
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({ impactNotice: `${customerErrorMessage(error, '确认未完成')}；选择已保留，可直接重试。` })
-    } finally { this.setData({ impactBusyId: '' }) }
+    } finally { if (generation === (this.pageGeneration || 0)) this.setData({ impactBusyId: '' }) }
   },
 
   async enablePerformanceNotification(event) {
@@ -220,6 +239,7 @@ Page({
     const reservation = this.data.reservations.find((item) => item.publicId === reservationPublicId)
     const option = reservation && reservation.performanceNotificationOption
     if (!option || this.data.notificationBusyId || typeof wx.requestSubscribeMessage !== 'function') return
+    const generation = this.pageGeneration || 0
     this.setData({ notificationBusyId: reservationPublicId, notificationNotice: '' })
     try {
       const performanceOption = Object.assign({}, option, {
@@ -232,7 +252,14 @@ Page({
         this.data.wechatSubscriptionPresentationOptions,
       )
       const result = await requestWechatSubscriptionFromTap(options, RESERVATION_SUCCESS_SUBSCRIBE_TYPES)
-      const outcome = (result.outcomes || []).find((item) => item.option.templateId === option.templateId)
+      if (generation !== (this.pageGeneration || 0)) return
+      const outcomeIndex = (result.outcomes || []).findIndex((item) => item.option.templateId === option.templateId)
+      const outcome = (result.outcomes || [])[outcomeIndex]
+      const recording = (result.recordingResults || [])[outcomeIndex]
+      if (recording && recording.writebackError) {
+        this.setData({ notificationNotice: '提醒选择尚未保存确认，请刷新后重试；预约本身不受影响。' })
+        return
+      }
       const platformResult = outcome && outcome.platformResult
       if (!['accept', 'reject', 'ban'].includes(platformResult)) {
         this.setData({ notificationNotice: '未完成提醒选择，可稍后再试。' })
@@ -244,12 +271,13 @@ Page({
       })
       await this.loadData()
     } catch (error) {
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({
         notificationNotice: customerErrorCode(error) === 'NETWORK_ERROR'
           ? `${customerErrorMessage(error, '提醒授权未完成')}；授权结果已保留，可直接重试。`
           : `${customerErrorMessage(error, '提醒授权未完成')}；请刷新预约后重试。`,
       })
-    } finally { this.setData({ notificationBusyId: '' }) }
+    } finally { if (generation === (this.pageGeneration || 0)) this.setData({ notificationBusyId: '' }) }
   },
 
   arrivalAt() { return `${this.data.reservationDate}T${this.data.reservationTime}:00+08:00` },
@@ -314,6 +342,8 @@ Page({
     const publicId = event.currentTarget.dataset.id
     const reservation = this.data.reservations.find((item) => item.publicId === publicId)
     if (!publicId || !reservation || !reservation.canCancel || this.data.cancelBusyId) return
+    const generation = this.pageGeneration || 0
+    this.setData({ cancelBusyId: publicId })
     const confirmed = await new Promise((resolve) => {
       wx.showModal({
         title: '取消预约',
@@ -327,16 +357,18 @@ Page({
         },
       })
     })
-    if (!confirmed) return
+    if (generation !== (this.pageGeneration || 0)) return
+    if (!confirmed) { this.setData({ cancelBusyId: '' }); return }
     this.setData({ cancelBusyId: publicId, error: '', success: '' })
     try {
       await cancelCustomerReservation(publicId)
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({ success: '预约已取消。' })
       await this.loadData()
     } catch (error) {
-      this.setData({ error: customerErrorMessage(error, '取消预约失败，请稍后重试或联系门店') })
+      if (generation === (this.pageGeneration || 0)) this.setData({ error: customerErrorMessage(error, '取消预约失败，请稍后重试或联系门店') })
     } finally {
-      this.setData({ cancelBusyId: '' })
+      if (generation === (this.pageGeneration || 0)) this.setData({ cancelBusyId: '' })
     }
   },
 
@@ -379,6 +411,7 @@ Page({
   previousStep() { this.setData({ step: Math.max(1, this.data.step - 1), error: '' }) },
 
   async preloadWechatSubscriptionPresentationOptions() {
+    const generation = this.presentationGeneration = (this.presentationGeneration || 0) + 1
     try {
       const empty = { presentation: [], authorizations: [] }
       // reservation_submit presentationPolicy returns the published reservation
@@ -394,6 +427,7 @@ Page({
         getWechatNotificationPrompt('member_card').catch(() => empty),
         getWechatNotificationPrompt('coupon_open').catch(() => empty),
       ])
+      if (generation !== this.presentationGeneration) return []
       const performanceOptions = (performance.authorizations || []).map((item) => Object.assign({}, item, {
         apiKind: 'reservation_performance',
         notificationType: 'reservation_performance_revised',
@@ -420,6 +454,12 @@ Page({
     }
   },
 
+  reservationDraftSignature() {
+    const data = this.data
+    return JSON.stringify([data.customerName, data.contact, data.partySize, data.reservationDate, data.reservationTime,
+      data.seatOptions[data.seatIndex], data.occasionOptions[data.occasionIndex], data.occasionNote, data.selectedPerformanceId])
+  },
+
   submitReservation() {
     if (this.data.pendingReservation) return this.recoverReservation()
     if (!this.data.reservationRecoveryReady) return
@@ -439,9 +479,16 @@ Page({
       this._presentationOptions,
       this.data.wechatSubscriptionPresentationOptions,
     )
+    const generation = this.pageGeneration || 0
+    const draftSignature = this.reservationDraftSignature()
     this._reservationSubmitPending = true
     requestWechatSubscriptionFromTap(options, RESERVATION_SUCCESS_SUBSCRIBE_TYPES).finally(() => {
+      if (generation !== (this.pageGeneration || 0)) return
       this._reservationSubmitPending = false
+      if (draftSignature !== this.reservationDraftSignature()) {
+        this.setData({ error: '预约内容已变化，请核对后重新确认提交。' })
+        return
+      }
       this.completeReservationSubmit()
     })
   },
@@ -462,14 +509,16 @@ Page({
 
   async recoverReservation() {
     if (this.data.submitting || !this.data.reservationRecoveryReady) return
+    const generation = this.pageGeneration || 0
     this.setData({ submitting: true, error: '', success: '' })
     try {
       const original = await recoverCustomerReservation()
+      if (generation !== (this.pageGeneration || 0)) return
       this.setData({ pendingReservation: null, showForm: false,
         success: original ? '已找回原预约，请核对下方最新预约状态。' : '' })
       await this.loadData()
-    } catch (error) { this.reservationSubmissionFailed(error) }
-    finally { this.setData({ submitting: false }) }
+    } catch (error) { if (generation === (this.pageGeneration || 0)) this.reservationSubmissionFailed(error) }
+    finally { if (generation === (this.pageGeneration || 0)) this.setData({ submitting: false }) }
   },
 
   async completeReservationSubmit() {
@@ -482,9 +531,17 @@ Page({
       this.setData({ error: !customerName ? '请填写预约称呼' : '请填写可联系的手机号或微信', success: '' })
       return
     }
+    if (!this.data.seatOptions[this.data.seatIndex] || !this.data.occasionOptions[this.data.occasionIndex]) {
+      this.setData({ error: '请重新选择有效的位置和到店场景。' })
+      return
+    }
+    const draftSignature = this.reservationDraftSignature()
+    const generation = this.pageGeneration || 0
     this.setData({ submitting: true, error: '', success: '' })
     try {
       const availability = await getReservationAvailability(this.arrivalAt(), this.data.partySize)
+      if (generation !== (this.pageGeneration || 0)) return
+      if (draftSignature !== this.reservationDraftSignature()) throw new Error('预约内容已变化，请核对后重新确认提交。')
       if (!availability.acceptingReservations) throw new Error('当前时间容量已经变化，请重新选择')
       const occasion = this.data.occasionOptions[this.data.occasionIndex]
       const show = this.data.performances.find((item) => item.id === this.data.selectedPerformanceId)
@@ -498,10 +555,11 @@ Page({
         reservationPolicyVersion: Number((availability.depositRule || {}).policyVersion),
         preferredScheduleId: show ? show.id : null,
       })
+      if (generation !== (this.pageGeneration || 0)) return
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
       this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
-    } catch (error) { this.reservationSubmissionFailed(error) }
-    finally { this.setData({ submitting: false }) }
+    } catch (error) { if (generation === (this.pageGeneration || 0)) this.reservationSubmissionFailed(error) }
+    finally { if (generation === (this.pageGeneration || 0)) this.setData({ submitting: false }) }
   },
 })

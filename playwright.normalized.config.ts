@@ -11,8 +11,8 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 12_000 },
   reporter: process.env.CI
-    ? [['line'], ['html', { outputFolder: './artifacts/normalized-browser/report', open: 'never' }]]
-    : [['list'], ['html', { outputFolder: './artifacts/normalized-browser/report', open: 'never' }]],
+    ? [['json', { outputFile: './artifacts/normalized-browser/report.json' }], ['line'], ['html', { outputFolder: './artifacts/normalized-browser/report', open: 'never' }]]
+    : [['json', { outputFile: './artifacts/normalized-browser/report.json' }], ['list'], ['html', { outputFolder: './artifacts/normalized-browser/report', open: 'never' }]],
   use: {
     ...devices['iPhone 14 Pro Max'],
     browserName: 'chromium',

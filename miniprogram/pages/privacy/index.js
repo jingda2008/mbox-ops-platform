@@ -58,8 +58,14 @@ Page({
   },
 
   onShow() { this.loadPrivacyPolicy() },
-  onHide() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1 },
-  onUnload() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1 },
+  onHide() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1; this.invalidateContacts() },
+  onUnload() { this.policyReadGeneration = (this.policyReadGeneration || 0) + 1; this.invalidateContacts() },
+  invalidateContacts() {
+    this.contactScope = (this.contactScope || 0) + 1
+    this.contactReadGeneration = (this.contactReadGeneration || 0) + 1
+    this.setData({ contactToolsOpen: false, loadingContacts: false, contactBusy: '', contactMessage: '',
+      verifiedPhones: [], activityRegistrations: [], editingRegistrationPublicId: '', editingContactValue: '' })
+  },
 
   async loadPrivacyPolicy() {
     const generation = this.policyReadGeneration = (this.policyReadGeneration || 0) + 1
@@ -89,14 +95,17 @@ Page({
 
   toggleContactTools() {
     const open = !this.data.contactToolsOpen
+    if (!open) { this.invalidateContacts(); return }
     this.setData({ contactToolsOpen: open, contactMessage: '', editingRegistrationPublicId: '', editingContactValue: '' })
     if (open) this.loadContactTools()
   },
 
   async loadContactTools() {
+    const generation = this.contactReadGeneration = (this.contactReadGeneration || 0) + 1
     this.setData({ loadingContacts: true, contactMessage: '' })
     try {
       const results = await Promise.all([getVerifiedPhones(), getActivityRegistrations()])
+      if (generation !== this.contactReadGeneration) return
       this.setData({
         verifiedPhones: Array.isArray(results[0]) ? results[0] : [],
         activityRegistrations: (Array.isArray(results[1]) ? results[1] : []).map((item) => Object.assign({}, item, {
@@ -104,60 +113,76 @@ Page({
           statusText: REGISTRATION_STATUS_TEXT[item.status] || '状态待确认',
         })),
       })
+      return true
     } catch (error) {
+      if (generation !== this.contactReadGeneration) return
       this.setData({ contactMessage: customerErrorMessage(error, '联系方式暂时无法读取') })
-    } finally { this.setData({ loadingContacts: false }) }
+    } finally { if (generation === this.contactReadGeneration) this.setData({ loadingContacts: false }) }
   },
 
   onAgreePrivacyAuthorization() {},
 
   async replacePhone(event) {
+    if (this.data.contactBusy) return
     const authorization = readWechatPhoneAuthorization(event)
     if (!authorization.code) return this.setData({ contactMessage: authorization.message })
+    const scope = this.contactScope || 0
     this.setData({ contactBusy: 'phone-replace', contactMessage: '' })
     try {
       await replaceVerifiedPhone(authorization.code)
-      this.setData({ contactMessage: '手机号已更新，原手机号不会再用于联系。' })
-      await this.loadContactTools()
-    } catch (error) { this.setData({ contactMessage: customerErrorMessage(error, '手机号未能更换') }) }
-    finally { this.setData({ contactBusy: '' }) }
+      if (scope !== (this.contactScope || 0)) return
+      const refreshed = await this.loadContactTools()
+      if (refreshed && scope === (this.contactScope || 0)) this.setData({ contactMessage: '手机号已更新，原手机号不会再用于联系。' })
+    } catch (error) { if (scope === (this.contactScope || 0)) this.setData({ contactMessage: customerErrorMessage(error, '手机号未能更换') }) }
+    finally { if (scope === (this.contactScope || 0)) this.setData({ contactBusy: '' }) }
   },
 
   async revokePhone(event) {
+    if (this.data.contactBusy) return
     const publicId = event.currentTarget.dataset.publicId
     if (!publicId) return
+    const scope = this.contactScope || 0
+    this.setData({ contactBusy: publicId })
     const confirmed = await new Promise((resolve) => wx.showModal({
       title: '停用验证手机号', content: '停用后不能用它继续找回或合并会员；订单和必要审计记录不会被删除。',
       confirmText: '确认停用', success: (result) => resolve(result.confirm), fail: () => resolve(false),
     }))
-    if (!confirmed) return
+    if (scope !== (this.contactScope || 0)) return
+    if (!confirmed) { this.setData({ contactBusy: '' }); return }
     this.setData({ contactBusy: publicId, contactMessage: '' })
     try {
       await revokeVerifiedPhone(publicId)
-      this.setData({ contactMessage: '该手机号已停用。' })
-      await this.loadContactTools()
-    } catch (error) { this.setData({ contactMessage: customerErrorMessage(error, '手机号未能停用') }) }
-    finally { this.setData({ contactBusy: '' }) }
+      if (scope !== (this.contactScope || 0)) return
+      const refreshed = await this.loadContactTools()
+      if (refreshed && scope === (this.contactScope || 0)) this.setData({ contactMessage: '该手机号已停用。' })
+    } catch (error) { if (scope === (this.contactScope || 0)) this.setData({ contactMessage: customerErrorMessage(error, '手机号未能停用') }) }
+    finally { if (scope === (this.contactScope || 0)) this.setData({ contactBusy: '' }) }
   },
 
   startActivityContactEdit(event) {
+    if (this.data.contactBusy) return
     this.setData({
       editingRegistrationPublicId: event.currentTarget.dataset.publicId || '',
       editingContactValue: '', contactMessage: '',
     })
   },
-  cancelActivityContactEdit() { this.setData({ editingRegistrationPublicId: '', editingContactValue: '' }) },
-  onActivityContactInput(event) { this.setData({ editingContactValue: String(event.detail.value || '').trim() }) },
+  cancelActivityContactEdit() { if (!this.data.contactBusy) this.setData({ editingRegistrationPublicId: '', editingContactValue: '' }) },
+  onActivityContactInput(event) { if (!this.data.contactBusy) this.setData({ editingContactValue: String(event.detail.value || '').trim() }) },
   async saveActivityContact() {
+    if (this.data.contactBusy) return
     const registrationPublicId = this.data.editingRegistrationPublicId
+    if (!registrationPublicId) return
     const contactValue = this.data.editingContactValue
     if (!/^1\d{10}$/.test(contactValue)) return this.setData({ contactMessage: '请输入正确的11位手机号。' })
+    const scope = this.contactScope || 0
     this.setData({ contactBusy: registrationPublicId, contactMessage: '' })
     try {
       await updateActivityRegistrationContact(registrationPublicId, contactValue)
-      this.setData({ contactMessage: '本次报名手机号已更正，原手机号不再用于联系。', editingRegistrationPublicId: '', editingContactValue: '' })
-      await this.loadContactTools()
-    } catch (error) { this.setData({ contactMessage: customerErrorMessage(error, '报名联系方式未能更正') }) }
-    finally { this.setData({ contactBusy: '' }) }
+      if (scope !== (this.contactScope || 0)) return
+      this.setData({ editingRegistrationPublicId: '', editingContactValue: '' })
+      const refreshed = await this.loadContactTools()
+      if (refreshed && scope === (this.contactScope || 0)) this.setData({ contactMessage: '本次报名手机号已更正，原手机号不再用于联系。' })
+    } catch (error) { if (scope === (this.contactScope || 0)) this.setData({ contactMessage: customerErrorMessage(error, '报名联系方式未能更正') }) }
+    finally { if (scope === (this.contactScope || 0)) this.setData({ contactBusy: '' }) }
   },
 })

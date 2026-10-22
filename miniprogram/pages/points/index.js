@@ -57,11 +57,19 @@ Page({
   },
 
   onShow() { this.load() },
+  onHide() { this.clearMemberRead() },
+  onUnload() { this.clearMemberRead() },
+  clearMemberRead() {
+    this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ membership: null, points: [], growth: [], processing: [], loading: false, error: '' })
+  },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    const generation = this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ loading: true, error: '', membership: null, points: [], growth: [], processing: [] })
     try {
       const [bootstrap, ledger] = await Promise.all([getMiniBootstrap(), getMiniLoyaltyLedger()])
+      if (generation !== this.readGeneration) return
       const membership = bootstrap.membership || null
       this.setData({
         loading: false,
@@ -107,6 +115,7 @@ Page({
         })),
       })
     } catch (error) {
+      if (generation !== this.readGeneration) return
       this.setData({ loading: false, error: customerErrorMessage(error, '积分明细暂时无法读取') })
     }
   },

@@ -27,7 +27,7 @@ function fixture(platform, options = {}) {
     return { data: { data: {} } }
   }, options)
   function reservationPage() {
-    const p = h.page('reservations', ['completeReservationSubmit', 'recoverReservation', 'reservationSubmissionFailed', 'submitReservation', 'startNewReservation'])
+    const p = h.page('reservations', ['completeReservationSubmit', 'recoverReservation', 'reservationSubmissionFailed', 'submitReservation', 'startNewReservation', ...(platform === 'miniprogram' ? ['reservationDraftSignature'] : [])])
     p.data = { submitting: false, reservationRecoveryReady: true, pendingReservation: null, customerName: input.customerName, contact: input.contact,
       partySize: input.partySize, occasionOptions: [{ code: '', name: '普通到店' }], occasionIndex: 0, occasionNote: input.note,
       performances: [], seatOptions: [{ code: input.seatPreference }], seatIndex: 0 }

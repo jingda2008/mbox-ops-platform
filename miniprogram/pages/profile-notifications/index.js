@@ -22,7 +22,7 @@ Page({
 
   async load() {
     const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
-    this.setData({ loading: true, error: '', options: [] })
+    this.setData({ loading: true, saving: false, error: '', options: [], official: null })
     try {
       const errors = []
       const [loyalty, memberService, official] = await Promise.all([
@@ -62,7 +62,12 @@ Page({
     const generation = this.loadGeneration
     this.setData({ saving: true })
     try { await setOfficialPointsNotifications({ accountId: this.data.official.accountId, enabled }); if (generation === this.loadGeneration) await this.load() }
-    catch (error) { if (generation !== this.loadGeneration) return; await this.load(); this.setData({ error: customerErrorMessage(error, '保存未确认，请重新读取核对') }) }
-    finally { this.setData({ saving: false }) }
+    catch (error) {
+      if (generation !== this.loadGeneration) return
+      const reloading = this.loadGeneration + 1
+      await this.load()
+      if (this.loadGeneration === reloading) this.setData({ error: customerErrorMessage(error, '保存未确认，请重新读取核对') })
+    }
+    finally { if (generation === this.loadGeneration) this.setData({ saving: false }) }
   },
 })

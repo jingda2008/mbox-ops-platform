@@ -1017,9 +1017,9 @@ async function cancelActivityRegistration(registrationPublicId, reason, idempote
   })).data
 }
 async function submitSongRequest(input) {
-  return request('/api/guest/song-requests', {
-    method: 'POST', headers: { 'idempotency-key': randomId('song-submit') }, data: input,
-  })
+  return recoverableGuestCommand('song-submit', input, (idempotencyKey) => request('/api/guest/song-requests', {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input,
+  }))
 }
 async function getTodayPerformances() {
   return getReservationPerformances(shanghaiDate())

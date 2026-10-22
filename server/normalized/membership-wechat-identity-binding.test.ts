@@ -15,6 +15,7 @@ const id = Object.freeze({
   member: randomUUID(),
   guest: randomUUID(),
   otherMember: randomUUID(),
+  legacyMember: randomUUID(),
 })
 const principalHash = (label: string) => createHash('sha256').update(`wechat:${label}-${id.tenant}`).digest('hex')
 
@@ -37,11 +38,11 @@ integration('bind verified wechat identity on membership claim', () => {
       INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status)
       SELECT customer_id,$2,$3,'wxbind-'||substr(replace(customer_id::text,'-',''),1,16),'active'
       FROM unnest($1::uuid[]) AS customer_id
-    `, [[id.member, id.guest, id.otherMember], id.tenant, id.store])
+    `, [[id.member, id.guest, id.otherMember, id.legacyMember], id.tenant, id.store])
     await pool.query(`
       INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no)
-      VALUES($1,$2,$3,'100001'),($1,$2,$4,'100002')
-    `, [id.tenant, id.store, id.member, id.otherMember])
+      VALUES($1,$2,$3,'100001'),($1,$2,$4,'100002'),($1,$2,$5,'MBX-1BD110AAFD92')
+    `, [id.tenant, id.store, id.member, id.otherMember, id.legacyMember])
   })
 
   afterAll(async () => pool?.end())
@@ -53,14 +54,14 @@ integration('bind verified wechat identity on membership claim', () => {
 
   it('links an unbound verified wechat identity to the claimed member', async () => {
     const hash = principalHash('fresh')
-    expect(await bind(hash)).toBe('linked')
+    expect((await bind(hash)).outcome).toBe('linked')
     expect(await owner(hash)).toBe(id.member)
   })
 
   it('is idempotent when the identity is already bound to the same member', async () => {
     const hash = principalHash('fresh')
-    expect(await bind(hash)).toBe('already_linked')
-    expect(await bind(hash)).toBe('already_linked')
+    expect((await bind(hash)).outcome).toBe('already_linked')
+    expect((await bind(hash)).outcome).toBe('already_linked')
     expect(await owner(hash)).toBe(id.member)
   })
 
@@ -68,7 +69,7 @@ integration('bind verified wechat identity on membership claim', () => {
     const hash = principalHash('guest')
     await runner.run(scope, (transaction) =>
       new CustomerRepository(transaction).linkIdentity(id.guest, 'wechat', hash))
-    expect(await bind(hash)).toBe('moved_from_guest')
+    expect((await bind(hash)).outcome).toBe('moved_from_guest')
     expect(await owner(hash)).toBe(id.member)
   })
 
@@ -76,8 +77,16 @@ integration('bind verified wechat identity on membership claim', () => {
     const hash = principalHash('other-member')
     await runner.run(scope, (transaction) =>
       new CustomerRepository(transaction).linkIdentity(id.otherMember, 'wechat', hash))
-    expect(await bind(hash)).toBe('conflict_other_member')
+    expect((await bind(hash)).outcome).toBe('conflict_other_member')
     expect(await owner(hash)).toBe(id.otherMember)
+  })
+
+  it('moves the identity off a legacy MBX-only member onto the 6-digit member and reports the source', async () => {
+    const hash = principalHash('legacy')
+    await runner.run(scope, (transaction) =>
+      new CustomerRepository(transaction).linkIdentity(id.legacyMember, 'wechat', hash))
+    expect(await bind(hash)).toEqual({ outcome: 'moved_from_legacy_member', previousCustomerId: id.legacyMember })
+    expect(await owner(hash)).toBe(id.member)
   })
 
   it('rejects anything that is not a server-computed principal hash', async () => {

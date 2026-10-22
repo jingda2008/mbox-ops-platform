@@ -130,6 +130,22 @@ function ensureWechatIdentity(force) {
   return pending
 }
 
+// 入会/认领会员时取一枚服务端可校验的微信身份令牌，让服务端把本微信绑到会员上。
+// 登出后也会重新走 wx.login + 服务端 code2session（不碰 access_token 接口）；失败返回 null，不阻断入会。
+async function obtainWechatIdentityForMembership() {
+  const config = getRuntimeConfig()
+  if (!config.wechatIdentityEnabled) return null
+  try {
+    if (!isMembershipLoggedOut()) {
+      const token = await ensureWechatIdentity(false)
+      if (typeof token === 'string' && token.length >= 32) return token
+    }
+    return await authenticateWechat(config)
+  } catch (_error) {
+    return null
+  }
+}
+
 async function issueReservationSession(provider, providerAssertion) {
   const response = await request('/api/public/reservation/session', {
     method: 'POST',
@@ -203,6 +219,7 @@ function renewReservationSessionOnly() {
 module.exports = {
   ensureCustomerSession,
   ensureWechatIdentity,
+  obtainWechatIdentityForMembership,
   clearCustomerSession,
   restartAnonymousCustomerSession,
   renewReservationSessionOnly,

@@ -3,7 +3,7 @@ const { randomId } = require('./id')
 const { recoverableGuestCommand } = require('./recoverable-command')
 const { getTableSession, rememberTableConnection, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
-const { ensureCustomerSession, ensureWechatIdentity, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable, clearMembershipLoggedOut } = require('./auth')
+const { ensureCustomerSession, ensureWechatIdentity, renewReservationSessionOnly, isCustomerSessionInvalid, isWechatIdentityUnavailable, clearMembershipLoggedOut, obtainWechatIdentityForMembership } = require('./auth')
 const { checkoutRecommendationAttribution } = require('./recommendation-attribution')
 
 async function loadGuestSession() {
@@ -425,8 +425,11 @@ async function enrollMembership(termsVersion, acknowledgementSource, phoneAuthor
     ? stored : Object.assign({}, payload, { idempotencyKey: randomId('membership-enroll') })
   wx.setStorageSync(storageKey, attempt)
   try {
+    const wechatIdentityToken = await obtainWechatIdentityForMembership()
+    const headers = { 'idempotency-key': attempt.idempotencyKey }
+    if (wechatIdentityToken) headers['x-mbox-wechat-identity'] = wechatIdentityToken
     const result = (await publicRequest('/api/public/mini/membership/enroll-with-phone', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
+      method: 'POST', headers, data: payload,
     })).data
     wx.removeStorageSync(storageKey)
     // 入会已落在当前预约会话顾客上。只清登出态，不要强制切微信身份：

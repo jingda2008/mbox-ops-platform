@@ -42,6 +42,8 @@ export class MembershipEnrollmentService {
       phoneAuthorizationCode: string
       phoneAuthorizationProvider?: MiniProgramPhoneAuthorizationProvider
       idempotencyKey: string
+      /** 服务端已校验的微信身份 principal hash（来自 wechat session），绝不信任客户端自报。 */
+      wechatPrincipalHash?: string | null
     }>,
   ) {
     const memberNo = memberNumber(context.customerId)
@@ -135,6 +137,9 @@ export class MembershipEnrollmentService {
       }
       const enrolled = await experience.enrollMembership(enrollCustomerId)
       const assignedMemberNo = enrolled.membership!.memberNo
+      const wechatBinding: WechatIdentityBindingResult = input.wechatPrincipalHash
+        ? await bindVerifiedWechatIdentityToMember(transaction, enrollCustomerId, input.wechatPrincipalHash)
+        : { outcome: 'not_provided' }
       if (enrolled.created) {
         await new MembershipTermsRepository(transaction).acceptCurrentEnrollment({
           customerId: enrollCustomerId,
@@ -152,6 +157,10 @@ export class MembershipEnrollmentService {
         memberNo: assignedMemberNo,
         created: enrolled.created,
         verifiedPhoneRecorded: true,
+        wechatIdentityBinding: wechatBinding.outcome,
+        ...(wechatBinding.previousCustomerId
+          ? { wechatIdentityPreviousCustomerId: wechatBinding.previousCustomerId }
+          : {}),
         ...(enrolled.created ? {
           termsVersion: input.termsVersion,
           acknowledgementSource: input.acknowledgementSource,
@@ -187,6 +196,66 @@ export class MembershipEnrollmentService {
         outboxMessages,
       }
     })
+  }
+}
+
+export type WechatIdentityBindingOutcome =
+  | 'not_provided'
+  | 'linked'
+  | 'already_linked'
+  | 'moved_from_guest'
+  | 'moved_from_legacy_member'
+  | 'conflict_other_member'
+
+export interface WechatIdentityBindingResult {
+  outcome: WechatIdentityBindingOutcome
+  previousCustomerId?: string
+}
+
+/**
+ * 认领/开通会员时，把本次会话里服务端已校验的微信身份绑定到会员顾客。
+ * - 未绑定：直接 link。
+ * - 已绑在该会员（含合并族）：幂等，不动。
+ * - 绑在没有任何会员的访客顾客上：把这条身份移到会员顾客（访客无会员资产可丢）。
+ * - 绑在只有 MBX- 历史脏号的顾客上，且目标是 6 位新会员：与手机号认领同一政策
+ *   （MBX- 不再作为原会员），移到当前会员，afterData 记录原顾客。
+ * - 绑在另一位 6 位会员上：不抢，记录 conflict，开通/认领本身照常成功。
+ */
+export async function bindVerifiedWechatIdentityToMember(
+  transaction: ScopedTransaction,
+  memberCustomerId: string,
+  wechatPrincipalHash: string,
+): Promise<WechatIdentityBindingResult> {
+  if (!/^[0-9a-f]{64}$/.test(wechatPrincipalHash)) throw new Error('invalid wechat principal hash')
+  const customers = new CustomerRepository(transaction)
+  const member = await customers.resolveCanonical(memberCustomerId)
+  const owner = await customers.findByIdentity('wechat', wechatPrincipalHash)
+  if (owner === null) {
+    await customers.linkIdentity(member.id, 'wechat', wechatPrincipalHash)
+    return { outcome: 'linked' }
+  }
+  if (owner.id === member.id) return { outcome: 'already_linked' }
+  const memberNumbers = async (customerId: string) => (await transaction.query<{ member_no: string }>(`
+    SELECT member_no FROM mbox.customer_memberships
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND customer_id = $3::uuid
+  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId])).rows.map((row) => row.member_no)
+  const ownerNumbers = await memberNumbers(owner.id)
+  const ownerIsLegacyOnly = ownerNumbers.length > 0 && ownerNumbers.every((no) => no.startsWith('MBX-'))
+  if (ownerNumbers.length > 0) {
+    const memberIsModern = (await memberNumbers(member.id)).some((no) => /^[0-9]{6}$/.test(no))
+    if (!ownerIsLegacyOnly || !memberIsModern) {
+      return { outcome: 'conflict_other_member', previousCustomerId: owner.id }
+    }
+  }
+  await transaction.query(`
+    UPDATE mbox.customer_identities
+    SET customer_id = $4::uuid
+    WHERE tenant_id = $1::uuid AND store_id = $2::uuid
+      AND identity_kind = 'wechat' AND identity_hash = $3
+  `, [transaction.scope.tenantId, transaction.scope.storeId, wechatPrincipalHash, member.id])
+  return {
+    outcome: ownerIsLegacyOnly ? 'moved_from_legacy_member' : 'moved_from_guest',
+    previousCustomerId: owner.id,
   }
 }
 

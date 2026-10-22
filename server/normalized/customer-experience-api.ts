@@ -92,6 +92,8 @@ interface CustomerExperienceApiOptions {
   recoveryPhoneAuthorization?: MembershipRecoveryPhoneAuthorizationPort
   membershipTerms?: MembershipTermsService
   membershipEnrollment?: MembershipEnrollmentService
+  /** 校验请求里的微信身份令牌（x-mbox-wechat-identity），返回服务端确认的 principal hash；无效返回 null。 */
+  resolveVerifiedWechatPrincipalHash?: (request: FastifyRequest) => Promise<string | null>
 }
 
 const OCCASIONS = ['business', 'friends', 'date', 'birthday', 'music', 'relax', 'other'] as const
@@ -610,6 +612,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     )
     const body = objectBody(request.body)
     const phoneAuthorization = readPhoneAuthorization(body)
+    const wechatPrincipalHash = options.resolveVerifiedWechatPrincipalHash
+      ? await options.resolveVerifiedWechatPrincipalHash(request)
+      : null
     const result = await options.membershipEnrollment.enroll(context, {
       termsVersion: integer(body.termsVersion, '入会条款版本', 1, 2_000_000_000),
       acknowledgementSource: enumValue(
@@ -618,6 +623,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       phoneAuthorizationCode: phoneAuthorization.authorizationCode,
       ...(phoneAuthorization.provider ? { phoneAuthorizationProvider: phoneAuthorization.provider } : {}),
       idempotencyKey: idempotencyKey(request),
+      ...(wechatPrincipalHash ? { wechatPrincipalHash } : {}),
     })
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
   }))

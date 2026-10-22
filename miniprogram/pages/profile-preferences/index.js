@@ -54,11 +54,23 @@ Page({
   },
 
   onLoad() { this.load() },
+  onShow() { if (this.wasHidden) { this.wasHidden = false; if (!this.data.profile) this.load() } },
+  onHide() { this.invalidateProfile() },
+  onUnload() { this.invalidateProfile() },
+  invalidateProfile() {
+    this.wasHidden = true
+    this.readGeneration = (this.readGeneration || 0) + 1
+    if (this.savedNavigationTimer) clearTimeout(this.savedNavigationTimer)
+    // Native avatar selection can hide the page; keep an already loaded draft.
+    if (this.data.loading || this.data.saving) this.setData({ profile: null, saving: false })
+  },
 
   async load() {
-    this.setData({ loading: true, error: '', dietaryConsent: false })
+    const generation = this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ loading: true, profile: null, error: '', dietaryConsent: false })
     try {
       const profile = await getCustomerProfile()
+      if (generation !== this.readGeneration) return
       const preferences = profile.preferences || {}
       const preferred = preferences.preferredAlcohol || 'mixed'
       const selectedAlcohol = Array.isArray(preferences.preferredAlcoholChoices)
@@ -76,6 +88,7 @@ Page({
         dietaryNotes: preferences.dietaryNotes || '',
       })
     } catch (error) {
+      if (generation !== this.readGeneration) return
       this.setData({ loading: false, error: customerErrorMessage(error, '暂时无法读取偏好设置') })
     }
   },
@@ -120,6 +133,9 @@ Page({
     if (displayName.length > 80) return this.setData({ error: '昵称请控制在80个字以内' })
     const selectedAlcohol = this.data.alcohol.filter((item) => item.selected).map((item) => item.value)
     const preferredAlcohol = selectedAlcohol.length === 1 ? selectedAlcohol[0] : 'mixed'
+    if (!Number.isInteger(this.data.birthdayIndex) || !this.data.birthdays[this.data.birthdayIndex]) {
+      return this.setData({ error: '请重新选择有效的生日月日' })
+    }
     const birthdayMonthDay = this.data.birthdays[this.data.birthdayIndex].value
     const preferences = {
       seatPreference: this.data.seatValue,
@@ -130,11 +146,13 @@ Page({
       musicStyles: String(this.data.musicStyles || '').trim(),
       dietaryNotes,
     }
+    const generation = this.readGeneration
     this.setData({ saving: true, error: '' })
     try {
       await updatePreferences(preferences, displayName || null, {
         version: 'wechat-dietary-v1', granted: Boolean(dietaryNotes && this.data.dietaryConsent),
       })
+      if (generation !== this.readGeneration) return
       const priorBirthday = this.data.profile && this.data.profile.preferences
         ? this.data.profile.preferences.birthdayMonthDay : ''
       if (birthdayMonthDay) {
@@ -143,11 +161,13 @@ Page({
         try { await withdrawBirthdayBenefitConsent('顾客本人移除生日月日并撤回生日礼遇授权') }
         catch (error) { if (!error || error.code !== 'BIRTHDAY_CONSENT_NOT_GRANTED') throw error }
       }
+      if (generation !== this.readGeneration) return
       wx.setStorageSync('mbox.member.displayName', displayName || '')
       wx.showToast({ title: '已保存', icon: 'success' })
-      setTimeout(() => wx.navigateBack(), 550)
+      this.savedNavigationTimer = setTimeout(() => { if (generation === this.readGeneration) wx.navigateBack() }, 550)
     } catch (error) {
+      if (generation !== this.readGeneration) return
       this.setData({ error: customerErrorMessage(error, '暂时没有保存成功') })
-    } finally { this.setData({ saving: false }) }
+    } finally { if (generation === this.readGeneration) this.setData({ saving: false }) }
   },
 })

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
+import { createRequire } from 'node:module'
+const { fixture } = createRequire(import.meta.url)('./miniprogram-state-fixture.cjs')
 for (const platform of ['miniprogram','alipay-miniprogram']) {
 const read = path => readFile(new URL('../' + path.replace(/^miniprogram\//,platform+'/').replace(/\.wxml$/,platform==='miniprogram'?'.wxml':'.axml'), import.meta.url), 'utf8')
 
@@ -36,10 +38,19 @@ test('portion notes survive polling, follow stable portions, and reset with the 
 })
 
 test('retry uses saved note snapshot and template has per-portion fields plus compact overall note', async () => {
-  const source = await read('miniprogram/pages/order/index.js')
   const view = await read('miniprogram/pages/order/index.wxml')
-  assert.match(source, /const attempt = previousAttempt \|\| \{\s*note: this.data.checkoutNote/)
-  assert.match(source, /checkoutSharedCart\(\{\s*note: attempt.note \|\| '',\s*lineNotes: attempt.lineNotes \|\| \[\]/)
+  const { page, state } = fixture('order', {}, platform)
+  page.data.checkoutNote = '原订单备注'
+  page.checkoutLineNotes = { 'portion-1': '少冰' }
+  const original = { ...page.checkoutDraft(null), idempotencyKey: 'original-note-attempt' }
+  state.storage.set('mbox.pending.guest.checkout.v1', original)
+  page.data.checkoutNote = '后来改写的备注'
+  page.checkoutLineNotes = { 'portion-1': '多冰' }
+  await page.retryCheckout()
+  assert.equal(state.calls.length, 1)
+  assert.equal(state.calls[0].key, original.idempotencyKey)
+  assert.equal(state.calls[0].input.note, '原订单备注')
+  assert.equal(state.calls[0].input.lineNotes[0].note, '少冰')
   assert.match(view, /(?:wx|a):key="portionId"/)
   assert.match(view, /(?:bindinput|onInput)="onLineNoteInput" maxlength="300"/)
   assert.match(view, /class="checkout-note"/)

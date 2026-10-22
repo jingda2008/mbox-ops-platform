@@ -29,6 +29,13 @@ Page({
   },
   onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/community/index') } enablePublicShareMenu(); this.load() },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
+  onHide() { this.clearMemberRead() },
+  onUnload() { this.clearMemberRead() },
+  clearMemberRead() {
+    this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ activities: [], membership: null, membershipTerms: null, membershipInviteVisible: false,
+      membershipInviteBusy: false, membershipInviteAgreed: false, pendingActivityId: '', loading: false })
+  },
 
   onShareAppMessage() {
     return publicSharePayload({
@@ -45,13 +52,15 @@ Page({
   },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    const generation = this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ loading: true, error: '', activities: [], membership: null, membershipTerms: null })
     try {
       const [rawActivities, rawRegistrations, bootstrap] = await Promise.all([
         getActivities(),
         getActivityRegistrations().catch(() => []),
         getMiniBootstrap(),
       ])
+      if (generation !== this.readGeneration) return
       const registrations = new Map((rawRegistrations || []).map((item) => [item.activityPublicId, item]))
       const activities = currentActivities(rawActivities).map((item) => {
         const registration = registrations.get(item.publicId)
@@ -80,7 +89,7 @@ Page({
         membershipInviteVisible: false,
         membershipInviteAgreed: false,
       })
-    } catch (error) { this.setData({ loading: false, error: customerErrorMessage(error, '活动或会员服务暂时没有接上') }) }
+    } catch (error) { if (generation === this.readGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '活动或会员服务暂时没有接上') }) }
   },
 
   openDetail(event) {
@@ -133,9 +142,11 @@ Page({
       wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
+    const generation = this.readGeneration
     this.setData({ membershipInviteBusy: true, error: '' })
     try {
       const result = await enrollMembership(terms.version, 'mini_community', authorization.code)
+      if (generation !== this.readGeneration) return
       const membership = result.membership || null
       this.setData({
         membership,
@@ -149,6 +160,7 @@ Page({
       wx.showToast({ title: '入会成功', icon: 'success' })
       if (activityId) this.navigateToActivity(activityId)
     } catch (error) {
+      if (generation !== this.readGeneration) return
       this.setData({ membershipInviteBusy: false, error: customerErrorMessage(error, '入会暂时没有完成') })
       wx.showToast({ title: customerErrorMessage(error, '入会未完成'), icon: 'none' })
     }

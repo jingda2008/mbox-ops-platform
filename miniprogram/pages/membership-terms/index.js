@@ -21,8 +21,14 @@ Page({
 
   onShow() { this.load() },
 
-  onHide() { this.termsReadGeneration = (this.termsReadGeneration || 0) + 1 },
-  onUnload() { this.termsReadGeneration = (this.termsReadGeneration || 0) + 1 },
+  onHide() { this.invalidatePage() },
+  onUnload() { this.invalidatePage() },
+  invalidatePage() {
+    this.pageGeneration = (this.pageGeneration || 0) + 1
+    this.termsReadGeneration = (this.termsReadGeneration || 0) + 1
+    if (this.enrollmentNavigationTimer) clearTimeout(this.enrollmentNavigationTimer)
+    this.setData({ busy: false, membership: null, enrollmentReady: false })
+  },
 
   async load() {
     const generation = this.termsReadGeneration = (this.termsReadGeneration || 0) + 1
@@ -100,16 +106,20 @@ Page({
       wx.showToast({ title: authorization.message, icon: 'none' })
       return
     }
+    const generation = this.pageGeneration || 0
     this.setData({ busy: true, error: '' })
     try {
       await enrollMembership(terms.version, this.data.acknowledgementSource, authorization.code)
+      if (generation !== (this.pageGeneration || 0)) return
       wx.showToast({ title: '入会成功', icon: 'success', duration: 1200 })
-      setTimeout(() => {
+      this.enrollmentNavigationTimer = setTimeout(() => {
+        if (generation !== (this.pageGeneration || 0)) return
         wx.navigateBack({
           fail: () => wx.switchTab({ url: '/pages/profile/index' }),
         })
       }, 1200)
     } catch (error) {
+      if (generation !== (this.pageGeneration || 0)) return
       const code = customerErrorCode(error)
       this.setData({
         error: code === 'ROUTE_NOT_FOUND'
@@ -123,7 +133,7 @@ Page({
         icon: 'none',
       })
     } finally {
-      this.setData({ busy: false })
+      if (generation === (this.pageGeneration || 0)) this.setData({ busy: false })
     }
   },
 })

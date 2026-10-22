@@ -191,7 +191,7 @@ jobs:
     if: needs.classify.outputs.scope == 'full' || needs.classify.outputs.scope == 'ui' || needs.classify.outputs.scope == 'frontend'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     outputs:
       startup_report_b64: ${{ steps.normalized-browser-evidence.outputs.startup_report_b64 }}
     services:
@@ -250,6 +250,8 @@ jobs:
         run: |
           cp -R artifacts/normalized-browser artifacts/normalized-browser-three-screen
           npm run test:e2e:normalized -- tests/normalized-e2e/normalized-member-participation.spec.ts tests/normalized-e2e/normalized-member-visit-rewards.spec.ts tests/normalized-e2e/normalized-member-gifts.spec.ts tests/normalized-e2e/normalized-manual-points.spec.ts
+      - name: Preserve member browser evidence
+        run: cp -R artifacts/normalized-browser artifacts/normalized-browser-member
       - name: Upload normalized browser evidence
         if: always()
         continue-on-error: true
@@ -258,10 +260,12 @@ jobs:
           name: normalized-browser-${{ github.sha }}
           path: |
             artifacts/normalized-browser/report
+            artifacts/normalized-browser/report.json
             artifacts/normalized-browser/results
             artifacts/normalized-browser/startup*.json
             artifacts/normalized-browser-baseline
             artifacts/normalized-browser-three-screen
+            artifacts/normalized-browser-member
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
       - name: Verify employee service history and mandatory primary ownership on a fresh database
@@ -275,6 +279,20 @@ jobs:
         with:
           name: table-service-browser-${{ github.sha }}
           path: artifacts/normalized-browser
+          if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
+
+      - name: Preserve service history browser evidence
+        run: cp -R artifacts/normalized-browser artifacts/normalized-browser-service
+      - name: Cover all remaining fixture cases and reject unverified baseline skips
+        run: npm run test:e2e:normalized:extended
+      - name: Upload complete skipped-case coverage and extended browser evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: normalized-browser-extended-${{ github.sha }}
+          path: artifacts/normalized-browser-extended
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 

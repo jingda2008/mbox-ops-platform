@@ -6,6 +6,8 @@ deployment_tier=${2:?deployment tier is required}
 public_url=${3:?public URL is required}
 backup_max_age_minutes=${4:?backup age is required}
 reconcile_previous_runtime=${5:-0}
+activation_attempt=${6:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}
+[[ "${activation_attempt}" =~ ^[0-9a-f]{32}$ ]]
 [[ "${reconcile_previous_runtime}" =~ ^[01]$ ]]
 
 install_root=/opt/mbox
@@ -930,6 +932,75 @@ verify_previous_runtime_database_identity() {
       '. + {containerId:$containerId,releaseSha:$releaseSha,imageDigest:$imageDigest,environmentSha:$environmentSha}'
 }
 
+archive_release_evidence() {
+  local evidence_directory=$1
+  local object_prefix=$2
+  local verification_report=$3
+  local relay_marker=$4
+  local expected_count=0
+  local relay_verification_report="${verification_report}.${activation_attempt}"
+  local expected_sha relative_path expected_key expected_bytes ledger_sha ledger_key ledger_bytes
+
+  if [ "${external_evidence_relay}" = 0 ]; then
+    MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
+      "${uploader}" "${evidence_directory}" "${object_prefix}"
+    return
+  fi
+
+  # This runs under the release lock. Keep a failed attempt's marker for audit,
+  # and use an attempt-specific receipt so a late prior uploader cannot satisfy
+  # or overwrite this attempt's wait.
+  if [ -f "${relay_marker}" ]; then
+    cp -p "${relay_marker}" "${relay_marker}.previous-${activation_attempt}"
+  fi
+  rm -f "${relay_verification_report}"
+  jq -n --arg releaseSha "${release_sha}" --arg prefix "${object_prefix}" \
+    --arg activationAttempt "${activation_attempt}" \
+    --arg evidenceDirectory "${evidence_directory}" --arg report "${relay_verification_report}" \
+    '{schemaVersion:1,releaseSha:$releaseSha,activationAttempt:$activationAttempt,prefix:$prefix,evidenceDirectory:$evidenceDirectory,report:$report}' \
+    > "${relay_marker}.next"
+  chmod 0600 "${relay_marker}.next"
+  mv "${relay_marker}.next" "${relay_marker}"
+
+  for _ in $(seq 1 "${evidence_relay_wait_seconds}"); do
+    [ -f "${relay_verification_report}" ] && break
+    sleep 1
+  done
+  test -f "${relay_verification_report}"
+  jq -e --arg prefix "${object_prefix}" \
+    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix
+      and .completionMarker == ($prefix + "/_COMPLETE.json")
+      and .objectsManifest == ($prefix + "/_OBJECTS.json")
+      and (.objectsManifestSha256 | type == "string" and test("^[0-9a-f]{64}$"))' \
+    "${relay_verification_report}" >/dev/null
+
+  ledger_key="${object_prefix}/SHA256SUMS"
+  ledger_sha=$(sha256sum "${evidence_directory}/SHA256SUMS" | awk '{print $1}')
+  ledger_bytes=$(stat -c '%s' "${evidence_directory}/SHA256SUMS")
+  jq -e --arg key "${ledger_key}" --arg sha "${ledger_sha}" \
+    --argjson bytes "${ledger_bytes}" \
+    'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+    "${relay_verification_report}" >/dev/null
+  expected_count=$((expected_count + 1))
+
+  while read -r expected_sha relative_path; do
+    relative_path=${relative_path#\*}
+    relative_path=${relative_path#./}
+    test -n "${relative_path}"
+    expected_key="${object_prefix}/${relative_path}"
+    expected_bytes=$(stat -c '%s' "${evidence_directory}/${relative_path}")
+    jq -e --arg key "${expected_key}" --arg sha "${expected_sha}" \
+      --argjson bytes "${expected_bytes}" \
+      'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
+      "${relay_verification_report}" >/dev/null
+    expected_count=$((expected_count + 1))
+  done < "${evidence_directory}/SHA256SUMS"
+  test "$(jq '.objects | length' "${relay_verification_report}")" = "${expected_count}"
+  mv -f "${relay_verification_report}" "${verification_report}"
+  rm -f "${relay_marker}"
+}
+
+
 release_state_require "${state_file}" external_preflight_passed
 if ! verify_previous_runtime_database_identity > "${release_dir}/rollback-database-identity-preflight.json"; then
   echo "release blocked: prepare and validate a restricted rollback baseline; existing application is unchanged" >&2
@@ -1121,8 +1192,16 @@ else
     fi
     sha256sum --check SHA256SUMS >/dev/null
   )
-  MBOX_OSS_VERIFICATION_REPORT="${release_dir}/oss-backup-verification.json" \
-    "${uploader}" "${backup_stage}" "mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+  backup_prefix="mbox/backups/$(date -u +%Y-%m-%d)/${release_sha}"
+  if [ "${contract_migration}" = 1 ]; then
+    # This is the frozen, post-drain backup. A pre-activation relay receipt must
+    # never authorize it; use a separate prefix and this exact stage's hashes.
+    backup_prefix="${backup_prefix}/post-drain/${activation_attempt}"
+  fi
+  archive_release_evidence \
+    "${backup_stage}" "${backup_prefix}" \
+    "${release_dir}/oss-backup-verification.json" \
+    "${release_dir}/.contract-backup-evidence-relay-ready.json"
 fi
 if [ "${contract_migration}" = 1 ]; then
   release_state_transition "${state_file}" writer_drained post_drain_backup_verified
@@ -1514,61 +1593,6 @@ cp "${state_file}" "${deployment_evidence}/release-state-before-evidence.json"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
   sha256sum --check SHA256SUMS >/dev/null
 )
-archive_release_evidence() {
-  local evidence_directory=$1
-  local object_prefix=$2
-  local verification_report=$3
-  local relay_marker=$4
-  local expected_count=0
-  local expected_sha relative_path expected_key expected_bytes ledger_sha ledger_key ledger_bytes
-
-  if [ "${external_evidence_relay}" = 0 ]; then
-    MBOX_OSS_VERIFICATION_REPORT="${verification_report}" \
-      "${uploader}" "${evidence_directory}" "${object_prefix}"
-    return
-  fi
-
-  rm -f "${verification_report}" "${relay_marker}"
-  jq -n --arg releaseSha "${release_sha}" --arg prefix "${object_prefix}" \
-    --arg evidenceDirectory "${evidence_directory}" --arg report "${verification_report}" \
-    '{schemaVersion:1,releaseSha:$releaseSha,prefix:$prefix,evidenceDirectory:$evidenceDirectory,report:$report}' \
-    > "${relay_marker}.next"
-  chmod 0600 "${relay_marker}.next"
-  mv "${relay_marker}.next" "${relay_marker}"
-
-  for _ in $(seq 1 "${evidence_relay_wait_seconds}"); do
-    [ -f "${verification_report}" ] && break
-    sleep 1
-  done
-  test -f "${verification_report}"
-  jq -e --arg prefix "${object_prefix}" \
-    '.verified == true and .authMode == "EcsRamRole" and .prefix == $prefix' \
-    "${verification_report}" >/dev/null
-
-  ledger_key="${object_prefix}/SHA256SUMS"
-  ledger_sha=$(sha256sum "${evidence_directory}/SHA256SUMS" | awk '{print $1}')
-  ledger_bytes=$(stat -c '%s' "${evidence_directory}/SHA256SUMS")
-  jq -e --arg key "${ledger_key}" --arg sha "${ledger_sha}" \
-    --argjson bytes "${ledger_bytes}" \
-    'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
-    "${verification_report}" >/dev/null
-  expected_count=$((expected_count + 1))
-
-  while read -r expected_sha relative_path; do
-    relative_path=${relative_path#\*}
-    relative_path=${relative_path#./}
-    test -n "${relative_path}"
-    expected_key="${object_prefix}/${relative_path}"
-    expected_bytes=$(stat -c '%s' "${evidence_directory}/${relative_path}")
-    jq -e --arg key "${expected_key}" --arg sha "${expected_sha}" \
-      --argjson bytes "${expected_bytes}" \
-      'any(.objects[]; .key == $key and .sha256 == $sha and .bytes == $bytes and .verified == true)' \
-      "${verification_report}" >/dev/null
-    expected_count=$((expected_count + 1))
-  done < "${evidence_directory}/SHA256SUMS"
-  test "$(jq '.objects | length' "${verification_report}")" = "${expected_count}"
-  rm -f "${relay_marker}"
-}
 
 archive_release_evidence \
   "${deployment_evidence}" \

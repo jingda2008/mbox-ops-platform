@@ -22,6 +22,8 @@
 5. 写入持久 `.contract-write-resumed` 标记后启动新版本写入和 worker，再切流、核对公开身份并归档证据。部署 manifest 记录 `contractBoundary: 275` 及 `rollbackMode: forward_only_after_contract_cutover`。
 6. 上线核对真实迁移版本、当前 SHA / digest、旧容器停止且不自动重启、待打印来源与失败原因、支付和退款回调、经营报表范围/缺项。仅在新版本就绪核验通过，或旧库与旧程序同时恢复且核验通过后，按原 active 状态恢复 watchdog timer；仍在维护/前进修复时保持停止。实体打印和真实支付退款分别留证，不能以脚本单元测试替代。
 
+运营机按既有设计不持 OSS 角色。停写后冻结备份沿原证据主机中继上传并读回，不能接受停写前的预备份回执。每次激活使用独立 `activationAttempt`，备份对象位于 `mbox/backups/<UTC日期>/<SHA>/post-drain/<attempt>`；阶段标记、暂存和回执按该次激活隔离。校验逐对象散列、大小、数量及 `_OBJECTS.json` / `_COMPLETE.json` 后才推进迁移。同 SHA 重试忽略旧阶段；迟到上传不能覆盖本次备份或满足本次等待。原计划维护 bootstrap 的既有证据合同保留，未新增脚本或扩大凭据。
+
 ## 出错如何处理
 
 | 时点 | 允许的恢复 | 禁止的操作 |
@@ -39,5 +41,6 @@
 
 - `scripts/print-policy-rollback-guard.test.mjs` 已在原 `npm run release:system:test` 中：覆盖 274 → 275/282 的契约选择、281 → 282 不额外停写、错误回退清单的兜底拦截、Docker 不可用不误报排空。
 - `scripts/contract-recovery-faults.test.mjs` 执行真实脚本恢复函数并注入故障：恢复失败、身份/私有/公开核验失败、只读候选恢复顺序、恢复写入前后以及改名后的保持维护；均不连接生产。
+- 2026-10-23停写后备份中继补充：提取实际 shell 函数的38项回归通过，含残留标记、迟回执、投递竞态和维护四阶段；当前发布Node门禁126通过、1项本机平台条件跳过。独立只读复审通过；最终Linux CI和实际OSS读回仍须另留证。
 - 本地旧源码探针及受限 PG 输出：`outputs/operating-dashboard-20261023/release-compatibility/`。旧源码绑定上述生产 SHA，记录文件 SHA-256。仅将旧分派器的依赖导入接到当前构造器以载入，失败发生于旧分派表查找，未进入任何活动域查询；**不是运行完整旧容器**。
 - 本机 Docker daemon 未启动，未做旧容器全栈或生产恢复演练。Linux CI 的发布链及最终冻结 artifact 校验仍是部署门禁；CI 结果必须引用本次实际 head。原平台专用测试在本机跳过的项目不计为通过。

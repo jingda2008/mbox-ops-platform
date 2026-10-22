@@ -80,7 +80,16 @@ jobs:
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
       - name: Audit production and development dependencies
-        run: npm audit --audit-level=moderate
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if npm audit --audit-level=moderate; then
+              exit 0
+            fi
+            echo "npm audit failed (attempt ${attempt}/5); retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "npm audit failed after 5 attempts"
+          exit 1
       - name: Run code, unit, metadata and production-build checks
         run: npm run check && npm run release:system:test
       - name: Verify candidate, upload and release gate semantics
@@ -101,7 +110,16 @@ jobs:
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
       - name: Audit production and development dependencies
-        run: npm audit --audit-level=moderate
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if npm audit --audit-level=moderate; then
+              exit 0
+            fi
+            echo "npm audit failed (attempt ${attempt}/5); retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "npm audit failed after 5 attempts"
+          exit 1
       - name: Run deterministic frontend checks and production build
         run: npm run check
 

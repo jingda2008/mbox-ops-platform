@@ -720,9 +720,15 @@ Page({
         this.data.wechatSubscriptionPresentationOptions,
       )
       const result = await requestWechatSubscription(options)
-      const outcome = (result.outcomes || []).find((item) => item.option.templateId === option.templateId)
+      const outcomeIndex = (result.outcomes || []).findIndex((item) => item.option.templateId === option.templateId)
+      const outcome = (result.outcomes || [])[outcomeIndex]
       const platformResult = outcome && outcome.platformResult
       if (!['accept', 'reject', 'ban'].includes(platformResult)) return
+      const recording = (result.recordingResults || [])[outcomeIndex]
+      if (recording && recording.writebackError) {
+        wx.showToast({ title: '提醒设置保存失败，请重试', icon: 'none' })
+        return
+      }
       this.setData({ expiryNotificationOption: null })
       wx.showToast({
         title: platformResult === 'accept' ? '到期提醒已申请' : '未开启到期提醒',

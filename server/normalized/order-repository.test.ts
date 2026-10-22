@@ -48,15 +48,26 @@ describe('OrderRepository', () => {
     ])
     const authorization=await new PricingAuthorizationPolicy({
       authorize:async()=>({authorized:true,authorizationId:itemId,kind:'discount',sourceType:'benefit',sourceId:itemId,
-        amountMinor:7810,maximumAmountMinor:7810,currency:'CNY',lineAllocations:lines.map((line,index)=>({
+        amountMinor:7810,maximumAmountMinor:7810,currency:'CNY',
+        fulfillmentPromises:[{requestIndex:1,benefitId:itemId}],lineAllocations:lines.map((line,index)=>({
           requestIndex:index,productId,quantity:1,unitPriceMinor:8800,discountAmountMinor:index===1?7810:0,lineFingerprint:pricingLineFingerprint(line),
         }))}),consume:async()=>{},
     }).authorize(tx,{scope:tx.scope,actor:{type:'system',ref:'pricing-test'},tableSessionId:sessionId,channel:'staff_assisted',lines},{sourceType:'benefit',sourceId:itemId})
     const result=await new OrderRepository(tx).createSubmitted({tableSessionId:sessionId,publicId:'priced-portions',channel:'staff_assisted',lines},authorization)
     expect(result.totalAmountMinor).toBe(9790)
+    // Identical products still have distinct portion authority. The first is
+    // an ordinary purchase; only the second carries the issued coupon promise.
+    expect(tx.calls[1]?.values[2]).toBe(JSON.stringify([
+      {request_index:0,product_id:productId,benefit_id:null},
+      {request_index:1,product_id:productId,benefit_id:itemId},
+    ]))
     const inserts=tx.calls.filter(call=>call.sql.includes('INSERT INTO mbox.order_items'))
     expect(inserts.map(call=>call.values.slice(7,10))).toEqual([[8800,0,8800],[8800,7810,990]])
     expect(inserts.map(call=>call.values[17])).toEqual([1050,1050])
+    expect(JSON.parse(String(inserts[0]!.values[14]))).not.toHaveProperty('fulfillmentBenefitId')
+    expect(JSON.parse(String(inserts[1]!.values[14]))).toMatchObject({
+      fulfillmentBenefitId:itemId,fulfillmentPromiseIndex:1,fulfillmentPricingAuthorizationId:itemId,
+    })
   })
   it('quotes with the submission price and cost functions without creating or reserving anything',async()=>{
     const tx=new ScriptedTransaction([{rows:[priceRow()]}])
@@ -99,6 +110,7 @@ describe('OrderRepository', () => {
     expect(tx.calls[1]?.values[2]).toBe(JSON.stringify([{
       request_index: 0,
       product_id: productId,
+      benefit_id: null,
     }]))
     expect(tx.calls[2]?.sql).toContain('INSERT INTO mbox.orders')
     expect(tx.calls[2]?.sql).toContain('settlement_mode')

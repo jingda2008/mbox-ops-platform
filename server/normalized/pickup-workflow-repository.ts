@@ -99,7 +99,7 @@ export async function authorizePickup(tx:ScopedTransaction,context:CommerceKdsRe
   return access
 }
 /** Explicit recovery proves the previous authorization boundary belongs to this real device. */
-export async function authorizePickupRecovery(tx:ScopedTransaction,context:CommerceKdsRequestContext,recovery:PickupRecoveryCommand){
+export async function authorizePickupRecovery(tx:ScopedTransaction,context:CommerceKdsRequestContext,recovery:Pick<PickupRecoveryCommand,'staffSessionId'|'commandScope'>&{request:{kind:'command'|'device'}}){
   const access=await authorizePickup(tx,context,recovery.request.kind==='device')
   const old=(await tx.query<{employee_id:string;device_key_hash:string}>(`SELECT session.employee_id,lease.device_key_hash FROM mbox.staff_sessions session
     JOIN mbox.store_device_access_leases lease ON (lease.tenant_id,lease.store_id,lease.id)=(session.tenant_id,session.store_id,session.device_access_lease_id)

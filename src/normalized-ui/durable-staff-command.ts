@@ -25,9 +25,10 @@ export class DurableStaffCommand<B,R>{
     const attempt=previous??{key:crypto.randomUUID(),body:structuredClone(body)}
     this.save(attempt)
     const request=this.send(attempt.body,attempt.key).then(result=>{this.save({...attempt,result});return result}).catch((error:unknown)=>{
-      const details=error as {status?:number;code?:string}|null
+      const details=error as {status?:number;code?:string;commitDisposition?:string}|null
       // A later refusal cannot establish that the first attempt never committed.
-      if(!previous&&details&&([400,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
+      if(details?.code==='NATIVE_BUSINESS_NOT_COMMITTED'&&details.commitDisposition==='not_committed')this.clear()
+      else if(!previous&&details&&([400,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
       throw error
     }).finally(()=>flights.delete(this.storageKey))
     flights.set(this.storageKey,request);return request

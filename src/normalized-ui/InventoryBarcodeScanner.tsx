@@ -16,11 +16,15 @@ export function InventoryBarcodeScanner({
   onDetected,
   title = '扫描酒瓶条形码或二维码',
   cameraLabel = '库存扫码摄像头画面',
+  autoAccept = false,
+  maxCodeLength = 128,
 }: {
   onClose(): void
   onDetected(code: string): void
   title?: string
   cameraLabel?: string
+  autoAccept?: boolean
+  maxCodeLength?: number
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [cameraState, setCameraState] = useState<CameraState>('starting')
@@ -42,12 +46,13 @@ export function InventoryBarcodeScanner({
     }
     const accept = (value: string) => {
       const code = value.trim()
-      if (!active || code.length < 3 || code.length > 128) return false
+      if (!active || accepted || code.length < 3 || code.length > maxCodeLength) return false
       accepted = true
       setDetectedCode(code)
       setCameraState('detected')
       setDetail('')
       stopCamera()
+      if (autoAccept) onDetected(code)
       return true
     }
     const cameraFailure = (error: unknown) => {

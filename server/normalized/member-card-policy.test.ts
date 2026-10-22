@@ -20,6 +20,14 @@ describe('independent member card and ordinary application policy',()=>{
     expect(()=>assertCardProjectOpen({...project,kind:'cobrand'},now)).toThrow('联名')
     expect(()=>assertCardProjectOpen({...project,kind:'cobrand',cooperationConfirmed:true,cooperationValidUntil:now.toISOString()},now)).toThrow('联名')
   })
+  it('allows simple pending approvals after applications close but not after expiry or before publication',()=>{
+    const input={state:'pending' as const,decision:'approve' as const,reviewerAuthorized:true,project:{...project,flowMode:'simple' as const,state:'closed' as const,availableUntil:null},now,activeMember:true,alreadyHoldsCard:false}
+    expect(decideCardApplication(input).createCard).toBe(true)
+    expect(()=>assertCardProjectOpen(input.project,now)).toThrow()
+    expect(()=>decideCardApplication({...input,project:{...input.project,state:'draft'}})).toThrow()
+    expect(()=>decideCardApplication({...input,project:{...input.project,availableUntil:now.toISOString()}})).toThrow()
+    expect(()=>assertCardProjectOpen({...project,availableUntil:null},now)).toThrow()
+  })
   it('allows rejecting a stale project application but still requires review authority',()=>{
     const input={state:'pending' as const,decision:'reject' as const,reviewerAuthorized:true,project:{...project,state:'closed' as const},now,activeMember:false,alreadyHoldsCard:false}
     expect(decideCardApplication(input).applicationState).toBe('rejected')

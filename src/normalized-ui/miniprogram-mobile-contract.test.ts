@@ -74,7 +74,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(detail).toContain('registrationBlocked')
     expect(detail).toContain('线上付款暂时不可用')
     expect(detail).toContain('本次报名尚未提交')
-    expect(detail).toContain("if (activity.registrationBlocked || pricing.paymentAvailability === 'blocked')")
+    expect(detail).toContain("if ((purchaseKind === 'admission_package' ? activity.registrationBlocked : activity.addonBlocked) || pricing.paymentAvailability === 'blocked')")
     expect(detail).toContain("activity.paymentBlockedText || '线上付款暂时不可用，本次报名尚未提交。'")
     expect(detail).toContain('本次报名尚未提交，也不会占用名额')
     expect(detailView).toContain('费用包含')

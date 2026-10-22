@@ -8,9 +8,10 @@ export class MemberCardPolicyError extends Error {
   constructor(message: string) { super(message); this.name = 'MemberCardPolicyError' }
 }
 export interface CardProjectEligibility {
+  flowMode?: 'legacy' | 'simple'
   state: CardProjectState
   availableFrom: string
-  availableUntil: string
+  availableUntil: string | null
   kind: 'interest' | 'cobrand'
   cooperationConfirmed: boolean
   cooperationValidUntil: string | null
@@ -21,10 +22,11 @@ function instant(value: string): number {
   }
   return Date.parse(value)
 }
-export function assertCardProjectOpen(project: CardProjectEligibility, now: Date): void {
-  const current=now.getTime(),from=instant(project.availableFrom),until=instant(project.availableUntil)
+export function assertCardProjectOpen(project: CardProjectEligibility, now: Date, reviewing=false): void {
+  const current=now.getTime(),from=instant(project.availableFrom),until=project.availableUntil===null&&project.flowMode==='simple'?Infinity:instant(project.availableUntil as string)
   if (!Number.isFinite(current) || until<=from) throw new MemberCardPolicyError('卡项目有效期不正确')
-  if (project.state!=='open' || current<from || current>=until) throw new MemberCardPolicyError('卡项目当前不接受申请或发卡')
+  const permittedState=project.state==='open'||(reviewing&&project.flowMode==='simple'&&['paused','closed'].includes(project.state))
+  if (!permittedState || current<from || current>=until) throw new MemberCardPolicyError('卡项目当前不接受申请或发卡；请核对开放状态及有效截止')
   if (project.kind==='cobrand' && (!project.cooperationConfirmed || project.cooperationValidUntil===null || instant(project.cooperationValidUntil)<=current)) {
     throw new MemberCardPolicyError('联名合作尚未确认或已到期')
   }
@@ -42,7 +44,7 @@ export function decideCardApplication(input: {
   if (!['approve','reject'].includes(input.decision)) throw new MemberCardPolicyError('审核结果不正确')
   if (input.state!=='pending') throw new MemberCardPolicyError('申请已处理，请刷新后查看真实结果')
   if (input.decision==='reject') return { applicationState:'rejected' as const, createCard:false }
-  assertCardProjectOpen(input.project,input.now)
+  assertCardProjectOpen(input.project,input.now,true)
   if (!input.activeMember) throw new MemberCardPolicyError('请先完成正常会员入会；无需同意额外营销')
   return { applicationState:'approved' as const, createCard:!input.alreadyHoldsCard }
 }

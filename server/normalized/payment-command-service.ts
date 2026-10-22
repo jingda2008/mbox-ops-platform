@@ -128,6 +128,9 @@ export interface RequestRefundCommand extends CommandMetadata {
 }
 
 export interface RequestActivityRefundCommand extends CommandMetadata {
+  amountMinor?: number
+  disposition?: 'retain_fulfillment' | 'stop_unstarted'
+  customerConfirmed?: boolean
   paymentId: string
   publicId: string
   reason: string
@@ -397,6 +400,8 @@ export class PaymentCommandService {
         initialStatus: 'succeeded',
         principal: { type: 'employee', employeeId },
       })
+      // This records funds already collected under the original invoice. New-sale
+      // qualification belongs before a provider action, never before recording cash truth.
       const occurredAt=payment.succeededAt
       if (occurredAt===null) throw new Error('Manual payment did not return an authoritative settlement time')
       await new ReconciliationRepository(transaction).append({
@@ -913,6 +918,9 @@ export class PaymentCommandService {
         reason: input.reason,
         requestedByEmployeeId: employeeId,
         requestEvidence,
+        amountMinor: input.amountMinor,
+        disposition: input.disposition,
+        customerConfirmed: input.customerConfirmed,
       })
       await this.authorization.assertRefundRequestLimit({
         transaction,

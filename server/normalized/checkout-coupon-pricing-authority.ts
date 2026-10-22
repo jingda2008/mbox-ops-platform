@@ -26,7 +26,8 @@ export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:
   if(!await lockBoundGuestTablePosition(tx,{tableSessionId:context.tableSessionId,customerId:row.customer_id,actorRef:context.actor.ref}))throw new PricingAuthorizationDeniedError('原会员已不在此桌，请重新扫码确认会员与桌台')
   const quote=await new CheckoutCouponQuoteRepository(tx).find(context.request.sourceId,row.customer_id)
   const allocations=verifyPricingLineAllocations(quote.lines.map(line=>({requestIndex:line.requestIndex,productId:line.productId,quantity:1,unitPriceMinor:line.standardMinor,discountAmountMinor:line.discountMinor,lineFingerprint:line.lineFingerprint})),context.lines,quote.discountMinor)
-  const standard=await new OrderRepository(tx,row.customer_id).quoteCurrent(context.lines,context.channel,false)
+  const fulfillmentPromises=quote.lines.flatMap(line=>line.benefitId?[{requestIndex:line.requestIndex,benefitId:line.benefitId}]:[])
+  const standard=await new OrderRepository(tx,row.customer_id).quoteCurrent(context.lines,context.channel,false,fulfillmentPromises)
   if(standard.currency!==quote.currency||standard.items.length!==allocations.length||standard.items.some((item,index)=>item.unitPriceMinor!==allocations[index]!.unitPriceMinor||item.quantity!==1))throw new PricingAuthorizationDeniedError('商品价格已变化，请重新确认报价')
   if(quote.payableMinor===0 && quote.pointsUsed===0)throw new PricingAuthorizationDeniedError('零元结算须具有完整积分抵扣凭证')
   const benefits=[...new Set(quote.lines.flatMap(line=>line.benefitId?[line.benefitId]:[]))].sort()
@@ -40,5 +41,5 @@ export async function authorizeCheckoutCouponQuote(tx:ScopedTransaction,context:
   const authorizationId=randomUUID()
   await tx.query(`INSERT INTO mbox.pricing_authorizations(id,tenant_id,store_id,table_session_id,source_type,source_id,checkout_quote_id,kind,amount_minor,maximum_amount_minor,currency,expires_at)
     VALUES($1,$2,$3,$4,'checkout_quote',$5,$5,'discount',$6,$6,$7,$8)`,[authorizationId,...scope,context.tableSessionId,quote.id,quote.discountMinor,quote.currency,quote.expiresAt])
-  return{authorized:true,authorizationId,kind:'discount',sourceType:'checkout_quote',sourceId:quote.id,amountMinor:quote.discountMinor,maximumAmountMinor:quote.discountMinor,currency:quote.currency,expiresAt:quote.expiresAt,lineAllocations:allocations}
+  return{authorized:true,authorizationId,kind:'discount',sourceType:'checkout_quote',sourceId:quote.id,amountMinor:quote.discountMinor,maximumAmountMinor:quote.discountMinor,currency:quote.currency,expiresAt:quote.expiresAt,lineAllocations:allocations,fulfillmentPromises}
 }

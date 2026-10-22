@@ -1,3 +1,4 @@
+import type { BundleUnitSelectionInput } from './order-repository.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -116,6 +117,7 @@ export interface RedeemBenefitInput {
   redeemedAt?: string
   businessDate?: string
   selectedProductId?: string | null
+  bundleSelections?: readonly BundleUnitSelectionInput[]
   substitutionReason?: string | null
 }
 
@@ -173,6 +175,7 @@ export interface GiftOrderRequest {
   redeemedByEmployeeId: string | null
   businessDate: string
   selectedProductId: string | null
+  bundleSelections?: readonly BundleUnitSelectionInput[]
   substitutionReason: string | null
 }
 
@@ -568,6 +571,7 @@ export class BenefitRepository {
         redeemedByEmployeeId: input.redeemedByEmployeeId ?? null,
         businessDate: input.businessDate ?? '',
         selectedProductId: input.selectedProductId ?? null,
+        bundleSelections: input.bundleSelections,
         substitutionReason: input.substitutionReason?.trim() || null,
       })
       giftOrderReference = gift.reference

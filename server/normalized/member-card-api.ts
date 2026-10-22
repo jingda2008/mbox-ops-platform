@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto'
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import type { CustomerBenefitApiOptions } from './customer-benefit-api.js'
 import type { NormalizedCommandExecutor, JsonObject, JsonCodec } from './command-executor.js'
@@ -65,16 +66,25 @@ export const memberCardApiPlugin:FastifyPluginAsync<Options>=async(app,options)=
   app.post<{Params:{id:string}}>('/staff/member-cards/applications/:id/review',{bodyLimit:4096},async request=>{
     const context=await staff(request,'member.card.review'),input=body(request,['decision','reason'])
     if(input.decision!=='approve'&&input.decision!=='reject')throw new MemberCardPolicyError('请选择通过或拒绝')
-    const data={applicationId:request.params.id,decision:input.decision,reason:string(input.reason,'审核原因'),employeeId:context.employeeId,businessDate:context.businessDate} as const
+    const data={applicationId:request.params.id,decision:input.decision,reason:input.decision==='approve'&&input.reason===undefined?'':string(input.reason,'审核原因'),employeeId:context.employeeId,businessDate:context.businessDate} as const
     const result=await write(request,context.scope,'review',data,repo=>repo.review(data));return{data:result.value,meta:{replayed:result.replayed}}
   })
   app.post('/staff/member-cards/projects',{bodyLimit:16384},async request=>{
-    const context=await staff(request,'member.card.manage'),input=body(request,['code','name','terms','kind','availableFrom','availableUntil','cooperationConfirmed','cooperationValidUntil','cooperationReference'])
+    const context=await staff(request,'member.card.manage'),input=body(request,['code','name','terms','kind','availableFrom','availableUntil','cooperationConfirmed','cooperationValidUntil','cooperationReference','openImmediately'])
     if(input.kind!=='interest'&&input.kind!=='cobrand')throw new MemberCardPolicyError('卡类型不正确')
-    if(typeof input.cooperationConfirmed!=='boolean')throw new MemberCardPolicyError('须明确记录合作确认状态')
-    const data={code:string(input.code,'编号'),name:string(input.name,'名称'),terms:string(input.terms,'说明'),kind:input.kind,availableFrom:string(input.availableFrom,'开始时间'),availableUntil:string(input.availableUntil,'结束时间'),cooperationConfirmed:input.cooperationConfirmed,
-      cooperationValidUntil:input.cooperationValidUntil===null?null:string(input.cooperationValidUntil,'合作到期时间'),cooperationReference:input.cooperationReference===null?null:string(input.cooperationReference,'合作依据'),employeeId:context.employeeId,businessDate:context.businessDate} as const
-    const result=await write(request,context.scope,'project_create',data,repo=>repo.createProject({...data,requireSocialConfiguration:true}));return{data:result.value,meta:{replayed:result.replayed}}
+    const simple=input.kind==='interest'
+    if(!simple&&typeof input.cooperationConfirmed!=='boolean')throw new MemberCardPolicyError('须明确记录合作确认状态')
+    if(input.openImmediately!==undefined&&typeof input.openImmediately!=='boolean')throw new MemberCardPolicyError('开放操作不正确')
+    const data={code:input.code===undefined&&simple?`CARD_${randomUUID().replaceAll('-','').toUpperCase()}`:string(input.code,'编号'),name:string(input.name,'名称'),terms:simple&&input.terms===undefined?'':typeof input.terms==='string'?input.terms:string(input.terms,'说明'),kind:input.kind,
+      availableFrom:simple&&input.availableFrom===undefined?new Date().toISOString():string(input.availableFrom,'开始时间'),availableUntil:simple&&(input.availableUntil===undefined||input.availableUntil===null)?null:string(input.availableUntil,'结束时间'),cooperationConfirmed:simple?false:input.cooperationConfirmed as boolean,
+      cooperationValidUntil:simple||input.cooperationValidUntil===null?null:string(input.cooperationValidUntil,'合作到期时间'),cooperationReference:simple||input.cooperationReference===null?null:string(input.cooperationReference,'合作依据'),employeeId:context.employeeId,businessDate:context.businessDate,
+      flowMode:simple?'simple' as const:'legacy' as const,openImmediately:input.openImmediately===true} as const
+    const result=await write(request,context.scope,'project_create',data,repo=>repo.createProject({...data,requireSocialConfiguration:!simple}));return{data:result.value,meta:{replayed:result.replayed}}
+  })
+  app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/validity',{bodyLimit:4096},async request=>{
+    const context=await staff(request,'member.card.manage'),input=body(request,['availableUntil','reason'])
+    const data={projectId:request.params.id,availableUntil:input.availableUntil===null?null:string(input.availableUntil,'到期时间'),reason:string(input.reason,'原因'),employeeId:context.employeeId,businessDate:context.businessDate}
+    const result=await write(request,context.scope,'project_validity',data,repo=>repo.setProjectValidity(data));return{data:result.value,meta:{replayed:result.replayed}}
   })
   app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/state',{bodyLimit:4096},async request=>{
     const input=body(request,['state','reason']),context=await staff(request,input.state==='open'?'loyalty.policy.publish':'member.card.manage')

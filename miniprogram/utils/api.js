@@ -514,6 +514,7 @@ async function registerActivity(
   paymentChoice,
   paymentMethod,
   idempotencyKey,
+  purchase,
 ) {
   return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}/registrations`, {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('activity-register') },
@@ -528,8 +529,35 @@ async function registerActivity(
         paymentChoice: paymentChoice || 'none',
       },
       paymentMethod ? { paymentMethod } : {},
+      purchase && purchase.purchaseKind ? {
+        purchaseKind: purchase.purchaseKind,
+        parentRegistrationPublicId: purchase.parentRegistrationPublicId || null,
+        ...(purchase.parentCredential ? { parentCredential: purchase.parentCredential } : {}),
+        ...(purchase.productId ? { productId: purchase.productId, quantity: purchase.quantity || 1 } : {}),
+        ...(Array.isArray(purchase.selections) ? { selections: purchase.selections } : {}),
+        ...(purchase.note ? { note: purchase.note } : {}),
+      } : {},
     ),
   })).data
+}
+async function updateActivityRegistrationPartySize(registrationPublicId, partySize, idempotencyKey) {
+  return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/party-size`, {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { partySize },
+  })).data
+}
+async function requestActivityRegistrationRefund(registrationPublicId, reason, idempotencyKey) {
+  return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/refund-request`, {
+    method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { reason },
+  })).data
+}
+async function getActivityRegistrationServiceCode(registrationPublicId) {
+  return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/service-code`)).data
+}
+async function resolveActivityParent(activityPublicId, code) {
+  return (await publicRequest('/api/public/mini/activity-parents/resolve', { method: 'POST', data: { activityPublicId, code } })).data
+}
+async function getActivityAddonProducts(activityPublicId) {
+  return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}/addon-products`)).data
 }
 async function getActivityRegistrationPayment(registrationPublicId) {
   return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/payment`)).data
@@ -864,6 +892,13 @@ async function checkout(items, checkoutUpgradeOfferPublicId, idempotencyKey, rec
   })
 }
 async function getSharedCart() { return (await request('/api/guest/shared-cart')).data }
+async function addIssuedCouponProduct(productId, issuedCouponBenefitId, expectedGeneration, expectedVersion, bundleSelections) {
+  const intent = { productId, issuedCouponBenefitId, bundleSelections: Array.isArray(bundleSelections) ? bundleSelections : [] }
+  return (await recoverableGuestCommand('issued-coupon-product', intent, key => request('/api/guest/shared-cart/lines', {
+    method: 'POST', headers: { 'idempotency-key': key },
+    data: { ...intent, delta: 1, expectedGeneration, expectedVersion },
+  }))).data
+}
 async function adjustSharedCart(productId, delta, expectedGeneration, expectedVersion, idempotencyKey,bundleSelections) {
   return (await request('/api/guest/shared-cart/lines', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-adjust') },
@@ -1070,6 +1105,7 @@ module.exports = {
   updateActivityRegistrationContact, getVerifiedPhones, replaceVerifiedPhone, revokeVerifiedPhone,
   enrollMembership,
   startMembershipRecovery, verifyMembershipRecovery, updatePreferences,
+  getActivityRegistrationServiceCode, resolveActivityParent, getActivityAddonProducts, updateActivityRegistrationPartySize, requestActivityRegistrationRefund,
   registerActivity, getActivityRegistrationPayment, startActivityRegistrationPayment,
   queryActivityRegistrationPayment, cancelActivityRegistration,
   getReservations, getReservationAvailability, getReservationPerformances, createCustomerReservation, getPendingCustomerReservation, recoverCustomerReservation,
@@ -1078,7 +1114,7 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
+  checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   logoutWechatIdentity,

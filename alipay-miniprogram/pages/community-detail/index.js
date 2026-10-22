@@ -4,6 +4,11 @@ const {
   getActivityPreview,
   getActivityLoyaltyBenefits,
   getActivityRegistrations,
+  getActivityRegistrationServiceCode,
+  updateActivityRegistrationPartySize,
+  requestActivityRegistrationRefund,
+  getActivityAddonProducts,
+  resolveActivityParent,
   registerActivity,
   getActivityRegistrationPayment,
   startActivityRegistrationPayment,
@@ -35,6 +40,8 @@ const LOCAL_REGISTRATIONS_KEY = 'mbox.community.registrations.v1'
 const REGISTRATION_ATTEMPTS_KEY = 'mbox.community.registration.attempts.v1'
 const PAYMENT_ACTION_ATTEMPTS_KEY = 'mbox.community.payment.actions.v1'
 const PAYMENT_QUERY_ATTEMPTS_KEY = 'mbox.community.payment.queries.v1'
+const REFUND_ATTEMPTS_KEY = 'mbox.community.registration.refund-requests.v1'
+const PARTY_SIZE_ATTEMPTS_KEY = 'mbox.community.registration.party-size.v1'
 const CANCELLATION_ATTEMPTS_KEY = 'mbox.community.registration.cancellations.v1'
 const REGISTRATION_ATTEMPT_MAX_AGE_MS = 15 * 60 * 1000
 const ALLOWED_PAYMENT_ACTIONS = ['start_payment', 'query_payment', 'cancel_registration']
@@ -50,8 +57,8 @@ const RESOLUTION_STATE_NAMES = {
   refunding: '退款处理中', refunded: '退款已经完成',
 }
 const REFUND_STATUS_NAMES = {
-  requested: '退款申请已提交，等待确认', approved: '退款申请已确认', processing: '退款处理中',
-  succeeded: '退款已经到账', failed: '退款暂未完成，门店正在确认', rejected: '退款申请未通过',
+  requested: '退款申请已提交，等待门店审核', approved: '退款处理中，尚未确认到账', processing: '退款处理中，尚未确认到账',
+  succeeded: '退款已完成', failed: '退款暂未完成，尚未确认到账，请联系门店核对', rejected: '退款申请未通过', cancelled: '退款申请已撤销',
 }
 
 function list(value) {
@@ -121,6 +128,11 @@ function registrationAttemptPayload(value) {
   return {
     activityPackagePublicId: payload.activityPackagePublicId || null,
     partySize: Number(payload.partySize || 1),
+    ...(payload.purchaseKind ? { purchaseKind: payload.purchaseKind, parentRegistrationPublicId: payload.parentRegistrationPublicId || null } : {}),
+    ...(payload.parentCredentialRequired ? { parentCredentialRequired: true } : {}),
+    ...(payload.productId ? { productId: payload.productId, quantity: Number(payload.quantity || 1) } : {}),
+    ...(Array.isArray(payload.selections) ? { selections: payload.selections.map(item => ({ groupId: String(item.groupId), productId: String(item.productId) })) } : {}),
+    ...(payload.note ? { note: String(payload.note).slice(0, 200) } : {}),
     termsAcknowledged: payload.termsAcknowledged === true,
     acknowledgedSafetyPolicyVersion: String(payload.acknowledgedSafetyPolicyVersion || ''),
     acknowledgedRefundPolicyVersion: String(payload.acknowledgedRefundPolicyVersion || ''),
@@ -213,8 +225,11 @@ function packageView(raw) {
     imageUrl: publicImageUrl(raw && raw.imageUrl),
     availability,
     availabilityText: raw && raw.availabilityText || (availability === 'available' ? '可报名' : availability === 'sold_out' ? '已售罄' : '暂不可订'),
-    feeText: feeAmountMinor > 0 ? `加购 ${money(feeAmountMinor)}${raw.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费加购',
+    isServicePackage: Number(raw && raw.maxParticipants) > 0,
+    feeText: Number(raw && raw.maxParticipants) > 0 ? `${money(feeAmountMinor)}/份` : feeAmountMinor > 0 ? `加购 ${money(feeAmountMinor)}${raw.feeBasis === 'per_person' ? '/人' : '/次'}` : '免费加购',
+    mealOnlyFeeText: raw && (raw.includesAdmission === false || raw.mealOnlyFeeAmountMinor != null) ? `${money(Number(raw.includesAdmission === false ? raw.feeAmountMinor : raw.mealOnlyFeeAmountMinor))}/份` : '',
     includedItems: list(raw && raw.includedItems),
+    choiceGroups: Array.isArray(raw && raw.choiceGroups) ? raw.choiceGroups : [],
   })
 }
 
@@ -230,7 +245,21 @@ function selectedPackage(activity, publicId) {
   return packages.find((item) => item && item.publicId === publicId) || null
 }
 
-function pricingFor(activity, activityPackage, partySize) {
+function pricingFor(activity, activityPackage, partySize, purchaseKind, product, quantity) {
+  if ((activityPackage && Number(activityPackage.maxParticipants) > 0) || purchaseKind === 'single_dish') {
+    const fee = purchaseKind === 'single_dish' ? Number(product && product.priceAmountMinor || 0) * Math.max(1, Number(quantity || 1))
+      : Number(purchaseKind === 'meal_package' && activityPackage.includesAdmission !== false ? activityPackage.mealOnlyFeeAmountMinor : activityPackage.feeAmountMinor)
+    const methods = list(activity.availablePaymentMethods)
+    const available = activity.paymentAvailability === 'available' && methods.length > 0
+    const productAvailable = purchaseKind !== 'single_dish' || Boolean(product && product.sellable !== false && product.priceAmountMinor != null)
+    return { feeAmountMinor: fee, depositAmountMinor: 0, paymentMode: fee > 0 ? 'full_required' : 'none',
+      paymentDeadlineMinutes: Number(activityPackage && activityPackage.paymentDeadlineMinutes || activity.paymentDeadlineMinutes || 15),
+      paymentAvailability: productAvailable && (fee === 0 || available) ? 'available' : 'blocked',
+      availablePaymentChoices: !productAvailable ? [] : fee === 0 ? ['none'] : available ? ['full'] : [], availablePaymentMethods: methods,
+      paymentRuleText: purchaseKind === 'single_dish' ? '单点加到所选套餐号码，单独付款' : purchaseKind === 'meal_package' ? '仅加餐，不增加入场名额；另领一个取餐号' : '每份按套餐总价付款，人数不改变本份价格',
+      deadlineText: fee === 0 ? '无需在线付款' : `${Number(activityPackage && activityPackage.paymentDeadlineMinutes || activity.paymentDeadlineMinutes || 15)} 分钟`,
+      requiresPaymentOnSubmit: productAvailable && fee > 0, feeText: productAvailable ? money(fee) : '暂不可购买', depositText: '无需订金' }
+  }
   const packageSelected = activityPackage || null
   const activityMultiplier = activity.feeBasis === 'per_person' ? partySize : 1
   const packageMultiplier = packageSelected && packageSelected.feeBasis === 'per_person' ? partySize : 1
@@ -268,10 +297,19 @@ function pricingFor(activity, activityPackage, partySize) {
 }
 
 function partySizeLimit(activity, activityPackage) {
+  if (Number(activityPackage && activityPackage.maxParticipants) > 0) return Number(activityPackage.maxParticipants)
   const limits = [Number(activity && activity.remainingCapacity || 0)]
   if (activityPackage) limits.push(Number(activityPackage.remainingCapacity || 0))
   const valid = limits.filter((value) => Number.isFinite(value) && value > 0)
   return valid.length ? Math.max(1, Math.min(...valid)) : 1
+}
+
+function packageChoiceGroups(activityPackage, selections) {
+  return (activityPackage && activityPackage.choiceGroups || []).map(group => {
+    const options = Array.isArray(group.options) ? group.options : []
+    const saved = (selections || []).find(item => item.groupId === group.id)
+    return Object.assign({}, group, { options, selectedProductId: saved ? saved.productId : options.length === 1 ? options[0].productId : '' })
+  })
 }
 
 function activitySelection(activity, requestedPackagePublicId, requestedPartySize) {
@@ -284,6 +322,7 @@ function activitySelection(activity, requestedPackagePublicId, requestedPartySiz
   return {
     selectedPackagePublicId,
     selectedPackage: currentPackage,
+    selectedChoiceGroups: packageChoiceGroups(currentPackage),
     partySize,
     partySizeLimit: maximumPartySize,
     selectedPricing: pricingFor(activity, currentPackage, partySize),
@@ -339,12 +378,14 @@ function viewActivity(raw) {
     availablePaymentChoices,
     availablePaymentMethods,
     packages,
+    hasServicePackages: packages.some((item) => Number(item.maxParticipants) > 0),
     isSharePreview,
     availabilityText: registrationStopped ? '已停止新报名' : String(raw.availabilityText || (raw.remainingCapacity > 0 ? '可报名' : '暂不可订')),
     packageSelectionRequired: Boolean(raw.packageSelectionRequired),
     requiresPaymentOnSubmit: raw.feeAmountMinor > 0 && !availablePaymentChoices.includes('none'),
     safetyFacts,
     registrationBlocked,
+    addonBlocked: !safetyPolicyVersion || !refundPolicyVersion || (raw.addonEndsAt || raw.mealServiceEndsAt || raw.endsAt ? Date.parse(raw.addonEndsAt || raw.mealServiceEndsAt || raw.endsAt) <= Date.now() : true),
     paymentBlockedText: isSharePreview ? '' : paymentBlockedText,
     acknowledgementText: safetyPolicyVersion && refundPolicyVersion
       ? `我已阅读并确认安全规则 ${safetyPolicyVersion} 与退款规则 ${refundPolicyVersion}`
@@ -363,7 +404,40 @@ function viewRegistration(raw) {
   const paymentAmountMinor = Number(payment.amountMinor || payment.amountDueMinor || raw.amountDueMinor || 0)
   const manualStates = ['confirmed', 'refund_requested', 'refunding', 'refunded']
   const refundComplete = resolutionState === 'refunded' || refundStatus === 'succeeded'
-  const stateGuide = status === 'confirmed'
+  const serviceRefundDisposition = raw.serviceRefundDisposition === undefined ? payment.serviceRefundDisposition : raw.serviceRefundDisposition
+  const retainedService = ['retain_fulfillment', 'stop_unstarted'].includes(serviceRefundDisposition) && ['confirmed', 'checked_in'].includes(status)
+  const hasServiceFlow = raw.serviceVersion === 3 || Number(raw.maxParticipants) > 0 || Number(raw.activityPackage && raw.activityPackage.maxParticipants) > 0 || Boolean(raw.purchaseKind)
+  const refundEligibility = Object.prototype.hasOwnProperty.call(raw, 'canRequestFullRefund') ? raw.canRequestFullRefund : payment.canRequestFullRefund
+  const refundRequestBlockReason = String((Object.prototype.hasOwnProperty.call(raw, 'refundRequestBlockReason') ? raw.refundRequestBlockReason : payment.refundRequestBlockReason) || '').trim()
+  const refundRejectionReason = refundStatus === 'rejected' ? String((Object.prototype.hasOwnProperty.call(raw, 'refundRejectionReason') ? raw.refundRejectionReason : payment.refundRejectionReason) || '').trim() : ''
+  const refundInProgress = ['requested', 'approved', 'processing'].includes(refundStatus) || ['refund_requested', 'refunding'].includes(resolutionState)
+  const compensation = ['retain_fulfillment', 'stop_unstarted'].includes(serviceRefundDisposition)
+  const storedRefundAttempt = storageObject(REFUND_ATTEMPTS_KEY)[raw.publicId]
+  const hasUnconfirmedRefundAttempt = Boolean(storedRefundAttempt && !storedRefundAttempt.refundPublicId)
+  const showFullRefundRequest = hasServiceFlow && refundEligibility === true && paidAmountMinor > 0 && !refundInProgress && !refundComplete && !compensation
+  let refundGuidance = ''
+  let showRefundContact = false
+  if (hasUnconfirmedRefundAttempt) {
+    refundGuidance = '原退订申请结果尚未确认，请核对原申请；不会新建重复申请。'
+  } else if (refundStatus === 'succeeded' || (!refundStatus && resolutionState === 'refunded')) {
+    refundGuidance = compensation ? '本次补偿退款已完成；原入场、餐号和已使用记录保留，剩余履约按已确认安排处理。' : '退款已完成；是否可以重新报名，仍需符合当前活动名额、时间和报名规则。'
+  } else if (refundInProgress) {
+    // The status label supplies the authoritative review/processing stage.
+  } else if (showFullRefundRequest) {
+    refundGuidance = refundStatus === 'rejected' ? '如仍需退订，可再次申请本份整单退订，由门店重新审核。' : '可申请本份整单退订，提交后等待门店审核；申请不代表退款已到账。'
+  } else if ((!hasServiceFlow || refundRequestBlockReason === 'legacy_registration') && (paidAmountMinor > 0 || manualStates.includes(resolutionState))) {
+    refundGuidance = '这是一笔旧版报名，如需退款，请联系门店办理；退款进展会显示在这里。'
+    showRefundContact = !refundComplete
+  } else if (hasServiceFlow && (paidAmountMinor > 0 || manualStates.includes(resolutionState))) {
+    refundGuidance = ['rights_used', 'active_addons', 'compensation_review_required'].includes(refundRequestBlockReason)
+      ? '本份已有入场、核销、关联加购或补偿安排，请联系门店核对已使用内容及退款安排。'
+      : typeof refundEligibility !== 'boolean'
+        ? '退订资格暂未确认，请刷新本页核对；如仍无法确认，请联系门店。'
+        : '当前报名或付款状态暂不支持本份整单退订，请刷新核对；需要协助时请联系门店。'
+    showRefundContact = true
+  }
+  const canAddPurchase = ['confirmed', 'checked_in'].includes(status) && !['refund_requested', 'refunding', 'unknown'].includes(resolutionState) && (resolutionState !== 'refunded' || retainedService) && !['requested', 'approved', 'processing'].includes(refundStatus)
+  const stateGuide = retainedService ? (serviceRefundDisposition === 'stop_unstarted' ? '补偿退款按已确认的停止未制作安排处理；原入场、餐号及已制作记录保留。' : '补偿退款与原约定履约分开记录；原入场与餐饮权益按约继续使用。') : status === 'confirmed'
     ? '报名成功，名额已确认。'
     : ['reserved', 'payment_pending'].includes(status)
       ? '名额已暂留，完成付款后才算报名成功。'
@@ -376,14 +450,20 @@ function viewRegistration(raw) {
     statusText: REGISTRATION_STATUS_NAMES[status] || '状态待确认',
     resolutionState,
     resolutionText: RESOLUTION_STATE_NAMES[resolutionState] || '',
-    refundStatus,
-    refundStatusText: REFUND_STATUS_NAMES[refundStatus] || '',
+    refundStatus, serviceRefundDisposition,
+    refundStatusText: hasUnconfirmedRefundAttempt ? '原退订申请结果待核对，尚未确认退款到账' : refundStatus === 'succeeded' && compensation ? '补偿退款已完成' : REFUND_STATUS_NAMES[refundStatus] || '',
+    refundRejectionReason: hasUnconfirmedRefundAttempt ? '' : refundRejectionReason, refundRequestBlockReason, refundGuidance, showFullRefundRequest, showRefundContact, hasUnconfirmedRefundAttempt,
     allowedActions,
-    canStartPayment: allowedActions.includes('start_payment'),
+    canStartPayment: !retainedService && allowedActions.includes('start_payment'),
     canQueryPayment: allowedActions.includes('query_payment'),
-    canCancelDirectly: allowedActions.includes('cancel_registration'),
+    canCancelDirectly: !retainedService && allowedActions.includes('cancel_registration'),
     requiresManualCancellation: !refundComplete && (paidAmountMinor > 0 || manualStates.includes(resolutionState)),
-    canReRegister: status === 'cancelled' && !manualStates.includes(resolutionState),
+    canReRegister: (['cancelled', 'expired'].includes(status) && !manualStates.includes(resolutionState)) || (['cancelled', 'refunded'].includes(status) && refundComplete),
+    canAddPurchase, canUseService: retainedService || canAddPurchase, canAttemptFullRefund: canAddPurchase && !retainedService, canRequestFullRefund: refundEligibility,
+    hasServiceFlow,
+    purchaseText: raw.purchaseKind === 'single_dish' ? '单点加购' : raw.purchaseKind === 'meal_package' ? '仅加餐套餐' : '活动报名',
+    packageText: raw.activityPackage && raw.activityPackage.name || raw.packageName || '',
+    selectionSummary: (Array.isArray(raw.selections) ? raw.selections : []).filter(item => item && item.name).map(item => `${item.label ? item.label + '：' : ''}${item.name} × ${item.quantity}`),
     paymentAmountMinor,
     amountDueText: money(paymentAmountMinor),
     paidText: money(paidAmountMinor),
@@ -427,7 +507,10 @@ Page({
     id: '', shareSource: '', loading: true, busy: false, error: '', success: '', activity: null,
     partySize: 1, partySizeLimit: 1, contact: '', contactFocused: false, contactAttention: false,
     acknowledgementAttention: false, ruleAcknowledged: false, registration: null, loyaltyBenefits: [],
-    selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null,
+    selectedPackagePublicId: '', selectedPackage: null, selectedPricing: null, selectedChoiceGroups: [], packageNote: '',
+    registrations: [], registrationReadFailed: false, selectedRegistrationPublicId: '', creatingPurchase: false,
+    purchaseKind: 'admission_package', parentRegistrationPublicId: '', parentCredentialRequired: false, parentPreview: null, ownParentRegistrationPublicId: '', addonProducts: [], selectedAddonProduct: null, selectedAddonProductId: '', addonQuantity: 1,
+    serviceCode: null, serviceBusy: false, serviceError: '', registeredPartySizeDraft: '',
     previewOnly: false, memberAccessRequested: false,
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
@@ -441,10 +524,25 @@ Page({
 
   onLoad(options) {
     const source = options && options.source === 'share' ? 'share' : ''
-    this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false })
+    this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false, selectedRegistrationPublicId: shareActivityId(options && options.registrationId) })
   },
-  onUnload() { if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer) },
-  onShow() { enablePublicShareMenu(); this.load() },
+  onHide() { this.pageVisible = false; this.invalidateReads() },
+  onUnload() { this.parentScanIntent = null; this.pageVisible = false; this.invalidateReads() },
+  invalidateReads() {
+    this.stopAddonMenuRefresh()
+    this.parentPurchaseCredential = null
+    this.serviceGeneration = (this.serviceGeneration || 0) + 1
+    this.selectionGeneration = (this.selectionGeneration || 0) + 1
+    this.pageGeneration = (this.pageGeneration || 0) + 1
+    this.readGeneration = (this.readGeneration || 0) + 1
+    this.presentationGeneration = (this.presentationGeneration || 0) + 1
+    if (this.registrationFocusTimer) clearTimeout(this.registrationFocusTimer)
+    this._presentationOptions = []
+    // An already-issued payment must retain its registration for reconciliation.
+    // New reads and pre-submit continuations are invalidated independently.
+    if (!this.data.busy) this.setData({ membership: null, registration: null, registrations: [], serviceCode: null, serviceError: '', loyaltyBenefits: [], membershipInviteBusy: false })
+  },
+  onShow() { this.pageVisible = true; enablePublicShareMenu(); if (!this.data.busy) this.load() },
 
   activitySharePayload() {
     const activity = this.data.activity
@@ -477,17 +575,19 @@ Page({
   },
 
   async load() {
-    this.setData({ loading: true, error: '', success: '' })
+    const generation = this.readGeneration = (this.readGeneration || 0) + 1
+    this.setData({ loading: true, error: '', success: '', membership: null, registration: null, loyaltyBenefits: [] })
     try {
       if (!this.data.id) {
         this.setData({ loading: false, activity: null, membershipInviteVisible: false, error: '活动入口无效，请返回活动列表重新选择' })
         return
       }
       if (this.data.shareSource === 'share' && !this.data.memberAccessRequested) {
-        await this.loadAnonymousSharePreview(false)
+        await this.loadAnonymousSharePreview(false, generation)
         return
       }
       const bootstrap = await getMiniBootstrap()
+      if (generation !== this.readGeneration) return
       const membership = bootstrap.membership || null
       const membershipTerms = bootstrap.membershipTerms || null
       this.setData({ membership, membershipTerms })
@@ -497,12 +597,12 @@ Page({
           return
         }
         if (this.data.shareSource === 'share') {
-          await this.loadAnonymousSharePreview(Boolean(membershipTerms))
+          await this.loadAnonymousSharePreview(Boolean(membershipTerms), generation)
           if (!membershipTerms) this.setData({ error: '当前会员协议暂时无法读取，请稍后再试。' })
           return
         }
         // Verify the public activity exists before asking the guest to join.
-        await this.loadAnonymousSharePreview(true)
+        await this.loadAnonymousSharePreview(true, generation)
         return
       }
       const [raw, activityPrompt, memberPrompt, couponPrompt] = await Promise.all([
@@ -512,6 +612,7 @@ Page({
         getAlipayNotificationPrompt('coupon_open').catch(() => ({ authorizations: [] })),
         this.preloadAlipaySubscriptionPresentationOptions(),
       ])
+      if (generation !== this.readGeneration) return
       const notificationPrompt = {
         authorizations: mergeAlipayNotificationPromptOptions(
           activityPrompt.authorizations,
@@ -531,40 +632,53 @@ Page({
       } catch (_error) {
         loyaltyBenefits = []
       }
+      if (generation !== this.readGeneration) return
       let registrations = []
       let registrationReadError = ''
       try { registrations = await getActivityRegistrations() } catch (error) { registrationReadError = customerErrorMessage(error, '报名记录暂时无法读取') }
+      if (generation !== this.readGeneration) return
       const local = storageObject(LOCAL_REGISTRATIONS_KEY)
-      const authoritative = (registrations || []).find((item) => item.activityPublicId === raw.publicId)
-      let registrationRaw = authoritative || local[raw.publicId] || null
+      const activityRegistrations = (registrations || []).filter((item) => item.activityPublicId === raw.publicId)
+      const pending = storageObject(REGISTRATION_ATTEMPTS_KEY)[raw.publicId]
+      const recovered = pending && activityRegistrations.find((item) => item.registrationRequestIdempotencyKey === pending.idempotencyKey)
+      const pendingParent = pending && pending.payload && pending.payload.parentRegistrationPublicId
+      const authoritative = recovered || activityRegistrations.find((item) => item.publicId === pendingParent) || activityRegistrations.find((item) => item.publicId === this.data.selectedRegistrationPublicId) || activityRegistrations[0]
+      let registrationRaw = authoritative || (registrationReadError ? local[raw.publicId] : null) || null
       let paymentReadError = ''
-      if (registrationRaw && registrationRaw.publicId && registrationRaw.status !== 'cancelled') {
+      if (registrationRaw && registrationRaw.publicId) {
         try {
           const paymentState = await getActivityRegistrationPayment(registrationRaw.publicId)
           registrationRaw = Object.assign({}, registrationRaw, paymentState, {
+            canRequestFullRefund: paymentState.canRequestFullRefund, refundRequestBlockReason: paymentState.refundRequestBlockReason, refundRejectionReason: paymentState.refundRejectionReason,
             status: paymentState.registrationStatus || registrationRaw.status,
           })
-        } catch (error) { paymentReadError = customerErrorMessage(error, '付款状态暂时无法读取') }
+        } catch (error) {
+          registrationRaw = Object.assign({}, registrationRaw, { canRequestFullRefund: undefined, refundRequestBlockReason: undefined, refundRejectionReason: undefined })
+          paymentReadError = customerErrorMessage(error, '付款状态暂时无法读取')
+        }
       }
+      if (generation !== this.readGeneration) return
       const pendingAttempt = storageObject(REGISTRATION_ATTEMPTS_KEY)[raw.publicId]
-      const sameCancelledRegistration = authoritative && authoritative.status === 'cancelled' && (
-        typeof pendingAttempt === 'string'
-        || (pendingAttempt && pendingAttempt.previousRegistrationPublicId === authoritative.publicId)
-      )
-      if (authoritative && !sameCancelledRegistration) this.clearRegistrationAttempt(raw.publicId)
+      if (recovered || (authoritative && !pendingAttempt)) this.clearRegistrationAttempt(raw.publicId)
       const registration = viewRegistration(registrationRaw)
       if (registration) this.rememberRegistration(registration, raw.publicId)
       const activity = viewActivity(raw)
       this.setData({
-        loading: false, activity, loyaltyBenefits, registration, error: paymentReadError || registrationReadError,
+        loading: false, activity, loyaltyBenefits, registration, registrations: activityRegistrations.map(viewRegistration), registrationReadFailed: Boolean(registrationReadError),
+        selectedRegistrationPublicId: registration && registration.publicId || '',
+        creatingPurchase: Boolean(pendingAttempt && !recovered && pendingAttempt.payload && pendingAttempt.payload.purchaseKind),
+        serviceCode: null, serviceError: '', error: paymentReadError || registrationReadError,
         previewOnly: false,
         membershipInviteVisible: false,
         alipayNotificationPromptOptions: notificationPrompt.authorizations || [],
         alipaySubscriptionPresentationOptions: notificationPrompt.presentation || [],
         ...activitySelection(activity, this.data.selectedPackagePublicId, this.data.partySize),
       })
+      if (pendingAttempt && !recovered && pendingAttempt.payload) await this.restorePurchaseAttempt(pendingAttempt)
+      if (registration) await this.loadServiceCode()
       rememberPresentationOptions('activity_registration', notificationPrompt.presentation || [])
     } catch (error) {
+      if (generation !== this.readGeneration) return
       if (error && error.code === 'ACTIVITY_MEMBERSHIP_REQUIRED') {
         this.setData({
           loading: false,
@@ -584,8 +698,9 @@ Page({
     }
   },
 
-  async loadAnonymousSharePreview(showMembershipInvite) {
+  async loadAnonymousSharePreview(showMembershipInvite, generation = this.readGeneration) {
     const raw = await getActivityPreview(this.data.id)
+    if (generation !== this.readGeneration) return
     if (!raw) throw new Error('活动已结束、暂停或当前不可分享')
     const activity = viewActivity(raw)
     this.setData({
@@ -664,40 +779,308 @@ Page({
     }
   },
 
+  onRegisteredPartySizeInput(event) {
+    if (this.data.busy) return
+    this.setData({ registeredPartySizeDraft: String(event.detail.value || '').replace(/\D/g, '').slice(0, 3) })
+  },
+
+  async saveRegisteredPartySize() {
+    const registration = this.data.registration
+    const service = this.data.serviceCode && this.data.serviceCode.service
+    if (this.data.busy || !registration || !service || !service.includesAdmission || service.meal) return
+    const partySize = Number(this.data.registeredPartySizeDraft)
+    const minimum = Math.max(1, Number(service.admittedCount || 0))
+    if (!Number.isInteger(partySize) || partySize < minimum || partySize > service.maxParticipants) return this.setData({ error: `本份实际人数应在 ${minimum} 至 ${service.maxParticipants} 人之间，不能少于已入场人数。` })
+    const stored = storageObject(PARTY_SIZE_ATTEMPTS_KEY)
+    const previous = stored[registration.publicId]
+    if (previous && previous.partySize !== partySize) return this.setData({ error: `上次修改为 ${previous.partySize} 人的结果尚未核对，请先恢复该人数再保存。` })
+    const attempt = previous || { partySize, idempotencyKey: commandKey('activity-party-size', registration.publicId) }
+    stored[registration.publicId] = attempt
+    runtime.setStorageSync(PARTY_SIZE_ATTEMPTS_KEY, stored)
+    this.setData({ busy: true, error: '', success: '' })
+    try {
+      const result = await updateActivityRegistrationPartySize(registration.publicId, attempt.partySize, attempt.idempotencyKey)
+      if (!result || result.partySize !== attempt.partySize) throw new Error('人数修改结果尚未确认，请按原人数重试核对。')
+      delete stored[registration.publicId]; runtime.setStorageSync(PARTY_SIZE_ATTEMPTS_KEY, stored)
+      const next = viewRegistration(Object.assign({}, registration, { partySize: result.partySize }))
+      this.rememberRegistration(next)
+      if (this.data.registration && this.data.registration.publicId === registration.publicId) {
+        this.setData({ registration: next, success: '本份实际参加人数已更新，套餐价格及可入场上限不变。' })
+        await this.loadServiceCode()
+      }
+    } catch (error) { this.setData({ error: customerErrorMessage(error, '人数修改结果尚未确认，请按原人数重试核对。') }) }
+    finally { this.setData({ busy: false }) }
+  },
+
+  async requestRegistrationRefund() {
+    const registration = this.data.registration
+    if (this.data.busy || this._refundConfirmPending || !registration || !registration.hasServiceFlow || (!registration.canAttemptFullRefund && !registration.hasUnconfirmedRefundAttempt) || Number(registration.paidAmountMinor || 0) <= 0) return
+    this._refundConfirmPending = true
+    const generation = this.pageGeneration || 0
+    const confirmed = await new Promise(resolve => runtime.showModal({ title: registration.hasUnconfirmedRefundAttempt ? '核对原退订申请' : '申请整份退订', content: registration.hasUnconfirmedRefundAttempt ? '将使用原请求核对退订申请，不会新建重复申请。' : '将申请退订当前这一份订单。提交后由门店审核并原路退款；已使用权益或有关联加购时，请先联系门店处理。提交申请不代表退款已到账。', confirmText: registration.hasUnconfirmedRefundAttempt ? '核对原申请' : '提交申请', success: result => resolve(result.confirm), fail: () => resolve(false) }))
+    this._refundConfirmPending = false
+    if (!confirmed || generation !== (this.pageGeneration || 0) || this.data.busy || !this.data.registration || this.data.registration.publicId !== registration.publicId) return
+    this.setData({ busy: true, error: '', success: '' })
+    const current = () => generation === (this.pageGeneration || 0) && this.data.registration && this.data.registration.publicId === registration.publicId
+    try {
+      const state = await getActivityRegistrationPayment(registration.publicId)
+      if (!current()) return
+      const authoritative = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
+      this.rememberRegistration(authoritative)
+      this.setData({ registration: authoritative })
+      const stored = storageObject(REFUND_ATTEMPTS_KEY)
+      let attempt = stored[registration.publicId]
+      // A previous terminal refund must never clear an unknown newer request.
+      // Only the exact acknowledged refund can establish a new user intent.
+      if (attempt && attempt.refundPublicId && attempt.refundPublicId === state.refundPublicId && ['rejected', 'cancelled'].includes(state.refundStatus)) attempt = null
+      if (!(attempt && !attempt.refundPublicId) && (!authoritative.canAttemptFullRefund || state.canRequestFullRefund !== true)) {
+        this.setData({ serviceCode: null, success: '已更新退款进展与退订资格；请按当前页面提示继续处理。' })
+        return
+      }
+      if (!attempt) attempt = { idempotencyKey: commandKey('activity-refund-request', registration.publicId), reason: '顾客在小程序申请整份活动订单退订' }
+      stored[registration.publicId] = attempt; runtime.setStorageSync(REFUND_ATTEMPTS_KEY, stored)
+      const result = await requestActivityRegistrationRefund(registration.publicId, attempt.reason, attempt.idempotencyKey)
+      if (!result || !result.refundPublicId || result.status !== 'requested') throw new Error('退款申请结果尚未确认，请使用原申请重试核对。')
+      attempt.refundPublicId = result.refundPublicId
+      const latestStored = storageObject(REFUND_ATTEMPTS_KEY)
+      latestStored[registration.publicId] = attempt; runtime.setStorageSync(REFUND_ATTEMPTS_KEY, latestStored)
+      if (!current()) return
+      let next = viewRegistration(Object.assign({}, authoritative, { resolutionState: 'refund_requested', refundStatus: 'requested', refundPublicId: result.refundPublicId, allowedActions: [] }))
+      let message = '整份退订申请已提交，等待门店审核；尚未退款到账。'
+      try {
+        const latest = await getActivityRegistrationPayment(registration.publicId)
+        if (!current()) return
+        next = viewRegistration(Object.assign({}, authoritative, latest, { canRequestFullRefund: latest.canRequestFullRefund, refundRequestBlockReason: latest.refundRequestBlockReason, refundRejectionReason: latest.refundRejectionReason, status: latest.registrationStatus || authoritative.status }))
+        if (latest.refundPublicId === result.refundPublicId && ['rejected', 'cancelled'].includes(latest.refundStatus)) message = next.showFullRefundRequest ? '已核对原申请，原申请已被拒绝或撤销；如仍需退订，可再次点击申请。' : '已核对原申请，原申请已被拒绝或撤销；请按页面提示核对本份退订资格。'
+        else if (latest.refundStatus && latest.refundStatus !== 'requested') message = '已更新退款申请进展，请查看当前状态。'
+      } catch (_error) { message = '申请已提交，当前审核进度暂时无法读取；请刷新核对，尚未确认退款到账。' }
+      this.rememberRegistration(next)
+      this.setData({ registration: next, serviceCode: null, success: message })
+    } catch (error) {
+      if (current()) this.setData({ registration: viewRegistration(this.data.registration), error: customerErrorMessage(error, '退款申请结果尚未确认，请重试原申请核对，不要重复提交其他申请。') })
+    } finally { this.setData({ busy: false }) }
+  },
+
+  hasPendingPurchase() {
+    const pending = storageObject(REGISTRATION_ATTEMPTS_KEY)[this.data.id]
+    if (!pending) return false
+    this.setData({ error: '上一次提交结果尚未核对，请先按原内容恢复，避免重复购买。' })
+    return true
+  },
+
+  async restorePurchaseAttempt(attempt) {
+    const payload = attempt.payload || {}
+    if (!payload.purchaseKind) return
+    const selection = activitySelection(this.data.activity, payload.activityPackagePublicId || '', payload.partySize)
+    const kind = payload.purchaseKind
+    this.setData({ ...selection, selectedChoiceGroups: packageChoiceGroups(selection.selectedPackage, payload.selections), packageNote: payload.note || '', creatingPurchase: true, purchaseKind: kind,
+      parentRegistrationPublicId: payload.parentRegistrationPublicId || '', parentCredentialRequired: payload.parentCredentialRequired === true, parentPreview: null, addonQuantity: Number(payload.quantity || 1),
+      error: '有一份提交结果尚未核对。请重新填写原手机号，按原内容恢复；不会另建一份。' })
+    if (kind === 'single_dish') await this.loadAddonProducts(payload.productId)
+    else this.setData({ selectedPricing: pricingFor(this.data.activity, selection.selectedPackage, selection.partySize, kind) })
+  },
+
+  async selectRegistration(event) {
+    if (this.data.busy) return
+    const id = String(event.currentTarget.dataset.registrationId || '')
+    const raw = this.data.registrations.find((item) => item.publicId === id)
+    if (!raw) return
+    this.parentPurchaseCredential = null
+    const generation = this.selectionGeneration = (this.selectionGeneration || 0) + 1
+    this.setData({ parentPreview: null, parentCredentialRequired: false, selectedRegistrationPublicId: id, registration: raw, creatingPurchase: false, serviceCode: null, serviceError: '', purchaseKind: 'admission_package', parentRegistrationPublicId: '', error: '', success: '' })
+    const registration = await this.readPaymentState(raw)
+    if (generation !== this.selectionGeneration) return
+    this.rememberRegistration(registration)
+    this.setData({ registration })
+    await this.loadServiceCode()
+  },
+
+  async scanParentForAddon() {
+    if (this.data.busy || this._registrationPending || this.data.registrationReadFailed) return
+    if (!this.data.activity || this.data.activity.addonBlocked) return this.setData({ error: '本场当前不开放加购。' })
+    const pending = storageObject(REGISTRATION_ATTEMPTS_KEY)[this.data.id]
+    if (pending && !(pending.payload && pending.payload.parentCredentialRequired)) return this.hasPendingPurchase()
+    if (!pending && this.data.registrations.some(item => ['reserved', 'payment_pending'].includes(item.status))) return this.setData({ error: '请先核对已有待付款订单，再新增购买。' })
+    if (!this.data.membership) return this.openMembershipInvite()
+    const intent = this.parentScanIntent = {}
+    const current = () => this.parentScanIntent === intent && this.pageVisible !== false
+    this.setData({ busy: true, error: '' })
+    try {
+      const scanned = await new Promise((resolve, reject) => runtime.scanCode({ onlyFromCamera: true, scanType: ['qrCode'], success: resolve, fail: reject }))
+      if (!current()) return
+      const code = String(scanned && scanned.result || '').trim()
+      if (!/^MBOX_ACTIVITY_V3:[^:]{8,128}:[0-9a-f-]{36}$/i.test(code)) throw new Error('请扫描原活动票的专用核销码，会员码不能关联送餐。')
+      const generation = this.pageGeneration || 0
+      const parent = await resolveActivityParent(this.data.id, code)
+      if (!current() || generation !== (this.pageGeneration || 0)) return
+      if (!parent || parent.activityPublicId !== this.data.id || !parent.registrationPublicId) throw new Error('该凭证不是本场可关联的有效活动票。')
+      if (pending && pending.payload.parentRegistrationPublicId !== parent.registrationPublicId) throw new Error('请扫描上次加购关联的同一张原票，不能改成另一号码。')
+      this.parentPurchaseCredential = code
+      this.setData({ ...activitySelection(this.data.activity, '', 1), creatingPurchase: true, purchaseKind: 'single_dish', parentCredentialRequired: true,
+        parentRegistrationPublicId: parent.registrationPublicId, parentPreview: { packageName: parent.packageName || '活动票', number: parent.number, plaqueState: parent.plaqueState },
+        selectedAddonProduct: null, selectedAddonProductId: '', addonProducts: [], addonQuantity: pending ? Number(pending.payload.quantity || 1) : 1,
+        packageNote: pending ? pending.payload.note || '' : '', ruleAcknowledged: false, error: '', success: '' })
+      await this.loadAddonProducts(pending && pending.payload.productId)
+    } catch (error) {
+      if (current()) this.setData({ error: customerErrorMessage(error, '没有完成扫码关联，请重试。') })
+    } finally {
+      if (this.parentScanIntent === intent) this.parentScanIntent = null
+      this.setData({ busy: false })
+    }
+  },
+
+  async beginPurchase(event) {
+    if (this.data.busy || this.hasPendingPurchase()) return
+    if (this.data.registrationReadFailed) return this.setData({ error: '请先刷新核对已有订单，暂不能另建购买。' })
+    const kind = String(event && event.currentTarget && event.currentTarget.dataset.kind || 'admission_package')
+    if (!['admission_package', 'meal_package', 'single_dish'].includes(kind)) return
+    if (kind !== 'admission_package' && this.data.activity.addonBlocked) return this.setData({ error: '本场当前不开放加购，请联系活动负责人。' })
+    const unfinished = this.data.registrations.find((item) => ['reserved', 'payment_pending'].includes(item.status))
+    if (unfinished) {
+      this.setData({ error: '还有一份待付款或结果待确认，请先选择该份继续付款、查单或取消，再购买。' })
+      return
+    }
+    const parent = this.data.registration
+    if (kind !== 'admission_package' && (!parent || !parent.canAddPurchase)) return
+    if (kind === 'single_dish' && (!this.data.serviceCode || !(this.data.serviceCode.service.hasMeal || this.data.serviceCode.service.includesAdmission) || this.data.serviceCode.service.purchaseKind === 'single_dish')) {
+      this.setData({ error: '请先选择一份有效活动票或餐饮套餐，再加购单点菜品。' })
+      return
+    }
+    this.parentPurchaseCredential = null
+    this.stopAddonMenuRefresh()
+    const packages = this.data.activity.packages || []
+    const first = packages.find((item) => item.availability === 'available' && (kind === 'meal_package' ? item.isServicePackage && (item.includesAdmission === false || item.mealOnlyFeeAmountMinor != null) : item.isServicePackage && item.includesAdmission !== false))
+    const selection = activitySelection(this.data.activity, kind === 'single_dish' ? '' : first && first.publicId || '', 1)
+    this.setData({ ...selection, creatingPurchase: true, purchaseKind: kind, parentCredentialRequired: false, parentPreview: null,
+      parentRegistrationPublicId: kind === 'admission_package' ? '' : parent.publicId,
+      selectedAddonProduct: null, selectedAddonProductId: '', addonProducts: [], addonQuantity: 1, packageNote: '', ruleAcknowledged: false, error: '', success: '',
+      selectedPricing: pricingFor(this.data.activity, selection.selectedPackage, selection.partySize, kind),
+    })
+    if (kind === 'single_dish') await this.loadAddonProducts()
+  },
+
+  stopCreatingPurchase() {
+    if (this.data.busy || this.hasPendingPurchase()) return
+    this.parentPurchaseCredential = null
+    this.stopAddonMenuRefresh()
+    this.setData({ parentPreview: null, parentCredentialRequired: false, creatingPurchase: false, purchaseKind: 'admission_package', parentRegistrationPublicId: '', selectedAddonProduct: null, selectedAddonProductId: '', error: '' })
+  },
+
+  stopAddonMenuRefresh() {
+    if (this.addonMenuTimer) clearTimeout(this.addonMenuTimer)
+    this.addonMenuTimer = null
+  },
+
+  startAddonMenuRefresh() {
+    this.stopAddonMenuRefresh()
+    if (this.pageVisible === false || !this.data.creatingPurchase || this.data.purchaseKind !== 'single_dish') return
+    this.addonMenuTimer = setTimeout(async () => {
+      this.addonMenuTimer = null
+      if (this.pageVisible === false || !this.data.creatingPurchase || this.data.purchaseKind !== 'single_dish') return
+      if (this.data.busy || this._registrationPending) { this.startAddonMenuRefresh(); return }
+      await this.loadAddonProducts(this.data.selectedAddonProductId)
+    }, 60000)
+    if (this.addonMenuTimer && typeof this.addonMenuTimer.unref === 'function') this.addonMenuTimer.unref()
+  },
+
+  async loadAddonProducts(requestedId) {
+    const generation = this.pageGeneration || 0
+    const menuGeneration = this.addonMenuGeneration = (this.addonMenuGeneration || 0) + 1
+    const requestedSelection = requestedId || this.data.selectedAddonProductId || ''
+    try {
+      const rows = await getActivityAddonProducts(this.data.id)
+      if (generation !== (this.pageGeneration || 0) || menuGeneration !== this.addonMenuGeneration || this.data.purchaseKind !== 'single_dish') return
+      const addonProducts = (Array.isArray(rows) ? rows : []).map((item) => Object.assign({}, item, { sellable: item.sellable !== false && item.priceAmountMinor != null, priceText: item.sellable !== false && item.priceAmountMinor != null ? money(Number(item.priceAmountMinor)) : '', statusText: item.statusText || (item.sellable === false || item.priceAmountMinor == null ? '当前不可购买' : '') }))
+      const product = addonProducts.find((item) => item.id === requestedSelection) || (!requestedSelection && addonProducts.find(item => item.sellable)) || null
+      this.setData({ addonProducts, selectedAddonProduct: product, selectedAddonProductId: requestedSelection || product && product.id || '',
+        selectedPricing: pricingFor(this.data.activity, null, 1, 'single_dish', product, this.data.addonQuantity),
+        ...(requestedSelection && !product ? { error: '原菜品当前不可售，请先刷新核对原提交结果；不要改成另一份重复下单。' } : {}),
+      })
+    } catch (error) { if (generation === (this.pageGeneration || 0) && menuGeneration === this.addonMenuGeneration) this.setData({ error: customerErrorMessage(error, '加购菜单暂时无法读取，请稍后刷新。') }) }
+    finally { if (generation === (this.pageGeneration || 0) && menuGeneration === this.addonMenuGeneration) this.startAddonMenuRefresh() }
+  },
+
+  chooseAddonProduct(event) {
+    if (this._registrationPending || this.data.busy || this.hasPendingPurchase()) return
+    const product = this.data.addonProducts.find((item) => item.id === event.currentTarget.dataset.productId)
+    if (!product || product.sellable === false) return
+    this.setData({ selectedAddonProduct: product, selectedAddonProductId: product.id, addonQuantity: 1, selectedPricing: pricingFor(this.data.activity, null, 1, 'single_dish', product, 1) })
+  },
+
+  changeAddonQuantity(event) {
+    if (this._registrationPending || this.data.busy || this.hasPendingPurchase()) return
+    const quantity = Math.max(1, Math.min(99, this.data.addonQuantity + Number(event.currentTarget.dataset.delta)))
+    this.setData({ addonQuantity: quantity, selectedPricing: pricingFor(this.data.activity, null, 1, 'single_dish', this.data.selectedAddonProduct, quantity) })
+  },
+
+  async loadServiceCode() {
+    const registration = this.data.registration
+    const generation = this.serviceGeneration = (this.serviceGeneration || 0) + 1
+    this.setData({ serviceCode: null, serviceError: '', serviceBusy: false, ownParentRegistrationPublicId: '' })
+    if (!registration || !registration.canUseService || !registration.hasServiceFlow) return
+    this.setData({ serviceBusy: true })
+    try {
+      const result = await getActivityRegistrationServiceCode(registration.publicId)
+      if (generation !== this.serviceGeneration || !this.data.registration || this.data.registration.publicId !== registration.publicId) return
+      const service = result && result.service
+      if (!service || service.registrationPublicId !== registration.publicId || (registration.purchaseKind !== 'single_dish' && (!result.code || !result.qrDataUrl))) throw new Error('本份核销码暂时无法读取')
+      const changes = storageObject(PARTY_SIZE_ATTEMPTS_KEY)
+      const pending = changes[registration.publicId]
+      if (pending && pending.partySize === service.partySize) { delete changes[registration.publicId]; runtime.setStorageSync(PARTY_SIZE_ATTEMPTS_KEY, changes) }
+      this.setData({ serviceCode: result, ownParentRegistrationPublicId: this.data.registrations.some(item => item.publicId === registration.parentRegistrationPublicId) ? registration.parentRegistrationPublicId : '', registeredPartySizeDraft: String(pending && pending.partySize !== service.partySize ? pending.partySize : service.partySize) })
+    } catch (error) {
+      if (generation === this.serviceGeneration) this.setData({ serviceError: customerErrorMessage(error, '本份核销码暂时无法读取，请刷新或联系门口工作人员。') })
+    } finally {
+      if (generation === this.serviceGeneration) this.setData({ serviceBusy: false })
+    }
+  },
+
   noop() {},
 
   changePartySize(event) {
+    if (this._registrationPending || this.data.busy || this.hasPendingPurchase()) return
     const delta = Number(event.currentTarget.dataset.delta)
     const maximum = this.data.partySizeLimit || 1
     const partySize = Math.max(1, Math.min(maximum, this.data.partySize + delta))
-    this.setData({ partySize, selectedPricing: pricingFor(this.data.activity, this.data.selectedPackage, partySize) })
+    this.setData({ partySize, selectedPricing: pricingFor(this.data.activity, this.data.selectedPackage, partySize, this.data.purchaseKind, this.data.selectedAddonProduct, this.data.addonQuantity) })
   },
+  choosePackageOption(event) {
+    if (this._registrationPending || this.data.busy || this.hasPendingPurchase()) return
+    const { groupId, productId } = event.currentTarget.dataset
+    this.setData({ selectedChoiceGroups: this.data.selectedChoiceGroups.map(group => group.id === groupId && group.options.some(option => option.productId === productId) ? Object.assign({}, group, { selectedProductId: productId }) : group) })
+  },
+  onPackageNoteInput(event) {
+    if (this._registrationPending || this.data.busy || this.hasPendingPurchase()) return
+    this.setData({ packageNote: String(event.detail.value || '').slice(0, 200) })
+  },
+
   choosePackage(event) {
     const activity = this.data.activity
-    if (!activity || this.data.busy) return
+    if (this._registrationPending || !activity || this.data.busy || this.hasPendingPurchase()) return
     const publicId = String(event.currentTarget.dataset.packageId || '')
     const next = selectedPackage(activity, publicId)
-    if (!next || next.availability !== 'available') return
+    if (!next || next.availability !== 'available' || (this.data.purchaseKind === 'meal_package' && next.includesAdmission !== false && next.mealOnlyFeeAmountMinor == null) || (this.data.purchaseKind === 'admission_package' && next.isServicePackage && next.includesAdmission === false)) return
     this.clearRegistrationAttempt(activity.publicId)
     const limit = partySizeLimit(activity, next)
     const partySize = Math.min(this.data.partySize, limit)
     this.setData({
       selectedPackagePublicId: publicId,
       selectedPackage: next,
+      selectedChoiceGroups: packageChoiceGroups(next),
       partySize,
       partySizeLimit: limit,
-      selectedPricing: pricingFor(activity, next, partySize),
+      selectedPricing: pricingFor(activity, next, partySize, this.data.purchaseKind),
       error: '', success: '',
     })
   },
   clearPackageSelection() {
     const activity = this.data.activity
-    if (!activity || activity.packageSelectionRequired || this.data.busy) return
+    if (this._registrationPending || !activity || activity.packageSelectionRequired || this.data.busy || this.data.purchaseKind !== 'admission_package' || this.hasPendingPurchase()) return
     this.clearRegistrationAttempt(activity.publicId)
     const limit = partySizeLimit(activity, null)
     const partySize = Math.min(this.data.partySize, limit)
     this.setData({
-      selectedPackagePublicId: '', selectedPackage: null,
+      selectedPackagePublicId: '', selectedPackage: null, selectedChoiceGroups: [], packageNote: '',
       partySize, partySizeLimit: limit,
       selectedPricing: pricingFor(activity, null, partySize), error: '', success: '',
     })
@@ -761,27 +1144,43 @@ Page({
   },
 
   async register() {
+    if (this._registrationPending || this.data.busy) return
+    this._registrationPending = true
+    try { return await this.completeRegistration(this.pageGeneration || 0) }
+    finally { this._registrationPending = false }
+  },
+
+  async completeRegistration(generation) {
+    const current = () => generation === (this.pageGeneration || 0)
     const activity = this.data.activity
     if (!activity || this.data.busy) return
     if (!this.data.membership) {
       await this.openMembershipInvite()
       return
     }
+    if (this.data.registrationReadFailed) return this.setData({ error: '请先刷新核对已有订单，暂不能另建购买。' })
     const chosenPackage = this.data.selectedPackage
-    if (activity.packageSelectionRequired && !chosenPackage) {
+    const purchaseKind = this.data.purchaseKind || 'admission_package'
+    const isSingleDish = purchaseKind === 'single_dish'
+    const parentCredential = this.parentPurchaseCredential
+    const choiceGroups = isSingleDish ? [] : this.data.selectedChoiceGroups || []
+    const missingChoice = choiceGroups.find(group => !group.selectedProductId)
+    if (missingChoice && !storageObject(REGISTRATION_ATTEMPTS_KEY)[activity.publicId]) return this.setData({ error: `请先选择${missingChoice.name}，每组固定选择一种。` })
+    if (isSingleDish && (!this.data.selectedAddonProduct || this.data.selectedAddonProduct.sellable === false)) return this.setData({ error: '请先选择当前可售的加购菜品。' })
+    if (!isSingleDish && (activity.packageSelectionRequired || purchaseKind === 'meal_package') && !chosenPackage) {
       return this.setData({ error: '请先选择一个活动套餐后再报名。' })
     }
     if (chosenPackage && chosenPackage.availability !== 'available') {
       return this.setData({ error: '所选套餐当前不可报名，请换一档后再试。' })
     }
-    const pricing = pricingFor(activity, chosenPackage, this.data.partySize)
-    if (activity.registrationBlocked || pricing.paymentAvailability === 'blocked') {
+    const pricing = pricingFor(activity, chosenPackage, this.data.partySize, purchaseKind, this.data.selectedAddonProduct, this.data.addonQuantity)
+    if ((purchaseKind === 'admission_package' ? activity.registrationBlocked : activity.addonBlocked) || pricing.paymentAvailability === 'blocked') {
       return this.setData({ error: activity.paymentBlockedText || '线上付款暂时不可用，本次报名尚未提交。' })
     }
     if (pricing.requiresPaymentOnSubmit && getRuntimeConfig().alipayPaymentEnabled !== true) {
       return this.setData({ error: '支付宝在线支付后端适配尚未接通，本次报名尚未创建，也没有占用名额。' })
     }
-    if (this.data.registration && !this.data.registration.canReRegister) {
+    if (this.data.registration && !this.data.registration.canReRegister && !this.data.creatingPurchase) {
       await this.showRegistrationOutcome(this.data.registration)
       return
     }
@@ -789,7 +1188,7 @@ Page({
     const previous = attempts[activity.publicId]
     if (typeof previous === 'string') {
       const recovered = await this.recoverRegistration(activity.publicId, null)
-      if (recovered) return
+      if (!current() || recovered) return
       this.clearRegistrationAttempt(activity.publicId)
       this.setData({ error: '上一次报名记录已失效，请重新填写手机号后报名。' })
       return
@@ -800,13 +1199,21 @@ Page({
       return
     }
     let attempt = previous && previous.payload ? previous : null
-    if (attempt && (attempt.payload.activityPackagePublicId || '') !== ((chosenPackage && chosenPackage.publicId) || '')) {
+    if (isSingleDish && (this.data.parentCredentialRequired || (attempt && attempt.payload.parentCredentialRequired)) && !parentCredential) {
+      if (attempt && await this.recoverRegistration(activity.publicId, attempt)) return
+      if (current()) this.setData({ error: '请重新扫描原票核销码授权关联；已有请求会使用原记录恢复，不另建订单。' })
+      return
+    }
+    if (attempt && attempt.payload.purchaseKind && ((attempt.payload.activityPackagePublicId || '') !== ((chosenPackage && chosenPackage.publicId) || '') || attempt.payload.purchaseKind !== purchaseKind || (attempt.payload.productId || '') !== (this.data.selectedAddonProduct && this.data.selectedAddonProduct.id || ''))) {
+      return this.setData({ error: '请先恢复上一次提交内容并核对结果，当前不能切换为新购买。' })
+    }
+    if (attempt && !attempt.payload.purchaseKind && (attempt.payload.activityPackagePublicId || '') !== ((chosenPackage && chosenPackage.publicId) || '')) {
       this.clearRegistrationAttempt(activity.publicId)
       attempt = null
     }
-    if (attempt && registrationAttemptExpired(attempt)) {
+    if (attempt && !attempt.payload.purchaseKind && registrationAttemptExpired(attempt)) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
-      if (recovered) return
+      if (!current() || recovered) return
       this.clearRegistrationAttempt(activity.publicId)
       this.setData({ error: '上次未完成报名已超过 15 分钟，请重新填写手机号后报名。' })
       return
@@ -825,8 +1232,9 @@ Page({
       // Keep the native subscription sheet in this direct customer tap.  Do
       // not wait for the confirmation dialog or a payment/network callback.
       await this.offerActivityRegistrationNotifications()
+      if (!current()) return
       const confirmed = await this.confirmPayment('上次报名结果尚未确认。请确认手机号与上次一致；我们会避免重复报名。')
-      if (!confirmed) return
+      if (!confirmed || !current()) return
     } else {
       contact = registrationContact(this.data.contact)
       if (!contact) {
@@ -839,13 +1247,21 @@ Page({
         return this.setData({ error: '活动报名说明暂未准备好，本场暂不开放报名。' })
       }
       // This precedes the payment-choice sheet so it remains a request from
-      // the customer's original registration action.
+      // the customer's original registration action, as required by Alipay.
       await this.offerActivityRegistrationNotifications()
+      if (!current()) return
       const payment = await this.choosePayment(pricing)
-      if (!payment) return
+      if (!payment || !current()) return
       const payload = {
-        activityPackagePublicId: chosenPackage && chosenPackage.publicId || null,
-        partySize: this.data.partySize,
+        activityPackagePublicId: (chosenPackage && chosenPackage.publicId) || null,
+        partySize: isSingleDish ? 1 : this.data.partySize,
+        ...((chosenPackage && chosenPackage.isServicePackage) || purchaseKind !== 'admission_package' ? {
+          purchaseKind, parentRegistrationPublicId: this.data.parentRegistrationPublicId || null,
+          ...(this.data.parentCredentialRequired ? { parentCredentialRequired: true } : {}),
+          selections: choiceGroups.map(group => ({ groupId: group.id, productId: group.selectedProductId })),
+          ...(this.data.packageNote.trim() ? { note: this.data.packageNote.trim() } : {}),
+          ...(isSingleDish ? { productId: this.data.selectedAddonProduct.id, quantity: this.data.addonQuantity } : {}),
+        } : {}),
         termsAcknowledged: true,
         acknowledgedSafetyPolicyVersion: activity.safetyPolicyVersion,
         acknowledgedRefundPolicyVersion: activity.refundPolicyVersion,
@@ -853,7 +1269,7 @@ Page({
         ...(payment.method ? { paymentMethod: payment.method } : {}),
       }
       attempt = {
-        idempotencyKey: commandKey('activity-register', `${activity.publicId}-${chosenPackage && chosenPackage.publicId || 'ticket'}`),
+        idempotencyKey: commandKey('activity-register', `${activity.publicId}-${(chosenPackage && chosenPackage.publicId) || 'ticket'}`),
         payload: registrationAttemptPayload(payload),
         previousRegistrationPublicId: this.data.registration && this.data.registration.publicId,
         createdAt: new Date().toISOString(),
@@ -865,6 +1281,7 @@ Page({
     this.setData({ busy: true, error: '', success: '', alipayIdentityRefreshRequired: false })
     try {
       const payload = Object.assign({}, attempt.payload, { contactSnapshot: { channel: 'miniprogram', contact } })
+      if (parentCredential) payload.parentCredential = parentCredential
       const result = await registerActivity(
         activity.publicId,
         payload.activityPackagePublicId,
@@ -876,20 +1293,25 @@ Page({
         payload.paymentChoice,
         payload.paymentMethod,
         attempt.idempotencyKey,
+        payload,
       )
       this.clearRegistrationAttempt(activity.publicId)
-      let registrationRaw = Object.assign({}, result, { activityPublicId: activity.publicId, createdAt: result.createdAt || new Date().toISOString() })
+      this.parentPurchaseCredential = null
+      let registrationRaw = Object.assign({}, result, { activityPublicId: activity.publicId, purchaseKind: payload.purchaseKind || null, parentRegistrationPublicId: payload.parentRegistrationPublicId || null, note: result.note || payload.note || '', selections: result.selections || choiceGroups.map(group => ({ label: group.name, productId: group.selectedProductId, name: (group.options.find(option => option.productId === group.selectedProductId) || {}).name || '', quantity: group.quantity })), registrationRequestIdempotencyKey: attempt.idempotencyKey, activityPackage: chosenPackage, createdAt: result.createdAt || new Date().toISOString() })
       if (result.payment && !registrationRaw.amountDueMinor) registrationRaw.amountDueMinor = result.payment.amountMinor
       const registration = await this.readPaymentState(registrationRaw)
       this.rememberRegistration(registration, activity.publicId)
-      this.setData({ registration })
+      if (!current()) return
+      this.setData({ registration, creatingPurchase: false, selectedRegistrationPublicId: registration.publicId, serviceCode: null })
+      await this.loadServiceCode()
       await this.refreshActivityAvailability()
+      if (!current()) return
       // A required online-payment choice is made before the registration is
       // created. Once the service returns its idempotent registration record,
       // immediately present the matching Alipay payment sheet instead of
       // making the customer tap a second “continue payment” button.
       shouldAutoStartPayment = Boolean(registration && registration.canStartPayment && payload.paymentChoice !== 'none')
-      if (shouldAutoStartPayment) {
+      if (current() && shouldAutoStartPayment) {
         this.setData({ success: '名额已暂留，正在打开支付宝支付。' })
       } else {
         const success = result.status === 'waitlisted'
@@ -901,8 +1323,9 @@ Page({
         await this.showRegistrationOutcome(registration)
       }
     } catch (error) {
+      if (!current()) return
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
-      if (recovered) return
+      if (!current() || recovered) return
       if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
         // Paid-activity identity is checked before any registration, capacity,
         // inventory, or payment write. Do not leave a misleading retry record.
@@ -921,8 +1344,11 @@ Page({
       }
       // 未知/网络类错误：保留幂等键重试，但展示真实原因，避免永远只看到笼统文案。
       this.setData({ error: `${detail} 请在 15 分钟内重新填写相同手机号后再试；我们会避免重复报名。` })
-    } finally { this.setData({ busy: false }) }
-    if (shouldAutoStartPayment) await this.startPayment()
+    } finally {
+      this.setData({ busy: false })
+      if (!current() && this.pageVisible) this.load()
+    }
+    if (current() && shouldAutoStartPayment) await this.startPayment()
   },
 
   async choosePayment(item) {
@@ -978,37 +1404,44 @@ Page({
   },
 
   async readPaymentState(registrationRaw) {
-    if (!registrationRaw || !registrationRaw.publicId || registrationRaw.status === 'cancelled') return viewRegistration(registrationRaw)
+    if (!registrationRaw || !registrationRaw.publicId) return viewRegistration(registrationRaw)
     try {
       const paymentState = await getActivityRegistrationPayment(registrationRaw.publicId)
-      return viewRegistration(Object.assign({}, registrationRaw, paymentState, { status: paymentState.registrationStatus || registrationRaw.status }))
+      return viewRegistration(Object.assign({}, registrationRaw, paymentState, { canRequestFullRefund: paymentState.canRequestFullRefund, refundRequestBlockReason: paymentState.refundRequestBlockReason, refundRejectionReason: paymentState.refundRejectionReason, status: paymentState.registrationStatus || registrationRaw.status }))
     } catch (error) {
       this.setData({ error: `报名已记录，但付款状态暂时无法核对：${customerErrorMessage(error, '请稍后刷新')}` })
-      return viewRegistration(registrationRaw)
+      return viewRegistration(Object.assign({}, registrationRaw, { canRequestFullRefund: undefined, refundRequestBlockReason: undefined, refundRejectionReason: undefined }))
     }
   },
 
   async refreshActivityAvailability() {
+    const generation = this.pageGeneration || 0
     try {
       const raw = await getActivity(this.data.id)
-      if (raw) this.setData({ activity: viewActivity(raw) })
+      if (raw && generation === (this.pageGeneration || 0)) this.setData({ activity: viewActivity(raw) })
     } catch (_error) {
       // 报名状态已由报名接口确认；名额显示会在下次进入页面时再以服务端数据刷新。
     }
   },
 
   async recoverRegistration(activityPublicId, attempt) {
+    const generation = this.pageGeneration || 0
     try {
       const registrations = await getActivityRegistrations()
-      const found = (registrations || []).find((item) => item.activityPublicId === activityPublicId)
+      const candidates = (registrations || []).filter((item) => item.activityPublicId === activityPublicId)
+      const found = attempt && attempt.payload && attempt.payload.purchaseKind
+        ? candidates.find((item) => item.registrationRequestIdempotencyKey === attempt.idempotencyKey)
+        : candidates.find((item) => !attempt || item.publicId !== attempt.previousRegistrationPublicId)
       if (!found) return false
       if (attempt && attempt.previousRegistrationPublicId === found.publicId && found.status === 'cancelled') return false
       const registration = await this.readPaymentState(found)
       this.clearRegistrationAttempt(activityPublicId)
       this.rememberRegistration(registration, activityPublicId)
-      this.setData({ registration, success: '已找回刚才的报名记录，没有重复提交。', error: '' })
+      if (generation !== (this.pageGeneration || 0)) return true
+      this.setData({ registration, creatingPurchase: false, selectedRegistrationPublicId: registration.publicId, success: '已找回刚才的报名记录，没有重复提交。', error: '' })
+      await this.loadServiceCode()
       await this.refreshActivityAvailability()
-      await this.showRegistrationOutcome(registration)
+      if (generation === (this.pageGeneration || 0)) await this.showRegistrationOutcome(registration)
       return true
     } catch (_error) { return false }
   },
@@ -1115,9 +1548,10 @@ Page({
       const state = await queryActivityRegistrationPayment(registration.publicId, attempt.idempotencyKey)
       delete stored[registration.publicId]
       runtime.setStorageSync(PAYMENT_QUERY_ATTEMPTS_KEY, stored)
-      const next = viewRegistration(Object.assign({}, registration, state, { status: state.registrationStatus || registration.status }))
+      const next = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
       this.rememberRegistration(next)
       this.setData({ registration: next })
+      await this.loadServiceCode()
       if (next.resolutionState === 'confirmed') this.setData({ success: '付款已经由支付通道确认，报名正式生效。', error: '' })
       else if (next.resolutionState === 'unknown') this.setData({ error: '支付通道暂未给出确定结果，名额继续保留；稍后只能继续查单。' })
       else if (next.resolutionState === 'failed') this.setData({ error: '支付通道已明确返回失败，可按页面允许的动作取消报名。' })
@@ -1131,9 +1565,10 @@ Page({
     if (!registration || !registration.publicId) return
     try {
       const state = await getActivityRegistrationPayment(registration.publicId)
-      const next = viewRegistration(Object.assign({}, registration, state, { status: state.registrationStatus || registration.status }))
+      const next = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
       this.rememberRegistration(next)
       this.setData({ registration: next })
+      await this.loadServiceCode()
     } catch (error) { if (showError) this.setData({ error: customerErrorMessage(error, '付款状态暂时无法读取') }) }
   },
 
@@ -1172,7 +1607,7 @@ Page({
 
   showCancellationHelp() {
     const contact = this.data.activity.contactInstructions || '请联系活动负责人核对。'
-    runtime.showModal({ title: '取消与退款说明', content: `已付款报名如需退款，请联系门店；退款进展会显示在这里。${contact}`, showCancel: false })
+    runtime.showModal({ title: '取消与退款说明', content: `${this.data.registration && this.data.registration.refundGuidance || '请联系门店核对本份报名及退款安排。'}${contact}`, showCancel: false })
   },
 
   clearRegistrationAttempt(activityPublicId) {
@@ -1184,6 +1619,8 @@ Page({
   rememberRegistration(registration, activityPublicId) {
     if (!registration) return
     const stored = storageObject(LOCAL_REGISTRATIONS_KEY)
+    const registrations = [registration, ...(this.data.registrations || []).filter((item) => item.publicId !== registration.publicId)]
+    this.setData({ registrations })
     stored[activityPublicId || this.data.id] = registration
     runtime.setStorageSync(LOCAL_REGISTRATIONS_KEY, stored)
   },

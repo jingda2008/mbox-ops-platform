@@ -1,3 +1,6 @@
+import {NativeCommandNotCommittedError} from './command-executor.js'
+import {ActivityServiceError} from './activity-service-repository.js'
+import type {ActivityDoorCommand} from '../../src/shared/activity-service.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { ActivityPaymentService } from './activity-payment-service.js'
 import {
@@ -35,6 +38,9 @@ export interface ActivityOperationsApiOptions {
 }
 
 export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsApiOptions> = async (app, options) => {
+  app.post('/staff/activity-operations/scan',async(request,reply)=>handle(reply,async()=>{const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.verify']);return reply.send({data:await options.service.scanService(context,text(object(request.body,'扫码').code,'套餐核销码',10,300))})}))
+  app.get<{Params:{registrationPublicId:string}}>('/staff/activity-operations/registrations/:registrationPublicId/service',async(request,reply)=>handle(reply,async()=>{const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.verify']);return reply.send({data:await options.service.serviceView(context,publicId(request.params.registrationPublicId))})}))
+  app.post<{Params:{registrationPublicId:string}}>('/staff/activity-operations/registrations/:registrationPublicId/service',async(request,reply)=>handle(reply,async()=>{const body=object(request.body,'现场办理');const context=await authorizedAny(options,request,['recover','restore_plaque'].includes(String(body.action))?['community.activity.manage']:['community.activity.manage','community.activity.verify']);const action=enumeration(body.action,'现场操作',['admit','redeem','admit_and_redeem','plaque_issued','return_plaque','restore_plaque','recover','update_location'] as const);const command:ActivityDoorCommand={action,...(body.arrivedCount===undefined?{}:{arrivedCount:integer(body.arrivedCount,'本次到场',1,50)}),...(body.location===undefined?{}:{location:text(body.location,'收餐位置',1,100)}),...(body.credential===undefined?{}:{credential:text(body.credential,'核销凭证',10,300)})};const result=await options.service.serviceCommand(context,publicId(request.params.registrationPublicId),command,idempotencyKey(request));return reply.send({data:result.value,meta:{replayed:result.replayed}})}))
   app.post<{Params:{publicId:string}}>('/staff/activity-operations/:publicId/stop-registration',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,['community.activity.manage'])
     const body=object(request.body,'停止报名')
@@ -65,6 +71,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     return reply.send({ data: await options.service.list(context) })
   }))
 
+  app.get('/staff/activity-operations/product-catalog',async(request,reply)=>handle(reply,async()=>{const context=await authorized(options,request,['community.activity.manage']);return reply.send({data:await options.service.productCatalog(context)})}))
   app.get('/staff/activity-operations/component-catalog', async (request, reply) => handle(reply, async () => {
     const context = await authorized(options, request, ['community.activity.manage'])
     return reply.send({ data: await options.service.componentCatalog(context) })
@@ -273,6 +280,7 @@ export function parseActivityDraft(value: Record<string, unknown>): ActivityDraf
     participationRequirements: textList(value.participationRequirements, '参与条件', 0, 100, 500),
     contactInstructions: text(value.contactInstructions, '联系与集合说明', 2, 1_200),
     memberBenefitText: optionalText(value.memberBenefitText, '会员权益与赠送', 1_000),
+    mealServiceStartsAt:optionalTimestamp(value.mealServiceStartsAt,'餐饮核销开始'),mealServiceEndsAt:optionalTimestamp(value.mealServiceEndsAt,'餐饮核销结束'),addonEndsAt:optionalTimestamp(value.addonEndsAt,'加购截止'),addonProductIds:value.addonProductIds===undefined?[]:Array.isArray(value.addonProductIds)?value.addonProductIds.map(id=>uuid(id,'加购菜品')):(()=>{throw invalid('请选择加购菜品')})(),
     packageSelectionRequired,
     packages,
   }
@@ -334,10 +342,22 @@ function activityPackage(
   if (new Set(components.map((component) => component.inventoryItemId)).size !== components.length) {
     throw invalid('同一套餐不能重复选择同一物料')
   }
+  const maxParticipants=value.maxParticipants==null?null:integer(value.maxParticipants,'套餐人数上限',1,50)
+  const products=value.products===undefined?[]:value.products
+  if(!Array.isArray(products)||products.length>100)throw invalid('套餐菜品最多100项')
+  const serviceProducts=products.map(entry=>{const product=object(entry,'套餐菜品');return {productId:uuid(product.productId,'菜品编号'),quantity:integer(product.quantity,'固定菜量',1,100)}})
+  if(new Set(serviceProducts.map(p=>p.productId)).size!==serviceProducts.length)throw invalid('套餐菜品不能重复')
+  if(maxParticipants!==null&&(value.feeBasis!=='per_registration'||paymentMode!=='full_required'||components.length>0))throw invalid('新套餐须按份固定价、全额预付，不按人数增减菜量或物料')
+  const choiceGroups=value.choiceGroups===undefined?[]:value.choiceGroups;
+  if(!Array.isArray(choiceGroups)||choiceGroups.length>5)throw invalid('固定自选项最多5组');
+  const serviceChoices=choiceGroups.map(raw=>{const group=object(raw,'自选组');if(!Array.isArray(group.productIds)||group.productIds.length<2||group.productIds.length>8)throw invalid('每组选择2至8个可选菜品');const productIds=group.productIds.map(id=>uuid(id,'可选菜品'));if(new Set(productIds).size!==productIds.length)throw invalid('自选组菜品不能重复');return {id:text(group.id,'自选组编号',3,64),name:text(group.name,'自选组名称',1,40),quantity:integer(group.quantity,'自选固定菜量',1,100),productIds}});
+  if(new Set(serviceChoices.map(g=>g.id)).size!==serviceChoices.length)throw invalid('自选组编号不能重复');
+  if(maxParticipants===null&&serviceChoices.length)throw invalid('旧套餐不能新增自选承诺，请创建新套餐');
   return {
+    maxParticipants,choiceGroups:serviceChoices,hasMeal:value.hasMeal===true||serviceProducts.length>0||serviceChoices.length>0,includesAdmission:optionalBoolean(value.includesAdmission,true,'包含入场'),mealOnlyFeeAmountMinor:value.mealOnlyFeeAmountMinor==null?null:integer(value.mealOnlyFeeAmountMinor,'纯加餐价格',1,100_000_000),products:serviceProducts,
     name: text(value.name, '套餐名称', 2, 120), description: optionalText(value.description, '套餐说明', 1_000) ?? '', imageUrl,
     includedItems: textList(value.includedItems ?? [], '套餐包含内容', 0, 100, 500),
-    capacity: integer(value.capacity, '套餐名额', 1, activityCapacity),
+    capacity: integer(value.capacity, maxParticipants===null?'套餐名额':'可售份数', 1, maxParticipants===null?activityCapacity:100_000),
     memberPurchaseLimit: integer(value.memberPurchaseLimit ?? 1, '每会员限购', 1, 20),
     feeAmountMinor,depositAmountMinor,feeBasis: enumeration(value.feeBasis, '套餐计价方式', ['per_person','per_registration'] as const),
     paymentMode,paymentDeadlineMinutes: integer(value.paymentDeadlineMinutes, '套餐付款时限', 5, 1_440),
@@ -349,14 +369,15 @@ function activityPackage(
 }
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
-  try { return await execute() } catch (error) {
+  try { return await execute() } catch (caught) {
+ const error=caught instanceof NativeCommandNotCommittedError?caught.original:caught;
     if (isStaffAuthenticationRequiredError(error)) {
       return reply.code(401).send({ error: STAFF_AUTHENTICATION_REQUIRED_ERROR })
     }
     if (error instanceof ActivityOperationsApiRequestError) {
       return reply.code(400).send({ error: { code: 'ACTIVITY_OPERATION_INPUT_INVALID', message: error.message } })
     }
-    if (error instanceof ActivityOperationsError || error instanceof CustomerExperienceRequestError) {
+    if (error instanceof ActivityOperationsError || error instanceof CustomerExperienceRequestError || error instanceof ActivityServiceError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }
     if (error instanceof StaffAccessDeniedError) {

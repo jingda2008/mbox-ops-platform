@@ -2,9 +2,10 @@ import type { StaffModule } from './StaffModulePanel'
 import type { StaffActionsTab } from './staff-actions/types'
 import { staffModuleForRoute } from '../shared/staff-module-access'
 
-export type NormalizedStaffRoute = StaffActionsTab | StaffModule
+export type NormalizedStaffRoute = StaffActionsTab | StaffModule | 'scan'
 
 export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null {
+  if (path === '/staff/scan') return 'scan'
   if (path === '/staff/orders') return 'orders'
   if (path === '/staff/live') return 'tables'
   if (path === '/staff/tasks') return 'tasks'

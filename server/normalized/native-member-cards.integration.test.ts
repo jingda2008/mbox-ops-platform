@@ -34,15 +34,15 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
   app=Fastify();await app.register(nativeMemberCardsApiPlugin,options);await app.register(memberCardApiPlugin,{...options,prefix:'/legacy',resolveSelfContext:()=>({scope,customerId:customer,businessDate:'2026-10-01',tableSessionId:null,actorRef:'test'})});await app.ready()
  })
  afterAll(async()=>{await app?.close();await runtime?.end();await admin?.end()})
- it('requires current draft and independent publisher, keeps permanent receipts, and does not expose account secrets',async()=>{
+ it('creates explicitly simple cards without social gates or a different publisher, keeps permanent receipts, and does not expose account secrets',async()=>{
   const key=`native-business-${randomUUID()}`,created=await send('create',body,editor,key);expect(created.statusCode,created.body).toBe(200);projectId=created.json().data.result.projectId;expect((await send('create',body,editor,key)).json().meta.replayed).toBe(true)
   let row=(await get()).items.find((r:any)=>r.id===projectId);const config=await get('/projects/'+projectId+'/config');expect(JSON.stringify(config)).not.toMatch(/encrypted_|credential_hash|key_id/)
   const social={projectId,expectedUpdatedAt:row.updated_at,serviceAccountId:service,wecomAccountId:wecom,autoRestore:false,artistName:'音乐现场',iconUrl:null}
-  expect((await send('social',social)).statusCode).toBe(200);expect((await send('social',social)).json().error.commitDisposition).toBe('not_committed')
+  expect((await send('social',social)).json().error.message).toContain('无需社交前置')
   row=(await get()).items.find((r:any)=>r.id===projectId);const open={projectId,expectedUpdatedAt:row.updated_at,state:'open',reason:'独立核对申请条款'}
-  expect((await send('state',open)).json().error.message).toContain('不能自行')
+  expect(row.flow_mode).toBe('simple')
   expect((await get('?section=projects',publisher)).items).toHaveLength(1)
-  expect((await send('state',open,publisher)).statusCode).toBe(200);expect((await send('state',{...open,state:'closed'},reviewer)).statusCode).toBe(409)
+  expect((await send('state',open,editor)).statusCode).toBe(200);expect((await send('state',{...open,state:'closed'},reviewer)).statusCode).toBe(409)
   const legacy=await app.inject({method:'GET',url:'/legacy/staff/member-cards/projects'});expect(legacy.json().data.items[0]).toMatchObject({id:projectId,status:'open'});expect(legacy.json().data).not.toHaveProperty('result')
   await admin.query("UPDATE mbox.employee_roles SET ends_at=clock_timestamp()-interval '1 second' WHERE employee_id=$1",[editor]);expect((await send('create',body,editor,key)).statusCode).toBe(403);await admin.query('UPDATE mbox.employee_roles SET ends_at=NULL WHERE employee_id=$1',[editor])
  })
@@ -51,7 +51,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
   expect((await get('?section=applications')).items[0].id).toBe(application.applicationId)
   const payload={applicationId:application.applicationId,decision:'approve',reason:'核对会员与双条件门槛'},key=`native-business-${randomUUID()}`
   const replies=await Promise.all([send('review',payload,reviewer,key),send('review',payload,reviewer,key)]);for(const r of replies)expect(r.statusCode,r.body).toBe(200);expect(replies.map(r=>r.json().meta.replayed).sort()).toEqual([false,true])
-  expect((await send('review',payload,reviewer)).json().error.commitDisposition).toBe('not_committed')
+  expect((await send('review',payload,reviewer)).json().data.result.replayed).toBe(true)
   let card=(await get('?section=holdings')).items[0];const old=card.updated_at;const suspend={cardId:card.id,expectedUpdatedAt:old,action:'suspend',reason:'核对卡资料'}
   expect((await send('holding',suspend)).statusCode).toBe(200);card=(await get('?section=holdings')).items[0];expect((await send('holding',{...suspend,expectedUpdatedAt:card.updated_at,action:'resume'})).statusCode).toBe(200)
   expect((await send('holding',suspend)).statusCode).toBe(409)

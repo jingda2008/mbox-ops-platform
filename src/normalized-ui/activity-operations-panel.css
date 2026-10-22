@@ -111,3 +111,7 @@
   .activity-operations-metrics { grid-template-columns: 1fr; }
   .activity-registration-actions { grid-template-columns: 1fr; }
 }
+.activity-operations-panel .activity-dish-options{max-height:240px;overflow:auto;border:1px solid #d6ddd6;border-radius:8px;padding:8px;display:grid;gap:8px;scrollbar-gutter:stable}
+.activity-operations-panel .activity-dish-options label{display:flex;flex-direction:row;gap:8px;align-items:center;flex-wrap:wrap;min-height:44px}
+.activity-operations-panel .activity-dish-options input[type=checkbox]{width:20px;min-width:20px;min-height:20px}
+.activity-operations-panel .activity-dish-options input[type=number]{width:72px;min-width:60px;min-height:44px;margin-left:auto}

@@ -1,3 +1,4 @@
+import {IssuedCouponPromiseError} from './issued-coupon-product-promise.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
 import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
@@ -571,6 +572,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         expectedVersion: input.expectedVersion,
         operationId: idempotencyKey,
         actorSessionRef: context.actorRef,
+        ...(input.couponQuoteId?{couponQuoteId:input.couponQuoteId}:{}),
       })
       let checkoutLines
       try { checkoutLines = checkoutLinesWithNotes(cart.lines, input.lineNotes, Boolean(input.couponQuoteId)) }
@@ -1146,7 +1148,7 @@ export async function searchGuestCatalog(
       COALESCE(choice_group_list.items, '[]'::jsonb) AS bundle_choice_groups,
       component_list.separate_amount_minor AS fixed_separate_amount_minor,
       choice_group_list.minimum_choice_amount_minor,
-      product.product_snapshot, (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$9::uuid)) AS guest_visible, product.search_text,
+      product.product_snapshot, mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$9::uuid) AS guest_visible, product.search_text,
       product.recommendation_beverage_family,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -1158,13 +1160,7 @@ export async function searchGuestCatalog(
       to_char(product.available_from, 'HH24:MI') AS available_from,
       to_char(product.available_until, 'HH24:MI') AS available_until,
       product.max_order_quantity,
-      CASE WHEN product.available_from IS NULL THEN true
-        WHEN product.available_from < product.available_until THEN
-          (clock_timestamp() AT TIME ZONE store.timezone)::time >= product.available_from
-          AND (clock_timestamp() AT TIME ZONE store.timezone)::time < product.available_until
-        ELSE (clock_timestamp() AT TIME ZONE store.timezone)::time >= product.available_from
-          OR (clock_timestamp() AT TIME ZONE store.timezone)::time < product.available_until
-      END AS within_availability,
+      (mbox.product_purchase_deadline(product.tenant_id,product.store_id,product.id,$9::uuid) IS NOT NULL) AS within_availability,
       product.cost_amount_minor::text, product.status,
       LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$9::uuid))::text AS amount_minor, price.currency,
       COALESCE(current_session.guest_count, 2) AS guest_count,
@@ -1262,6 +1258,7 @@ export async function searchGuestCatalog(
             AND 'guest_qr'=ANY(option_product.allowed_channels)
             AND option_inventory.configuration_complete
             AND option_inventory.available
+            AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -1275,6 +1272,7 @@ export async function searchGuestCatalog(
             WHEN NOT option_product.guest_visible OR NOT ('guest_qr'=ANY(option_product.allowed_channels)) THEN '当前不对顾客开放'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
             WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -1503,7 +1501,7 @@ export async function searchGuestCatalog(
       AND product.store_id = $2::uuid
       AND ($3::uuid IS NULL OR current_session.id IS NOT NULL)
       AND (product.status = 'active' OR ($11::boolean AND product.status = 'sold_out'))
-      AND (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$9::uuid))
+      AND mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$9::uuid)
       -- Unconfigured legacy codes stay visible until staff explicitly map
       -- them.  Once configured, parent and child visibility is authoritative
       -- for the customer menu without altering the product itself.
@@ -1532,7 +1530,7 @@ export async function searchGuestCatalog(
         ELSE 2
       END,
       product.recommendation_priority DESC,
-      COALESCE((SELECT min(mi.sort_order) FROM mbox.member_card_menu_items mi JOIN mbox.member_cards card ON card.tenant_id=mi.tenant_id AND card.store_id=mi.store_id AND card.project_id=mi.project_id JOIN mbox.member_card_projects cp ON cp.tenant_id=card.tenant_id AND cp.store_id=card.store_id AND cp.id=card.project_id WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.active AND mi.exclusive AND card.status='active' AND card.valid_from<=clock_timestamp() AND card.valid_until>clock_timestamp() AND cp.status='open' AND mbox.canonical_customer_id(card.tenant_id,card.store_id,card.customer_id)=mbox.canonical_customer_id(product.tenant_id,product.store_id,$9::uuid) AND mbox.card_social_conditions_met(card.tenant_id,card.store_id,card.project_id,card.customer_id)),product.menu_sort_order),
+      COALESCE((SELECT min(mi.sort_order) FROM mbox.member_card_menu_items mi JOIN mbox.member_cards card ON card.tenant_id=mi.tenant_id AND card.store_id=mi.store_id AND card.project_id=mi.project_id JOIN mbox.member_card_projects cp ON cp.tenant_id=card.tenant_id AND cp.store_id=card.store_id AND cp.id=card.project_id WHERE mi.tenant_id=product.tenant_id AND mi.store_id=product.store_id AND mi.product_id=product.id AND mi.active AND mi.exclusive AND mbox.customer_has_usable_member_card(card.tenant_id,card.store_id,card.project_id,$9::uuid,true) AND mbox.service_window_deadline(mi.tenant_id,mi.store_id,mi.product_id,mi.project_id,true) IS NOT NULL),product.menu_sort_order),
       CASE WHEN product.product_kind = 'bundle' THEN 0 ELSE 1 END,
       CASE
         WHEN product.cost_amount_minor IS NOT NULL AND price.amount_minor > product.cost_amount_minor
@@ -2092,6 +2090,7 @@ function publicSharedCart(cart: GuestSharedCart) {
     && cart.totalAmountMinor !== null
     && cart.lines.every((line) => line.available)
   return {
+    ...(cart.issuedCouponPortionId?{issuedCouponPortionId:cart.issuedCouponPortionId}:{}),
     cartPublicId: cart.publicId,
     generation: cart.generation,
     version: cart.version,
@@ -2106,6 +2105,7 @@ function publicSharedCart(cart: GuestSharedCart) {
       subtotalAmountMinor: line.subtotalAmountMinor,
       currency: line.currency,
       available: line.available,
+      couponReviewAvailable: line.couponReviewAvailable===true,
       unavailableReason: line.unavailableReason,
       bundleSelections:line.bundleSelections.map((unit)=>({ groups:unit.groups.map((group)=>({
         groupId:group.groupId,productIds:[...group.productIds],
@@ -2506,9 +2506,10 @@ function readSharedCartAdjustment(value: unknown): {
   expectedGeneration: number
   expectedVersion: number
   bundleSelections: ReturnType<typeof readBundleSelections>
+  issuedCouponBenefitId?: string
 } {
   const body = readStrictObject(value, '共享购物车请求', [
-    'productId', 'delta', 'expectedGeneration', 'expectedVersion', 'bundleSelections',
+    'productId', 'delta', 'expectedGeneration', 'expectedVersion', 'bundleSelections','issuedCouponBenefitId',
   ])
   const delta=readInteger(body.delta, 'delta', -99, 99)
   return {
@@ -2517,6 +2518,7 @@ function readSharedCartAdjustment(value: unknown): {
     expectedGeneration: readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647),
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
     bundleSelections:readBundleSelections(body.bundleSelections,'bundleSelections',Math.max(0,delta)),
+    ...(body.issuedCouponBenefitId===undefined?{}:{issuedCouponBenefitId:readUuid(body.issuedCouponBenefitId,'issuedCouponBenefitId')}),
   }
 }
 
@@ -2786,6 +2788,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
         message: '原请求正在确认或内容不一致，请恢复原请求，不要重复提交。',
       } })
     }
+    if(error instanceof IssuedCouponPromiseError)return reply.code(422).send({ok:false,error:{code:'ISSUED_COUPON_UNAVAILABLE',message:error.message}})
     if(error instanceof CheckoutCartPricingError||error instanceof CouponCalendarError||error instanceof StackingPricingError||error instanceof PricingAuthorizationDeniedError||error instanceof BenefitUnavailableError||error instanceof BenefitOwnershipError){
       return reply.code(409).send({error:{code:'CHECKOUT_COUPON_RECONFIRM_REQUIRED',message:error instanceof BenefitOwnershipError?'优惠券不属于当前会员，请重新选择':error.message}})
     }

@@ -1,3 +1,8 @@
+import {editActivityParty,activityAddonProducts,resolveActivityParent,customerActivityServiceView} from './activity-customer-service.js'
+import {CustomerRepository} from './customer-repository.js'
+import QRCode from 'qrcode'
+import {ActivityServiceRepository,activityCredential,ActivityServiceError} from './activity-service-repository.js'
+import type {ActivityPurchaseOptions} from './activity-purchase-support.js'
 import {ExperiencePlanLifecycleRepository} from './experience-plan-lifecycle-repository.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
@@ -2101,9 +2106,29 @@ export class CustomerExperienceService {
     })
   }
 
+  activityAddonProducts(context:PublicCustomerExperienceContext,publicId:string){return this.transactions.run(context.scope,tx=>activityAddonProducts(tx,context.customerId,publicId),{readOnly:true})}
+  editActivityParty(context:PublicCustomerExperienceContext,publicId:string,partySize:number,key:string){return this.transactions.run(context.scope,tx=>editActivityParty(tx,context.customerId,publicId,partySize,key))}
+
+  resolveActivityParent(context: PublicCustomerExperienceContext, activityPublicId: string, code: string) {
+    return this.transactions.run(context.scope, tx => resolveActivityParent(tx, activityPublicId, code), {readOnly: true})
+  }
+
+  activityServiceCode(context: PublicCustomerExperienceContext, publicId: string) {
+    return this.transactions.run(context.scope, async tx => {
+      const repository = new ActivityServiceRepository(tx), row = await repository.registration(publicId)
+      const owner = await new CustomerRepository(tx).resolveCanonical(String(row.customer_id))
+      const current = await new CustomerRepository(tx).resolveCanonical(context.customerId)
+      if (owner.id !== current.id) throw new ActivityServiceError('只可查看本人的活动凭证', 'ACTIVITY_CREDENTIAL_FORBIDDEN', 403)
+      const service = customerActivityServiceView(await repository.view(publicId))
+      if (row.purchase_kind === 'single_dish') return {service}
+      const code = activityCredential(row.public_id, row.credential_token)
+      return {code, qrDataUrl: await QRCode.toDataURL(code, {width: 480, margin: 2, errorCorrectionLevel: 'M'}), service}
+    }, {readOnly: true})
+  }
+
   registerActivity(
     context: PublicCustomerExperienceContext,
-    input: Readonly<{
+    input: Readonly<ActivityPurchaseOptions & {
       activityPublicId: string
       activityPackagePublicId: string | null
       partySize: number
@@ -2126,7 +2151,7 @@ export class CustomerExperienceService {
       requestFingerprint: fingerprint({
         customerId: context.customerId,
         activityPublicId: input.activityPublicId,
-        activityPackagePublicId: input.activityPackagePublicId,
+        activityPackagePublicId: input.activityPackagePublicId,purchaseKind:input.purchaseKind,parentRegistrationPublicId:input.parentRegistrationPublicId,parentCredential:input.parentCredential,productId:input.productId,quantity:input.quantity,selections:input.selections,note:input.note,
         partySize: input.partySize,
         contactType: input.protectedContact.contactType,
         contactHash: input.protectedContact.contactHash,
@@ -2157,7 +2182,7 @@ export class CustomerExperienceService {
         this.activityPaymentProviderConfigured,
       ).registerActivity({
         activityPublicId: input.activityPublicId,
-        activityPackagePublicId: input.activityPackagePublicId,
+        activityPackagePublicId: input.activityPackagePublicId,purchaseKind:input.purchaseKind,parentRegistrationPublicId:input.parentRegistrationPublicId,parentCredential:input.parentCredential,productId:input.productId,quantity:input.quantity,selections:input.selections,note:input.note,
         customerId: context.customerId,
         partySize: input.partySize,
         protectedContact: input.protectedContact,

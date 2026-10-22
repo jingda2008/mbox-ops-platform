@@ -1,11 +1,13 @@
 const runtime = require('../../utils/platform')
 const { getMemberCards, submitMemberCardAction, getMemberGiftJobs } = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
+const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { dateInput } = require('../../utils/format')
 const labels = { active: '有效', suspended: '已冻结', withdrawn: '已退出', revoked: '已撤销', pending: '待审核', approved: '已通过', rejected: '未通过' }
-function time(value) { const date = new Date(dateInput(value)); return Number.isFinite(date.getTime()) ? new Date(date.getTime() + 28800000).toISOString().slice(0, 16).replace('T', ' ') : '时间待核实' }
+function time(value) { if (value === null) return '长期有效'; const date = new Date(dateInput(value)); return Number.isFinite(date.getTime()) ? new Date(date.getTime() + 28800000).toISOString().slice(0, 16).replace('T', ' ') : '时间待核实' }
 Page({
   data: { loading: true, loaded: false, busy: false, error: '', message: '', projects: [], cards: [], applications: [], nextCursors: {}, selectedProject: null, acknowledged: false, activeMember: false, giftJobs: [], giftLoaded: false, giftLoading: false, giftError: '', giftCursor: null },
+  onLoad(options) { this.resumeProjectId = options && typeof options.projectId === 'string' && /^[0-9a-f-]{36}$/i.test(options.projectId) ? options.projectId : null },
   onShow() { this.setData({ message: '' }); this.load(); this.loadGifts() },
   onHide() { this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
   onUnload() { this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
@@ -44,16 +46,29 @@ Page({
       const pending = new Set(data.applications.filter(item => item.status === 'pending').map(item => item.project_id))
       this.setData({
         loading: false, loaded: true, busy: false, activeMember: data.activeMember, nextCursors: data.nextCursors || {},
-        projects: data.projects.map(item => Object.assign({}, item, { untilText: time(item.available_until), canApply: data.activeMember && item.accepting_applications && !item.has_current_card && !item.has_pending_application && !held.has(item.id) && !pending.has(item.id), buttonText: item.has_current_card || held.has(item.id) ? '已持有' : item.has_pending_application || pending.has(item.id) ? '审核中' : item.accepting_applications ? '查看并申请' : '暂未开放' })),
+        projects: data.projects.map(item => Object.assign({}, item, { untilText: time(item.available_until), canApply: (data.activeMember || item.flow_mode === 'simple') && item.accepting_applications && !item.has_current_card && !item.has_pending_application && !held.has(item.id) && !pending.has(item.id), buttonText: item.has_current_card || held.has(item.id) ? '查看权益' : item.has_pending_application || pending.has(item.id) ? '审核中' : item.accepting_applications ? item.flow_mode === 'simple' ? data.activeMember ? '申请' : '登录并申请' : '查看并申请' : '暂未开放' })),
         cards: data.cards.map(item => Object.assign({}, item, { stateText: item.expired && ['active', 'suspended'].includes(item.status) ? '已到期' : labels[item.status] || '待核实', untilText: time(item.valid_until), canWithdraw: ['active', 'suspended'].includes(item.status) })),
         applications: data.applications.map(item => Object.assign({}, item, { stateText: labels[item.status] || '待核实', requestedText: time(item.requested_at) })),
       })
+      if ((!more || kind === 'projects') && this.resumeProjectId && data.activeMember) {
+        const project = this.data.projects.find(item => item.id === this.resumeProjectId)
+        if (!project && this.data.nextCursors.projects) { await this.load('projects'); return }
+        this.resumeProjectId = null
+        if (project && project.flow_mode === 'simple' && project.canApply) await this.applySimple(project)
+      }
     } catch (error) { if (generation === this.generation) this.setData({ loading: false, busy: false, error: customerErrorMessage(error, more ? '更多记录未能读取，可再次点击加载更多；已读记录保留' : '卡片暂时无法读取，请重试') }) }
   },
-  openProject(event) {
+  async openProject(event) {
     if (this.data.busy) return
     const project = this.data.projects.find(item => item.id === event.currentTarget.dataset.id)
+    if (project && (project.has_current_card || this.data.cards.some(card => card.project_id === project.id && !card.expired && ['active','suspended'].includes(card.status)))) { runtime.switchTab({ url: '/pages/order/index' }); return }
+    if (project && project.canApply && project.flow_mode === 'simple') return this.applySimple(project)
     if (project && project.canApply) this.setData({ selectedProject: project, acknowledged: false, error: '', message: '' })
+  },
+  async applySimple(project) {
+    if (this.data.busy) return
+    if (!this.data.activeMember) { redirectToMembershipLogin('/pages/profile-cards/index?projectId=' + encodeURIComponent(project.id)); return }
+    return this.execute('apply', project.id, { projectId: project.id, acceptedProjectVersion: project.version }, '申请已提交，等待后台审核。')
   },
   closeProject() { if (!this.data.busy) this.setData({ selectedProject: null, acknowledged: false }) },
   acknowledge(event) { this.setData({ acknowledged: Array.isArray(event.detail.value) && event.detail.value.includes('agree') }) },
@@ -81,5 +96,6 @@ Page({
       await this.load()
     } catch (error) { if (generation === this.generation) this.setData({ busy: false, error: customerErrorMessage(error, '结果暂未确认，请刷新核对后重试') }) }
   },
-  openMembership() { runtime.switchTab({ url: '/pages/profile/index' }) },
+  openBenefits() { runtime.switchTab({ url: '/pages/order/index' }) },
+  openMembership() { redirectToMembershipLogin('/pages/profile-cards/index') },
 })

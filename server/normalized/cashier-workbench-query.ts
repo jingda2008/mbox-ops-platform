@@ -147,6 +147,11 @@ interface RecollectionAuthorizationRow extends Record<string, unknown> {
 }
 
 interface ActivityRegistrationRow extends Record<string, unknown> {
+  service_version: number
+  service_refund_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
+  activity_refund_reserved_minor: string | number
+  refund_activity_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
+  refund_activity_customer_confirmed: boolean
   id: string
   public_id: string
   activity_public_id: string
@@ -179,6 +184,7 @@ interface ActivityRegistrationRow extends Record<string, unknown> {
   refund_status: RefundStatus | null
   refund_provider_submission_state: CashierWorkbenchRefund['providerSubmissionState'] | null
   refund_reason: string | null
+  refund_requested_by_customer_id?: string | null
   refund_requested_by_employee_id: string | null
   refund_requested_by_employee_name: string | null
   refund_approved_by_employee_id: string | null
@@ -436,7 +442,11 @@ export class PostgresCashierWorkbenchQuery {
       ])
       const activityResult = canUseActivityCashier
         ? await transaction.query<ActivityRegistrationRow>(`
-            SELECT registration.id,registration.public_id,
+            SELECT registration.id,registration.public_id,registration.service_version,registration.service_refund_disposition,
+              (SELECT COALESCE(SUM(reserved.amount_minor),0) FROM mbox.refunds reserved
+               WHERE (reserved.tenant_id,reserved.store_id,reserved.payment_id)=(registration.tenant_id,registration.store_id,registration.payment_id)
+                AND (reserved.status IN('requested','approved','processing','succeeded') OR (reserved.status='failed' AND reserved.approved_by_employee_id IS NOT NULL))) AS activity_refund_reserved_minor,
+              refund.activity_disposition AS refund_activity_disposition,refund.activity_customer_confirmed AS refund_activity_customer_confirmed,
               activity.public_id AS activity_public_id,activity.title AS activity_title,
               activity.starts_at::text,registration.party_size,registration.status,registration.payment_status,
               registration.amount_due_minor,registration.paid_amount_minor,registration.currency,
@@ -454,6 +464,7 @@ export class PostgresCashierWorkbenchQuery {
               refund.currency AS refund_currency,refund.status AS refund_status,
               refund.provider_submission_state AS refund_provider_submission_state,refund.reason AS refund_reason,
               refund.requested_by_employee_id AS refund_requested_by_employee_id,
+              refund.requested_by_customer_id AS refund_requested_by_customer_id,
               requester.display_name AS refund_requested_by_employee_name,
               refund.approved_by_employee_id AS refund_approved_by_employee_id,
               approver.display_name AS refund_approved_by_employee_name,
@@ -515,7 +526,7 @@ export class PostgresCashierWorkbenchQuery {
                   COALESCE((SELECT jsonb_build_array(jsonb_build_object(
                     'id',r.id,'publicId',r.public_id,'paymentId',r.payment_id,'providerRefundId',r.provider_refund_id,
                     'amountMinor',r.amount_minor,'currency',r.currency,'status',r.status,'providerSubmissionState',r.provider_submission_state,
-                    'reason',r.reason,'requestedByEmployeeId',r.requested_by_employee_id,'requestedByEmployeeName',COALESCE(e.display_name,'已离职员工'),
+                    'reason',r.reason,'requestedByEmployeeId',r.requested_by_employee_id,'requestedByCustomerId',r.requested_by_customer_id,'requestedByEmployeeName',CASE WHEN r.requested_by_customer_id IS NOT NULL THEN '顾客本人' ELSE COALESCE(e.display_name,'已离职员工') END,
                     'approvedByEmployeeId',r.approved_by_employee_id,'approvedByEmployeeName',NULL,'decisionReason',r.decision_reason,
                     'receiptReference',NULLIF(r.provider_snapshot->>'receiptReference',''),'completedAt',r.completed_at::text,'createdAt',r.created_at::text,'allocations','[]'::jsonb
                   )) FROM mbox.refunds r LEFT JOIN mbox.employees e ON e.tenant_id=r.tenant_id AND e.store_id=r.store_id AND e.id=r.requested_by_employee_id
@@ -1012,7 +1023,7 @@ function mapRefund(
 
 function mapActivityRegistration(row: ActivityRegistrationRow): CashierWorkbenchActivityRegistration {
   return {
-    id: row.id,
+    id: row.id, serviceVersion: row.service_version, serviceRefundDisposition: row.service_refund_disposition,
     publicId: row.public_id,
     activityPublicId: row.activity_public_id,
     activityTitle: row.activity_title,
@@ -1045,7 +1056,7 @@ function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayme
   const refunds: CashierWorkbenchRefund[] = row.refund_id === null
     ? []
     : [{
-        id: row.refund_id,
+        id: row.refund_id, activityDisposition: row.refund_activity_disposition, activityCustomerConfirmed: row.refund_activity_customer_confirmed,
         publicId: requireText(row.refund_public_id, 'activity refund public id'),
         paymentId: id,
         providerRefundId: row.refund_provider_refund_id,
@@ -1057,8 +1068,9 @@ function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayme
           'activity refund provider submission state',
         ),
         reason: requireText(row.refund_reason, 'activity refund reason'),
-        requestedByEmployeeId: requireText(row.refund_requested_by_employee_id, 'activity refund requester'),
-        requestedByEmployeeName: row.refund_requested_by_employee_name ?? '已离职员工',
+        requestedByEmployeeId: row.refund_requested_by_employee_id,
+        requestedByCustomerId: row.refund_requested_by_customer_id??null,
+        requestedByEmployeeName: row.refund_requested_by_customer_id?'顾客本人':row.refund_requested_by_employee_name ?? '已离职员工',
         approvedByEmployeeId: row.refund_approved_by_employee_id,
         approvedByEmployeeName: row.refund_approved_by_employee_name,
         decisionReason: row.refund_decision_reason,
@@ -1067,9 +1079,7 @@ function mapActivityPayment(row: ActivityRegistrationRow): CashierWorkbenchPayme
         createdAt: requireText(row.refund_created_at, 'activity refund created time'),
         allocations: [],
       }]
-  const reservedRefundAmountMinor = sumMinor(refunds
-    .filter((refund) => RESERVING_REFUND_STATUSES.includes(refund.status))
-    .map((refund) => refund.amountMinor))
+  const reservedRefundAmountMinor = asSafeMinor(row.activity_refund_reserved_minor ?? sumMinor(refunds.filter(refund => RESERVING_REFUND_STATUSES.includes(refund.status)).map(refund => refund.amountMinor)), 'activity reserved refunds')
   return {
     id,
     publicId: requireText(row.payment_public_id, 'activity payment public id'),

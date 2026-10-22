@@ -7,7 +7,7 @@ const root = resolve('artifacts/normalized-browser-extended')
 const active = resolve('artifacts/normalized-browser')
 const specs = names => names.map(name => `tests/normalized-e2e/normalized-${name}.spec.ts`)
 const groups = [
-  { name: 'member-remaining', count: 10, flags: { MEMBER_CARDS: 'true', REQUIREMENTS_V9: 'true' }, files: specs(['member-cards', 'coupon-refund-review', 'marketing', 'requirements-v9', 'upgrade-qualification']) },
+  { name: 'member-remaining', count: 12, flags: { MEMBER_CARDS: 'true', REQUIREMENTS_V9: 'true' }, files: specs(['member-cards', 'member-card-benefits', 'coupon-refund-review', 'marketing', 'requirements-v9', 'upgrade-qualification']) },
   // Legacy kitchen batches and the three-screen dispatch policy need different fixtures.
   { name: 'kitchen-batches', count: 5, flags: { KITCHEN: 'true' }, files: specs(['kitchen-batch']) },
   { name: 'three-screen-workflow', count: 1, flags: { KITCHEN: 'true', THREE_SCREEN: 'true' }, files: specs(['three-screen']) },

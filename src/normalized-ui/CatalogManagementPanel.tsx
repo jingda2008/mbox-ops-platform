@@ -1,3 +1,5 @@
+import { ServiceWindowFields } from './ServiceWindowFields'
+import { parseProductServiceWindow, type ProductServiceWindow } from '../shared/product-service-window'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, CirclePlus, LoaderCircle, PackageOpen, Pencil } from 'lucide-react'
 import { NormalizedApiClient, type StaffAuthView } from '../normalized-api'
@@ -53,6 +55,7 @@ interface CatalogProduct {
     options:Array<{ productId:string;quantity:number;sortOrder:number }> }>
   productSnapshot: Record<string, unknown>
   guestVisible: boolean
+  serviceWindow?: ProductServiceWindow | null
   searchText: string
   recommendationEnabled: boolean
   recommendationMinGuests: number
@@ -128,6 +131,7 @@ interface ProductDraft {
   recommendationHoldMinutes: string
   recommendationUpgradeProductId: string
   sortOrder: string
+  serviceWindow: ProductServiceWindow | null
   availableFrom: string
   availableUntil: string
   allowedChannels: string[]
@@ -493,6 +497,7 @@ export function CatalogManagementPanel({
       recommendationHoldMinutes: integerText(product.recommendationHoldMinutes, '10'),
       recommendationUpgradeProductId: product.recommendationUpgradeProductId ?? '',
       sortOrder: integerText(product.menuSortOrder, '999'),
+      serviceWindow: product.serviceWindow ?? null,
       availableFrom: product.availableFrom ?? '',
       availableUntil: product.availableUntil ?? '',
       allowedChannels: product.allowedChannels,
@@ -728,7 +733,8 @@ export function CatalogManagementPanel({
     if(maxOrderQuantity===null)fieldProblems.push('单次限购数量：请填写有效整数')
     if(sceneTags===null||intentTags===null||tasteTags===null||dwellTags===null)fieldProblems.push('推荐标签：存在不符合格式或数量限制的内容，请检查各标签字段')
     if(draft.allowedChannels.length===0)fieldProblems.push('销售渠道：至少开放一个点单渠道')
-    if(Boolean(draft.availableFrom)!==Boolean(draft.availableUntil)||draft.availableFrom!==''&&draft.availableFrom===draft.availableUntil)fieldProblems.push('供应时间：开始与结束需同时填写且不能相同；跨午夜可使用较早的结束时间')
+    try { parseProductServiceWindow(draft.serviceWindow) } catch (error) { fieldProblems.push(error instanceof Error ? error.message : '时段配置无效') }
+    if(!draft.serviceWindow&&(Boolean(draft.availableFrom)!==Boolean(draft.availableUntil)||draft.availableFrom!==''&&draft.availableFrom===draft.availableUntil))fieldProblems.push('供应时间：开始与结束需同时填写且不能相同；跨午夜可使用较早的结束时间')
     if(!inventoryCostIsAutomatic&&canViewInventoryCost&&(costAmount===undefined||draft.status==='active'&&costAmount===null))fieldProblems.push('非库存商品成本：在售前须填写有效成本；库存商品和套餐成本由配方自动计算')
     if(fieldProblems.length){setNotice({kind:'error',text:fieldProblems.join('；')});return}
     // Keep narrowing explicit for the typed command payload after listing every invalid field.
@@ -845,8 +851,9 @@ export function CatalogManagementPanel({
       recommendationHoldMinutes: holdMinutes,
       recommendationUpgradeProductId: draft.recommendationUpgradeProductId || null,
       menuSortOrder: sortOrder,
-      availableFrom: draft.availableFrom || null,
-      availableUntil: draft.availableUntil || null,
+      serviceWindow: draft.serviceWindow,
+      availableFrom: draft.serviceWindow ? (draft.serviceWindow.saleEndMinute-draft.serviceWindow.saleStartMinute===1440 ? null : windowMinute(draft.serviceWindow.saleStartMinute)) : draft.availableFrom || null,
+      availableUntil: draft.serviceWindow ? (draft.serviceWindow.saleEndMinute-draft.serviceWindow.saleStartMinute===1440 ? null : windowMinute(draft.serviceWindow.saleEndMinute)) : draft.availableUntil || null,
       allowedChannels: draft.allowedChannels,
       maxOrderQuantity,
       kdsPriority,
@@ -946,8 +953,9 @@ export function CatalogManagementPanel({
             {showAdvanced && <>
               <label>菜单排序<NumberInputWithUnit inputMode="numeric" min={0} max={100000} unit="序号" value={draft.sortOrder} onChange={(event) => updateDraft('sortOrder', event.target.value)} /></label>
               <label>单笔最大数量<NumberInputWithUnit inputMode="numeric" min={1} max={9999} unit="份/单" value={draft.maxOrderQuantity} onChange={(event) => updateDraft('maxOrderQuantity', event.target.value)} /></label>
-              <label>供应开始<input type="time" value={draft.availableFrom} onChange={(event) => updateDraft('availableFrom', event.target.value)} /></label>
-              <label>供应结束<input type="time" value={draft.availableUntil} onChange={(event) => updateDraft('availableUntil', event.target.value)} /></label>
+              <ServiceWindowFields value={draft.serviceWindow} onChange={value=>updateDraft('serviceWindow',value)}/>
+              {!draft.serviceWindow&&<><label>供应开始<input type="time" value={draft.availableFrom} onChange={(event) => updateDraft('availableFrom', event.target.value)} /></label>
+              <label>供应结束<input type="time" value={draft.availableUntil} onChange={(event) => updateDraft('availableUntil', event.target.value)} /></label></>}
               <label>KDS优先级<NumberInputWithUnit inputMode="numeric" min={0} max={1000} unit="级" value={draft.kdsPriority} onChange={(event) => updateDraft('kdsPriority', event.target.value)} /></label>
               <label>出品时限<NumberInputWithUnit inputMode="numeric" min={30} max={14400} unit="秒" placeholder="按岗位默认" value={draft.fulfillmentSlaSeconds} onChange={(event) => updateDraft('fulfillmentSlaSeconds', event.target.value)} /></label>
               <label>预计准备<NumberInputWithUnit inputMode="numeric" min={0} max={240} unit="分钟" value={draft.recommendationExpectedPrepMinutes} onChange={(event) => updateDraft('recommendationExpectedPrepMinutes', event.target.value)} /></label>
@@ -1051,7 +1059,7 @@ function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
     recommendationSceneTags: '', recommendationIntentTags: '', recommendationTasteTags: '',
     recommendationDwellTags: '', recommendationSingleWaveEligible: true,
     recommendationExpectedPrepMinutes: '8', recommendationHoldMinutes: '10',
-    recommendationUpgradeProductId: '', sortOrder: '999', availableFrom: '', availableUntil: '',
+    recommendationUpgradeProductId: '', sortOrder: '999', serviceWindow: null, availableFrom: '', availableUntil: '',
     allowedChannels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
     costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', acidity:'',sweetness:'',imageUrl: '', snapshot: {}, componentQuantities: {},choiceGroups:[],
@@ -1325,3 +1333,5 @@ function stationLabel(value: FulfillmentStation): string {
 function statusLabel(value: ProductStatus): string {
   return value === 'active' ? '在售' : value === 'sold_out' ? '售罄' : '停用'
 }
+
+function windowMinute(minute:number){return `${String(Math.floor((minute%1440)/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`}

@@ -32,7 +32,7 @@ function harness(platform, getOrders) {
   const page = { ...actions, data: { pendingPayment: original, checkoutLocked: true },
     currentTableRequest: () => request, isCurrentTableRequest: (value) => value === request,
     setData(value) { Object.assign(this.data,value) },
-    showMenuBeforeCart() {}, updateCart() {}, applyFilters() {}, recordOrderTiming() {}, loadOrderExtras() {}, startSharedCartPolling() {}, startServicePolling() {},
+    showMenuBeforeCart() {}, updateCart() {}, applyFilters() {}, recordOrderTiming() {}, loadOrderExtras() {}, startSharedCartPolling() {}, startMenuWindowRefresh() {}, startServicePolling() {},
     queuePendingGuestPaymentAbandonment: () => { abandonCalls++; return {} },
     executePendingGuestPaymentAbandonment: () => { abandonCalls++ },
   }

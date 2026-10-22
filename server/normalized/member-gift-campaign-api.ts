@@ -30,7 +30,7 @@ export const memberGiftCampaignApiPlugin:FastifyPluginAsync<Options>=async(app,o
     return{data:result.value,meta:{replayed:result.replayed}}
   }
   app.get<{Querystring:{cursor?:string}}>('/public/mini/member-gift-jobs',async request=>{const context=await options.resolveSelfContext(request);return{data:await options.transactions.run(context.scope,tx=>new MemberGiftCampaignRepository(tx).selfJobs(context.customerId,request.query.cursor??null),{readOnly:true})}})
-  app.get<{Querystring:{cursor?:string}}>('/staff/member-gifts/campaigns',async request=>{const context=await staff(request,'loyalty.configuration.view');return{data:await options.transactions.run(context.scope,tx=>new MemberGiftCampaignRepository(tx).list(context.employeeId,request.query.cursor??null),{readOnly:true})}})
+  app.get<{Querystring:{cursor?:string;projectId?:string}}>('/staff/member-gifts/campaigns',async request=>{const context=await staff(request,'loyalty.configuration.view');return{data:await options.transactions.run(context.scope,tx=>new MemberGiftCampaignRepository(tx).list(context.employeeId,request.query.cursor??null,request.query.projectId??null),{readOnly:true})}})
   app.get<{Querystring:{cursor?:string}}>('/staff/member-gifts/jobs',async request=>{const context=await staff(request,'loyalty.configuration.view');return{data:await options.transactions.run(context.scope,tx=>new MemberGiftCampaignRepository(tx).jobs(context.employeeId,request.query.cursor??null),{readOnly:true})}})
   app.get<{Querystring:{cursor?:string;state?:'pending'|'resolved'}}>('/staff/member-gifts/refund-reviews',async request=>{
     const context=await staff(request,'loyalty.configuration.view')

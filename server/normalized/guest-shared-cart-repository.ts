@@ -4,6 +4,8 @@ import { OrderRepository } from './order-repository.js'
 import type { BundleUnitSelectionInput } from './order-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import {MAX_LINE_QUANTITY,MAX_CART_QUANTITY,MAX_CART_AMOUNT_MINOR} from './guest-shared-cart-limits.js'
+import {canReviewIssuedCouponProduct,verifyIssuedCouponProductLines} from './issued-coupon-product-promise.js'
+import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 
 export interface GuestSharedCartLine {
   productId: string
@@ -14,11 +16,14 @@ export interface GuestSharedCartLine {
   subtotalAmountMinor: number | null
   currency: string | null
   available: boolean
+  couponReviewAvailable?: boolean
   unavailableReason: string | null
   bundleSelections: readonly BundleUnitSelectionInput[]
 }
 
 export interface GuestSharedCart {
+  issuedCouponPortionId?: string
+
   id: string
   publicId: string
   tableSessionId: string
@@ -206,6 +211,7 @@ export class GuestSharedCartRepository {
       operationId: string
       actorSessionRef: string
       bundleSelections?: readonly BundleUnitSelectionInput[]
+      issuedCouponBenefitId?: string
     }>,
   ): Promise<GuestSharedCart> {
     validateAdjust(input)
@@ -221,10 +227,19 @@ export class GuestSharedCartRepository {
       // checked authoritatively below, so only reject a partial non-empty set.
       if(addedSelections.length>0)throw new TypeError('每份新增套餐都必须分别提交一组选择')
     }
-    const payload = { productId: input.productId, delta: input.delta,
+    let payload = { productId: input.productId, delta: input.delta,
+      ...(input.issuedCouponBenefitId?{issuedCouponBenefitId:input.issuedCouponBenefitId}:{}),
       ...(addedSelections.length>0?{ bundleSelections:bundleSelectionsToJson(addedSelections) }:{}), } as JsonObject
     if (await this.isOperationReplay(cart.tableSessionId, input.operationId, 'adjust', payload)) {
-      return this.snapshot(cart)
+      const result = await this.snapshot(cart)
+      if (input.issuedCouponBenefitId) {
+        const receipt = await this.transaction.query<{portion_id:string|null}>(`SELECT payload->>'issuedCouponPortionId' AS portion_id
+          FROM mbox.guest_shared_cart_operations WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND scope_operation_id=$4`,
+          [this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.tableSessionId,input.operationId])
+        const portionId = receipt.rows[0]?.portion_id
+        if (portionId && result.lines.some(line=>line.portionIds?.includes(portionId))) result.issuedCouponPortionId=portionId
+      }
+      return result
     }
     await this.assertWriteAllowed(cart, input.actorSessionRef)
     const latePositiveAdd = input.delta > 0
@@ -250,9 +265,10 @@ export class GuestSharedCartRepository {
       throw new GuestSharedCartLimitError(`单个商品最多可加入${MAX_LINE_QUANTITY}件`)
     }
     if (nextQuantity > 0) {
+      if(input.issuedCouponBenefitId&&input.delta!==1)throw new GuestSharedCartLimitError('原券商品每次加入一份，请按具体份次核对优惠券')
       await new OrderRepository(this.transaction,this.customerId).assertCurrentOrderable([
-        { productId: input.productId, quantity: nextQuantity, bundleSelections:nextSelections },
-      ], 'guest_qr')
+        { productId: input.productId, quantity: input.issuedCouponBenefitId?1:nextQuantity, bundleSelections:input.issuedCouponBenefitId?addedSelections:nextSelections },
+      ], 'guest_qr',input.issuedCouponBenefitId?[{requestIndex:0,benefitId:input.issuedCouponBenefitId}]:[])
     }
     if (nextQuantity === 0) {
       await this.transaction.query(`
@@ -272,11 +288,19 @@ export class GuestSharedCartRepository {
     }
     await this.assertCartLimits(cart.id)
     const {version,updatedAt} = await this.incrementVersion(cart)
+    const result = await this.snapshot({ ...cart, version,updatedAt })
+    if (input.issuedCouponBenefitId) {
+      const previous = new Set(cart.lines.flatMap(line=>line.portionIds??[]))
+      const added = result.lines.filter(line=>line.productId===input.productId).flatMap(line=>line.portionIds??[]).filter(id=>!previous.has(id))
+      if (added.length!==1) throw new GuestSharedCartVersionConflictError(cart)
+      result.issuedCouponPortionId=added[0]!
+      payload={...payload,issuedCouponPortionId:added[0]!}
+    }
     await this.appendOperation(cart, {
       command: 'adjust', operationId: input.operationId, actorSessionRef: auditActorSessionRef(input.actorSessionRef),
       expectedVersion: input.expectedVersion, resultingVersion: version, payload,
     })
-    return this.snapshot({ ...cart, version,updatedAt })
+    return result
   }
 
   /** Internal cart mutation only: callers must independently verify an accepted
@@ -469,6 +493,7 @@ export class GuestSharedCartRepository {
       expectedVersion: number
       operationId: string
       actorSessionRef: string
+      couponQuoteId?: string
     }>,
   ): Promise<GuestSharedCart> {
     validateOperation(input.operationId, input.actorSessionRef)
@@ -482,7 +507,15 @@ export class GuestSharedCartRepository {
     await this.assertCartLimits(cart.id)
     const withLines = await this.snapshot(cart)
     if (withLines.lines.length === 0) throw new GuestSharedCartEmptyError()
-    if (withLines.lines.some((line) => !line.available)) {
+    let couponPortions=new Set<string>()
+    if(input.couponQuoteId&&this.customerId){
+      const quote=await new CheckoutCouponQuoteRepository(this.transaction).find(input.couponQuoteId,this.customerId)
+      if(!quote.current||quote.cartId!==cart.id||quote.generation!==cart.generation||quote.version!==cart.version)throw new GuestSharedCartLimitError('原券报价已变化，请重新核对')
+      const promises=quote.lines.flatMap(line=>line.benefitId?[{requestIndex:line.requestIndex,benefitId:line.benefitId}]:[])
+      await verifyIssuedCouponProductLines(this.transaction,this.customerId,quote.lines.map(line=>({productId:line.productId,quantity:1})),promises)
+      couponPortions=new Set(quote.lines.filter(line=>line.benefitId).map(line=>line.portionId))
+    }
+    if (withLines.lines.some((line) => !line.available && !line.portionIds?.every(id=>couponPortions.has(id)))) {
       throw new GuestSharedCartLimitError('购物车中有暂不可售商品，请处理后再结账')
     }
     const update = await this.transaction.query<{ version: number | string }>(`
@@ -567,7 +600,8 @@ export class GuestSharedCartRepository {
         LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) AS unit_price_minor,price.currency,
         CASE
           WHEN product.id IS NULL OR product.status<>'active' THEN '商品已下架'
-          WHEN NOT (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid)) OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
+          WHEN NOT mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$4::uuid) OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
+          WHEN mbox.product_purchase_deadline(product.tenant_id,product.store_id,product.id,$4::uuid) IS NULL THEN '当前不在可售时段或专属资格已失效'
           WHEN price.amount_minor IS NULL THEN '商品价格待确认'
           WHEN product.product_kind='bundle' AND NOT selection_state.valid
             THEN '套餐选择已变更，请重新选择'
@@ -587,7 +621,8 @@ export class GuestSharedCartRepository {
           ELSE NULL
         END AS unavailable_reason,
         COALESCE(product.status='active'
-          AND (product.guest_visible OR mbox.customer_has_card_menu_item(product.tenant_id,product.store_id,product.id,$4::uuid))
+          AND mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$4::uuid)
+          AND mbox.product_purchase_deadline(product.tenant_id,product.store_id,product.id,$4::uuid) IS NOT NULL
           AND 'guest_qr'=ANY(product.allowed_channels)
           AND price.amount_minor IS NOT NULL
           AND (product.product_kind<>'bundle' OR selection_state.valid)
@@ -795,7 +830,8 @@ export class GuestSharedCartRepository {
                   WHERE product.product_kind='bundle' AND option_product.status='active'
                     AND option_product.guest_visible
                     AND 'guest_qr'=ANY(option_product.allowed_channels)
-                    AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
+                    AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
+            AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
                       OR (option_product.available_from<option_product.available_until
                         AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
                         AND (clock_timestamp() AT TIME ZONE store.timezone)::time<option_product.available_until)
@@ -865,6 +901,7 @@ export class GuestSharedCartRepository {
           WHERE product.product_kind='bundle' AND option_product.status='active'
             AND option_product.guest_visible
             AND 'guest_qr'=ANY(option_product.allowed_channels)
+            AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
                 AND (clock_timestamp() AT TIME ZONE store.timezone)::time>=option_product.available_from
@@ -901,11 +938,15 @@ export class GuestSharedCartRepository {
         portionIds:line.portion_ids??[],
       }
     })
+    const couponReview=new Map<string,boolean>()
+    for(const line of mappedLines.filter(line=>!line.available)){
+      couponReview.set(line.productId,await canReviewIssuedCouponProduct(this.transaction,this.customerId,line.productId))
+    }
     const currencies = new Set(mappedLines.filter((line) => line.available).map((line) => line.currency))
     const allPriced = mappedLines.every((line) => line.available && line.subtotalAmountMinor !== null)
     return {
       ...cart,
-      lines: mappedLines,
+      lines: mappedLines.map(line=>({...line,couponReviewAvailable:couponReview.get(line.productId)??false})),
       totalAmountMinor: allPriced && currencies.size <= 1
         ? mappedLines.reduce((sum, line) => sum + line.subtotalAmountMinor!, 0)
         : null,
@@ -1108,7 +1149,10 @@ export class GuestSharedCartRepository {
     `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,tableSessionId,operationId])
     const row = operation.rows[0]
     if (!row) return false
-    if (row.command !== command || stableJson(row.payload) !== stableJson(payload)) {
+    const originalPayload = { ...row.payload }
+    // Receipt identity is server-generated metadata, not a command input.
+    if (row.command==='adjust' && originalPayload.issuedCouponBenefitId) delete originalPayload.issuedCouponPortionId
+    if (row.command !== command || stableJson(originalPayload) !== stableJson(payload)) {
       throw new GuestSharedCartOperationConflictError()
     }
     return true

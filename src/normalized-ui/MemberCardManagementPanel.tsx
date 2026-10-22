@@ -4,14 +4,18 @@ import {executeRecoverableCommand} from './recoverable-command'
 import {createIdempotencyKey} from './cashier-mutation'
 import {useConfirmationDialog} from './ConfirmationDialog'
 import './member-card-management-panel.css'
-interface Application{id:string;project_name:string;customer_reference:string;member_no:string|null;member_level:string|null;requested_at:string}
-interface Project{id:string;code:string;name:string;kind:string;status:string;terms:string;available_until:string;created_by_employee_id:string}
-interface Holding{id:string;project_name:string;customer_reference:string;status:string;expired:boolean;valid_until:string}
+import {CardMenuEditor} from './CardMenuEditor'
+import {MemberGiftCampaignPanel} from './MemberGiftCampaignPanel'
+interface Application{previous_card_status?:string|null;previous_card_reason?:string|null;id:string;project_name:string;customer_reference:string;member_no:string|null;member_level:string|null;requested_at:string}
+interface Project{id:string;code:string;name:string;kind:string;status:string;terms:string;available_until:string|null;flow_mode:'legacy'|'simple';created_by_employee_id:string}
+interface Holding{id:string;project_name:string;customer_reference:string;status:string;expired:boolean;valid_until:string|null}
 const names:Record<string,string>={draft:'草稿',open:'开放申请',paused:'暂停申请',closed:'已关闭',member:'会员',silver:'银卡',gold:'金卡',black:'黑卡'}
 export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;auth:StaffAuthView}){
   const manage=auth.permissions.includes('member.card.manage'),review=auth.permissions.includes('member.card.review')
   const [projects,setProjects]=useState<Project[]>([]),[applications,setApplications]=useState<Application[]>([]),[selected,setSelected]=useState<string[]>([])
   const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[reason,setReason]=useState('符合申请条件')
+  const [menuProject,setMenuProject]=useState<string|null>(null),[validityProject,setValidityProject]=useState<string|null>(null),[validity,setValidity]=useState('')
+  const [benefitProject,setBenefitProject]=useState<string|null>(null)
   const [holdings,setHoldings]=useState<Holding[]>([]),[holdingCursor,setHoldingCursor]=useState<string|null>(null),[cardReason,setCardReason]=useState('')
   const [projectCursor,setProjectCursor]=useState<string|null>(null),[applicationCursor,setApplicationCursor]=useState<string|null>(null)
   const [form,setForm]=useState({code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:'',kind:'interest',availableFrom:'',availableUntil:'',cooperationReference:'',cooperationValidUntil:'',cooperationConfirmed:false})
@@ -65,23 +69,23 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
     }catch(error){if(mounted.current)setMessage(error instanceof Error?error.message:'结果未确认，请刷新核对')}
     finally{if(mounted.current)setBusy(false)}
   }
-  async function save(){
+  async function save(openImmediately=false){
     if(busy)return;setBusy(true);setMessage('')
     try{
-      if(!form.availableFrom||!form.availableUntil)throw new Error('请填写明确的开始和结束时间（北京时间）')
-      await command(`${path}/projects`,{...form,availableFrom:`${form.availableFrom}:00+08:00`,availableUntil:`${form.availableUntil}:00+08:00`,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
+      if(form.kind==='cobrand'&&(!form.availableFrom||!form.availableUntil))throw new Error('请填写联名卡明确的开始和结束时间（北京时间）')
+      await command(`${path}/projects`,{...form,openImmediately,availableFrom:form.kind==='interest'?new Date().toISOString():`${form.availableFrom}:00+08:00`,availableUntil:form.availableUntil?`${form.availableUntil}:00+08:00`:null,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
         cooperationValidUntil:form.kind==='cobrand'&&form.cooperationValidUntil?`${form.cooperationValidUntil}:00+08:00`:null,cooperationConfirmed:form.kind==='cobrand'&&form.cooperationConfirmed})
       if(!mounted.current)return
-      setForm(current=>({...current,code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:''}));await load();setMessage('已保存草稿，尚未开放申请；请先配置企业微信与服务号加入门槛、发卡或发券。')
+      setForm(current=>({...current,code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:''}));await load();setMessage(openImmediately?'已保存并开放申请；未配置的权益不作承诺。':'已保存草稿，尚未开放申请；可在此配置指定商品后开放。')
     }catch(error){if(mounted.current)setMessage(error instanceof Error?error.message:'保存结果未确认，请核对后重试')}
     finally{if(mounted.current)setBusy(false)}
   }
   async function decide(ids:string[],decision:'approve'|'reject'){
     if(busy||!ids.length)return
-    if(reason.trim().length<2){setMessage('请选择或填写简短审核原因');return}
+    if(decision==='reject'&&reason.trim().length<2){setMessage('请选择或填写简短拒绝原因');return}
     setBusy(true);setMessage('')
     const results:string[]=[]
-    const decisionReason=decision==='reject'&&reason==='符合申请条件'?'不符合本卡申请条件':reason
+    const decisionReason=decision==='approve'?'符合申请条件':reason==='符合申请条件'?'不符合本卡申请条件':reason
     for(const id of ids){
       try{await command(`${path}/applications/${id}/review`,{decision,reason:decisionReason});results.push(`${applications.find(item=>item.id===id)?.member_no||id.slice(-8)}：${decision==='approve'?'通过':'拒绝'}成功`)}
       catch(error){results.push(`${id.slice(-8)}：${error instanceof Error?error.message:'未确认，请核对'}`)}
@@ -104,7 +108,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
       {!applications.length&&<p>读取后将在这里显示待审核申请。</p>}
       {applicationCursor&&<button type="button" disabled={busy} onClick={()=>void loadMore('applications')}>加载更多待审核申请</button>}
       <label>常用审核理由<select disabled={busy} value={['符合申请条件','不符合本卡申请条件','资料不完整，请核对后重新申请'].includes(reason)?reason:''} onChange={event=>setReason(event.target.value)}><option value="">自定义原因</option><option>符合申请条件</option><option>不符合本卡申请条件</option><option>资料不完整，请核对后重新申请</option></select></label>
-      {applications.map(item=><article key={item.id}><label className="member-card-management__select"><input type="checkbox" checked={selected.includes(item.id)} disabled={busy} onChange={event=>setSelected(value=>event.target.checked?[...value,item.id]:value.filter(id=>id!==item.id))}/><span>{item.member_no||item.customer_reference}<small>{names[item.member_level||'']||'等级待核实'} · {item.project_name}</small><small>申请于 {new Date(item.requested_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · 待审核</small></span></label><div className="member-card-management__actions"><button type="button" disabled={busy} onClick={()=>void decide([item.id],'approve')}>通过</button><button type="button" disabled={busy} onClick={()=>void decide([item.id],'reject')}>拒绝</button></div></article>)}
+      {applications.map(item=><article key={item.id}><label className="member-card-management__select"><input type="checkbox" checked={selected.includes(item.id)} disabled={busy} onChange={event=>setSelected(value=>event.target.checked?[...value,item.id]:value.filter(id=>id!==item.id))}/><span>{item.member_no||item.customer_reference}<small>{names[item.member_level||'']||'等级待核实'} · {item.project_name}</small><small>申请于 {new Date(item.requested_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · 待审核</small>{item.previous_card_status==='revoked'&&<small>原卡已撤销：{item.previous_card_reason||'请先核对原处理原因'}；核实后再决定是否通过。</small>}</span></label><div className="member-card-management__actions"><button type="button" disabled={busy} onClick={()=>void decide([item.id],'approve')}>通过</button><button type="button" disabled={busy} onClick={()=>void decide([item.id],'reject')}>拒绝</button></div></article>)}
     </div>}
     {manage&&<details><summary>持卡状态管理</summary><p>冻结、恢复和撤销独立于会员等级。退出和撤销的卡不直接恢复；已到期卡不能恢复。</p><label>变更原因<input maxLength={300} value={cardReason} disabled={busy} onChange={event=>setCardReason(event.target.value)}/></label><button type="button" disabled={busy} onClick={()=>void loadHoldings()}>读取 / 刷新持卡</button>
       {holdings.map(card=><article key={card.id}><div><strong>{card.project_name}</strong><small>{card.customer_reference} · {card.expired?'已到期':({active:'有效',suspended:'已冻结',withdrawn:'已退出',revoked:'已撤销'}[card.status]||card.status)}</small></div><div className="member-card-management__actions">
@@ -118,14 +122,20 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
       <p>项目编号自动生成，请填写会员卡名称。</p>
       <label>名称<input value={form.name} maxLength={60} onChange={event=>setForm({...form,name:event.target.value})}/></label>
       <label>类型<select value={form.kind} onChange={event=>setForm({...form,kind:event.target.value,cooperationConfirmed:false})}><option value="interest">免费兴趣卡</option><option value="cobrand">免费联名卡</option></select></label>
-      <label>开始时间（北京时间）<input type="datetime-local" value={form.availableFrom} onChange={event=>setForm({...form,availableFrom:event.target.value})}/></label>
-      <label>结束时间（北京时间）<input type="datetime-local" value={form.availableUntil} onChange={event=>setForm({...form,availableUntil:event.target.value})}/></label>
+      {form.kind==='cobrand'&&<label>开始时间（北京时间）<input type="datetime-local" value={form.availableFrom} onChange={event=>setForm({...form,availableFrom:event.target.value})}/></label>}
+      <label>{form.kind==='interest'?'统一到期时间（北京时间，留空长期）':'结束时间（北京时间）'}<input type="datetime-local" value={form.availableUntil} onChange={event=>setForm({...form,availableUntil:event.target.value})}/></label>
       {form.kind==='cobrand'&&<><label>合作依据（仅内部）<input value={form.cooperationReference} maxLength={500} onChange={event=>setForm({...form,cooperationReference:event.target.value})}/></label><label>合作到期（北京时间）<input type="datetime-local" value={form.cooperationValidUntil} onChange={event=>setForm({...form,cooperationValidUntil:event.target.value})}/></label><label className="member-card-management__select"><input type="checkbox" checked={form.cooperationConfirmed} onChange={event=>setForm({...form,cooperationConfirmed:event.target.checked})}/>已核实合作许可和对外表述</label></>}
-    </div><label>顾客申请说明<textarea value={form.terms} maxLength={6000} rows={4} onChange={event=>setForm({...form,terms:event.target.value})}/></label><p>保存后条款不可覆盖；需修订时新建项目。未配置入卡礼，不承诺自动发券。</p><button type="button" onClick={()=>void save()}>保存未开放草稿</button></fieldset>
+    </div><label>顾客申请说明<textarea value={form.terms} maxLength={6000} rows={4} onChange={event=>setForm({...form,terms:event.target.value})}/></label><p>普通兴趣卡默认长期，介绍可留空；未配置权益不承诺自动发券。已发卡期限不随默认设置改变。</p><button type="button" onClick={()=>void save()}>保存未开放草稿</button>{form.kind==='interest'&&auth.permissions.includes('loyalty.policy.publish')&&<button type="button" onClick={()=>void save(true)}>保存并开放申请</button>}</fieldset>
       {projects.map(project=><article key={project.id}><div><strong>{project.name}</strong><small>{project.code} · {names[project.status]||project.status}</small><details><summary>申请说明</summary><p className="member-card-management__message">{project.terms}</p></details></div><div className="member-card-management__actions">
-        {project.status!=='closed'&&project.status!=='open'&&project.created_by_employee_id!==auth.employee.id&&auth.permissions.includes('loyalty.policy.publish')&&<button type="button" disabled={busy} onClick={()=>void state(project,'open')}>开放申请</button>}
+        <button type="button" disabled={busy} onClick={()=>setMenuProject(menuProject===project.id?null:project.id)}>配置指定商品</button>
+        {auth.permissions.includes('loyalty.configuration.view')&&<button type="button" disabled={busy} onClick={()=>setBenefitProject(benefitProject===project.id?null:project.id)}>配置入卡权益</button>}
+        {project.flow_mode==='simple'&&<button type="button" disabled={busy} onClick={()=>{setValidityProject(project.id);setValidity(project.available_until?new Date(Date.parse(project.available_until)+28800000).toISOString().slice(0,16):'')}}>后续发卡期限</button>}
+        {project.status!=='closed'&&project.status!=='open'&&(project.flow_mode==='simple'||project.created_by_employee_id!==auth.employee.id)&&auth.permissions.includes('loyalty.policy.publish')&&<button type="button" disabled={busy} onClick={()=>void state(project,'open')}>开放申请</button>}
         {project.status==='open'&&<button type="button" disabled={busy} onClick={()=>void state(project,'paused')}>暂停申请</button>}{project.status!=='closed'&&<button type="button" disabled={busy} onClick={()=>void state(project,'closed')}>关闭项目</button>}
-      </div></article>)}
+      </div>{menuProject===project.id&&<CardMenuEditor key={project.id} api={api} auth={auth} projectId={project.id}/>}
+      {benefitProject===project.id&&<MemberGiftCampaignPanel key={`benefits:${project.id}`} api={api} auth={auth} cardProject={project}/>}
+      {validityProject===project.id&&<div><label>新的统一到期时间（留空长期）<input type="datetime-local" value={validity} onChange={e=>setValidity(e.target.value)}/></label><p>只影响后续审批，已发卡期限不变。</p><button disabled={busy} onClick={()=>{setBusy(true);void command(`${path}/projects/${project.id}/validity`,{availableUntil:validity?`${validity}:00+08:00`:null,reason:'调整后续发卡默认期限'}).then(async()=>{setValidityProject(null);await load();setMessage('后续发卡期限已更新，原卡期限保留')}).catch(error=>setMessage(error instanceof Error?error.message:'结果未确认，请刷新')).finally(()=>setBusy(false))}}>保存后续期限</button></div>}
+      </article>)}
       {projectCursor&&<button type="button" disabled={busy} onClick={()=>void loadMore('projects')}>加载更多卡项目</button>}
     </details>}
   </section>

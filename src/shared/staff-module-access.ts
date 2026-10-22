@@ -143,6 +143,10 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
       'privacy.policy.view', 'privacy.policy.manage', 'privacy.policy.publish',
     ],
   },
+  {
+    code: 'scan', label: '扫码与活动核销', route: '/staff/scan', sortOrder: 225,
+    permissionCodes: ['loyalty.account.view', 'community.activity.view', 'community.activity.manage', 'community.activity.verify'],
+  },
 ])
 
 export interface StaffNavigationPresentation {

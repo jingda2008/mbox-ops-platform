@@ -14,7 +14,7 @@ export function defaultStaffWorkMode(roleCodes: readonly string[]): StaffWorkMod
 }
 export function quickStaffEntries(entries: StaffBootstrapView['navigation'], mode: StaffWorkMode) {
   const codes = staffWorkModes.find(item => item.id === mode)!.codes
-  const sorted = [...entries].sort((a, b) => {
+  const sorted = entries.filter(entry => entry.code !== 'scan').sort((a, b) => {
     const rank = (code: string) => codes.includes(code) ? codes.indexOf(code) : 100
     return rank(a.code) - rank(b.code)
   })

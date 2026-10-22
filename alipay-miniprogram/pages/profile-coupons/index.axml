@@ -14,6 +14,7 @@
           <text a:if="{{item.calendarText}}" class="coupon-copy">{{item.calendarText}}</text>
           <text a:if="{{item.calendarNextText}}" class="coupon-copy">{{item.calendarNextText}}</text>
           <text a:if="{{item.calendarLimitText}}" class="coupon-copy">{{item.calendarLimitText}}</text>
+          <button a:if="{{item.canUsePriceCoupon}}" class="secondary-button" onTap="usePriceCoupon">去点单使用已有兑换券</button>
           <view class="coupon-foot"><text a:if="{{item.valueText}}">{{item.valueText}}</text><text>{{item.validText}}</text></view>
         </view>
       </view>

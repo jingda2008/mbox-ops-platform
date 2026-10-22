@@ -1,6 +1,7 @@
 const { getMiniBootstrap } = require('./api')
 
 const LOGIN_REDIRECT_KEY = 'mbox.membership.login.redirect.v1'
+const LOGIN_DESTINATION_KEY = 'mbox.membership.login.destination.v1'
 
 async function hasActiveMembership() {
   try {
@@ -11,7 +12,9 @@ async function hasActiveMembership() {
   }
 }
 
-function redirectToMembershipLogin() {
+function redirectToMembershipLogin(destination) {
+  if (typeof destination === 'string' && /^\/pages\/profile-cards\/index(?:\?projectId=[0-9a-f-]{36})?$/i.test(destination)) wx.setStorageSync(LOGIN_DESTINATION_KEY, destination)
+  else wx.removeStorageSync(LOGIN_DESTINATION_KEY)
   wx.setStorageSync(LOGIN_REDIRECT_KEY, String(Date.now()))
   wx.switchTab({ url: '/pages/profile/index' })
 }
@@ -21,6 +24,12 @@ function consumeMembershipLoginRedirect() {
   if (!stored) return false
   wx.removeStorageSync(LOGIN_REDIRECT_KEY)
   return true
+}
+
+function consumeMembershipLoginDestination() {
+  const destination = wx.getStorageSync(LOGIN_DESTINATION_KEY)
+  wx.removeStorageSync(LOGIN_DESTINATION_KEY)
+  return typeof destination === 'string' && /^\/pages\/profile-cards\/index(?:\?projectId=[0-9a-f-]{36})?$/i.test(destination) ? destination : null
 }
 
 function promptMembershipLogin(content) {
@@ -47,6 +56,7 @@ module.exports = {
   hasActiveMembership,
   redirectToMembershipLogin,
   consumeMembershipLoginRedirect,
+  consumeMembershipLoginDestination,
   promptMembershipLogin,
   requireMembershipLogin,
 }

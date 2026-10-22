@@ -5,6 +5,14 @@ const root = new URL('../../', import.meta.url)
 const read = (path: string) => readFileSync(new URL(path, root), 'utf8')
 
 describe('activity operations staff and customer contract', () => {
+  it('routes v3 service and refund handling to the single authorized workbench while legacy buttons remain gated',()=>{
+    const panel=read('src/normalized-ui/ActivityOperationsPanel.tsx')
+    expect(panel).toContain('registration.serviceVersion!==3 && canRequestRefund')
+    expect(panel).toContain('registration.serviceVersion!==3 && canApproveRefund')
+    expect(panel).toContain('registration.serviceVersion!==3 && canExecuteRefund')
+    expect(panel).toContain("canManage && registration.serviceVersion!==3 && registration.status === 'confirmed'")
+    expect(panel).toContain('退款统一到“收银与退款 → 活动收银”核对原申请')
+  })
   it('keeps published promises immutable and exposes the full draft configuration surface', () => {
     const panel = read('src/normalized-ui/ActivityOperationsPanel.tsx')
     expect(panel).toContain('发布后修改需重新确认')
@@ -54,7 +62,9 @@ describe('activity operations staff and customer contract', () => {
   it('keeps package setup on the single draft page and sends its complete contract', () => {
     const panel = read('src/normalized-ui/ActivityOperationsPanel.tsx')
     const api = read('server/normalized/activity-operations-api.ts')
-    expect(panel).toContain('活动套餐（活动票之外最多选一档）')
+    expect(panel).toContain('活动套餐与加购')
+    expect(panel).toContain('新套餐按份固定价、固定菜量，价格已含所选入场权益')
+    expect(panel).not.toContain('活动票之外最多选一档')
     expect(panel).toContain('报名必须选择套餐')
     expect(panel).toContain('新增套餐')
     expect(panel).toContain('draft.packages.map')

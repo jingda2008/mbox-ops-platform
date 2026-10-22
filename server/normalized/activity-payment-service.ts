@@ -9,6 +9,7 @@ import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import type { PaymentCommandService } from './payment-command-service.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 import { PaymentRepository } from './payment-repository.js'
+import { RESERVING_REFUND_STATUSES } from './refund-repository.js'
 
 export type ActivityPaymentResolutionState =
   | 'not_required' | 'action_required' | 'pending' | 'unknown'
@@ -18,8 +19,13 @@ export type ActivityPaymentResolutionState =
 export type ActivityPaymentAllowedAction =
   | 'start_payment' | 'query_payment' | 'cancel_registration'
 
+export type ActivityRefundRequestBlockReason =
+  | 'legacy_registration' | 'payment_not_refundable' | 'registration_not_active'
+  | 'rights_used' | 'active_addons' | 'refund_in_progress' | 'compensation_review_required'
+
 export interface PublicActivityPaymentState {
   registrationPublicId: string
+  registrationStatus: string
   paymentPublicId: string | null
   resolutionState: ActivityPaymentResolutionState
   paymentStatus: string
@@ -29,6 +35,11 @@ export interface PublicActivityPaymentState {
   expiresAt: string | null
   allowedActions: ActivityPaymentAllowedAction[]
   refundStatus: string | null
+  refundPublicId: string | null
+  refundRejectionReason: string | null
+  canRequestFullRefund: boolean
+  refundRequestBlockReason: ActivityRefundRequestBlockReason | null
+  serviceRefundDisposition: 'retain_fulfillment' | 'stop_unstarted' | null
 }
 
 export interface PublicActivityProviderAction {
@@ -56,6 +67,14 @@ interface ActivityPaymentRow extends Record<string, unknown> {
   authoritative_payment_status: string | null
   provider_action_state: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
   refund_status: string | null
+  refund_public_id: string | null
+  refund_decision_reason: string | null
+  service_version: number
+  service_refund_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
+  refund_rights_used: boolean
+  refund_active_addons: boolean
+  refund_amount_reserved: boolean
+  refund_compensation_reserved: boolean
 }
 
 type ActivityOnlinePayments = Pick<OnlinePaymentService, 'create' | 'query' | 'close'>
@@ -275,7 +294,7 @@ export class ActivityPaymentService {
 
   async requestRefund(
     context: StaffCustomerExperienceContext,
-    input: Readonly<{ registrationPublicId: string; paymentPublicId?: string | null; expectedPaymentPublicId?: string | null; reason: string; idempotencyKey: string }>,
+    input: Readonly<{ registrationPublicId: string; paymentPublicId?: string | null; expectedPaymentPublicId?: string | null; reason: string; idempotencyKey: string; amountMinor?:number; disposition?:'retain_fulfillment'|'stop_unstarted';customerConfirmed?:boolean }>,
   ) {
     const payment = await this.transactions.run(context.scope, async (transaction) => (
       staffActivityPayment(transaction, input.registrationPublicId, input.paymentPublicId ?? null, input.expectedPaymentPublicId ?? null)
@@ -291,7 +310,7 @@ export class ActivityPaymentService {
       requestFingerprint: fingerprint(input),
       paymentId: payment.payment_id,
       publicId: deterministicProviderRefundPublicId(context.scope.storeId, input.idempotencyKey),
-      reason: input.reason,
+      reason: input.reason, amountMinor: input.amountMinor, disposition: input.disposition, customerConfirmed: input.customerConfirmed,
       requestEvidence: {
         registrationPublicId: input.registrationPublicId,
         ...(input.paymentPublicId === undefined || input.paymentPublicId === null
@@ -335,7 +354,29 @@ async function ownedActivityPayment(
       payment.method AS payment_method,
       payment.status AS authoritative_payment_status,
       provider_action.state AS provider_action_state,
-      latest_refund.status AS refund_status
+      latest_refund.status AS refund_status, latest_refund.public_id AS refund_public_id,
+      latest_refund.decision_reason AS refund_decision_reason,
+      registration.service_version, registration.service_refund_disposition,
+      EXISTS (
+        SELECT 1 FROM mbox.activity_admission_batches batch
+        WHERE (batch.tenant_id,batch.store_id,batch.registration_id)=(registration.tenant_id,registration.store_id,registration.id)
+      ) OR EXISTS (
+        SELECT 1 FROM mbox.activity_service_lines line
+        WHERE (line.tenant_id,line.store_id,line.registration_id)=(registration.tenant_id,registration.store_id,registration.id)
+      ) OR EXISTS (
+        SELECT 1 FROM mbox.activity_meals meal
+        WHERE (meal.tenant_id,meal.store_id,meal.registration_id)=(registration.tenant_id,registration.store_id,registration.id)
+      ) AS refund_rights_used,
+      EXISTS (
+        SELECT 1 FROM mbox.community_activity_registrations child
+        WHERE (child.tenant_id,child.store_id,child.parent_registration_id)=(registration.tenant_id,registration.store_id,registration.id)
+          AND child.status IN ('payment_pending','confirmed','checked_in')
+          AND (child.payment_status IN ('pending','paid')
+            OR (child.payment_status='not_required' AND child.fee_amount_minor=0)
+            OR child.service_refund_disposition IS NOT NULL)
+      ) AS refund_active_addons,
+      refund_reservations.amount_reserved AS refund_amount_reserved,
+      refund_reservations.compensation_reserved AS refund_compensation_reserved
     FROM mbox.community_activity_registrations registration
     JOIN mbox.community_activities activity
       ON activity.tenant_id=registration.tenant_id AND activity.store_id=registration.store_id
@@ -347,15 +388,24 @@ async function ownedActivityPayment(
       ON provider_action.tenant_id=payment.tenant_id AND provider_action.store_id=payment.store_id
      AND provider_action.payment_id=payment.id
     LEFT JOIN LATERAL (
-      SELECT refund.status
+      SELECT refund.status, refund.public_id, refund.decision_reason
       FROM mbox.refunds refund
       WHERE refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
         AND refund.payment_id=payment.id
       ORDER BY refund.created_at DESC, refund.id DESC LIMIT 1
     ) latest_refund ON true
+    LEFT JOIN LATERAL (
+      SELECT count(*) > 0 AS amount_reserved,
+        COALESCE(bool_or(refund.activity_disposition IS NOT NULL), false) AS compensation_reserved
+      FROM mbox.refunds refund
+      WHERE refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id
+        AND refund.payment_id=payment.id
+        AND (refund.status=ANY($5::text[])
+          OR (refund.status='failed' AND refund.approved_by_employee_id IS NOT NULL))
+    ) refund_reservations ON true
     WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
       AND registration.public_id=$4 AND registration.customer_id IN (SELECT id FROM family)
-  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId, registrationPublicId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId, registrationPublicId, RESERVING_REFUND_STATUSES])
   const row = result.rows[0]
   if (row === undefined) throw new CustomerExperienceRequestError('没有找到本人的活动报名', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
   return row
@@ -374,7 +424,7 @@ async function staffActivityPayment(
       registration.seat_hold_expires_at::text, activity.starts_at::text AS activity_starts_at,
       payment.id AS payment_id, payment.public_id AS payment_public_id,
       payment.status AS authoritative_payment_status,
-      provider_action.state AS provider_action_state, latest_refund.status AS refund_status
+      provider_action.state AS provider_action_state, latest_refund.status AS refund_status, latest_refund.public_id AS refund_public_id
     FROM mbox.community_activity_registrations registration
     JOIN mbox.community_activities activity ON activity.tenant_id=registration.tenant_id
       AND activity.store_id=registration.store_id AND activity.id=registration.activity_id
@@ -395,7 +445,7 @@ async function staffActivityPayment(
     LEFT JOIN mbox.payment_provider_actions provider_action ON provider_action.tenant_id=payment.tenant_id
       AND provider_action.store_id=payment.store_id AND provider_action.payment_id=payment.id
     LEFT JOIN LATERAL (
-      SELECT refund.status FROM mbox.refunds refund
+      SELECT refund.status, refund.public_id FROM mbox.refunds refund
       WHERE refund.tenant_id=payment.tenant_id AND refund.store_id=payment.store_id AND refund.payment_id=payment.id
       ORDER BY refund.created_at DESC, refund.id DESC LIMIT 1
     ) latest_refund ON true
@@ -409,6 +459,7 @@ async function staffActivityPayment(
 
 function view(row: Readonly<ActivityPaymentRow>): PublicActivityPaymentState {
   const resolutionState = resolution(row)
+  const refundRequestBlockReason = fullRefundRequestBlockReason(row)
   const cancellable = Date.parse(row.activity_starts_at) > Date.now()
     && ['not_required', 'action_required', 'pending', 'failed'].includes(resolutionState)
   const allowedActions: ActivityPaymentAllowedAction[] = resolutionState === 'action_required'
@@ -423,6 +474,7 @@ function view(row: Readonly<ActivityPaymentRow>): PublicActivityPaymentState {
       : cancellable ? ['cancel_registration'] : []
   return {
     registrationPublicId: row.registration_public_id,
+    registrationStatus: row.registration_status,
     paymentPublicId: row.payment_public_id,
     resolutionState,
     paymentStatus: row.payment_status,
@@ -432,7 +484,27 @@ function view(row: Readonly<ActivityPaymentRow>): PublicActivityPaymentState {
     expiresAt: row.seat_hold_expires_at,
     allowedActions,
     refundStatus: row.refund_status,
+    refundPublicId: row.refund_public_id ?? null,
+    refundRejectionReason: row.refund_status === 'rejected' ? row.refund_decision_reason ?? null : null,
+    canRequestFullRefund: refundRequestBlockReason === null,
+    refundRequestBlockReason,
+    serviceRefundDisposition: row.service_refund_disposition ?? null,
   }
+}
+
+/** Read-only mirror of requestActivity's customer guards and assertActivityUnusedRefund.
+ * This is a display hint from one database snapshot; the command still locks and
+ * rechecks every fact, including reservations created after this response.
+ */
+function fullRefundRequestBlockReason(row: Readonly<ActivityPaymentRow>): ActivityRefundRequestBlockReason | null {
+  if (row.service_version !== 3) return 'legacy_registration'
+  if (row.refund_compensation_reserved || row.service_refund_disposition) return 'compensation_review_required'
+  if (!row.payment_id || row.payment_status !== 'paid' || row.authoritative_payment_status !== 'succeeded') return 'payment_not_refundable'
+  if (!['confirmed', 'checked_in'].includes(row.registration_status)) return 'registration_not_active'
+  if (row.refund_rights_used) return 'rights_used'
+  if (row.refund_active_addons) return 'active_addons'
+  if (row.refund_amount_reserved) return 'refund_in_progress'
+  return null
 }
 
 function resolution(row: Readonly<ActivityPaymentRow>): ActivityPaymentResolutionState {

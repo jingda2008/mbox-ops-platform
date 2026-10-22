@@ -92,6 +92,8 @@ jobs:
           exit 1
       - name: Run code, unit, metadata and production-build checks
         run: npm run check && npm run release:system:test
+      - name: Verify activity, cashier and gift recovery in real browser components
+        run: npm run test:activity-recovery
       - name: Verify candidate, upload and release gate semantics
         run: npm run release:miniprogram:test
 

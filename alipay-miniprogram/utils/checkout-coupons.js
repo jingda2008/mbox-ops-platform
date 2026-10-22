@@ -2,7 +2,7 @@ const initialCheckoutCoupons = {
   pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, pointsInput: '',
   couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
-  couponQuoteTotal: '', couponNeedsReview: false,
+  couponQuoteTotal: '', couponNeedsReview: false, couponEntryOpen: false, couponProducts: [], issuedCouponPending: null,
 }
 function couponPortions(cart, coupons, selections, money) {
   return cart.flatMap(line => (line.portionIds || []).map((portionId, index) => {
@@ -13,6 +13,9 @@ function couponPortions(cart, coupons, selections, money) {
         + ' · ' + money(coupon.pricePromise.fixedPriceMinor) + '/份',
     })))
     const selected = selections.find(selection => selection.portionId === portionId)
+    if (selected && selected.benefitId && !options.some(option => option.benefitId === selected.benefitId)) {
+      options.push({ benefitId: selected.benefitId, label: '已选原券（待核对有效报价）' })
+    }
     const selectedIndex = Math.max(0, options.findIndex(option => option.benefitId === (selected && selected.benefitId)))
     return { portionId, label: line.name + ' · 第' + (index + 1) + '份', options,
       optionLabels: options.map(option => option.label), selectedIndex, selectedLabel: options[selectedIndex].label }
@@ -61,12 +64,14 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
       this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
         couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '购物车或会话已变化，请重新核对优惠，或明确选择不使用优惠。' : '',
-        ...(clearWallet ? { couponItems: [], couponNextCursor: null, couponPickerOpen: false } : {}) })
+        ...(clearWallet ? { couponItems: [], couponProducts: [], couponNextCursor: null, couponPickerOpen: false, couponEntryOpen: false } : {}) })
     },
     async openCheckoutCoupons() {
       if (this.data.busy) return
       if (this.checkoutCouponScope !== scope()) {
+        const entry = this.data.couponEntryOpen
         this.invalidateCheckoutCoupons(true, false)
+        if (entry) this.setData({ couponEntryOpen: true })
         this.checkoutCouponScope = scope()
       }
       if (this.data.pointsPickerOpen) this.invalidateCheckoutCoupons(false, false)
@@ -83,6 +88,10 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
         const items = more === true ? [...new Map([...this.data.couponItems, ...result.items].map(item => [item.id, item])).values()] : result.items
         this.setData({ couponItems: items, couponNextCursor: result.nextCursor,
+          couponProducts: items.filter(item => item.state === 'available' && item.quantityAvailable > 0 && item.pricePromise)
+            .flatMap(item => item.pricePromise.products.map(product => ({ ...product, benefitId: item.id,
+              key: item.id + ':' + product.id, couponTitle: item.display && (item.display.title || item.display.name) || '兑换券',
+              priceText: money(item.pricePromise.fixedPriceMinor) + '/份' }))),
           couponPortions: couponPortions(this.data.cart, items, this.data.couponSelections, money) })
       } catch (error) {
         if (epoch === this.checkoutCouponEpoch) this.setData({ couponError: errorMessage(error, '优惠券读取失败，可重试或不用券继续。') })
@@ -124,10 +133,21 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money
     skipCheckoutCoupons() {
       if (this.data.busy) return
       this.invalidateCheckoutCoupons(false, false)
-      this.setData({ couponPickerOpen: false })
+      const unavailable = this.data.cart.some(line => line.available === false)
+      this.setData({ couponPickerOpen: unavailable, ...(unavailable ? { couponError: '不用券时请先移除暂不可售商品，不会改按原价提交。' } : {}) })
     },
     couponCheckoutReady() {
       const quote = this.data.couponQuote
+      const unavailable = this.data.cart.filter(line => line.available === false)
+      if (this.data.issuedCouponPending || (unavailable.length && (!quote || !quote.current || quote.pointsUsed > 0
+        || quote.generation !== this.data.cartGeneration || quote.version !== this.data.cartVersion
+        || !(Date.parse(quote.expiresAt) > Date.now()) || unavailable.some(line => !line.couponReviewAvailable
+          || (line.portionIds || []).length !== line.quantity || line.portionIds.some(portionId => !(quote.lines || []).some(part =>
+            part.portionId === portionId && part.productId === line.productId && part.benefitId
+            && this.data.couponSelections.some(selection => selection.portionId === portionId && selection.benefitId === part.benefitId))))))) {
+        this.setData({ couponError: this.data.issuedCouponPending ? '原加入结果未确认，请先核对原加入。' : '暂不可售商品须逐份使用有效原券并核对报价；不用券时请先移除这些商品。' })
+        return false
+      }
       if (this.data.couponNeedsReview || ((this.data.couponSelections.length || this.data.pointsInput) && (!quote || quote.generation !== this.data.cartGeneration
         || quote.version !== this.data.cartVersion || !(Date.parse(quote.expiresAt) > Date.now())))) {
         this.setData({ couponError: '请先确认有效优惠报价，或选择不使用优惠按原价提交。' })

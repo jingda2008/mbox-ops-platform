@@ -2,6 +2,8 @@ import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'rea
 import {requiresStaffLogin} from './staff-session-error'
 import {useScreenViewport} from './use-screen-viewport'
 import {ScreenFullscreenButton} from './ScreenFullscreenButton'
+import {ActivityProductionPanel} from './ActivityProductionPanel'
+import {StaffActionsApi} from './staff-actions-api'
 import type {PickupBoardData,PickupReceipt} from '../../shared/pickup-workflow'
 import {staffErrorMessage} from '../../shared/staff-error-message'
 import {PickupApi,PickupApiError,type PickupApiPort,type PickupMutationResult,type PickupRequest} from './pickup-api'
@@ -20,7 +22,9 @@ export function PickupBoard({staffSessionId,api:suppliedApi,canViewOriginalTasks
   const [data,setData]=useState<PickupBoardData|null>(null),[stale,setStale]=useState(true),[busy,setBusy]=useState(false)
   const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine!==false)
   const [message,setMessage]=useState('正在读取取餐内容…'),[loginRequired,setLoginRequired]=useState(false)
-  const [mode,setMode]=useState<'waiting'|'history'|'settings'>('waiting'),[page,setPage]=useState(0),[historyPage,setHistoryPage]=useState(0)
+  const [mode,setMode]=useState<'waiting'|'history'|'settings'|'activity'>('waiting'),[page,setPage]=useState(0),[historyPage,setHistoryPage]=useState(0)
+  const activityApi=useMemo(()=>new StaffActionsApi({staffSessionId}),[staffSessionId])
+  const [activityCount,setActivityCount]=useState(0)
   const [draft,setDraft]=useState<PickupDraft|null>(null),[undo,setUndo]=useState<PickupReceipt|null>(null)
   const [recentId,setRecentId]=useState<string|null>(null),[guard,setGuard]=useState(false),[now,setNow]=useState(Date.now()),[,setStorageVersion]=useState(0)
   const [deviceLabel,setDeviceLabel]=useState('吧台取餐屏')
@@ -111,6 +115,7 @@ export function PickupBoard({staffSessionId,api:suppliedApi,canViewOriginalTasks
   return <section className="pickup-board" style={viewport.style} aria-label="吧台取餐工作台" onPointerDownCapture={()=>{pointer.current=true}} onPointerUpCapture={pointerEnd} onPointerCancel={pointerEnd}>
     <header className="pickup-top"><strong>吧台取餐</strong><nav aria-label="取餐查看">
       <button type="button" aria-pressed={mode==='waiting'} disabled={busy} onClick={leave}>待取 {tables.reduce((sum,table)=>sum+table.units.length,0)}份</button>
+      <button type="button" aria-pressed={mode==='activity'} disabled={busy} onClick={()=>{setMode('activity');setDraft(null);setUndo(null)}}>活动餐号 {activityCount}份</button>
       <button type="button" aria-pressed={mode==='history'} disabled={busy} onClick={()=>{setMode('history');setDraft(null);setUndo(null)}}>取走记录</button>
       <button type="button" aria-pressed={mode==='settings'} disabled={busy} onClick={()=>{setMode('settings');setDraft(null);setUndo(null);setDeviceLabel(data?.device?.label??'吧台取餐屏')}}>设置</button>
     </nav><span className="pickup-connection">{!online?'连接中断':stale?'待更新':busy?'核对中':'已更新'}</span><ScreenFullscreenButton/>{onExit&&<button type="button" onClick={onExit}>返回出品</button>}</header>
@@ -126,7 +131,8 @@ export function PickupBoard({staffSessionId,api:suppliedApi,canViewOriginalTasks
       {data.attention.map((item,index)=><p key={item.taskId}>{canViewOriginalTasks?<>{hint(item.message)} <a href={item.href}>查看原出品</a></>:<>第{index+1}项：旧出品需值班经理核对，尚未标记取走</>}</p>)}
       {!canViewOriginalTasks&&<p>请交由有出品处理权限的值班经理核对；其他正常出品仍可取走。{onLoginRequired&&<button type="button" disabled={busy||unresolved} onClick={onLoginRequired}>切换处理账号</button>}{unresolved&&'请先核对本设备的原取餐结果，再切换账号。'}</p>}
     </details>}
-    {showPrevious&&recovery.previousAttempt?<div className="pickup-detail" aria-label="本设备上次取餐操作"><header><h2>核对本设备上次操作</h2><button type="button" disabled={busy} onClick={()=>setShowPrevious(false)}>返回</button></header>
+    <ActivityProductionPanel api={activityApi} station="pickup" scope={staffSessionId} active={mode==='activity'} blocked={busy||unresolved||!canTake} onCount={setActivityCount}/>
+    {mode==='activity'?null:showPrevious&&recovery.previousAttempt?<div className="pickup-detail" aria-label="本设备上次取餐操作"><header><h2>核对本设备上次操作</h2><button type="button" disabled={busy} onClick={()=>setShowPrevious(false)}>返回</button></header>
       <div className="pickup-detail-scroll"><h3>{recovery.previousAttempt.preview?.title??(recovery.previousAttempt.request.kind==='device'?'上次取餐屏设置':'上次取餐确认')}</h3>
         <p>{clock(recovery.previousAttempt.createdAt)} · 结果待核对</p>{recovery.previousAttempt.preview?.lines.map((line,index)=><p className="pickup-recovery-line" key={index}>{line}</p>)}</div>
       <div className="pickup-detail-actions"><p>仅恢复上次确认的这批出品；本次登录须有对应操作权限。核对完成后再领取其他出品。</p>

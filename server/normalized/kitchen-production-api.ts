@@ -1,3 +1,4 @@
+import {registerActivityProductionRoutes} from './activity-production-api.js'
 import {createHash,randomUUID} from 'node:crypto'
 import type {FastifyPluginAsync} from 'fastify'
 import {kitchenCompatibilityKey,type KitchenCommand,type KitchenCommandResult,type KitchenDestination,type ProductionStation} from '../../src/shared/kitchen-production.js'
@@ -15,6 +16,7 @@ const codec:JsonCodec<KitchenCommandResult>={encode:value=>({...value}),decode:v
 const conflict=(message:string,code='KITCHEN_CHANGED'):never=>{throw new CommerceKdsRequestError(code,message,409)}
 
 export const kitchenProductionApiPlugin:FastifyPluginAsync<Options>=async(app,options)=>{
+  await registerActivityProductionRoutes(app,options)
   app.get('/commerce/kitchen-board',async(request,reply)=>handleCommerceRoute(reply,async()=>{
     const context=await options.resolveContext(request),stationCode=parseStation((request.query as Record<string,unknown>).station)
     const data=await options.staffAccessTransactions.run(context.scope,tx=>readKitchenBoard(tx,context,(stationCode==='bar'?options.barEnabled:options.enabled)===true,stationCode),{isolation:'repeatable-read',readOnly:true})

@@ -1,3 +1,5 @@
+import { giftBundleSelectionsSchema } from './gift-bundle-selections.js'
+import { legacyProductDeadlineSql } from './issued-coupon-product-promise.js'
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import {createHash} from 'node:crypto'
 import {z} from 'zod'
@@ -14,7 +16,7 @@ const common={customerId:uuid,benefitId:uuid,tableSessionId:uuid}
 const schemas={
  issue:z.object({customerId:uuid,benefitCode:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/),title:z.string().trim().min(2).max(100),benefitType:z.enum(['gift_product','discount','credit','access','other']),valueAmountMinor:z.number().int().min(0).max(100000000),quantity:z.number().int().min(1).max(10000),authorizationLimitId:uuid,allowedProductIds:z.array(uuid).max(100),validFrom:z.iso.datetime({offset:true}),validUntil:z.iso.datetime({offset:true}).nullable(),reason}).strict(),
  reserve:z.object({...common,quantity:z.number().int().min(1).max(100),expectedVersion:z.number().int().min(1)}).strict(),
- redeem:z.object({...common,reservationId:uuid,quantity:z.number().int().min(1).max(100),selectedProductId:uuid.optional(),substitutionReason:reason.optional()}).strict(),
+ redeem:z.object({...common,reservationId:uuid,quantity:z.number().int().min(1).max(100),selectedProductId:uuid.optional(),bundleSelections:giftBundleSelectionsSchema.optional(),substitutionReason:reason.optional()}).strict(),
  cancel:z.object({...common,reservationId:uuid,quantity:z.number().int().min(1).max(100),reason}).strict(),
 }
 type Action=keyof typeof schemas
@@ -33,7 +35,16 @@ export function registerNativeBenefitWallet(app:FastifyInstance,options:Customer
    const page=await new BenefitRepository(tx).listWalletForCustomer(customer.id,parseBenefitWalletCursor(q.cursor),25,now)
    const ids=page.items.map(b=>b.id),args=[ctx.scope.tenantId,ctx.scope.storeId,ids]
    const snackIds=new Set((await tx.query<{benefit_id:string}>(`SELECT benefit_id FROM mbox.annual_daily_snack_claims WHERE tenant_id=$1 AND store_id=$2 AND benefit_id=ANY($3::uuid[])`,args)).rows.map(r=>r.benefit_id))
-   const products=(await tx.query(`SELECT a.benefit_id,p.id,p.name,p.status FROM mbox.benefit_allowed_products a JOIN mbox.products p ON p.tenant_id=a.tenant_id AND p.store_id=a.store_id AND p.id=a.product_id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.benefit_id=ANY($3::uuid[]) ORDER BY p.name,p.id`,args)).rows
+   const products=(await tx.query(`SELECT a.benefit_id,p.id,p.name,p.status,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id',g.id,'code',g.code,'name',g.display_name,'selectionCount',g.selection_count,
+        'options',(SELECT jsonb_agg(jsonb_build_object('productId',option.id,'code',option.code,'name',option.name,'quantity',choice.quantity,
+          'available',option.status='active' AND 'cashier'=ANY(option.allowed_channels) AND (${legacyProductDeadlineSql('option')}) IS NOT NULL) ORDER BY choice.sort_order,choice.id)
+          FROM mbox.product_bundle_choice_options choice JOIN mbox.products option
+            ON option.tenant_id=choice.tenant_id AND option.store_id=choice.store_id AND option.id=choice.component_product_id
+          JOIN mbox.stores store ON store.tenant_id=option.tenant_id AND store.id=option.store_id
+          WHERE choice.tenant_id=g.tenant_id AND choice.store_id=g.store_id AND choice.choice_group_id=g.id)) ORDER BY g.sort_order,g.id)
+        FROM mbox.product_bundle_choice_groups g WHERE g.tenant_id=p.tenant_id AND g.store_id=p.store_id AND g.bundle_product_id=p.id),'[]'::jsonb) AS "bundleChoiceGroups"
+     FROM mbox.benefit_allowed_products a JOIN mbox.products p ON p.tenant_id=a.tenant_id AND p.store_id=a.store_id AND p.id=a.product_id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.benefit_id=ANY($3::uuid[]) ORDER BY p.name,p.id`,args)).rows
    // Only the current authorized table scope is exposed; old reservations remain in original audits.
    const reservations=(await tx.query(`SELECT r.id,r.benefit_id AS "benefitId",r.table_session_id AS "tableSessionId",r.quantity,r.status,r.expires_at::text AS "expiresAt",t.code AS "tableCode",
     r.expires_at>clock_timestamp() AS "canRedeem"
@@ -60,7 +71,7 @@ export function registerNativeBenefitWallet(app:FastifyInstance,options:Customer
    return{employeeId:ctx.employeeId,items:rows.slice(0,50),nextOffset:rows.length>50?q.offset+50:null}
   },{readOnly:true});return reply.send({data})
  }))
- app.post<{Params:{action:string}}>('/staff/native-benefit-wallet/commands/:action',{bodyLimit:12000},async(request,reply)=>handle(reply,async()=>{
+ app.post<{Params:{action:string}}>('/staff/native-benefit-wallet/commands/:action',{bodyLimit:64000},async(request,reply)=>handle(reply,async()=>{
   const action=z.enum(['issue','reserve','redeem','cancel']).parse(request.params.action),input=schemas[action].parse(request.body)
   const key=z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(request.headers['idempotency-key']),ctx=await options.resolveStaffContext(request)
   await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission(action))},{readOnly:true})
@@ -81,7 +92,7 @@ export function registerNativeBenefitWallet(app:FastifyInstance,options:Customer
      if(benefit.benefitType==='gift_product'){
       const allowed=await tx.query(`SELECT 1 FROM mbox.benefit_allowed_products a JOIN mbox.products p ON p.tenant_id=a.tenant_id AND p.store_id=a.store_id AND p.id=a.product_id WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.benefit_id=$3 AND p.id=$4 AND p.status='active'`,[ctx.scope.tenantId,ctx.scope.storeId,v.benefitId,v.selectedProductId??null])
       if(allowed.rowCount!==1)throw new BenefitUnavailableError('请选择本券允许的实际兑付商品')
-     }else if(v.selectedProductId)throw new BenefitUnavailableError('此权益不是赠品券，不能生成赠品')
+     }else if(v.selectedProductId||v.bundleSelections?.length)throw new BenefitUnavailableError('此权益不是赠品券，不能生成赠品')
     }
     if('reservationId' in row){
      const found=await tx.query(`SELECT id FROM mbox.benefit_reservations WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND benefit_id=$4 AND table_session_id=$5 AND quantity=$6 AND status='reserved'`,[ctx.scope.tenantId,ctx.scope.storeId,row.reservationId,row.benefitId,row.tableSessionId,row.quantity])

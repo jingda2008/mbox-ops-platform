@@ -1,3 +1,4 @@
+import {saveProductServiceWindow} from './product-service-window-repository.js'
 import {createHash} from 'node:crypto'
 import type {FastifyPluginAsync,FastifyRequest} from 'fastify'
 import {z} from 'zod'
@@ -12,12 +13,12 @@ type Options=Pick<CustomerBenefitApiOptions,'transactions'|'resolveStaffContext'
 const codec:JsonCodec<JsonObject>={encode:v=>v,decode:v=>v as JsonObject}
 const uuid=z.string().uuid(),reason=z.string().trim().min(2).max(300),date=z.iso.datetime({offset:true}),expected=z.string().min(10).max(64)
 const schemas={
- create:z.object({code:z.string().regex(/^[A-Z][A-Z0-9_]{1,39}$/),name:z.string().trim().min(2).max(60),terms:z.string().trim().min(2).max(6000),kind:z.enum(['interest','cobrand']),availableFrom:date,availableUntil:date,cooperationConfirmed:z.boolean(),cooperationValidUntil:date.nullable(),cooperationReference:z.string().trim().min(2).max(500).nullable()}).strict(),
+ create:z.object({code:z.string().regex(/^[A-Z][A-Z0-9_]{1,39}$/),name:z.string().trim().min(2).max(60),terms:z.string().trim().min(2).max(6000),kind:z.enum(['interest','cobrand']),availableFrom:date,availableUntil:date.nullable(),openImmediately:z.boolean().optional(),cooperationConfirmed:z.boolean(),cooperationValidUntil:date.nullable(),cooperationReference:z.string().trim().min(2).max(500).nullable()}).strict(),
  state:z.object({projectId:uuid,expectedUpdatedAt:expected,state:z.enum(['open','paused','closed']),reason}).strict(),
- review:z.object({applicationId:uuid,decision:z.enum(['approve','reject']),reason}).strict(),
+ review:z.object({applicationId:uuid,decision:z.enum(['approve','reject']),reason:reason.optional()}).strict(),
  holding:z.object({cardId:uuid,expectedUpdatedAt:expected,action:z.enum(['suspend','resume','revoke']),reason}).strict(),
  social:z.object({projectId:uuid,expectedUpdatedAt:expected,serviceAccountId:uuid,wecomAccountId:uuid,autoRestore:z.boolean(),artistName:z.string().trim().min(1).max(100),iconUrl:z.string().regex(/^\/(?:assets|media)\/[A-Za-z0-9_./-]+$/).nullable()}).strict(),
- menu:z.object({projectId:uuid,expectedMenu:z.string().regex(/^[a-f0-9]{64}$/),productId:uuid,exclusive:z.boolean(),active:z.boolean(),sortOrder:z.number().int().min(0).max(10000),exclusivePriceMinor:z.number().int().min(0).max(100000000).nullable()}).strict(),
+ menu:z.object({projectId:uuid,expectedMenu:z.string().regex(/^[a-f0-9]{64}$/),productId:uuid,exclusive:z.boolean(),active:z.boolean(),sortOrder:z.number().int().min(0).max(10000),exclusivePriceMinor:z.number().int().min(0).max(100000000).nullable(),serviceWindow:z.unknown().optional()}).strict(),
  'menu-remove':z.object({projectId:uuid,expectedMenu:z.string().regex(/^[a-f0-9]{64}$/),productId:uuid}).strict(),
 }
 type Action=keyof typeof schemas
@@ -45,7 +46,7 @@ export const nativeMemberCardsApiPlugin:FastifyPluginAsync<Options>=async(app,op
   const id=uuid.parse(request.params.id),ctx=await context(request,'member.card.manage')
   const data=await options.transactions.run(ctx.scope,async tx=>{
    const args=[ctx.scope.tenantId,ctx.scope.storeId];const project=(await tx.query('SELECT id,status,updated_at::text FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...args,id])).rows[0];if(!project)throw new MemberCardPolicyError('项目不存在')
-   const menu=(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text,mi.updated_at::text FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.product_id',[...args,id])).rows
+   const menu=(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text,mi.updated_at::text,mbox.product_service_window_json(mi.tenant_id,mi.store_id,mi.product_id,mi.project_id) AS service_window FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.product_id',[...args,id])).rows
    const accounts=(await tx.query('SELECT id,kind,name,enabled FROM mbox.social_accounts WHERE tenant_id=$1 AND store_id=$2 ORDER BY name,id',args)).rows
    return{project,menu,expectedMenu:snapshot(menu),accounts,employeeId:ctx.employeeId}
   },{readOnly:true,isolation:'repeatable-read'});return{data}
@@ -61,29 +62,30 @@ export const nativeMemberCardsApiPlugin:FastifyPluginAsync<Options>=async(app,op
   const commands=nativeGuardedExecutor(options.commands,{fingerprint:{action,input,employeeId:ctx.employeeId},authorize:async tx=>{const fresh=await options.resolveStaffContext(request);if(fresh.employeeId!==ctx.employeeId||fresh.scope.tenantId!==ctx.scope.tenantId||fresh.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('账号已变化');await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission)}})
   const result=await commands.execute({scope:ctx.scope,operationScope:'member.card.'+action,idempotencyKey:key,requestFingerprint:'',resultCodec:codec},async tx=>{
    const repo=new MemberCardRepository(tx),meta={employeeId:ctx.employeeId,businessDate:ctx.businessDate};let value:unknown
-   if(action==='create')value=await repo.createProject({...schemas.create.parse(input),...meta,requireSocialConfiguration:true})
+   if(action==='create')value=await repo.createProject({...schemas.create.parse(input),...meta,flowMode:schemas.create.parse(input).kind==='interest'?'simple':'legacy',requireSocialConfiguration:schemas.create.parse(input).kind!=='interest'})
    else if(action==='state')value=await repo.setProjectState({...schemas.state.parse(input),...meta})
-   else if(action==='review')value=await repo.review({...schemas.review.parse(input),...meta,expectedPending:true})
+   else if(action==='review')value=await repo.review({...schemas.review.parse(input),reason:schemas.review.parse(input).reason??'',...meta,expectedPending:true})
    else if(action==='holding')value=await repo.changeCard({...schemas.holding.parse(input),...meta})
    else {
     const config=action==='social'?schemas.social.parse(input):action==='menu'?schemas.menu.parse(input):schemas['menu-remove'].parse(input)
     const args=[ctx.scope.tenantId,ctx.scope.storeId,config.projectId]
-    const project=(await tx.query<{status:string;updated_at:string;require_social_conditions:boolean}>('SELECT status,updated_at::text,require_social_conditions FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',args)).rows[0]
+    const project=(await tx.query<{status:string;updated_at:string;require_social_conditions:boolean;flow_mode:string}>('SELECT status,updated_at::text,require_social_conditions,flow_mode FROM mbox.member_card_projects WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',args)).rows[0]
     if(!project)throw new MemberCardPolicyError('项目不存在')
     if('serviceAccountId'in config){
+     if(project.flow_mode==='simple')throw new MemberCardPolicyError('普通兴趣卡无需社交前置，不能添加关注门槛')
      if(project.status!=='draft'||project.updated_at!==config.expectedUpdatedAt)throw new MemberCardPolicyError('项目已变化，加入门槛只能在原草稿配置')
      const accounts=(await tx.query<{id:string;kind:string}>('SELECT id,kind FROM mbox.social_accounts WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])',[...args.slice(0,2),[config.serviceAccountId,config.wecomAccountId]])).rows
      if(!accounts.some(a=>a.id===config.serviceAccountId&&a.kind==='service_account')||!accounts.some(a=>a.id===config.wecomAccountId&&a.kind==='wecom'))throw new MemberCardPolicyError('请选择本店服务号和企业微信')
      await tx.query('UPDATE mbox.member_card_projects SET service_account_id=$4,wecom_account_id=$5,auto_restore=$6,artist_name=$7,icon_url=$8,require_social_conditions=true,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...args,config.serviceAccountId,config.wecomAccountId,config.autoRestore,config.artistName,config.iconUrl]);value={projectId:config.projectId,configured:true}
     } else {
-     const menu=(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text,mi.updated_at::text FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.product_id FOR UPDATE OF mi',args)).rows
+     const menu=(await tx.query('SELECT mi.product_id,p.name,mi.exclusive,mi.active,mi.sort_order,mi.exclusive_price_minor::text,mi.updated_at::text,mbox.product_service_window_json(mi.tenant_id,mi.store_id,mi.product_id,mi.project_id) AS service_window FROM mbox.member_card_menu_items mi JOIN mbox.products p ON p.tenant_id=mi.tenant_id AND p.store_id=mi.store_id AND p.id=mi.product_id WHERE mi.tenant_id=$1 AND mi.store_id=$2 AND mi.project_id=$3 ORDER BY mi.product_id FOR UPDATE OF mi',args)).rows
      if(snapshot(menu)!==config.expectedMenu)throw new MemberCardPolicyError('专属菜单已变化，请刷新后核对')
      if(action==='menu'){
       const menuInput=schemas.menu.parse(config)
-      if(!project.require_social_conditions)throw new MemberCardPolicyError('请先配置企微与服务号加入门槛')
+      if(project.flow_mode!=='simple'&&!project.require_social_conditions)throw new MemberCardPolicyError('请先配置企微与服务号加入门槛')
       const product=(await tx.query<{guest_visible:boolean}>('SELECT guest_visible FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR SHARE',[...args.slice(0,2),config.productId])).rows[0]
       if(!product||menuInput.exclusive&&product.guest_visible)throw new MemberCardPolicyError('专属增量须选择非公共商品，不得遮挡公共商品')
-      await tx.query('INSERT INTO mbox.member_card_menu_items(tenant_id,store_id,project_id,product_id,exclusive,active,sort_order,exclusive_price_minor) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(tenant_id,store_id,project_id,product_id) DO UPDATE SET exclusive=EXCLUDED.exclusive,active=EXCLUDED.active,sort_order=EXCLUDED.sort_order,exclusive_price_minor=EXCLUDED.exclusive_price_minor,updated_at=clock_timestamp()',[...args,config.productId,menuInput.exclusive,menuInput.active,menuInput.sortOrder,menuInput.exclusivePriceMinor]);value={projectId:config.projectId,productId:config.productId,saved:true}
+      await tx.query('INSERT INTO mbox.member_card_menu_items(tenant_id,store_id,project_id,product_id,exclusive,active,sort_order,exclusive_price_minor) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(tenant_id,store_id,project_id,product_id) DO UPDATE SET exclusive=EXCLUDED.exclusive,active=EXCLUDED.active,sort_order=EXCLUDED.sort_order,exclusive_price_minor=EXCLUDED.exclusive_price_minor,updated_at=clock_timestamp()',[...args,config.productId,menuInput.exclusive,menuInput.active,menuInput.sortOrder,menuInput.exclusivePriceMinor]);if(Object.hasOwn(menuInput,'serviceWindow')){try{await saveProductServiceWindow(tx,config.productId,menuInput.serviceWindow,config.projectId)}catch(error){if(error instanceof TypeError)throw new MemberCardPolicyError(error.message);throw error}};value={projectId:config.projectId,productId:config.productId,saved:true}
      }else{await tx.query('DELETE FROM mbox.member_card_menu_items WHERE tenant_id=$1 AND store_id=$2 AND project_id=$3 AND product_id=$4',[...args,config.productId]);value={projectId:config.projectId,productId:config.productId,removed:true}}
     }
    }

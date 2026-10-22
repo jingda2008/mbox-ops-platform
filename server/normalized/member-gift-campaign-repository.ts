@@ -33,9 +33,10 @@ export class MemberGiftCampaignRepository{
   private async audit(action:string,objectId:string,employeeId:string|undefined,businessDate:string,why:string){
     await appendAuditEvent(this.tx,{actor:employeeId?{type:'employee',employeeId}:{type:'system',ref:'member-gift-worker'},businessDate,action:`member_gift.${action}`,objectType:'member_gift_campaign',objectId,reason:why,afterData:{operation:action}})
   }
-  async list(employeeId:string,cursor:string|null=null){
+  async list(employeeId:string,cursor:string|null=null,projectId:string|null=null){
     await new StaffAccessRepository(this.tx).assertPermission(employeeId,'loyalty.configuration.view');if(cursor)id(cursor)
-    const rows=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.member_gift_campaign_versions WHERE tenant_id=$1 AND store_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT 21`,[...this.scope,cursor])).rows
+    if(projectId)id(projectId)
+    const rows=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.member_gift_campaign_versions WHERE tenant_id=$1 AND store_id=$2 AND ($3::uuid IS NULL OR id>$3) AND ($4::uuid IS NULL OR card_project_id=$4) ORDER BY id LIMIT 21`,[...this.scope,cursor,projectId])).rows
     const items=[];for(const row of rows.slice(0,20))items.push(await this.find(row.id))
     return{items,nextCursor:rows.length>20?items.at(-1)!.id:null}
   }
@@ -173,7 +174,7 @@ export class MemberGiftCampaignRepository{
       LEFT JOIN LATERAL(SELECT tier FROM mbox.membership_tier_periods WHERE tenant_id=m.tenant_id AND store_id=m.store_id AND membership_id=m.id AND starts_at<=clock_timestamp() AND status IN('active','grace') AND CASE WHEN status='grace' THEN grace_ends_at>clock_timestamp() ELSE ends_at IS NULL OR ends_at>clock_timestamp() END ORDER BY starts_at DESC,id DESC LIMIT 1) period ON account.id IS NOT NULL
       WHERE m.tenant_id=$1 AND m.store_id=$2 AND mbox.canonical_customer_id(m.tenant_id,m.store_id,m.customer_id)=$3 AND EXISTS(SELECT 1 FROM mbox.customers c WHERE c.tenant_id=m.tenant_id AND c.store_id=m.store_id AND c.id=$3 AND c.status='active') ORDER BY (m.customer_id=$3) DESC,m.joined_at DESC,m.id LIMIT 1`,[...this.scope,customerId])).rows[0]
     if(!row||row.status!=='active'||row.account_status!=='active')return false
-    const cards=await this.tx.query<{code:string}>(`SELECT p.code FROM mbox.member_cards c JOIN mbox.member_card_projects p ON p.tenant_id=c.tenant_id AND p.store_id=c.store_id AND p.id=c.project_id WHERE c.tenant_id=$1 AND c.store_id=$2 AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND c.status='active' AND c.valid_until>clock_timestamp() AND mbox.card_social_conditions_met(c.tenant_id,c.store_id,c.project_id,c.customer_id)`,[...this.scope,customerId])
+    const cards=await this.tx.query<{code:string}>(`SELECT p.code FROM mbox.member_cards c JOIN mbox.member_card_projects p ON p.tenant_id=c.tenant_id AND p.store_id=c.store_id AND p.id=c.project_id WHERE c.tenant_id=$1 AND c.store_id=$2 AND mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id)=$3 AND mbox.customer_has_usable_member_card(c.tenant_id,c.store_id,c.project_id,c.customer_id)`,[...this.scope,customerId])
     return matchesCardAudience(rule.audience,{tier:row.tier,activeCardCodes:cards.rows.map(c=>c.code)})
   }
   async enqueue(input:{versionId:string;customerId:string;cycleKey:string;applicationId?:string}){

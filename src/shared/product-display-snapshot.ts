@@ -4,6 +4,7 @@ export const PRODUCT_SNAPSHOT_TOP_LEVEL_OPERATIONAL_KEYS = [
   'sortOrder',
   'availableFrom',
   'availableUntil',
+  'serviceWindow',
   'allowedChannels',
   'maxOrderQuantity',
   'kdsPriority',

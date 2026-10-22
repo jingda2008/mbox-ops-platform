@@ -1,3 +1,5 @@
+import {registerActivityCustomerRefundRoutes} from './activity-customer-refund-api.js'
+import {ActivityServiceError} from './activity-service-repository.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
 import { createHash } from 'node:crypto'
 import { selectPublicPrivacyPolicy, type PublicPrivacyPolicyView } from './approved-privacy-policy.js'
@@ -136,6 +138,7 @@ interface StaffMemberLedgerRow extends Record<string, unknown> {
 }
 
 export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceApiOptions> = async (app, options) => {
+  await registerActivityCustomerRefundRoutes(app,{...options,handle})
   registerLoyaltyRefundReviewRoutes(app, options)
   registerManualPointsRoutes(app, options)
   registerOrderFinancialRecoveryRoutes(app, options)
@@ -544,6 +547,16 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: await options.service.activity(context, publicId(request.params.activityPublicId)) })
   }))
 
+  app.get<{Params:{publicId:string}}>('/public/mini/activities/:publicId/addon-products',async(request,reply)=>handle(reply,async()=>{const context=await options.resolvePublicContext(request);return reply.send({data:await options.service.activityAddonProducts(context,publicId(request.params.publicId))})}))
+  app.post<{Params:{registrationPublicId:string}}>('/public/mini/activity-registrations/:registrationPublicId/party-size',async(request,reply)=>handle(reply,async()=>{const context=await options.resolvePublicContext(request),body=objectBody(request.body);return reply.send({data:await options.service.editActivityParty(context,publicId(request.params.registrationPublicId),integer(body.partySize,'参加人数',1,50),idempotencyKey(request))})}))
+
+  app.post('/public/mini/activity-parents/resolve', async (request, reply) => handle(reply, async () => {
+    reply.header('Cache-Control', 'private, no-store')
+    const context = await options.resolvePublicContext(request), body = objectBody(request.body)
+    return reply.send({data: await options.service.resolveActivityParent(context, publicId(text(body.activityPublicId, '活动编号', 8, 128)), text(body.code, '套餐码', 20, 256))})
+  }))
+
+  app.get<{Params:{registrationPublicId:string}}>('/public/mini/activity-registrations/:registrationPublicId/service-code',async(request,reply)=>handle(reply,async()=>{reply.header('Cache-Control','private, no-store');const context=await options.resolvePublicContext(request);return reply.send({data:await options.service.activityServiceCode(context,publicId(request.params.registrationPublicId))})}))
   app.get('/public/mini/activity-registrations', async (request, reply) => handle(reply, async () => {
     reply.header('Cache-Control', 'private, no-store, max-age=0').header('Pragma', 'no-cache')
     const context = await options.resolvePublicContext(request)
@@ -756,7 +769,13 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       activityPublicId: publicId(request.params.activityPublicId),
       activityPackagePublicId: body.activityPackagePublicId === undefined || body.activityPackagePublicId === null
         ? null : publicId(text(body.activityPackagePublicId, '套餐编号', 8, 128)),
-      partySize: integer(body.partySize, '报名人数', 1, 20),
+      partySize: integer(body.partySize, '报名人数', 1, 50),
+      selections:parseActivitySelections(body.selections),note:body.note==null?undefined:text(body.note,'必要备注',0,200),
+      ...(body.purchaseKind===undefined?{}:{purchaseKind:enumValue(body.purchaseKind,'购买类型',['admission_package','meal_package','single_dish'] as const)}),
+      ...(body.parentRegistrationPublicId==null?{}:{parentRegistrationPublicId:publicId(text(body.parentRegistrationPublicId,'原报名',8,128))}),
+      ...(body.parentCredential==null?{}:{parentCredential:text(body.parentCredential,'原套餐授权码',20,256)}),
+      ...(body.productId==null?{}:{productId:text(body.productId,'菜品编号',36,36)}),
+      ...(body.quantity==null?{}:{quantity:integer(body.quantity,'菜品数量',1,100)}),
       protectedContact: await protectActivityRegistrationContact(
         miniActivityRegistrationPhone(body.contactSnapshot),
         options.protectContact,
@@ -1235,6 +1254,9 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         paymentPublicId: optionalText(body.paymentPublicId, '付款编号', 128),
         ...(body.expectedPaymentPublicId === undefined ? {} : { expectedPaymentPublicId: optionalText(body.expectedPaymentPublicId, '原付款编号', 128) }),
         reason: text(body.reason, '退款原因', 2, 1000),
+        ...(body.amountMinor===undefined?{}:{amountMinor:integer(body.amountMinor,'退款金额',1,Number.MAX_SAFE_INTEGER)}),
+        ...(body.disposition===undefined?{}:{disposition:enumValue(body.disposition,'履约处理',['retain_fulfillment','stop_unstarted'] as const)}),
+        ...(body.customerConfirmed===undefined?{}:{customerConfirmed:booleanValue(body.customerConfirmed,'顾客确认')}),
         idempotencyKey: idempotencyKey(request),
       })
       return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
@@ -1761,7 +1783,7 @@ function errorResponse(error: unknown): { statusCode: number; code: string; mess
 
 function knownErrorResponse(error: unknown): { statusCode: number; code: string; message: string } | null {
   if (error instanceof UpgradeQualificationError) return { statusCode:400,code:'CHECKOUT_UPGRADE_QUALIFICATION_INVALID',message:error.message }
-  if (error instanceof CustomerExperienceRequestError) return { statusCode: error.statusCode, code: error.code, message: error.message }
+  if ((error instanceof CustomerExperienceRequestError || error instanceof ActivityServiceError)) return { statusCode: error.statusCode, code: error.code, message: error.message }
   if (error instanceof ReservationGuestSessionInvalidError || error instanceof GuestAuthenticationRequiredError
     || error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return { statusCode: 401, code: 'AUTHENTICATION_REQUIRED', message: '登录状态已失效，请重新进入' }
@@ -1852,7 +1874,7 @@ function activityRegistrationErrorResponse(error: unknown): { statusCode: number
   if (error instanceof IdempotencyRecordError || error instanceof OutboxMessageConflictError) {
     return { statusCode: 503, code: 'ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED', message: '报名结果确认中，请稍后在“我的活动”查看' }
   }
-  if (error instanceof CustomerExperienceRequestError
+  if ((error instanceof CustomerExperienceRequestError || error instanceof ActivityServiceError)
     && (error.code === 'ACTIVITY_CONTACT_PROTECTION_FAILED' || error.code === 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE')) {
     return { statusCode: 503, code: 'ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE', message: '报名服务配置异常，请稍后再试' }
   }
@@ -2230,3 +2252,5 @@ function stringList<const Values extends readonly string[]>(value: unknown, labe
   const result = [...new Set(value.map((entry) => enumValue(entry, label, values)))]
   return result
 }
+
+function parseActivitySelections(value:unknown):Array<{groupId:string;productId:string}>|undefined {if(value===undefined)return undefined;if(!Array.isArray(value)||value.length>5)throw new CustomerExperienceRequestError('固定自选项格式不正确');return value.map(raw=>{const item=object(raw,'自选项');return {groupId:text(item.groupId,'自选组',3,64),productId:uuid(item.productId,'自选菜品')}})}

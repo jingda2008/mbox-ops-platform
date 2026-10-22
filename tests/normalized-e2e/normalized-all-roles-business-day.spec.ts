@@ -144,6 +144,7 @@ test('all real employees enter role-scoped mobile workspaces and every high-freq
 
 async function expectStaffRoute(page: Page, route: string) {
   const heading = ({
+    '/staff/scan': '扫码与活动核销',
     '/staff/live': '找到桌台，直接处理',
     '/staff/tasks': '只看需要服务的事',
     '/staff/fulfillment': '只做当前下一步',

@@ -161,13 +161,24 @@ describe('GuestApp', () => {
 })
 
 
+it('only calls an empty order history empty after an authoritative read succeeds', () => {
+  const render = (loaded: boolean, loading: boolean) => renderToStaticMarkup(createElement(TableOrdersPanel, {
+    orders: [], loaded, loading, onRefresh() {}, onPay() {},
+  }))
+  expect(render(false, true)).toContain('正在读取历史订单')
+  expect(render(false, true)).not.toContain('还没有已确认的订单')
+  expect(render(false, false)).toContain('历史订单尚未读取，请刷新核对')
+  expect(render(false, false)).not.toContain('还没有已确认的订单')
+  expect(render(true, false)).toContain('还没有已确认的订单')
+})
+
 it('renders actual item and bundle progress while leaving unresolved stopped amounts unpayable', () => {
   const base: GuestTableOrder = { publicId: 'original', round: 1, channel: 'staff_assisted', sourceText: '员工协助点单',
     status: 'fulfilling', visibility: 'shared', isMine: false, createdAt: '2026-09-13T10:00:00Z', paymentStatus: 'unpaid',
     paymentAccess: 'status_review', settlementReviewRequired: true, payableAmountMinor: 0, currency: 'CNY',
     items: [{ productId: 'water', name: '水', quantity: 5, status: 'preparing', progressText: '暂停 2 份 · 准备中 3 份' },
       { productId: 'bundle', name: '套餐', quantity: 1, status: 'preparing', components: [{ name: '套餐鸡尾酒', quantity: 2, progressText: '暂停 1 份 · 已备齐 1 份' }] }] }
-  const render = (order: GuestTableOrder) => renderToStaticMarkup(createElement(TableOrdersPanel, { orders: [order], loading: false, onRefresh() {}, onPay() {} }))
+  const render = (order: GuestTableOrder) => renderToStaticMarkup(createElement(TableOrdersPanel, { orders: [order], loaded: true, loading: false, onRefresh() {}, onPay() {} }))
   const review = render(base)
   expect(review).toContain('水 × 5'); expect(review).toContain('暂停 2 份 · 准备中 3 份')
   expect(review).toContain('套餐鸡尾酒 × 2'); expect(review).toContain('暂停 1 份 · 已备齐 1 份')

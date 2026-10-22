@@ -1,4 +1,4 @@
-import { parseProductServiceWindow, serviceWindowState, type ProductServiceWindow } from '../../src/shared/product-service-window.js'
+import { parseProductServiceWindow, serviceWindowDateParts, serviceWindowState, type ProductServiceWindow } from '../../src/shared/product-service-window.js'
 
 /** Read-only explanation. Availability and prices still come from the existing SQL/quote authorities. */
 export function customerSupplyProjection(product: 'product'|'p', customer: '$9'|'$4') {
@@ -46,7 +46,7 @@ export function customerSupplyCopy(value:unknown) {
   const inactive=base&&!serviceWindowState(base,now,zone).active
     ?base:rules.find(rule=>!serviceWindowState(rule,now,zone).active)
   if(inactive){
-    const dateParts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now)
+    const dateParts=serviceWindowDateParts(now,zone)
     const part=(name:string)=>dateParts.find(p=>p.type===name)?.value??'0'
     let anchor=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`),current=Number(part('hour'))*60+Number(part('minute'))
     if(inactive.saleEndMinute>1440&&current<inactive.saleStartMinute){anchor=new Date(anchor.getTime()-86400000);current+=1440}

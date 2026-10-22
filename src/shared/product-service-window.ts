@@ -41,10 +41,26 @@ export function parseProductServiceWindow(value: unknown): ProductServiceWindow 
   return {dateFrom,dateThrough,weekdays:[...w.weekdays].sort((a,b)=>a-b),saleStartMinute,saleEndMinute,visibleStartMinute,visibleEndMinute}
 }
 
+// Reuse only locale machinery, never an evaluated time, rule, or eligibility.
+// Bound the cache because store timezones are configuration, not a fixed enum.
+const dateFormatters = new Map<string, Intl.DateTimeFormat>()
+export function serviceWindowDateParts(now: Date, timeZone: string) {
+  let formatter = dateFormatters.get(timeZone)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'})
+    if (dateFormatters.size >= 16) {
+      const oldest = dateFormatters.keys().next().value
+      if (oldest !== undefined) dateFormatters.delete(oldest)
+    }
+    dateFormatters.set(timeZone, formatter)
+  }
+  return formatter.formatToParts(now)
+}
+
 /** Null means unchanged legacy scheduling, not a closed product. */
 export function serviceWindowState(window: ProductServiceWindow | null | undefined, now = new Date(), timeZone = 'Asia/Shanghai', kind: 'sale'|'visible' = 'sale') {
   if (!window) return {active:true,until:null as string|null}
-  const parts = new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(now)
+  const parts = serviceWindowDateParts(now,timeZone)
   const part = (name: string) => Number(parts.find(item=>item.type===name)?.value)
   const current = part('hour')*60+part('minute')+part('second')/60
   const start = kind==='sale'?window.saleStartMinute:window.visibleStartMinute
@@ -56,18 +72,19 @@ export function serviceWindowState(window: ProductServiceWindow | null | undefin
   const weekday = new Date(dayMs).getUTCDay() || 7
   const active = minute>=start && minute<end && (!window.dateFrom||day>=window.dateFrom)
     && (!window.dateThrough||day<=window.dateThrough) && window.weekdays.includes(weekday)
+  if (!active) return {active:false,until:null}
   // Resolve the local wall-clock end in the store timezone, including DST.
   const desired = dayMs+end*60_000
   let resolved = desired
   for(let i=0;i<3;i++) {
-    const p=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(resolved))
+    const p=serviceWindowDateParts(new Date(resolved),timeZone)
     const n=(key:string)=>Number(p.find(item=>item.type===key)?.value)
     const represented=Date.UTC(n('year'),n('month')-1,n('day'),n('hour'),n('minute'),n('second'))
     const diff=desired-represented
     resolved+=diff
     if(!diff)break
   }
-  return {active,until:active?new Date(resolved).toISOString():null}
+  return {active:true,until:new Date(resolved).toISOString()}
 }
 
 export const DEFAULT_PRODUCT_SERVICE_WINDOW: ProductServiceWindow = {

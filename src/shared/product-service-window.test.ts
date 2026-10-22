@@ -20,6 +20,23 @@ describe('product service windows',()=>{
  it('uses the store timezone rather than the device timezone',()=>{
   expect(serviceWindowState({...all,saleStartMinute:540,saleEndMinute:600},new Date('2026-10-22T13:30:00Z'),'America/New_York')).toEqual({active:true,until:'2026-10-22T14:00:00.000Z'})
  })
+ it('re-evaluates the exact end boundary and changed rules with a reused timezone',()=>{
+  const rule={...all,saleStartMinute:1080,saleEndMinute:1560}
+  expect(serviceWindowState(rule,new Date('2026-10-22T17:59:59Z'))).toEqual({active:true,until:'2026-10-22T18:00:00.000Z'})
+  expect(serviceWindowState(rule,new Date('2026-10-22T18:00:00Z'))).toEqual({active:false,until:null})
+  expect(serviceWindowState({...rule,dateThrough:'2026-10-21'},new Date('2026-10-22T17:59:59Z'))).toEqual({active:false,until:null})
+  expect(serviceWindowState(rule,new Date('2026-10-23T10:00:00Z'))).toEqual({active:true,until:'2026-10-23T18:00:00.000Z'})
+ })
+ it.each([
+  ['2026-03-08T06:30:00Z','2026-03-08T08:00:00.000Z'],
+  ['2026-11-01T05:30:00Z','2026-11-01T09:00:00.000Z'],
+  ['2026-11-01T06:30:00Z','2026-11-01T09:00:00.000Z'],
+ ])('keeps the local end through DST changes at %s without caching an offset', (now,until)=>{
+  const rule={...all,saleStartMinute:60,saleEndMinute:240}
+  expect(serviceWindowState(rule,new Date(now),'America/New_York')).toEqual({active:true,until})
+  expect(serviceWindowState(rule,new Date(now),'Asia/Shanghai')).toEqual({active:false,until:null})
+  expect(serviceWindowState(rule,new Date(until),'America/New_York')).toEqual({active:false,until:null})
+ })
  it.each([
   {dateFrom:'2026-02-30'}, {dateFrom:'2027-01-01',dateThrough:'2026-01-01'}, {weekdays:[]}, {weekdays:[1,1]}, {weekdays:[0]},
   {saleStartMinute:0.5}, {saleEndMinute:0}, {saleEndMinute:1441}, {visibleStartMinute:1}, {unsupported:true},

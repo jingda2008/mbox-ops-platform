@@ -1591,6 +1591,7 @@ export function publicCatalogProduct(row: CatalogMenuRow) {
   const categoryName = configuredCategoryName
     ?? publicCatalogCategoryFallbackName(row.category_code, row.product_snapshot, source)
   const unconfiguredCategory = configuredCategoryName === null
+  const supplyCopy = customerSupplyCopy(row.supply_presentation)
   return {
     productId: row.id,
     code: row.code,
@@ -1636,8 +1637,8 @@ export function publicCatalogProduct(row: CatalogMenuRow) {
     savingsAmountMinor,
     savingsFromMinor,
     recommendation: publicRecommendation(row, amountMinor),
-    supplyDescription: customerSupplyCopy(row.supply_presentation).description,
-    availabilityDetail: availabilityStatus === 'scheduled' && row.supply_presentation ? customerSupplyCopy(row.supply_presentation).unavailableText : null,
+    supplyDescription: supplyCopy.description,
+    availabilityDetail: availabilityStatus === 'scheduled' && row.supply_presentation ? supplyCopy.unavailableText : null,
     availabilityStatus,
     available: availabilityStatus === 'available',
   }

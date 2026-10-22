@@ -375,12 +375,34 @@ jobs:
           mkdir -p release-artifact
           archive="release-artifact/mbox-normalized-${VERSION}-${SHORT_SHA}.tar.gz"
           docker save "${IMAGE_TAG}" | gzip -1 > "${archive}"
-          image_digest=$(tar -xOf "${archive}" index.json \
-            | jq -er '.manifests[] | select(.annotations["org.opencontainers.image.ref.name"] != null) | .digest' \
-            | head -n 1)
-          test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "blobs/sha256/${image_digest#sha256:}" | sha256sum | awk '{print $1}')"
+          # Prefer annotated image ref. When buildx reports ImageID==Digest, docker save
+          # may annotate a config blob; fall back to a real image/index descriptor and
+          # infer mediaType from the blob when the index omits it.
+          resolve_ref() { tar -xOf "${archive}" index.json | jq -c '.manifests[]'; }
+          ref_json=$(resolve_ref | jq -c 'select(.annotations["org.opencontainers.image.ref.name"] != null)' | head -n 1)
+          if [ -z "${ref_json}" ]; then
+            ref_json=$(resolve_ref | jq -c 'select(.mediaType == "application/vnd.oci.image.manifest.v1+json" or .mediaType == "application/vnd.docker.distribution.manifest.v2+json" or .mediaType == "application/vnd.oci.image.index.v1+json" or .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")' | head -n 1)
+          fi
+          test -n "${ref_json}"
+          image_digest=$(printf '%s' "${ref_json}" | jq -er '.digest')
+          reference_media_type=$(printf '%s' "${ref_json}" | jq -r '.mediaType // empty')
           reference_blob="blobs/sha256/${image_digest#sha256:}"
-          reference_media_type=$(tar -xOf "${archive}" "${reference_blob}" | jq -er '.mediaType')
+          test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "${reference_blob}" | sha256sum | awk '{print $1}')"
+          if [ -z "${reference_media_type}" ]; then
+            if tar -xOf "${archive}" "${reference_blob}" | jq -e '.config.digest' >/dev/null; then
+              reference_media_type='application/vnd.oci.image.manifest.v1+json'
+            elif tar -xOf "${archive}" "${reference_blob}" | jq -e '.manifests' >/dev/null; then
+              reference_media_type='application/vnd.oci.image.index.v1+json'
+            else
+              # Annotated digest was likely a config blob; pick a real manifest descriptor.
+              ref_json=$(resolve_ref | jq -c 'select(.mediaType == "application/vnd.oci.image.manifest.v1+json" or .mediaType == "application/vnd.docker.distribution.manifest.v2+json" or .mediaType == "application/vnd.oci.image.index.v1+json" or .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json")' | head -n 1)
+              test -n "${ref_json}"
+              image_digest=$(printf '%s' "${ref_json}" | jq -er '.digest')
+              reference_media_type=$(printf '%s' "${ref_json}" | jq -er '.mediaType')
+              reference_blob="blobs/sha256/${image_digest#sha256:}"
+              test "${image_digest}" = "sha256:$(tar -xOf "${archive}" "${reference_blob}" | sha256sum | awk '{print $1}')"
+            fi
+          fi
           case "${reference_media_type}" in
             application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json)
               platform_manifest_digest=$(tar -xOf "${archive}" "${reference_blob}" \
@@ -395,6 +417,7 @@ jobs:
               exit 1
               ;;
           esac
+
           platform_image_digest=$(tar -xOf "${archive}" "blobs/sha256/${platform_manifest_digest#sha256:}" \
             | jq -er '.config.digest')
           test "${platform_image_digest}" = "$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')"

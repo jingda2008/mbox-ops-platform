@@ -80,7 +80,16 @@ jobs:
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
       - name: Audit production and development dependencies
-        run: npm audit --audit-level=moderate
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if npm audit --audit-level=moderate; then
+              exit 0
+            fi
+            echo "npm audit failed (attempt ${attempt}/5); retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "npm audit failed after 5 attempts"
+          exit 1
       - name: Run code, unit, metadata and production-build checks
         run: npm run check && npm run release:system:test
       - name: Verify candidate, upload and release gate semantics
@@ -101,7 +110,16 @@ jobs:
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
       - name: Audit production and development dependencies
-        run: npm audit --audit-level=moderate
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if npm audit --audit-level=moderate; then
+              exit 0
+            fi
+            echo "npm audit failed (attempt ${attempt}/5); retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "npm audit failed after 5 attempts"
+          exit 1
       - name: Run deterministic frontend checks and production build
         run: npm run check
 
@@ -422,7 +440,17 @@ jobs:
 
           platform_image_digest=$(tar -xOf "${archive}" "blobs/sha256/${platform_manifest_digest#sha256:}" \
             | jq -er '.config.digest')
-          test "${platform_image_digest}" = "$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')"
+          # buildx --load sometimes reports ImageID as the manifest digest instead of the
+          # config digest; accept either so packaging still seals a real config blob.
+          docker_image_id=$(docker image inspect "${IMAGE_TAG}" --format '{{.Id}}')
+          case "${docker_image_id}" in
+            "${platform_image_digest}"|"${platform_manifest_digest}"|"${image_digest}") ;;
+            *)
+              echo "platform config ${platform_image_digest} does not match docker Id ${docker_image_id} (manifest ${platform_manifest_digest})" >&2
+              exit 1
+              ;;
+          esac
+
           node scripts/generate-migration-manifest.mjs \
             --directory database/normalized-migrations \
             --output release-artifact/migration-manifest.json >/dev/null

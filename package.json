@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.264",
+  "version": "1.0.0-rc.265",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {
@@ -131,7 +131,7 @@
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
     "vite": "^8.1.6",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "concurrently": {

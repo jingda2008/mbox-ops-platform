@@ -89,6 +89,11 @@ FastifyPluginAsync<ReservationPerformanceNotificationApiOptions> = async (app, o
             objectType: 'reservation_performance_notification_authorization',
             objectId: recorded.id,
             businessDate: context.businessDate,
+            afterData: {
+              reservationPublicId: recorded.reservationPublicId,
+              decision: recorded.decision ?? null,
+              policyVersion: recorded.policyVersion,
+            },
             metadata: {
               reservationPublicId: recorded.reservationPublicId,
               policyVersion: recorded.policyVersion,

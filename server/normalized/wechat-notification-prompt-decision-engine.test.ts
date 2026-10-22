@@ -62,4 +62,21 @@ describe('WeChat notification prompt decision engine', () => {
       'activity_registration_confirmed', 'activity_performance_starting', 'activity_schedule_changed',
     ])
   })
+
+  it.each(['coupon_open', 'member_card', 'order_checkout'] as const)('keeps the points-expiry reminder in the %s prompt', (context) => {
+    const plan = decideWechatNotificationPrompt({
+      context,
+      loyaltyAuthorizations: [
+        { ...base, notificationType: 'loyalty_points_credited', templateId: 'points-credit-template', purpose: 'loyalty_balance_change', authorizationContext: 'loyalty_accrual' },
+        { ...base, notificationType: 'loyalty_points_reversed', templateId: 'points-reversal-template', purpose: 'loyalty_balance_change', authorizationContext: 'loyalty_refund' },
+        { ...base, notificationType: 'loyalty_points_expiring', templateId: 'points-expiry-template', purpose: 'loyalty_expiry_reminder', authorizationContext: 'loyalty_expiry' },
+      ],
+      memberServiceAuthorizations: [
+        { ...base, notificationType: 'member_benefit_issued', templateId: 'benefit-template' },
+        { ...base, notificationType: 'membership_tier_changed', templateId: 'tier-template', authorizationContext: 'membership_tier' },
+      ],
+    } as never)
+    expect(plan).toHaveLength(3)
+    expect(plan[0].notificationType).toBe('loyalty_points_expiring')
+  })
 })

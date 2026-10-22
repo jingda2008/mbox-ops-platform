@@ -42,7 +42,7 @@ const CONTEXTUAL_PRIORITY: Readonly<Record<WechatNotificationPromptContext, read
     'loyalty_points_credited', 'loyalty_points_reversed', 'loyalty_points_expiring',
   ],
   order_checkout: [
-    'loyalty_points_credited', 'loyalty_points_reversed', 'loyalty_points_expiring',
+    'loyalty_points_expiring', 'loyalty_points_credited', 'loyalty_points_reversed',
     'member_benefit_issued', 'membership_tier_changed', 'activity_registration_confirmed',
   ],
   activity_registration: [
@@ -51,12 +51,12 @@ const CONTEXTUAL_PRIORITY: Readonly<Record<WechatNotificationPromptContext, read
     'loyalty_points_reversed', 'loyalty_points_expiring',
   ],
   coupon_open: [
-    'member_benefit_issued', 'membership_tier_changed', 'loyalty_points_credited',
-    'loyalty_points_reversed', 'activity_registration_confirmed', 'loyalty_points_expiring',
+    'loyalty_points_expiring', 'loyalty_points_credited', 'member_benefit_issued',
+    'membership_tier_changed', 'loyalty_points_reversed', 'activity_registration_confirmed',
   ],
   member_card: [
-    'membership_tier_changed', 'member_benefit_issued', 'loyalty_points_credited',
-    'loyalty_points_reversed', 'activity_registration_confirmed', 'loyalty_points_expiring',
+    'loyalty_points_expiring', 'loyalty_points_credited', 'membership_tier_changed',
+    'member_benefit_issued', 'loyalty_points_reversed', 'activity_registration_confirmed',
   ],
   reservation_submit: [
     'reservation_performance_revised', 'member_benefit_issued', 'loyalty_points_credited',

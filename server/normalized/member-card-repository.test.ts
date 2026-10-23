@@ -155,6 +155,40 @@ integration('member card ordinary approval persistence',()=>{
     const application=await run(repo=>repo.apply({projectId,customerId:forCustomerId,acceptedProjectVersion:1,businessDate}))
     return run(repo=>repo.review({applicationId:application.applicationId,decision:'approve',employeeId:editor,businessDate,reason:''}))
   }
+  it('keeps the old social-gated draft unchanged while separate publisher and reviewer complete a simple card application',async()=>{
+    const publisher=randomUUID(),approver=randomUUID()
+    for(const [id,permissions] of [[publisher,['member.card.manage','loyalty.policy.publish']],[approver,['member.card.manage','member.card.review']]] as const){
+      const roleId=randomUUID()
+      await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)',[id,tenantId,storeId,`split-${id}`])
+      await pool.query('INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,$4)',[roleId,tenantId,storeId,`SPLIT_${roleId.replaceAll('-','').slice(0,16).toUpperCase()}`])
+      await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 minute')",[tenantId,storeId,id,roleId])
+      await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($4::text[])',[tenantId,storeId,roleId,permissions])
+    }
+    const input={terms:'',kind:'interest' as const,availableFrom:new Date(Date.now()-60000).toISOString(),cooperationConfirmed:false,cooperationValidUntil:null,cooperationReference:null,employeeId:publisher,businessDate}
+    const old=await run(repo=>repo.createProject({...input,code:`OLD_${randomUUID().slice(0,8).toUpperCase()}`,name:'原五迷草稿',terms:'原加入条件保持',flowMode:'legacy',requireSocialConfiguration:true,availableUntil:new Date(Date.now()+86400000).toISOString()}))
+    const oldSnapshot=(await pool.query('SELECT * FROM mbox.member_card_projects WHERE id=$1',[old.projectId])).rows[0]
+    const fresh=await run(repo=>repo.createProject({...input,code:`NEW_${randomUUID().slice(0,8).toUpperCase()}`,name:'WMLS（五迷）',flowMode:'simple',availableUntil:null}))
+    expect(fresh.status).toBe('draft')
+    expect((await run(repo=>repo.selfView(customerId))).projects.some(p=>[old.projectId,fresh.projectId].includes(p.id))).toBe(false)
+    await expect(run(repo=>repo.setProjectState({projectId:fresh.projectId,state:'open',employeeId:approver,businessDate,reason:'无发布权限'}))).rejects.toThrow()
+    await run(repo=>repo.setProjectState({projectId:fresh.projectId,state:'open',employeeId:publisher,businessDate,reason:'开放普通兴趣卡申请'}))
+    const visible=(await run(repo=>repo.selfView(customerId))).projects.find(p=>p.id===fresh.projectId)
+    expect(visible).toMatchObject({flow_mode:'simple',require_social_conditions:false,social_conditions_met:true,accepting_applications:true,available_until:null})
+    const apply=()=>run(repo=>repo.apply({projectId:fresh.projectId,customerId,acceptedProjectVersion:1,businessDate}))
+    const requests=await Promise.all([apply(),apply()])
+    expect(new Set(requests.map(row=>row.applicationId)).size).toBe(1)
+    const applicationId=requests[0]!.applicationId
+    expect((await run(repo=>repo.reviewQueue(approver))).items.some(row=>row.id===applicationId)).toBe(true)
+    await expect(run(repo=>repo.review({applicationId,decision:'approve',employeeId:publisher,businessDate,reason:''}))).rejects.toThrow()
+    const approved=await run(repo=>repo.review({applicationId,decision:'approve',employeeId:approver,businessDate,reason:''}))
+    expect(approved.status).toBe('approved')
+    expect((await run(repo=>repo.selfView(customerId))).cards.find(card=>card.id===approved.cardId)).toMatchObject({status:'active',valid_until:null,expired:false})
+    expect(await apply()).toMatchObject({status:'approved',cardId:approved.cardId,replayed:true})
+    expect((await pool.query('SELECT * FROM mbox.member_card_projects WHERE id=$1',[old.projectId])).rows[0]).toEqual(oldSnapshot)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.member_cards WHERE project_id=$1',[fresh.projectId])).rows[0].n).toBe(1)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.benefits WHERE customer_id=$1',[customerId])).rows[0].n).toBe(0)
+    expect((await pool.query('SELECT level FROM mbox.customer_memberships WHERE customer_id=$1',[customerId])).rows[0].level).toBe('gold')
+  })
   it('saves and opens a simple lifelong card with the same authorized employee, grants no implicit benefit, and replays its real card',async()=>{
     const {projectId,status}=await simpleProject();expect(status).toBe('open')
     const approved=await approveSimple(projectId)

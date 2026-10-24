@@ -95,9 +95,12 @@ export class MediaAssetRepository {
               AND card.status='published'
               AND card.image_url=('/api/public/media-assets/'||asset.public_id)
           ) OR EXISTS (
-            -- Menu images are visible to the mini program only when the
-            -- product itself is published to the customer menu.  Staff image
-            -- previews must not make inactive or hidden product assets public.
+            -- A menu image needs a published customer-menu reference. A card
+            -- product can be visible to holders while guest_visible is false.
+            -- Reuse the real holder/window rule, including simple cards whose
+            -- existing rights survive closing new applications. Staff previews
+            -- or an unissued draft alone never publish an image. This route
+            -- serves only image bytes; menu and purchase authorization is intact.
             SELECT 1
             FROM mbox.products AS product
             LEFT JOIN mbox.menu_categories AS menu_category
@@ -112,7 +115,24 @@ export class MediaAssetRepository {
               AND product.store_id=asset.store_id
               AND product.product_snapshot->>'imageUrl'=('/api/public/media-assets/'||asset.public_id)
               AND product.status='active'
-              AND product.guest_visible=true
+              AND (product.guest_visible=true OR EXISTS (
+                SELECT 1
+                FROM mbox.member_card_menu_items AS card_menu
+                JOIN mbox.member_cards AS holder
+                  ON holder.tenant_id=card_menu.tenant_id
+                 AND holder.store_id=card_menu.store_id
+                 AND holder.project_id=card_menu.project_id
+                WHERE card_menu.tenant_id=product.tenant_id
+                  AND card_menu.store_id=product.store_id
+                  AND card_menu.product_id=product.id
+                  AND card_menu.active AND card_menu.exclusive
+                  AND holder.status='active'
+                  AND holder.valid_from<=clock_timestamp()
+                  AND (holder.valid_until IS NULL OR holder.valid_until>clock_timestamp())
+                  AND mbox.customer_has_card_menu_item(
+                    product.tenant_id,product.store_id,product.id,holder.customer_id
+                  )
+              ))
               AND 'guest_qr'=ANY(product.allowed_channels)
               AND (menu_category.id IS NULL OR (
                 menu_category.guest_visible=true

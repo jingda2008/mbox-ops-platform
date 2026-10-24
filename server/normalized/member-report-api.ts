@@ -15,8 +15,8 @@ export const memberReportApiPlugin:FastifyPluginAsync<Options>=async(app,options
   if(error instanceof z.ZodError)return reply.code(400).send({error:{code:'MEMBER_REPORT_INVALID',message:'请检查查询条件、日期范围和页码'}})
   return reply.code(503).send({error:{code:'MEMBER_REPORT_UNAVAILABLE',message:'会员报表暂时无法读取，请重试'}})
  })
- app.get('/staff/member-report',async request=>{
-  const ctx=await options.resolveStaffContext(request),filter=memberReportFilter.parse(request.query)
+ app.post('/staff/member-report',async request=>{
+  const ctx=await options.resolveStaffContext(request),filter=memberReportFilter.parse(request.body)
   return {data:await options.transactions.run(ctx.scope,async tx=>{
    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'member.report.view')
    await tx.query("SET LOCAL statement_timeout='15s'")

@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react'
-import type {NormalizedApiClient,StaffAuthView} from '../normalized-api'
+import {NormalizedApiError,type NormalizedApiClient,type StaffAuthView} from '../normalized-api'
 import type {MemberReportView,MemberReportDetail,MemberReportRow} from '../shared/member-report'
 import './member-report.css'
 const money=(v:number)=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:'CNY'}).format(v/100)
@@ -12,7 +12,7 @@ export function MemberReportPanel({api,auth}:{api:NormalizedApiClient;auth:Staff
  const generation=useRef(0),detailGeneration=useRef(0),allowed=auth.permissions.includes('member.report.view')
  async function load(next=applied,page=1){
   const token=++generation.current;++detailGeneration.current;setSelected(null);setDetail(null);setView(null);setBusy(true);setError('')
-  try{const params=new URLSearchParams(Object.entries({...next,page:String(page)}).filter(([,value])=>value!==''));const r=await api.getEndpoint<{data:MemberReportView}>(`/api/staff/member-report?${params}`);if(token===generation.current){setView(r.data);setApplied(next)}}catch(e){if(token===generation.current)setError(e instanceof Error?e.message:'会员报表读取失败')}finally{if(token===generation.current)setBusy(false)}
+  try{const body=Object.fromEntries(Object.entries({...next,page}).filter(([,value])=>value!==''));const r=await api.postEndpoint<MemberReportView>('/api/staff/member-report',body);if(token===generation.current){setView(r);setApplied(next)}}catch(e){if(token===generation.current)setError(e instanceof NormalizedApiError&&e.status!==null&&e.status>=500?'会员报表读取失败，请重试':e instanceof Error?e.message:'会员报表读取失败')}finally{if(token===generation.current)setBusy(false)}
  }
  async function open(row:MemberReportRow,page=1){
   const token=++detailGeneration.current;setSelected(row);setDetail(null);setDetailBusy(true);setDetailError('')

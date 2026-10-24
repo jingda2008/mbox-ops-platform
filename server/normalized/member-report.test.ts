@@ -55,11 +55,13 @@ describe('member report input and phone protection',()=>{
  it('requires explicit report authority on both endpoints, with no shared-role grant',async()=>{
   const app=Fastify();await app.register(memberReportApiPlugin,{transactions:runner,protection,resolveStaffContext:()=>({scope,employeeId:employee,permissions:[],businessDate:'2026-10-24'})})
   try{
-   for(const path of ['/staff/member-report',`/staff/member-report/${customer}/consumption`]){const res=await app.inject(path);expect(res.statusCode).toBe(403);expect(res.headers['cache-control']).toContain('no-store')}
+   for(const request of [{method:'POST' as const,url:'/staff/member-report',payload:{}},{method:'GET' as const,url:`/staff/member-report/${customer}/consumption`}]){const res=await app.inject(request);expect(res.statusCode).toBe(403);expect(res.headers['cache-control']).toContain('no-store')}
    await runner.run(scope,async tx=>{const a=new StaffAccessRepository(tx);await a.upsertPermissionDefinition({code:'member.report.view',name:'会员查询报表'});await a.setEmployeePermissionOverride({employeeId:employee,permissionCode:'member.report.view',effect:'grant',reason:'Synthetic report test',configuredByEmployeeId:employee})})
-   const ok=await app.inject('/staff/member-report');expect(ok.statusCode).toBe(200);expect(ok.json().data.totalMembers).toBe(2)
+   const ok=await app.inject({method:'POST',url:'/staff/member-report',payload:{}});expect(ok.statusCode).toBe(200);expect(ok.json().data.totalMembers).toBe(2)
    expect(JSON.stringify(ok.json())).not.toMatch(/encrypted_value|contact_hash|phone_cipher/)
-   expect((await app.inject('/staff/member-report?page=0')).statusCode).toBe(400)
+   expect((await app.inject({method:'POST',url:'/staff/member-report',payload:{search:'MBXREPORT01'}})).json().data.matchedMembers).toBe(1)
+   expect((await app.inject('/staff/member-report?search=13800000000')).statusCode).toBe(404)
+   expect((await app.inject({method:'POST',url:'/staff/member-report',payload:{page:0}})).statusCode).toBe(400)
   }finally{await app.close()}
  })
  it('counts two orders at one table once, subtracts successful refunds and excludes pending/simulated payments',async()=>{

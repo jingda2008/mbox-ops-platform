@@ -421,7 +421,7 @@ function RoleNavigation({
 function NavigationGroups({entries,onNavigate}:{entries:StaffBootstrapView['navigation'];onNavigate?: (route:string)=>void}) {
   const members=entries.filter(entry=>entry.code.startsWith('member-'))
   const item=(entry:StaffBootstrapView['navigation'][number])=><button type="button" key={entry.code} onClick={()=>onNavigate?.(entry.route)} disabled={!onNavigate}><span className="normalized-nav-icon"><StaffNavigationIcon code={entry.code} size={19}/></span><strong>{entry.label}</strong><ChevronRight size={17}/></button>
-  return <div className="normalized-role-nav-list">{entries.filter(entry=>!entry.code.startsWith('member-')).map(item)}{members.length>0&&<button type="button" className="staff-member-navigation" onClick={()=>onNavigate?.((members.find(entry=>entry.code==='member-accounts')??members[0]).route)} disabled={!onNavigate}><span className="normalized-nav-icon"><Gift size={19}/></span><strong>会员服务与管理</strong><ChevronRight size={17}/></button>}</div>
+  return <div className="normalized-role-nav-list">{entries.filter(entry=>!entry.code.startsWith('member-')).map(item)}{members.length>0&&<button type="button" className="staff-member-navigation" onClick={()=>onNavigate?.((members.find(entry=>entry.code==='member-report')??members.find(entry=>entry.code==='member-accounts')??members[0]).route)} disabled={!onNavigate}><span className="normalized-nav-icon"><Gift size={19}/></span><strong>会员服务与管理</strong><ChevronRight size={17}/></button>}</div>
 }
 
 function WorkspaceGate({

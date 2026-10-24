@@ -1,11 +1,11 @@
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
 
 const groups = [
-  { label: '查询与办理', codes: ['member-accounts', 'member-fulfillment', 'member-exceptions', 'member-management'] },
+  { label: '查询与办理', codes: ['member-report', 'member-accounts', 'member-fulfillment', 'member-exceptions', 'member-management'] },
   { label: '权益与规则', codes: ['member-overview', 'member-rule-drafts', 'member-rule-approvals', 'member-rule-publish'] },
 ]
 const labels: Record<string, string> = {
-  'member-accounts': '查会员', 'member-fulfillment': '待领取', 'member-exceptions': '异常处理',
+  'member-report':'会员报表', 'member-accounts': '查会员', 'member-fulfillment': '待领取', 'member-exceptions': '异常处理',
   'member-management': '会员办理与活动', 'member-overview': '等级与权益',
   'member-rule-drafts': '规则草稿', 'member-rule-approvals': '待审批', 'member-rule-publish': '待发布',
 }

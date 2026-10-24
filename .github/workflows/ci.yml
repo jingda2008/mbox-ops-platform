@@ -255,9 +255,10 @@ jobs:
         env:
           NORMALIZED_E2E_MEMBER_CARDS: 'true'
           NORMALIZED_E2E_MEMBER_VISIT_REWARDS: 'true'
+          NORMALIZED_E2E_MEMBER_REPORT: 'true'
         run: |
           cp -R artifacts/normalized-browser artifacts/normalized-browser-three-screen
-          npm run test:e2e:normalized -- tests/normalized-e2e/normalized-member-participation.spec.ts tests/normalized-e2e/normalized-member-visit-rewards.spec.ts tests/normalized-e2e/normalized-member-gifts.spec.ts tests/normalized-e2e/normalized-manual-points.spec.ts
+          npm run test:e2e:normalized -- tests/normalized-e2e/normalized-member-participation.spec.ts tests/normalized-e2e/normalized-member-visit-rewards.spec.ts tests/normalized-e2e/normalized-member-gifts.spec.ts tests/normalized-e2e/normalized-manual-points.spec.ts tests/normalized-e2e/normalized-member-report.spec.ts
       - name: Preserve member browser evidence
         run: cp -R artifacts/normalized-browser artifacts/normalized-browser-member
       - name: Upload normalized browser evidence

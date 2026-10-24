@@ -103,6 +103,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'member-rule-publish', label: '会员规则发布', route: '/staff/member-rule-publish', sortOrder: 291,
     permissionCodes: ['loyalty.policy.publish'],
   },
+  {code:'member-report',label:'会员查询报表',route:'/staff/member-report',sortOrder:291.5,permissionCodes:['member.report.view']},
   {
     code: 'member-accounts', label: '会员账户查询', route: '/staff/member-accounts', sortOrder: 292,
     permissionCodes: ['loyalty.account.view'],

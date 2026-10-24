@@ -66,7 +66,8 @@ const pricingAuthorizationId = randomUUID()
 class ScriptedTransaction implements ScopedTransaction {
   readonly scope = { tenantId, storeId }
   constructor(private readonly responses: Array<{ rows: Record<string, unknown>[]; rowCount?: number }>) {}
-  async query<Row extends Record<string, unknown> = Record<string, unknown>>() {
+  async query<Row extends Record<string, unknown> = Record<string, unknown>>(text: string) {
+    if(text.includes('/* product-sale-quantity */'))return {rows:[] as Row[],rowCount:0}
     const response = this.responses.shift()
     if (!response) throw new Error('Unexpected query')
     return { rows: response.rows as Row[], rowCount: response.rowCount ?? response.rows.length }

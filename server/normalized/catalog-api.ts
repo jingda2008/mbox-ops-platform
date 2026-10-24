@@ -119,6 +119,7 @@ interface BundleChoiceGroupInput extends JsonObject {
 }
 
 interface ProductRow extends Record<string, unknown> {
+  sale_quantity_available?: boolean;
   id: string;
   code: string;
   name: string;
@@ -955,6 +956,51 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
   app.patch<{Params:{productId:string}}>('/catalog/products/:productId', productUpdateHandler(false));
   app.post<{Params:{productId:string}}>('/native/catalog/products/:productId', productUpdateHandler(true));
 
+  app.get<{Params:{productId:string}}>('/catalog/products/:productId/sale-quantity', async (request,reply)=>
+    handleRoute(reply,async()=>{
+      const context=await resolveStaffContext(options,request);
+      const productId=readUuid(request.params.productId,'productId');
+      const data=await options.transactions.run(context.scope,async transaction=>{
+        await assertLivePermission(transaction,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION);
+        return readSaleQuantity(transaction,productId);
+      },{readOnly:true});
+      return reply.send({data});
+    }));
+  app.post<{Params:{productId:string}}>('/catalog/products/:productId/sale-quantity', async (request,reply)=>
+    handleRoute(reply,async()=>{
+      const context=await resolveStaffContext(options,request);
+      const productId=readUuid(request.params.productId,'productId');
+      const body=readRecord(request.body,'可售数量');
+      const remaining=body.remaining===null?null:readInteger(body.remaining,'剩余可售份数',0,1000000);
+      if(typeof body.expectedVersion!=='string'||!/^\d{1,18}$/.test(body.expectedVersion))throw new CatalogRequestError('请重新读取当前可售数量');
+      const expectedVersion=body.expectedVersion;
+      const key=readIdempotencyKey(request);
+      const command:IdempotentCommand<JsonObject>={
+        ...catalogCommand(request,context,'catalog.product.sale-quantity',key,{productId,remaining,expectedVersion}),
+        retryCompletedAfter:undefined,
+        resultCodec:{encode:value=>value,decode:value=>readJsonObject(value,'可售数量回执')},
+      };
+      // Live permission is rechecked even when returning an idempotent result.
+      const executor=nativePhysicalExecutor(options.commandExecutor,context,async tx=>{
+        await assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION);
+      });
+      const execution=await executor.execute(command,async transaction=>{
+        await assertLivePermission(transaction,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION);
+        await lockProduct(transaction,productId);
+        const before=await readSaleQuantity(transaction,productId);
+        if(before.version!==expectedVersion)throw new CatalogConflictError('可售数量已变化，本次未保存。请重新读取后核对剩余份数');
+        await transaction.query(`UPDATE mbox.products SET sale_remaining_quantity=$4,
+          sale_quantity_generation=sale_quantity_generation+CASE WHEN (sale_remaining_quantity IS NULL) IS DISTINCT FROM ($4::integer IS NULL) THEN 1 ELSE 0 END,
+          sale_quantity_version=sale_quantity_version+1 WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+          [transaction.scope.tenantId,transaction.scope.storeId,productId,remaining]);
+        const after=await readSaleQuantity(transaction,productId);
+        return {result:after,auditEvents:[{actor:{type:'employee',employeeId:context.employeeId},
+          action:'catalog.product.sale_quantity.changed',objectType:'product',objectId:productId,
+          businessDate:context.businessDate,beforeData:before,afterData:after,requestId:request.id}],outboxMessages:[]};
+      });
+      return reply.send(executionResponse(execution));
+    }));
+
   app.put<{ Params: { productId: string } }>(
     "/catalog/products/:productId/standard-price",
     async (request, reply) =>
@@ -1243,7 +1289,8 @@ async function listProducts(
       COALESCE(choice_group_list.items,'[]'::jsonb) AS bundle_choice_groups,
       COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
-      COALESCE(inventory_stock.available, false) AS inventory_available,
+      mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id) AS sale_quantity_available,
+      (COALESCE(inventory_stock.available, false) AND mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id)) AS inventory_available,
       product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -1314,7 +1361,7 @@ async function listProducts(
           'productId',option_product.id,'code',option_product.code,'name',option_product.name,
           'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
           'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
-            AND option_inventory.configuration_complete AND option_inventory.available
+            AND option_inventory.configuration_complete AND option_inventory.available AND mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity)
             AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -1327,7 +1374,7 @@ async function listProducts(
             WHEN option_product.status<>'active' THEN '当前已停用'
             WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
-            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT option_inventory.available OR NOT mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity) THEN '当前剩余数量不足'
             WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -1340,7 +1387,7 @@ async function listProducts(
             ELSE NULL END
         ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
         count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
-          AND option_inventory.configuration_complete AND option_inventory.available
+          AND option_inventory.configuration_complete AND option_inventory.available AND mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity)
           AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
             OR (option_product.available_from<option_product.available_until
@@ -2137,7 +2184,8 @@ async function getProduct(
       COALESCE(choice_group_list.items,'[]'::jsonb) AS bundle_choice_groups,
       COALESCE(choice_group_list.all_available,false) AS bundle_choice_groups_available,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
-      COALESCE(inventory_stock.available, false) AS inventory_available,
+      mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id) AS sale_quantity_available,
+      (COALESCE(inventory_stock.available, false) AND mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id)) AS inventory_available,
       product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
@@ -2208,7 +2256,7 @@ async function getProduct(
           'productId',option_product.id,'code',option_product.code,'name',option_product.name,
           'quantity',choice_option.quantity,'sortOrder',choice_option.sort_order,
           'available',(option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
-            AND option_inventory.configuration_complete AND option_inventory.available
+            AND option_inventory.configuration_complete AND option_inventory.available AND mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity)
             AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -2221,7 +2269,7 @@ async function getProduct(
             WHEN option_product.status<>'active' THEN '当前已停用'
             WHEN NOT ('staff_assisted'=ANY(option_product.allowed_channels)) THEN '未开放员工协助点单'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
-            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT option_inventory.available OR NOT mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity) THEN '当前剩余数量不足'
             WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -2234,7 +2282,7 @@ async function getProduct(
             ELSE NULL END
         ) ORDER BY choice_option.sort_order,choice_option.id) AS items,
         count(*) FILTER(WHERE option_product.status='active' AND 'staff_assisted'=ANY(option_product.allowed_channels)
-          AND option_inventory.configuration_complete AND option_inventory.available
+          AND option_inventory.configuration_complete AND option_inventory.available AND mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity)
           AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
             OR (option_product.available_from<option_product.available_until
@@ -2409,6 +2457,18 @@ async function getProduct(
   return requiredProduct(result.rows[0]);
 }
 
+async function readSaleQuantity(transaction:ScopedTransaction,productId:string):Promise<JsonObject>{
+  const result=await transaction.query<{remaining:number|null;version:string;reserved:number}>(`
+    SELECT p.sale_remaining_quantity AS remaining,p.sale_quantity_version::text AS version,
+      COALESCE((SELECT sum(a.quantity) FROM mbox.product_sale_quantity_allocations a
+        WHERE a.tenant_id=p.tenant_id AND a.store_id=p.store_id AND a.product_id=p.id
+          AND a.generation=p.sale_quantity_generation AND a.status='reserved'),0)::integer AS reserved
+    FROM mbox.products p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.id=$3`,
+    [transaction.scope.tenantId,transaction.scope.storeId,productId]);
+  const row=result.rows[0];if(!row)throw new CatalogProductNotFoundError();
+  return {...row};
+}
+
 function mapProduct(row: ProductRow, guest = false, includeCost = true): CatalogProduct {
   const standardPrice =
     row.standard_price_id === null
@@ -2445,7 +2505,8 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
     }
   }
   if(!row.inventory_configuration_complete)availabilityReasons.push('库存扣减配方未完整配置，请补齐商品配方');
-  if(!row.inventory_available)availabilityReasons.push('当前库存不足以履约，请核对配方用量及实际库存');
+  if(row.sale_quantity_available===false)availabilityReasons.push('剩余可售份数不足，请核对实际备货后在可售数量中补充');
+  else if(!row.inventory_available)availabilityReasons.push('当前库存不足以履约，请核对配方用量及实际库存');
   return {
     ...(!guest?{availabilityReasons}:{}),
     id: row.id,

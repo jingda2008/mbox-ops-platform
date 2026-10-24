@@ -140,6 +140,7 @@ function fixture(input: {
   const staffTransaction: ScopedTransaction = {
     scope: { tenantId, storeId },
     query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
+      if(text.includes('/* product-sale-quantity */'))return {rows:[] as Row[],rowCount:0}
       const sql = text.replace(/\s+/g, ' ').trim()
       staffQueries.push(sql)
       if (sql.includes('FROM mbox.employees') && sql.includes('employee_code')) {
@@ -275,6 +276,7 @@ function fixture(input: {
   const commandTransaction: ScopedTransaction = {
     scope: { tenantId, storeId },
     query: async <Row extends Record<string, unknown>>(text: string): Promise<PostgresQueryResult<Row>> => {
+      if(text.includes('/* product-sale-quantity */'))return {rows:[] as Row[],rowCount:0}
       const sql = text.replace(/\s+/g, ' ').trim()
       commandQueries.push(sql)
       if(sql.includes('FROM mbox.pickup_devices'))return rows([{found:input.activePickupDevice===true}]) as PostgresQueryResult<Row>

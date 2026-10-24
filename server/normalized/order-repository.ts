@@ -327,6 +327,18 @@ export class OrderRepository {
     if (pricingAuthorization) assertVerifiedPricingAuthorization(pricingAuthorization)
     const requested = normalizeRequestedLines(input.lines)
     await this.lockOpenTableSession(input.tableSessionId)
+    // Lock only capped products before the existing shared price locks. Without
+    // this order two different tables could both try to upgrade a shared lock.
+    await this.transaction.query(`/* product-sale-quantity */
+      SELECT id FROM mbox.products WHERE tenant_id=$1 AND store_id=$2
+        AND sale_remaining_quantity IS NOT NULL AND id IN (
+          SELECT unnest($3::uuid[])
+          UNION SELECT component_product_id FROM mbox.product_bundle_components
+            WHERE tenant_id=$1 AND store_id=$2 AND bundle_product_id=ANY($3::uuid[])
+          UNION SELECT o.component_product_id FROM mbox.product_bundle_choice_options o
+            JOIN mbox.product_bundle_choice_groups g ON g.tenant_id=o.tenant_id AND g.store_id=o.store_id AND g.id=o.choice_group_id
+            WHERE g.tenant_id=$1 AND g.store_id=$2 AND g.bundle_product_id=ANY($3::uuid[])
+        ) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,requested.map(line=>line.productId)])
     const promises=pricingAuthorization?.fulfillmentPromises??[]
     const priced = await this.loadCurrentPrices(requested,true,input.createdByCustomerId??this.customerId,!pricingAuthorization,promises)
     const currency = requireSingleCurrency(priced)

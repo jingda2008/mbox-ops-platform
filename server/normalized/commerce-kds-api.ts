@@ -1,3 +1,4 @@
+import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import {nativePhysicalExecutor,isNativePhysicalKey,NativePhysicalNotCommittedError} from './native-physical-command.js'
 import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
 import {pickupWorkflowApiPlugin} from './pickup-workflow-api.js'
@@ -1903,6 +1904,7 @@ function safeErrorCode(error: unknown): string {
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (error instanceof ProductSaleQuantityUnavailableError) return apiError(409, 'PRODUCT_SALE_QUANTITY_UNAVAILABLE', error.reason)
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')
   }

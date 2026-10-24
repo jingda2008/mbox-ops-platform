@@ -1,3 +1,4 @@
+import { ProductSaleQuantityRepository } from './product-sale-quantity-repository.js';
 import type { JsonObject } from "./command-executor.js";
 import type { OrderItem } from "./order-repository.js";
 import type { ScopedTransaction } from "./transaction-runner.js";
@@ -1680,6 +1681,7 @@ export class InventoryRepository {
       throw new TypeError("At most 100 order items can be consumed at once");
     if (options.createdByEmployeeId)
       requireUuid("createdByEmployeeId", options.createdByEmployeeId);
+    await new ProductSaleQuantityRepository(this.transaction).allocate(orderItems, "consumed");
     const trackedOrderItems = await this.loadTrackedInventoryOrderItemIds(orderItems);
     if (trackedOrderItems.size === 0) return [];
     const demand = await this.loadRecipeDemand(orderItems);
@@ -1762,6 +1764,7 @@ export class InventoryRepository {
       throw new InventoryConflictError("Order is not awaiting payment inventory reservation");
     }
 
+    await new ProductSaleQuantityRepository(this.transaction).allocate(orderItems, "reserved");
     const trackedOrderItems = await this.loadTrackedInventoryOrderItemIds(orderItems);
     if (trackedOrderItems.size === 0) return [];
     const demand = await this.loadRecipeDemand(orderItems);
@@ -1855,6 +1858,7 @@ export class InventoryRepository {
     options: Readonly<ConsumeInventoryOptions> = {},
   ): Promise<InventoryConsumption[]> {
     requireUuid("orderId", orderId);
+    await new ProductSaleQuantityRepository(this.transaction).consume(orderId);
     const reservations = await this.readOrderReservations(orderId, true);
     return this.consumeLockedReservations(reservations, options);
   }
@@ -1864,6 +1868,7 @@ export class InventoryRepository {
     options: Readonly<ConsumeInventoryOptions> = {},
   ): Promise<InventoryConsumption[]> {
     requireUuid("orderItemId", orderItemId);
+    await new ProductSaleQuantityRepository(this.transaction).consume("", orderItemId);
     const reservations = await this.readOrderItemReservations(orderItemId, true);
     return this.consumeLockedReservations(reservations, {
       ...options,
@@ -2096,6 +2101,7 @@ export class InventoryRepository {
   async releaseImmediatePaymentReservations(orderId: string, reason: string): Promise<number> {
     requireUuid("orderId", orderId);
     if (reason.trim().length < 3 || reason.length > 300) throw new TypeError("release reason is invalid");
+    await new ProductSaleQuantityRepository(this.transaction).release(orderId);
     const reservations = await this.readOrderReservations(orderId, true);
     const reserved = reservations.filter((row) => row.status === "reserved");
     if (reserved.length === 0) return 0;

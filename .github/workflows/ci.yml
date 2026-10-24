@@ -96,6 +96,8 @@ jobs:
         run: npm run test:activity-recovery
       - name: Verify operating dashboard periods, permissions and recovery
         run: node scripts/operating-dashboard-browser.mjs
+      - name: Verify optional product sale quantity editing and receipt recovery
+        run: node scripts/product-sale-quantity-browser.mjs
       - name: Verify customer purchase, card entry and scan feedback
         run: node scripts/customer-experience-b06-browser.mjs
       - name: Verify candidate, upload and release gate semantics

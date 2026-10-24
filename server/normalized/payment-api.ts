@@ -1,3 +1,4 @@
+import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import { readCashierTodoSummary } from './cashier-todo-summary.js'
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
 import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
@@ -1585,6 +1586,7 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (error instanceof ProductSaleQuantityUnavailableError) return apiError(409, 'PRODUCT_SALE_QUANTITY_UNAVAILABLE', error.reason)
   if (error instanceof InventoryReturnCostProjectionBusyError) {
     return { statusCode: 503, body: { error: { code: error.code, message: error.message, retryable: true } } }
   }

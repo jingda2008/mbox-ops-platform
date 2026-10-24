@@ -1,3 +1,4 @@
+import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import { customerSupplyProjection, customerSupplyCopy } from './product-supply-presentation.js'
 import {IssuedCouponPromiseError} from './issued-coupon-product-promise.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1168,7 +1169,7 @@ export async function searchGuestCatalog(
       COALESCE(current_session.guest_count, 2) AS guest_count,
       COALESCE(current_session.guest_profile_snapshot, '{}'::jsonb) AS guest_profile_snapshot,
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
-      COALESCE(inventory_stock.available, false) AS inventory_available
+      (COALESCE(inventory_stock.available, false) AND mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id)) AS inventory_available
     FROM mbox.products AS product
     LEFT JOIN mbox.table_sessions AS current_session
       ON current_session.tenant_id = product.tenant_id
@@ -1260,6 +1261,7 @@ export async function searchGuestCatalog(
             AND 'guest_qr'=ANY(option_product.allowed_channels)
             AND option_inventory.configuration_complete
             AND option_inventory.available
+            AND mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity)
             AND mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NOT NULL
             AND (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -1273,7 +1275,7 @@ export async function searchGuestCatalog(
             WHEN option_product.status<>'active' THEN '当前已停用'
             WHEN NOT option_product.guest_visible OR NOT ('guest_qr'=ANY(option_product.allowed_channels)) THEN '当前不对顾客开放'
             WHEN NOT option_inventory.configuration_complete THEN '配方正在更新'
-            WHEN NOT option_inventory.available THEN '当前库存不足'
+            WHEN NOT option_inventory.available OR NOT mbox.product_sale_quantity_available(option_product.tenant_id,option_product.store_id,option_product.id,choice_option.quantity) THEN '当前剩余数量不足'
             WHEN mbox.product_base_service_deadline(option_product.tenant_id,option_product.store_id,option_product.id) IS NULL THEN '当前不在可售时间'
             WHEN NOT (option_product.available_from IS NULL OR option_product.available_until IS NULL
               OR (option_product.available_from<option_product.available_until
@@ -2831,6 +2833,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof GuestServiceFeedbackStateError) {
       return reply.code(409).send({ error: { code: 'SERVICE_FEEDBACK_STATE_CONFLICT', message: error.message } })
     }
+    if (error instanceof ProductSaleQuantityUnavailableError) return reply.code(409).send({error:{code:'PRODUCT_SALE_QUANTITY_UNAVAILABLE',message:error.reason}})
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })
     }

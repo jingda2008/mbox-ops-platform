@@ -1,3 +1,4 @@
+import { ProductSaleQuantityEditor } from './ProductSaleQuantityEditor'
 import { useStaffViewState } from './staff-view-state'
 import { ServiceWindowFields } from './ServiceWindowFields'
 import { parseProductServiceWindow, type ProductServiceWindow } from '../shared/product-service-window'
@@ -923,6 +924,7 @@ export function CatalogManagementPanel({
             <label>出品岗位<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'none' : draft.fulfillmentStation} onChange={(event) => updateDraft('fulfillmentStation', event.target.value as FulfillmentStation)}><option value="bar">吧台</option><option value="kitchen">后厨</option><option value="cashier">收银</option><option value="none">无需出品</option></select></label>
             <label>销售状态<select value={draft.status} onChange={(event) => updateDraft('status', event.target.value as ProductStatus)}><option value="active">在售</option><option value="sold_out">售罄</option><option value="inactive">停用</option></select><small>状态更改需点击底部“保存并读回验证”；保存成功后才会影响小程序菜单。</small></label>
             <label>库存方式<select disabled={draft.productKind === 'bundle'} value={draft.productKind === 'bundle' ? 'tracked' : draft.inventoryControlMode} onChange={(event) => updateDraft('inventoryControlMode', event.target.value as InventoryControlMode)}><option value="tracked">跟踪库存（酒水等）</option><option value="not_managed">暂不管理数量（小吃水果）</option></select></label>
+            {draft.id && canManageProduct && <ProductSaleQuantityEditor key={draft.id} api={api} productId={draft.id} onSaved={load} />}
             <label>搜索文本<input maxLength={4000} value={draft.searchText} onChange={(event) => updateDraft('searchText', event.target.value)} /></label>
             <label>标准售价<NumberInputWithUnit disabled={!canManagePrice} inputMode="decimal" unit="元" value={draft.priceYuan} onChange={(event) => updateDraft('priceYuan', event.target.value)} />{!canManagePrice && <small>当前岗位不能定价；不会在保存后尝试补写售价。</small>}</label>
             {canViewInventoryCost && (draft.inventoryControlMode === 'tracked' || draft.productKind === 'bundle')

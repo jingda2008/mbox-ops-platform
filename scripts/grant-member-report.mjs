@@ -17,7 +17,7 @@ try{
   const e=(await tx.query("SELECT id,display_name,status FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code=$3",[scope.tenantId,scope.storeId,employeeCode])).rows
   if(e.length!==1||e[0].id!==expectedId||e[0].display_name!=='陈方宇'||e[0].status!=='active')throw Error('Target employee identity mismatch')
   const access=await new StaffAccessRepository(tx).resolve(expectedId)
-  return {employeeId:expectedId,employeeCode,permissions:access.permissions,navigation:access.navigation,businessDate:(await tx.query('SELECT mbox.current_operating_business_date($1,$2)::text day',[scope.tenantId,scope.storeId])).rows[0].day}
+  return {employeeId:expectedId,employeeCode,permissions:access.permissions,navigation:access.navigation,businessDate:(await tx.query('SELECT mbox.current_operating_business_date($1,$2)::text AS business_date',[scope.tenantId,scope.storeId])).rows[0].business_date}
  },{readOnly:true})
  if(process.env.MBOX_APPLY_MEMBER_REPORT!=='true'){console.log(JSON.stringify({mode:'preview',employeeCode,permission,alreadyGranted:before.permissions.includes(permission)}))}
  else {

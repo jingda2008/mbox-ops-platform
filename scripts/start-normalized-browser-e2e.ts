@@ -99,6 +99,14 @@ try {
       await tx.query("INSERT INTO mbox.employees(tenant_id,store_id,employee_code,display_name,pin_hash) VALUES($1,$2,'history-reader','仅查看员工',$3)",[scope.tenantId,scope.storeId,pinHash])
     })
   }
+  if(process.env.NORMALIZED_E2E_MEMBER_REPORT==='true')await runtime.transactions.run(scope,async tx=>{
+    const access=new StaffAccessRepository(tx)
+    const owner=(await tx.query<{id:string}>("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='chenfangyu'",[scope.tenantId,scope.storeId])).rows[0]!
+    await access.upsertPermissionDefinition({code:'member.report.view',name:'会员查询报表'})
+    await access.setEmployeePermissionOverride({employeeId:owner.id,permissionCode:'member.report.view',effect:'grant',reason:'Isolated browser report fixture',configuredByEmployeeId:owner.id})
+    const customer=(await tx.query<{id:string}>("INSERT INTO mbox.customers(tenant_id,store_id,public_id) VALUES($1,$2,'report-browser-customer') RETURNING id",[scope.tenantId,scope.storeId])).rows[0]!
+    await tx.query("INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,'MBXREPORT88')",[scope.tenantId,scope.storeId,customer.id])
+  })
   const memberCardFixture = process.env.NORMALIZED_E2E_MEMBER_CARDS === 'true'
   if (memberCardFixture) await runtime.transactions.run(scope, async transaction => {
     // Deterministic qualification fixture: a counted, non-stock-managed drink

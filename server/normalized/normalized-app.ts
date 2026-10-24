@@ -1,3 +1,4 @@
+import { memberReportApiPlugin } from './member-report-api.js'
 import { createGiftOrderPort } from './gift-order-fulfillment.js'
 import {officialPointsNotificationApiPlugin} from './official-points-notification-api.js'
 import { nativePushApiPlugin } from './native-push-api.js'
@@ -729,6 +730,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
             wechat: wechatPhoneAuthorization,
             alipay: alipayPhoneAuthorization,
           }))
+    instance.register(memberReportApiPlugin,{prefix:'/api',transactions,protection:activityContactProtection,resolveStaffContext:staffReservationContext})
     const membershipPhoneProtection = createMembershipRecoveryPhoneProtector(activityContactProtection)
     const membershipRecovery = new MembershipRecoveryService(
       transactions,

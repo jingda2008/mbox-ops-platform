@@ -22,6 +22,7 @@ export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null 
   if (path === '/staff/member-rule-drafts') return 'member-rule-drafts'
   if (path === '/staff/member-rule-approvals') return 'member-rule-approvals'
   if (path === '/staff/member-rule-publish') return 'member-rule-publish'
+  if (path === '/staff/member-report') return 'member-report'
   if (path === '/staff/member-accounts') return 'member-accounts'
   if (path === '/staff/member-management') return 'member-management'
   if (path === '/staff/devices') return 'devices'

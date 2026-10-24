@@ -1,3 +1,4 @@
+import {MemberReportPanel} from './MemberReportPanel'
 import { OperatingDashboardPanel } from './OperatingDashboardPanel'
 import { EmployeeSalesSummary } from './EmployeeSalesSummary'
 import { signedMinorAmount, type EmployeeSalesView } from './employee-sales-presentation'
@@ -87,7 +88,7 @@ const PerformanceRevisionPanel = lazy(() => import('./PerformanceRevisionPanel')
 
 export type StaffModule = 'orders' | 'payments' | 'performance' | 'inventory' | 'operations' | 'experience'
   | 'member-fulfillment' | 'member-exceptions' | 'member-overview' | 'member-rule-drafts'
-  | 'member-rule-approvals' | 'member-rule-publish' | 'member-accounts' | 'member-management'
+  | 'member-report' | 'member-rule-approvals' | 'member-rule-publish' | 'member-accounts' | 'member-management'
   | 'devices' | 'settings'
 
 interface ScheduleEntry extends Record<string, unknown> {
@@ -416,6 +417,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
         || module === 'member-rule-drafts'
         || module === 'member-rule-approvals'
         || module === 'member-rule-publish'
+        || module === 'member-report'
         || module === 'member-accounts'
         || module === 'member-management') {
         setData(emptyData)
@@ -491,6 +493,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     if (module === 'member-rule-approvals') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-rule-approvals" />
     if (module === 'member-rule-publish') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-rule-publish" />
     if (module === 'member-accounts') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-accounts" />
+    if (module === 'member-report') return <MemberReportPanel api={api} auth={auth}/>
     if (module === 'member-management') return <CustomerExperienceManagementPanel api={api} auth={auth} dashboard={null} mode="member-management" />
     if (module === 'devices') return <DevicesModule api={api} auth={auth} devices={data.devices} jobs={data.printJobs} bridges={data.printBridges} routes={data.printerRoutes} onChanged={refresh} />
     return <SettingsModule api={api} auth={auth} policy={data.commercePolicy} onChanged={refresh} />
@@ -510,6 +513,7 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
     'member-rule-approvals': { title: '待审批会员规则', icon: ShieldCheck },
     'member-rule-publish': { title: '会员规则发布', icon: ShieldCheck },
     'member-accounts': { title: '会员账户查询', icon: ShieldCheck },
+    'member-report': {title:'会员查询报表',icon:ShieldCheck},
     'member-management': { title: '其他会员经营配置', icon: ShieldCheck },
     devices: { title: '设备与打印', icon: Printer },
     settings: { title: '系统配置状态', icon: Settings2 },

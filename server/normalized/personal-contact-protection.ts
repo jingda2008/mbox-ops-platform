@@ -16,6 +16,7 @@ export interface ActivityContactProtectionKeyring {
     contactHash: string
     encryptionKeyId: string
   }>): string
+  revealPhone?(input: Readonly<{ encryptedValue: Buffer; contactHash: string; encryptionKeyId: string }>): string
   hasKey(keyId: string): boolean
   protectPhone(value: string): Readonly<{
     contactHash: string; matchHashes: readonly string[]; encryptedValue: Buffer
@@ -113,6 +114,20 @@ export function createActivityContactProtectionKeyring(
         if (error instanceof PersonalContactDecryptionError) throw error
         throw new PersonalContactDecryptionError('CIPHERTEXT_INVALID')
       }
+    },
+    revealPhone(input: Readonly<{ encryptedValue: Buffer; contactHash: string; encryptionKeyId: string }>) {
+      const key=keys.get(input.encryptionKeyId)
+      if(!key)throw new PersonalContactDecryptionError('KEY_UNAVAILABLE')
+      const legacy=input.encryptionKeyId==='normalized-phone-v1',offset=legacy?0:1,envelope=input.encryptedValue
+      if(envelope.length<31+offset||(!legacy&&envelope[0]!==1))throw new PersonalContactDecryptionError('CIPHERTEXT_INVALID')
+      try {
+        const decipher=createDecipheriv('aes-256-gcm',key,envelope.subarray(offset,offset+12))
+        decipher.setAuthTag(envelope.subarray(offset+12,offset+28))
+        const value=Buffer.concat([decipher.update(envelope.subarray(offset+28)),decipher.final()]).toString('utf8')
+        const expected=Buffer.from(input.contactHash,'hex'),actual=createHmac('sha256',legacy?legacyPhoneLookupKey:lookupKey).update(value).digest()
+        if(expected.length!==actual.length||!timingSafeEqual(expected,actual))throw new PersonalContactDecryptionError('HASH_MISMATCH')
+        return value
+      }catch(error){if(error instanceof PersonalContactDecryptionError)throw error;throw new PersonalContactDecryptionError('CIPHERTEXT_INVALID')}
     },
     protectPhone(value: string) {
       const phone = value.trim()

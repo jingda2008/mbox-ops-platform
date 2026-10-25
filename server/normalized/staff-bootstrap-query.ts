@@ -1,4 +1,4 @@
-import { orderNeedsCollectionSql } from './order-collection-sql.js'
+import { bulkOrderNeedsCollectionSql, orderCollectionBalancesCtesSql } from './order-collection-balances-sql.js'
 import { createHash } from 'node:crypto'
 import type {
   StaffBootstrapView,
@@ -419,12 +419,24 @@ async function readSummaries(
   employeeId: string,
 ): Promise<SummaryRow> {
   const result = await transaction.query<SummaryRow>(`
-    WITH business_window AS (
+    WITH ${orderCollectionBalancesCtesSql}, business_window AS (
       SELECT
         ($3::date::timestamp + business_day_cutoff) AT TIME ZONE timezone AS starts_at,
         (($3::date + 1)::timestamp + business_day_cutoff) AT TIME ZONE timezone AS ends_at
       FROM mbox.stores
       WHERE tenant_id = $1::uuid AND id = $2::uuid
+    ),
+    workspace_refunds AS MATERIALIZED (
+      SELECT refund.status,refund.requested_by_employee_id,customer_order.business_date
+      FROM mbox.refunds refund
+      JOIN LATERAL (
+        SELECT payment.* FROM mbox.order_payment_facts payment
+        WHERE (payment.tenant_id,payment.store_id,payment.id)=(refund.tenant_id,refund.store_id,refund.payment_id)
+          AND (refund.order_id IS NULL OR refund.order_id=payment.order_id) OFFSET 0
+      ) payment ON true
+      JOIN mbox.orders customer_order ON (customer_order.tenant_id,customer_order.store_id,customer_order.id)=(payment.tenant_id,payment.store_id,payment.order_id)
+      JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(customer_order.tenant_id,customer_order.store_id,customer_order.table_session_id)
+      WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid AND refund.status IN ('requested','approved','processing')
     ),
     kds_work AS (
       SELECT task.status, task.station_code, task.due_at, customer_order.business_date
@@ -490,55 +502,23 @@ async function readSummaries(
       (SELECT count(*) FROM mbox.reservations WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND arrival_at >= business_window.starts_at AND arrival_at < business_window.ends_at
         AND status = 'pending')::text AS reservation_attention,
-      (SELECT count(*) FROM mbox.orders payment_order WHERE payment_order.tenant_id=$1::uuid
+      (SELECT count(*) FROM collection_balances payment_order WHERE payment_order.tenant_id=$1::uuid
         AND payment_order.store_id=$2::uuid AND payment_order.business_date=$3::date
-        AND ${orderNeedsCollectionSql('payment_order')})::text AS pending_payments,
+        AND ${bulkOrderNeedsCollectionSql('payment_order')})::text AS pending_payments,
       '0'::text AS failed_payments,
-      (SELECT count(*) FROM mbox.orders payment_order WHERE payment_order.tenant_id=$1::uuid
+      (SELECT count(*) FROM collection_balances payment_order WHERE payment_order.tenant_id=$1::uuid
         AND payment_order.store_id=$2::uuid AND payment_order.business_date<$3::date
-        AND ${orderNeedsCollectionSql('payment_order')})::text AS carryover_payment_tasks,
+        AND ${bulkOrderNeedsCollectionSql('payment_order')})::text AS carryover_payment_tasks,
       (SELECT count(*) FROM mbox.refunds WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND status = 'requested')::text AS refund_approvals,
-      (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
-        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
-          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
-        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
-          AND customer_order.business_date=$3::date)::text AS current_refund_approval_tasks,
-      (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
-        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
-          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
-        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND refund.status IN ('approved','processing')
-          AND customer_order.business_date=$3::date)::text AS current_refund_execution_tasks,
-      (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
-        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
-          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
-        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND refund.status='requested' AND refund.requested_by_employee_id<>$4::uuid
-          AND customer_order.business_date<$3::date)::text AS carryover_refund_approval_tasks,
-      (SELECT count(*) FROM mbox.refunds AS refund
-        JOIN mbox.order_payment_facts AS payment ON payment.tenant_id=refund.tenant_id
-          AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
-        JOIN mbox.orders AS customer_order ON customer_order.tenant_id=payment.tenant_id
-          AND customer_order.store_id=payment.store_id AND customer_order.id=payment.order_id
-        JOIN mbox.table_sessions AS session ON session.tenant_id=customer_order.tenant_id
-          AND session.store_id=customer_order.store_id AND session.id=customer_order.table_session_id
-        WHERE refund.tenant_id=$1::uuid AND refund.store_id=$2::uuid
-          AND refund.status IN ('approved','processing')
-          AND customer_order.business_date<$3::date)::text AS carryover_refund_execution_tasks,
+      (SELECT count(*) FROM workspace_refunds WHERE status='requested' AND requested_by_employee_id<>$4::uuid
+        AND business_date=$3::date)::text AS current_refund_approval_tasks,
+      (SELECT count(*) FROM workspace_refunds WHERE status IN ('approved','processing')
+        AND business_date=$3::date)::text AS current_refund_execution_tasks,
+      (SELECT count(*) FROM workspace_refunds WHERE status='requested' AND requested_by_employee_id<>$4::uuid
+        AND business_date<$3::date)::text AS carryover_refund_approval_tasks,
+      (SELECT count(*) FROM workspace_refunds WHERE status IN ('approved','processing')
+        AND business_date<$3::date)::text AS carryover_refund_execution_tasks,
       (SELECT count(*) FROM mbox.inventory_balances AS balance
         JOIN mbox.inventory_items AS item ON item.tenant_id = balance.tenant_id
           AND item.store_id = balance.store_id AND item.id = balance.inventory_item_id

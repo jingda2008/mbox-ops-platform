@@ -19,6 +19,8 @@ import {readBusinessDayBlockerFacts} from './business-day-blocker-facts.js'
 import {listTablePaymentOrdersForSession} from './commerce-kds-api.js'
 import {orderNeedsCollectionSql} from './order-collection-sql.js'
 import {operatingDashboardOrderBalancesSql} from './operating-dashboard-order-balances.js'
+import {orderCollectionBalancesCtesSql,bulkOrderFinancialAttentionSql} from './order-collection-balances-sql.js'
+import {operatingHistorySummariesSql} from './operating-history-summary-sql.js'
 import {ItemQuantityFulfillmentRepository} from './item-quantity-fulfillment-repository.js'
 import {normalizedOperationsApiPlugin} from './normalized-operations-api.js'
 import {TableSessionRepository,TableSessionCommandService} from './table-session-repository.js'
@@ -102,6 +104,21 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   // A period without these purchases must still retain every historical debt.
   afterEach(async()=>{
     await runner.run(scope,async tx=>{
+      const scopeValues=[scope.tenantId,scope.storeId]
+      const expectedBalances=await tx.query(`SELECT id,mbox.order_collection_due_amount(tenant_id,store_id,id) AS amount,
+        mbox.order_receivable_amount(tenant_id,store_id,id) AS effective_minor FROM mbox.orders
+        WHERE tenant_id=$1 AND store_id=$2 AND status<>'draft' ORDER BY id`,scopeValues)
+      const actualBalances=await tx.query(`WITH ${orderCollectionBalancesCtesSql}
+        SELECT id,amount,effective_minor FROM collection_balances ORDER BY id`,scopeValues)
+      expect(actualBalances.rows).toEqual(expectedBalances.rows)
+      const signals=await tx.query(`SELECT DISTINCT o.id FROM mbox.orders o
+        JOIN mbox.payment_financial_monitoring_signals signal ON (signal.tenant_id,signal.store_id,signal.subject_id)=(o.tenant_id,o.store_id,o.id)
+        WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.status<>'draft'
+          AND signal.signal IN ('order_overcollected','cancelled_order_captured') ORDER BY o.id`,scopeValues)
+      const boundedSignals=await tx.query(`WITH ${orderCollectionBalancesCtesSql}
+        SELECT o.id FROM collection_balances o WHERE ${bulkOrderFinancialAttentionSql('o')} ORDER BY o.id`,scopeValues)
+      expect(boundedSignals.rows).toEqual(signals.rows)
+      expect((await tx.query(`WITH ${orderCollectionBalancesCtesSql} SELECT * FROM collection_balances`,[randomUUID(),randomUUID()])).rows).toEqual([])
       for(const reportDate of [date,'1900-01-01']){
         const values=[scope.tenantId,scope.storeId,reportDate,reportDate,'CNY']
         const expected=await tx.query(`SELECT o.public_id,'order' source_type,o.business_date::text,
@@ -114,7 +131,19 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
           ORDER BY public_id`,values)
         const actual=await tx.query(operatingDashboardOrderBalancesSql+' ORDER BY public_id',values)
         expect(actual.rows).toEqual(expected.rows)
+        const summaryValues=[scope.tenantId,scope.storeId,reportDate,reportDate]
+        const summary=await tx.query(operatingHistorySummariesSql,summaryValues)
+        const authority=await tx.query(`SELECT mbox.operating_day_summary($1,$2,day::date) AS summary
+          FROM generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day ORDER BY day`,summaryValues)
+        expect(summary.rows).toEqual(authority.rows)
       }
+      const start=new Date(Date.parse(date)-86400000).toISOString().slice(0,10)
+      const end=new Date(Date.parse(date)+86400000).toISOString().slice(0,10)
+      const rangeValues=[scope.tenantId,scope.storeId,start,end]
+      const range=await tx.query(operatingHistorySummariesSql,rangeValues)
+      const expectedRange=await tx.query(`SELECT mbox.operating_day_summary($1,$2,day::date) AS summary
+        FROM generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day ORDER BY day`,rangeValues)
+      expect(range.rows).toEqual(expectedRange.rows)
       const foreign=await tx.query(operatingDashboardOrderBalancesSql,[randomUUID(),randomUUID(),date,date,'CNY'])
       expect(foreign.rows).toEqual([])
     },{isolation:'repeatable-read',readOnly:true})

@@ -1,11 +1,12 @@
 import {describe,it,expect} from 'vitest'
 import {readOperatingHistory} from './operating-history-query.js'
+import {operatingHistorySummariesSql} from './operating-history-summary-sql.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 describe('operating history',()=>{
   it('exports beyond one page from the same read and refuses oversized exports without partial data',async()=>{
     const rows=Array.from({length:52},(_,i)=>({id:String(i),business_date:'2026-09-10',public_id:String(i),table_code:'W01',employee_name:null,submitted_at:'2026-09-10T01:00:00Z',status:'completed',payment_status:'paid',total_amount_minor:'100'}))
     const calls:unknown[][]=[]
-    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values:unknown[])=>{calls.push(values);return{rows:sql.includes('FROM mbox.orders ordering')?rows:[]}}} as unknown as ScopedTransaction
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values:unknown[])=>{calls.push(values);return{rows:sql.includes('FROM collection_balances ordering')?rows:[]}}} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-10',table:'',employee:'',page:2,exportAll:true})
     expect(result.orders).toHaveLength(52)
     expect(result.hasMore).toBe(false)
@@ -28,7 +29,7 @@ describe('operating history',()=>{
   })
   it('applies the same date range to orders and ledger without applying employee filters to receipts',async()=>{
     const calls:unknown[][]=[]
-    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values:unknown[])=>{calls.push(values);return {rows:sql.includes('operating_day_summary')?[
+    const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string,values:unknown[])=>{calls.push(values);return {rows:sql===operatingHistorySummariesSql?[
       {summary:{orderCount:1,orderAmountMinor:'2000',unsettledCount:1,outstandingMinor:'500',pendingPaymentCount:0,pendingRefundCount:1}},
       {summary:{orderCount:2,orderAmountMinor:'3000',unsettledCount:0,outstandingMinor:'0',pendingPaymentCount:0,pendingRefundCount:2}},
     ]:[]}}} as unknown as ScopedTransaction
@@ -40,7 +41,7 @@ describe('operating history',()=>{
   it('never fills missing range money with zero and does not reveal summaries to non-financial roles',async()=>{
     let summaryReads=0
     const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string)=>{
-      if(sql.includes('operating_day_summary')){summaryReads++;return {rows:[{summary:{orderCount:1}}]}}
+      if(sql===operatingHistorySummariesSql){summaryReads++;return {rows:[{summary:{orderCount:1}}]}}
       return {rows:[]}
     }} as unknown as ScopedTransaction
     const filter={businessDate:'2026-09-01',endDate:'2026-09-10',table:'',employee:'',page:0}
@@ -55,7 +56,7 @@ describe('operating history',()=>{
     const tx={scope:{tenantId:'tenant',storeId:'store'},query:async(sql:string)=>{reads.push(sql);return {rows:[]}}} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2020-01-01',endDate:'2030-01-01',table:'',employee:'',page:0,exportAll:true})
     expect(result.summary).toBeUndefined()
-    expect(reads.some(sql=>sql.includes('operating_day_summary'))).toBe(false)
+    expect(reads.includes(operatingHistorySummariesSql)).toBe(false)
     expect(reads.some(sql=>sql.includes('reconciliation_entries'))).toBe(true)
   })
   it('paginates shared facts independently and never reads them without an explicit authorized delivery scope',async()=>{

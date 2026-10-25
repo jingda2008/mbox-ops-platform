@@ -43,3 +43,9 @@ PR完整数据库3565项通过；浏览器主流程153项通过，45项基线跳
 用户最新要求先完成测试，凌晨12点半后再部署，上线后逐项验证陈方宇及其他账号并告知结果。最早部署时间继续为北京时间2026-10-26 00:30；标准上线前及激活前均复查实际营业，仍有中断收款或服务风险则延后。已准备13账号39项正常HTTP、4账号真实生产390px浏览器、16账号权限和配置前后比较；工作台权限、财务可见范围和三处营业日一致性均列入验收。另3个账号缺少可用登录凭据，只读核对不算登录验收，不修改PIN或授权。
 
 证据目录：`/Users/jingda/mbox/outputs/shared-query-performance-20261025`，核心文件pr-ci-verified.json、pr-verified.json、tag-ci-verified.json、tag-release-verified.json、pr-ci-success.log、pr-ci-growth.json、accounts-repair-summary.json、account-acceptance-plan.json、release-plan.json。
+
+## 2026-10-26 00:32 CST 营业状态阻止切换
+
+北京时间00:30:43的只读检查确认现网仍为rc272/SHA5431f370382225f252f88bd4e71020bfccc1da29/schema283且ready，当前仍有15桌开台，最近开台更新时间为2026-10-25 23:51 CST。最近30分钟虽未见新订单或收退款，不能据此认定无人营业；当时也采样到其他短时数据库事务。因此未运行deploy-rc273.sh、未进入标准部署、未改生产。此前503笔旧待支付与3条已关桌待处理投诉均保留，不清理或用作闭店依据。
+
+同一安排顺延到北京时间2026-10-26 01:30再次低频检查，仍有影响营业条件继续延后。修复与发布包检查均已完成，部署和陈方宇等账号上线验收尚未完成。证据：ready-window-open.json、operating-preflight-window-open.json、release-plan.json。

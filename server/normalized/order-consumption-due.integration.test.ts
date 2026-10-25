@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto'
 import {Client,Pool} from 'pg'
 import {dropDisconnectedLocalFixtureDatabase} from '../../scripts/test-support/postgres-fixture-cleanup.js'
 import Fastify from 'fastify'
-import {afterAll,beforeAll,describe,expect,it} from 'vitest'
+import {afterAll,afterEach,beforeAll,describe,expect,it} from 'vitest'
 import {runNormalizedMigrations,loadNormalizedMigrations,unwrapNormalizedMigrationTransaction} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
 import {NormalizedCommandExecutor,appendOutboxMessage} from './command-executor.js'
@@ -18,6 +18,7 @@ import {readTableSessionClosureState} from './table-session-closure-blockers.js'
 import {readBusinessDayBlockerFacts} from './business-day-blocker-facts.js'
 import {listTablePaymentOrdersForSession} from './commerce-kds-api.js'
 import {orderNeedsCollectionSql} from './order-collection-sql.js'
+import {operatingDashboardOrderBalancesSql} from './operating-dashboard-order-balances.js'
 import {ItemQuantityFulfillmentRepository} from './item-quantity-fulfillment-repository.js'
 import {normalizedOperationsApiPlugin} from './normalized-operations-api.js'
 import {TableSessionRepository,TableSessionCommandService} from './table-session-repository.js'
@@ -96,6 +97,28 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
       if(admin)await dropDisconnectedLocalFixtureDatabase(admin,database)
     } finally {await admin?.end()}
   })
+  // Compare the report optimization with the collection authority after each
+  // real refund/repricing/recollection scenario, including allocated receipts.
+  // A period without these purchases must still retain every historical debt.
+  afterEach(async()=>{
+    await runner.run(scope,async tx=>{
+      for(const reportDate of [date,'1900-01-01']){
+        const values=[scope.tenantId,scope.storeId,reportDate,reportDate,'CNY']
+        const expected=await tx.query(`SELECT o.public_id,'order' source_type,o.business_date::text,
+          COALESCE(o.submitted_at,o.created_at)::text occurred_at,
+          mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id)::text amount,
+          o.payment_status IN('paid','partially_refunded','refunded') paid
+          FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.currency=$5 AND o.status<>'draft'
+          AND (o.status<>'cancelled' OR mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id)>0)
+          AND (o.business_date BETWEEN $3::date AND $4::date OR mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id)>0)
+          ORDER BY public_id`,values)
+        const actual=await tx.query(operatingDashboardOrderBalancesSql+' ORDER BY public_id',values)
+        expect(actual.rows).toEqual(expected.rows)
+      }
+      const foreign=await tx.query(operatingDashboardOrderBalancesSql,[randomUUID(),randomUUID(),date,date,'CNY'])
+      expect(foreign.rows).toEqual([])
+    },{isolation:'repeatable-read',readOnly:true})
+  })
   const metadata=(employeeId=cashier)=>({scope,actor:{type:'employee' as const,employeeId},businessDate:date,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
   async function fixture(bundle=false,capturedMinor=4000,existingSession?:string){
     const table=randomUUID(),session=existingSession??randomUUID(),order=randomUUID(),item=randomUUID(),task=randomUUID(),parent=bundle?randomUUID():item
@@ -167,6 +190,15 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     const f=await fixture();await compensate(f,100)
     expect(await summary(f.order)).toMatchObject({receivable:4000,received:4000,refunded:100,net:3900,due:0,state:'paid'})
     expect(await due(f.session)).toEqual([])
+  })
+
+  it('preserves cancelled delivered debt and excludes cancelled undelivered invoices',async()=>{
+    const delivered=await fixture(false,1600),undelivered=await fixture(false,1600)
+    await deliver(delivered,5)
+    await pool.query("UPDATE mbox.orders SET status='cancelled' WHERE id=ANY($1::uuid[])",[[delivered.order,undelivered.order]])
+    const balances=await runner.run(scope,tx=>tx.query(operatingDashboardOrderBalancesSql,[scope.tenantId,scope.storeId,date,date,'CNY']),{readOnly:true})
+    expect(balances.rows.find(row=>row.public_id===delivered.order)?.amount).toBe('2400')
+    expect(balances.rows.some(row=>row.public_id===undelivered.order)).toBe(false)
   })
 
   it('compensation after a quantity refund keeps zero due on the persisted ticket without recollection authorization',async()=>{

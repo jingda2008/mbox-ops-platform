@@ -1,6 +1,6 @@
 import type { ScopedTransaction } from './transaction-runner.js'
 import type { OperatingDashboardProjection, OperatingDashboardSource, OperatingDashboardSourceQuery, OperatingDashboardBreakdown } from '../../src/shared/operating-dashboard.js'
-import { orderCollectionDueSql } from './order-collection-sql.js'
+import { operatingDashboardOrderBalancesSql } from './operating-dashboard-order-balances.js'
 
 export interface DashboardRange { startDate: string; endDate: string; requestedEndDate: string; currentBusinessDate: string }
 interface SourceRow extends Record<string, unknown> {
@@ -105,10 +105,7 @@ export async function readOperatingDashboard(tx: ScopedTransaction, period: stri
     publicId:r.public_id,label:r.label,businessDate:r.business_date,occurredAt:r.occurred_at,amountMinor:nullableMoney(r.amount),
     ...(r.original_amount===null?{}:{originalAmountMinor:money(r.original_amount)}),missingCount:r.missing }))
   const outstanding = await tx.query<{public_id:string;source_type:string;business_date:string;occurred_at:string;amount:string;paid:boolean}>(`
-    SELECT o.public_id,'order' source_type,o.business_date::text,COALESCE(o.submitted_at,o.created_at)::text occurred_at,
-      (${orderCollectionDueSql('o')})::text amount,o.payment_status IN('paid','partially_refunded','refunded') paid
-    FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.currency=$5 AND o.status<>'draft' AND (o.status<>'cancelled' OR ${orderCollectionDueSql('o')}>0)
-      AND (o.business_date BETWEEN $3::date AND $4::date OR ${orderCollectionDueSql('o')}>0)
+    ${operatingDashboardOrderBalancesSql}
     UNION ALL
     SELECT r.public_id,'activity',COALESCE(f.business_date,mbox.activity_purchase_business_date(r.tenant_id,r.store_id,r.registered_at))::text,
       r.registered_at::text,CASE WHEN r.status='payment_pending' AND r.payment_status='pending'

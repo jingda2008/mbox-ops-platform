@@ -15,7 +15,7 @@ export const orderCollectionBalancesCtesSql = `
     SELECT order_id,sum(amount_minor) amount FROM mbox.order_refund_facts
     WHERE tenant_id=$1 AND store_id=$2 AND status='succeeded' GROUP BY order_id
   ), collection_adjustments AS (
-    SELECT order_id,sum(amount_minor) amount FROM mbox.item_receivable_adjustment_facts
+    SELECT order_id,sum(amount_minor) amount,count(*) adjustment_count FROM mbox.item_receivable_adjustment_facts
     WHERE tenant_id=$1 AND store_id=$2 GROUP BY order_id
   ), collection_delivered AS (
     SELECT order_id,sum(total_amount_minor) amount FROM mbox.order_items
@@ -23,6 +23,7 @@ export const orderCollectionBalancesCtesSql = `
   ), collection_balances AS MATERIALIZED (
     SELECT o.*,o.total_amount_minor AS original_minor,COALESCE(p.amount,0)::bigint AS received_minor,
       (o.total_amount_minor-COALESCE(a.amount,0))::bigint AS effective_minor,
+      COALESCE(a.adjustment_count,0)::bigint AS adjustment_count,
       CASE WHEN (CASE WHEN o.status='cancelled' THEN COALESCE(d.amount,0)
         ELSE o.total_amount_minor-COALESCE(a.amount,0) END)
         -COALESCE(p.amount,0)+COALESCE(r.amount,0)>0
@@ -41,10 +42,10 @@ export function bulkOrderNeedsCollectionSql(order: string): string {
   return `(${order}.status NOT IN ('draft','cancelled') AND ${order}.amount>0)`
 }
 
-/** Refunds only reduce net receipts: skip the signal view only below its bound. */
+/** Every adjusted order retains its existing signal authority, including legacy views. */
 export function bulkOrderFinancialAttentionSql(order: string): string {
   if (!/^[a-z_]+$/.test(order)) throw new TypeError('Invalid order SQL alias')
-  return `(CASE WHEN ${order}.received_minor>CASE WHEN ${order}.status='cancelled' THEN 0 ELSE ${order}.effective_minor END
+  return `(CASE WHEN ${order}.adjustment_count>0 OR ${order}.received_minor>CASE WHEN ${order}.status='cancelled' THEN 0 ELSE ${order}.original_minor END
     THEN EXISTS(SELECT 1 FROM mbox.payment_financial_monitoring_signals signal
       WHERE signal.tenant_id=${order}.tenant_id AND signal.store_id=${order}.store_id AND signal.subject_id=${order}.id
         AND signal.signal IN ('order_overcollected','cancelled_order_captured')) ELSE false END)`

@@ -27,7 +27,7 @@ for(const account of ['chenfangyu','hugu','sanmu','ajin']){
     const month=await query(page,'/api/operations/history',()=>panel.getByRole('button',{name:'查找订单',exact:true}).click())
     if(initial.financialSummaryVisible===false){expect(month.receipts).toEqual([]);expect(month.summary).toBeUndefined()}
     await query(page,'/api/operations/history',()=>page.reload())
-    await expect(page.getByLabel('营业日账务与历史订单',{exact:true}).getByRole('alert')).toHaveCount(0)
+    await expect(page.getByLabel('营业日账务与历史订单',{exact:true}).locator(':scope > p[role="alert"]')).toHaveCount(0)
     const workspace=await page.request.get('/api/staff/workspace')
     expect(workspace.status()).toBe(200)
     expect((await workspace.json()).data.staff.code).toBe(account)

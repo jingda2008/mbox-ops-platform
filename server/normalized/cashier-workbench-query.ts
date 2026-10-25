@@ -652,6 +652,10 @@ export class PostgresCashierWorkbenchQuery {
           ORDER BY item.created_at, item.id
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const paymentResult = await transaction.query<PaymentRow>(`
+          WITH selected_cashier_payments AS MATERIALIZED (
+            SELECT * FROM mbox.order_payment_facts
+            WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
+          )
           SELECT payment.id, payment.order_id, payment.public_id, payment.provider,
             payment.method, payment.provider_transaction_id,
             provider_action.state AS provider_action_state,
@@ -665,8 +669,11 @@ export class PostgresCashierWorkbenchQuery {
             CASE WHEN payment.provider_snapshot->'lateSuccessAfterClose'='true'::jsonb THEN ${unreservedOrderExcessSql('payment')} ELSE 0 END::text AS unreserved_excess_minor,
             payment.succeeded_at::text, payment.created_at::text,
             EXISTS(SELECT 1 FROM mbox.order_cancellation_events cancellation WHERE cancellation.tenant_id=payment.tenant_id AND cancellation.store_id=payment.store_id AND cancellation.order_id=payment.order_id AND cancellation.occurred_at<=payment.succeeded_at) AS cancelled_after_attempt
-          FROM mbox.order_payment_facts payment
-          JOIN mbox.payments original ON original.tenant_id=payment.tenant_id AND original.store_id=payment.store_id AND original.id=payment.id
+          FROM selected_cashier_payments payment
+          JOIN LATERAL (
+            SELECT original.* FROM mbox.payments original
+            WHERE original.tenant_id=payment.tenant_id AND original.store_id=payment.store_id AND original.id=payment.id OFFSET 0
+          ) original ON true
           LEFT JOIN mbox.payment_provider_actions provider_action
             ON provider_action.tenant_id = payment.tenant_id
            AND provider_action.store_id = payment.store_id

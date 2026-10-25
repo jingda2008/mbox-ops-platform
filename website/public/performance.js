@@ -31,7 +31,7 @@ if(root){
   if(busy)return;busy=true;const ticket=++sequence,date=shanghaiDate();dateRequested=date;q('schedule-status').textContent=m.loading;q('schedule-refresh').disabled=true;
   try{const data=await fetchDay(date);if(ticket!==sequence)return;state=data;q('schedule-label').textContent=m.verified;q('schedule-status').textContent=data.schedules.length?m.fresh:m.empty;
    q('schedule-checked').textContent=m.checked+' · '+new Intl.DateTimeFormat(locale,{dateStyle:'medium',timeStyle:'short',timeZone:'Asia/Shanghai'}).format(new Date())+' · Shanghai UTC+8';
-  }catch{q('schedule-status').textContent=m.failed;}
+  }catch{if(state.localDate!==date||state.unavailable){state={timezone:'Asia/Shanghai',localDate:date,schedules:[],unavailable:true};q('schedule-label').textContent=m.staleLabel;q('schedule-status').textContent=m.staleNote;q('schedule-checked').textContent='';}else q('schedule-status').textContent=m.failed;}
   overnightFailed=false;
   if(Number(new Intl.DateTimeFormat('en-GB',{hour:'2-digit',hourCycle:'h23',timeZone:'Asia/Shanghai'}).format(new Date()))<6){try{overnight=await fetchDay(previousDate(date))}catch{overnight=null;overnightFailed=true}}else overnight=null;
   render();busy=false;q('schedule-refresh').disabled=false;

@@ -17,7 +17,9 @@ export function renderPerformance(html,snapshot){
  const rows=snapshot.schedules.map((s,i)=>`<article class="performance"><span class="set-number">${e(messages.set.replace('{n}',String(i+1)))}</span><h3>${e(s.performerStageName)}</h3><span class="genre">${e(messages.verified)}</span><time datetime="${e(s.startsAt)}">${e(s.startsAt.slice(11,16))} — ${e(s.endsAt.slice(11,16))}${s.startsAt.slice(0,10)!==s.endsAt.slice(0,10)?' · '+e(messages.nextDay):''}</time></article>`).join('');
  return html.replace(/(<strong id="schedule-date">).*?(<\/strong>)/s,()=>`<strong id="schedule-date">${snapshot.localDate}</strong>`)
  .replace(/<div class="schedule" id="schedule-list">.*?<\/div>/s,()=>`<div class="schedule" id="schedule-list">${rows}</div>`)
- .replace(/<p class="fineprint" id="schedule-checked">.*?<\/p>/s,()=>`<p class="fineprint" id="schedule-checked">${e(messages.checked)} · ${e(snapshot.checkedAt)} (UTC)</p>`)
+ .replace(/(<[^>]+ id="schedule-label"[^>]*>).*?(<\/[^>]+>)/s,(_a,start,end)=>start+e(snapshot.unavailable?messages.staleLabel:messages.verified)+end)
+ .replace(/(<[^>]+ id="schedule-status"[^>]*>).*?(<\/[^>]+>)/s,(_a,start,end)=>start+e(snapshot.unavailable?messages.staleNote:snapshot.schedules.length?messages.fresh:messages.empty)+end)
+ .replace(/<p class="fineprint" id="schedule-checked">.*?<\/p>/s,()=>`<p class="fineprint" id="schedule-checked">${snapshot.checkedAt?e(messages.checked)+' · '+e(snapshot.checkedAt)+' (UTC)':''}</p>`)
  .replace(/(<script id="performance-snapshot" type="application\/json">).*?(<\/script>)/s,()=>`<script id="performance-snapshot" type="application/json">${json(snapshot)}</script>`);
 }
 export function createWebsiteContent(send=fetch){
@@ -35,7 +37,7 @@ export function createWebsiteContent(send=fetch){
   if(enabled){let data=null;try{data=await menu()}catch{}output=renderPage(output,lang,data)}
   if(!u.pathname.includes('/menu/')){
    const date=shanghaiDate();if(performanceDate!==date){performanceDate=date;performance=createReader(ORIGIN+'/api/public/reservation/performances?date='+date,p=>({...normalize(p,date),checkedAt:new Date().toISOString()}),60000,send)}
-   try{output=renderPerformance(output,await performance())}catch{/* The fallback retains its original explicit date; the client will retry. */}
+   try{output=renderPerformance(output,await performance())}catch{output=renderPerformance(output,{timezone:'Asia/Shanghai',localDate:date,schedules:[],unavailable:true,checkedAt:null})}
   }
   return new Response(request.method==='HEAD'?null:output,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
  };

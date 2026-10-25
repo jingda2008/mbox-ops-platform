@@ -165,3 +165,6 @@ from build_archive import render_archive
 render_archive(B, LANGS, C, header, footer)
 from build_news import render_news
 render_news(B)
+
+from build_international import render_international
+render_international(B)

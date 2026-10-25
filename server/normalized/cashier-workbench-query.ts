@@ -1,10 +1,11 @@
+import { bulkOrderNeedsCollectionSql, bulkOrderFinancialAttentionSql, orderCollectionBalancesCtesSql } from './order-collection-balances-sql.js'
 import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import {closedDebtEligibilitySql,localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
 import {historyTableIdSql} from './history-table-filter.js'
 import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
 import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
-import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
+import { orderReceivableSql } from './order-collection-sql.js'
 import type {
   CashierPaymentMethod as PaymentMethod,
   CashierPaymentProvider as PaymentProvider,
@@ -249,7 +250,16 @@ export class PostgresCashierWorkbenchQuery {
     const canUseActivityCashier = input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
-        WITH table_filter AS (SELECT ${historyTableIdSql('$4','$11')} AS id)
+        WITH ${orderCollectionBalancesCtesSql}, cashier_pending_refund_orders AS MATERIALIZED (
+          SELECT DISTINCT carryover_payment.order_id FROM mbox.refunds carryover_refund
+          JOIN LATERAL (
+            SELECT payment.order_id FROM mbox.order_payment_facts payment
+            WHERE (payment.tenant_id,payment.store_id,payment.id)=(carryover_refund.tenant_id,carryover_refund.store_id,carryover_refund.payment_id)
+              AND (carryover_refund.order_id IS NULL OR carryover_refund.order_id=payment.order_id) OFFSET 0
+          ) carryover_payment ON true
+          WHERE carryover_refund.tenant_id=$1 AND carryover_refund.store_id=$2
+            AND carryover_refund.status IN ('requested','approved','processing')
+        ), table_filter AS (SELECT ${historyTableIdSql('$4','$11')} AS id)
         SELECT orders.id, orders.public_id, table_row.code AS table_code,
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
@@ -281,12 +291,12 @@ export class PostgresCashierWorkbenchQuery {
             WHERE (fact.tenant_id,fact.store_id,fact.order_id)=(orders.tenant_id,orders.store_id,orders.id)
               AND session.status='closed' AND ${localUnpresentedPaymentSql()}
           ),'[]'::jsonb) AS closable_unpresented_payments,
-          mbox.order_collection_due_amount(orders.tenant_id,orders.store_id,orders.id) AS persistent_due_minor,
+          orders.amount AS persistent_due_minor,
           orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
           mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) AS collection_due_minor,
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
-        FROM mbox.orders AS orders CROSS JOIN table_filter
+        FROM collection_balances AS orders CROSS JOIN table_filter
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
          AND session.store_id = orders.store_id
@@ -308,9 +318,9 @@ export class PostgresCashierWorkbenchQuery {
             OR (($4::text <> '' OR $9::text IS NOT NULL)
               AND orders.business_date < $3::date)
             OR (orders.business_date < $3::date AND (
-              EXISTS(SELECT 1 FROM mbox.payment_financial_monitoring_signals signal WHERE signal.tenant_id=orders.tenant_id AND signal.store_id=orders.store_id AND signal.subject_id=orders.id AND signal.signal IN ('order_overcollected','cancelled_order_captured')) OR
+              ${bulkOrderFinancialAttentionSql('orders')} OR
               ${cashierCouponRefundReviewCountSql}>0 OR
-              ${orderNeedsCollectionSql('orders')}
+              ${bulkOrderNeedsCollectionSql('orders')}
               -- Keep a just-collected carryover visible long enough for the
               -- cashier to verify it on this or another terminal. Older
               -- terminal history remains in the dedicated history search.
@@ -322,17 +332,7 @@ export class PostgresCashierWorkbenchQuery {
                   AND recent_captured.status IN ('succeeded','partially_refunded','refunded')
                   AND recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
               )
-              OR EXISTS (
-                SELECT 1 FROM mbox.order_payment_facts AS carryover_payment
-                JOIN mbox.refunds AS carryover_refund
-                  ON carryover_refund.tenant_id=carryover_payment.tenant_id
-                 AND carryover_refund.store_id=carryover_payment.store_id
-                 AND carryover_refund.payment_id=carryover_payment.id AND (carryover_refund.order_id IS NULL OR carryover_refund.order_id=carryover_payment.order_id)
-                WHERE carryover_payment.tenant_id=orders.tenant_id
-                  AND carryover_payment.store_id=orders.store_id
-                  AND carryover_payment.order_id=orders.id
-                  AND carryover_refund.status IN ('requested','approved','processing')
-              )
+              OR EXISTS (SELECT 1 FROM cashier_pending_refund_orders pending_refund WHERE pending_refund.order_id=orders.id)
             ))
           )
           AND orders.status <> 'draft'
@@ -407,7 +407,7 @@ export class PostgresCashierWorkbenchQuery {
           AND ($8::uuid IS NULL OR area.id=$8::uuid)
           AND (
             $9::text IS NULL
-            OR ($9='unpaid' AND ${orderNeedsCollectionSql('orders')})
+            OR ($9='unpaid' AND ${bulkOrderNeedsCollectionSql('orders')})
             OR ($9='processing' AND EXISTS (SELECT 1 FROM mbox.order_payment_facts filter_payment
                 WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
                   AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')
@@ -416,7 +416,7 @@ export class PostgresCashierWorkbenchQuery {
               OR (orders.total_amount_minor=0 AND orders.status NOT IN ('draft','cancelled'))))
             OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
           )
-        ORDER BY ${orderNeedsCollectionSql('orders')} DESC,
+        ORDER BY ${bulkOrderNeedsCollectionSql('orders')} DESC,
           EXISTS (
             SELECT 1 FROM mbox.order_payment_facts recent_captured_ordering
             WHERE recent_captured_ordering.tenant_id=orders.tenant_id
@@ -652,6 +652,10 @@ export class PostgresCashierWorkbenchQuery {
           ORDER BY item.created_at, item.id
         `, [input.scope.tenantId, input.scope.storeId, orderIds])
       const paymentResult = await transaction.query<PaymentRow>(`
+          WITH selected_cashier_payments AS MATERIALIZED (
+            SELECT * FROM mbox.order_payment_facts
+            WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=ANY($3::uuid[])
+          )
           SELECT payment.id, payment.order_id, payment.public_id, payment.provider,
             payment.method, payment.provider_transaction_id,
             provider_action.state AS provider_action_state,
@@ -665,8 +669,11 @@ export class PostgresCashierWorkbenchQuery {
             CASE WHEN payment.provider_snapshot->'lateSuccessAfterClose'='true'::jsonb THEN ${unreservedOrderExcessSql('payment')} ELSE 0 END::text AS unreserved_excess_minor,
             payment.succeeded_at::text, payment.created_at::text,
             EXISTS(SELECT 1 FROM mbox.order_cancellation_events cancellation WHERE cancellation.tenant_id=payment.tenant_id AND cancellation.store_id=payment.store_id AND cancellation.order_id=payment.order_id AND cancellation.occurred_at<=payment.succeeded_at) AS cancelled_after_attempt
-          FROM mbox.order_payment_facts payment
-          JOIN mbox.payments original ON original.tenant_id=payment.tenant_id AND original.store_id=payment.store_id AND original.id=payment.id
+          FROM selected_cashier_payments payment
+          JOIN LATERAL (
+            SELECT original.* FROM mbox.payments original
+            WHERE original.tenant_id=payment.tenant_id AND original.store_id=payment.store_id AND original.id=payment.id OFFSET 0
+          ) original ON true
           LEFT JOIN mbox.payment_provider_actions provider_action
             ON provider_action.tenant_id = payment.tenant_id
            AND provider_action.store_id = payment.store_id

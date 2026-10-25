@@ -1,8 +1,10 @@
+import {bulkOrderNeedsCollectionSql,orderCollectionBalancesCtesSql} from './order-collection-balances-sql.js'
+import {operatingHistorySummariesSql} from './operating-history-summary-sql.js'
 import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
 import {historyTableIdSql} from './history-table-filter.js'
 import {legacyStockReturnCapabilitySql,orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
-import {orderNeedsCollectionSql,orderReceivableSql} from './order-collection-sql.js'
+import {orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import type { OperatingHistory,SharedDeliveryHistory } from '../../src/shared/operating-history.js'
 import type { PickupUnit } from '../../src/shared/pickup-workflow.js'
@@ -16,18 +18,19 @@ export interface OperatingHistoryFilter { businessDate: string; endDate?: string
 export async function readOperatingHistory(tx: ScopedTransaction, input: OperatingHistoryFilter): Promise<OperatingHistory> {
   const orders=await tx.query<{id:string;business_date:string;public_id:string;table_code:string;employee_name:string|null;
     submitted_at:string;status:string;payment_status:string;total_amount_minor:string;effective_amount_minor?:string;table_session_id:string;session_public_id:string;area_name:string}>(`
-    WITH table_filters AS (SELECT ${historyTableIdSql('$4','$15')} AS table_id,${historyTableIdSql('$9','$16')} AS search_table_id)
+    WITH ${orderCollectionBalancesCtesSql}, table_filters AS (SELECT ${historyTableIdSql('$4','$15')} AS table_id,${historyTableIdSql('$9','$16')} AS search_table_id)
     SELECT ordering.id,ordering.business_date::text,ordering.public_id,venue.code AS table_code,employee.display_name AS employee_name,
       COALESCE(ordering.submitted_at,ordering.created_at)::text AS submitted_at,
       ordering.status,ordering.payment_status,ordering.total_amount_minor::text,(${orderReceivableSql('ordering')})::text AS effective_amount_minor,ordering.table_session_id,session.public_id AS session_public_id,area.name AS area_name
-    FROM mbox.orders ordering CROSS JOIN table_filters JOIN mbox.table_sessions session
+    FROM collection_balances ordering CROSS JOIN table_filters
+    JOIN mbox.table_sessions session
       ON session.tenant_id=ordering.tenant_id AND session.store_id=ordering.store_id AND session.id=ordering.table_session_id
     JOIN mbox.tables venue ON venue.tenant_id=session.tenant_id AND venue.store_id=session.store_id AND venue.id=session.table_id
     JOIN mbox.areas area ON area.tenant_id=venue.tenant_id AND area.store_id=venue.store_id AND area.id=venue.area_id
     LEFT JOIN mbox.employees employee ON employee.tenant_id=ordering.tenant_id AND employee.store_id=ordering.store_id
       AND employee.id=ordering.created_by_employee_id
     CROSS JOIN LATERAL (SELECT (
-      ${orderNeedsCollectionSql('ordering')}
+      ${bulkOrderNeedsCollectionSql('ordering')}
       OR EXISTS(SELECT 1 FROM mbox.refunds refund JOIN mbox.order_payment_facts payment
         ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
         WHERE payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id AND payment.order_id=ordering.id
@@ -153,11 +156,8 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
   const summary=input.allowFinancialSummary!==false&&financialStartDate<=financialEndDate
     &&Number.isInteger(summaryRangeDays)&&summaryRangeDays>=1&&summaryRangeDays<=366
     ? financialStartDate===financialEndDate
-      ? (await tx.query<{summary:OperatingDaySummary}>('SELECT mbox.operating_day_summary($1,$2,$3::date) AS summary',[tx.scope.tenantId,tx.scope.storeId,financialStartDate])).rows[0]?.summary
-      : combineOperatingSummaries((await tx.query<{summary:OperatingDaySummary}>(`
-          SELECT mbox.operating_day_summary($1,$2,day::date) AS summary
-          FROM generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day
-        `,[tx.scope.tenantId,tx.scope.storeId,financialStartDate,financialEndDate])).rows.map(row=>row.summary))
+      ? (await tx.query<{summary:OperatingDaySummary}>(operatingHistorySummariesSql,[tx.scope.tenantId,tx.scope.storeId,financialStartDate,financialEndDate])).rows[0]?.summary
+      : combineOperatingSummaries((await tx.query<{summary:OperatingDaySummary}>(operatingHistorySummariesSql,[tx.scope.tenantId,tx.scope.storeId,financialStartDate,financialEndDate])).rows.map(row=>row.summary))
     :undefined
   const shared=input.workKind==='delivered'&&input.sharedDeliveryScope?await readSharedDeliveryHistory(tx,input):undefined
   return {businessDate:input.businessDate,endDate:input.endDate??input.businessDate,summary,generatedAt:new Date().toISOString(),page:input.exportAll?0:input.page,hasMore:!input.exportAll&&(orders.rows.length>50||shared?.hasMore===true),

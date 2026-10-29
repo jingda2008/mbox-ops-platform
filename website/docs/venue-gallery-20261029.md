@@ -24,3 +24,11 @@
 ## 证据
 
 本机 `outputs/website-content-20261013/venue-gallery-20261029/`：`baseline.json`、`manifest.json`、`local-verification.json`、`website-tests.txt`、`runtime-tests.txt`、`browser-mobile-checks.json`、`prepare-result.txt`、`activate-result.txt`、`health-result.txt`、`public-verification.json`、`live-seating-desktop.png`。
+
+## 用户文案修订（2026-10-29，v23）
+
+用户要求去掉“AI优化”等说明，作为正式对外宣传。七语首页已移除新照片的制作过程说明和座位图的免责式段落；首屏与外景图改为简洁品牌图注（中文分别为“把下一次相聚，约在歌声里。”“上海的夜，留给相聚。”），首页页脚去掉同类说明。保留预约备注偏好、工作人员联系确认等实用信息，未添加“未经处理实拍”等真实性承诺。上文 v22 为历史发布记录。
+
+v23 只改 data/pages.json 的七个首页值，图片不变；548 个其他现有运行文件保持一致，预约和后台不变。44 网站测试及 11 新容器运行测试通过；七语首页公网逐段匹配新文案，七个预约页与发布前相同。沿用独立公开站发布方式，只将 www 代理 upstream 从 v22 切到 v23（loopback 8814）；旧版保留可回退。员工后台镜像、启动时间、健康状态与 readiness 关键字段保持一致。
+
+证据：`outputs/website-content-20261013/venue-copy-20261029/` 中 manifest.json、baseline.json、tests.txt、prepare-result.txt、activate-result.txt、public-checks.json。

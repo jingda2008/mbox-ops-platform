@@ -168,3 +168,6 @@ render_news(B)
 
 from build_international import render_international
 render_international(B)
+
+from build_venue import render_venue
+render_venue(B)

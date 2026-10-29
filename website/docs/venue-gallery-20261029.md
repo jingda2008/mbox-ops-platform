@@ -32,3 +32,9 @@
 v23 只改 data/pages.json 的七个首页值，图片不变；548 个其他现有运行文件保持一致，预约和后台不变。44 网站测试及 11 新容器运行测试通过；七语首页公网逐段匹配新文案，七个预约页与发布前相同。沿用独立公开站发布方式，只将 www 代理 upstream 从 v22 切到 v23（loopback 8814）；旧版保留可回退。员工后台镜像、启动时间、健康状态与 readiness 关键字段保持一致。
 
 证据：`outputs/website-content-20261013/venue-copy-20261029/` 中 manifest.json、baseline.json、tests.txt、prepare-result.txt、activate-result.txt、public-checks.json。
+
+## 首页主图替换（2026-10-29，v24）
+
+按用户截图定位首页右侧旧主图，七语同步替换为既有 `assets/venue-20261029/stage.webp`，保留宣传图注，改为准确的图片尺寸并取消额外压暗。桌面及390px手机裁切已目视检查，无水平溢出。仅七首页 hero figure 改变，其余页面内容一致；548个其他运行文件不变。新运行容器11项测试通过，七语公网主图与源内容匹配，七语预约页字节不变。独立公开站v24（8815），员工后台镜像/启动时间/健康/readiness关键字段前后相同。
+
+证据：`outputs/website-content-20261013/hero-photo-20261029/` 的 manifest、baseline、prepare-result、activate-result、public-checks 与 live-homepage.png。

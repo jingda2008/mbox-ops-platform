@@ -1,7 +1,7 @@
 """Add an idempotent gallery only to the seven public homepages."""
 from pathlib import Path
 import html, json, re, sys
-from venue_content import VENUE, PROMO_CAPTIONS
+from venue_content import VENUE, PROMO_CAPTIONS, HALL_ALT
 E=html.escape
 ASSETS='/assets/venue-20261029/'
 PHOTOS=['stage.webp','green-gold.webp','booths-bar.webp']
@@ -27,7 +27,11 @@ def enhance_home(source,lang):
   block=caption(match,hero)
   return re.sub(r'<img [^>]*>',lambda _: '<img src="'+ASSETS+'stage.webp" alt="'+E(c['photos'][0],quote=True)+'" width="1448" height="1086" fetchpriority="high" style="filter:none;object-position:50% 50%">',block,count=1)
  source=re.sub(r'<figure class="hero-visual">.*?</figure>',hero_image,source,count=1,flags=re.S)
- source=re.sub(r'<section class="exterior"><figure>.*?</figure>',lambda m:caption(m,exterior),source,count=1,flags=re.S)
+ def evening_image(match):
+  block=caption(match,exterior)
+  block=re.sub(r'<section class="exterior"[^>]*>', '<section class="exterior" id="evening">',block,count=1)
+  return re.sub(r'<img [^>]*>',lambda _: '<img src="'+ASSETS+'hall-bar.webp" width="1448" height="1086" loading="lazy" decoding="async" alt="'+E(HALL_ALT[lang],quote=True)+'">',block,count=1)
+ source=re.sub(r'<section class="exterior"[^>]*><figure>.*?</figure>',evening_image,source,count=1,flags=re.S)
  source=re.sub(r'(<div class="footer-bottom"><span>.*?</span><span>).*?(</span></div>)',lambda m:m[1]+E(footer)+m[2],source,count=1,flags=re.S)
  return source
 

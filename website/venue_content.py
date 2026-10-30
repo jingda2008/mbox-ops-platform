@@ -19,3 +19,13 @@ PROMO_CAPTIONS = {
  'fr': ('Votre prochaine soirée ensemble, en musique.', 'Les nuits de Shanghai se partagent.', 'Musique live · Demandes de réservation en ligne'),
  'de': ('Der nächste gemeinsame Abend beginnt mit Livemusik.', 'Shanghais Nächte gemeinsam erleben.', 'Livemusik · Online-Reservierungsanfragen'),
 }
+
+HALL_ALT = {
+ 'zh':'MBOX 全厅与吧台：深绿座椅、环形卡座与暖金灯光',
+ 'en':'MBOX lounge and bar with deep green seats, curved booths and warm golden light',
+ 'ru':'Зал и бар MBOX: тёмно-зелёные кресла, полукруглые диваны и тёплый золотистый свет',
+ 'ja':'MBOXのフロアとバー：深いグリーンの椅子、曲線を描くソファ席、あたたかな金色の照明',
+ 'ko':'짙은 녹색 좌석, 곡선형 소파석과 따뜻한 금빛 조명의 MBOX 홀과 바',
+ 'fr':'Salle et bar de MBOX : sièges vert profond, banquettes arrondies et lumière dorée',
+ 'de':'Gastraum und Bar von MBOX mit tiefgrünen Sesseln, geschwungenen Sitzgruppen und warmem goldenem Licht',
+}

@@ -1,3 +1,6 @@
+import {TablePrepaymentRepository} from './table-prepayment-repository.js'
+import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
+import {RecommendationFinancialAttributionRepository} from './recommendation-financial-attribution-repository.js'
 import {ItemAfterSalesReplacementRepository} from './item-after-sales-replacement-repository.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import type {
@@ -78,12 +81,12 @@ export interface SubmitOrderCommand extends Omit<CreateSubmittedOrderInput, 'tab
 }
 
 export interface PaymentNextStep {
-  status: 'required' | 'deferred'
-  action: 'create_payment_intent' | 'settle_table_later'
+  status: 'required' | 'deferred' | 'settled'
+  action: 'create_payment_intent' | 'settle_table_later' | 'none'
   orderId: string
   amountMinor: number
   currency: string
-  paymentStatus: 'unpaid'
+  paymentStatus: 'unpaid' | 'paid'
 }
 
 export interface SubmittedCommerceResult {
@@ -153,6 +156,7 @@ export class CommerceCommandService {
       const effectiveLines = selectedUpgrade?.upgradedItems ?? input.lines
       const orderInput: CreateSubmittedOrderInput = {
         tableSessionId: context.tableSessionId,
+        prepaymentSettlement:input.prepaymentSettlement,
         publicId: input.publicId,
         channel: input.channel,
         settlementMode: input.settlementMode ?? 'table_tab',
@@ -175,6 +179,9 @@ export class CommerceCommandService {
       if(input.replacementCaseId)await new ItemAfterSalesReplacementRepository(transaction).link({caseId:input.replacementCaseId,orderId:order.id,employeeId:input.createdByEmployeeId!,previousOrderId:input.replacementPreviousOrderId})
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
 
+      if(order.prepaymentRequired&&input.channel!=='guest_qr'&&order.paymentStatus!=='paid'&&pricingAuthorization?.kind!=='gift'){
+        await new TablePrepaymentRepository(transaction).allocate(context.tableSessionId,order.id);order.paymentStatus='paid'
+      }
       const inventoryEnforcementMode = this.options.inventoryEnforcementMode ?? 'strict'
       const fulfillmentPlan = buildFulfillmentPlan(order.items, schedulingOverride)
       const inventoryReservations = await new PaymentFulfillmentRepository(transaction).prepareSubmittedOrder(
@@ -232,6 +239,14 @@ export class CommerceCommandService {
         context.tableSessionId,
         order,
       )
+      if(order.prepaymentRequired&&order.paymentStatus==='paid'){
+        const source=(await transaction.query<{payment_id:string}>(`SELECT payment_id FROM mbox.table_prepayment_allocations WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 ORDER BY payment_id LIMIT 1`,[input.scope.tenantId,input.scope.storeId,order.id])).rows[0]
+        if(source){
+          await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({paymentId:source.payment_id,orderId:order.id,actorRef:`payment:${source.payment_id}`})
+          await new LoyaltyAccrualRepository(transaction).recordPaidOrder({paymentId:source.payment_id,orderId:order.id,occurredAt:new Date().toISOString()})
+        }
+      }
+      delete order.prepaymentRequired
       const result: SubmittedCommerceResult = {
         order,
         kdsTasks,
@@ -447,14 +462,14 @@ function timestampText(value: unknown): string | null {
 
 function paymentNextStep(order: SubmittedOrder): PaymentNextStep {
   return {
-    status: order.settlementMode === 'immediate_payment' ? 'required' : 'deferred',
-    action: order.settlementMode === 'immediate_payment'
+    status: order.paymentStatus==='paid'?'settled':order.settlementMode === 'immediate_payment' ? 'required' : 'deferred',
+    action: order.paymentStatus==='paid'?'none':order.settlementMode === 'immediate_payment'
       ? 'create_payment_intent'
       : 'settle_table_later',
     orderId: order.id,
     amountMinor: order.totalAmountMinor,
     currency: order.currency,
-    paymentStatus: 'unpaid',
+    paymentStatus: order.paymentStatus==='paid'?'paid':'unpaid',
   }
 }
 
@@ -832,9 +847,9 @@ function isSubmittedOrder(value: unknown): value is SubmittedOrder {
 function isPaymentNextStep(value: unknown): value is PaymentNextStep {
   if (!jsonObjectOrNull(value)) return false
   const next = value as Partial<PaymentNextStep>
-  return (next.status === 'required' || next.status === 'deferred')
-    && (next.action === 'create_payment_intent' || next.action === 'settle_table_later')
-    && next.paymentStatus === 'unpaid'
+  return (next.status === 'required' || next.status === 'deferred'||next.status==='settled')
+    && (next.action === 'create_payment_intent' || next.action === 'settle_table_later'||next.action==='none')
+    && (next.paymentStatus === 'unpaid'||next.paymentStatus==='paid')
     && typeof next.orderId === 'string'
     && typeof next.amountMinor === 'number'
     && typeof next.currency === 'string'

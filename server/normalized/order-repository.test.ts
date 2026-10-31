@@ -40,6 +40,21 @@ class ScriptedTransaction implements ScopedTransaction {
 }
 
 describe('OrderRepository', () => {
+  it.each(['guest_qr','staff_assisted','cashier'] as const)('rejects insufficient %s orders before any order or reservation is created',async channel=>{
+    const tx=new ScriptedTransaction([{rows:[{id:sessionId,minimum_spend_minor:'8801'}]},
+      {rows:[priceRow()]},{rows:[{consumed_minor:'0'}]}])
+    await expect(new OrderRepository(tx).createSubmitted({tableSessionId:sessionId,publicId:'minimum-test',channel,lines:[{productId,quantity:1}]}))
+      .rejects.toMatchObject({name:'TableMinimumSpendNotMetError',details:{shortfallMinor:1}})
+    expect(tx.calls.some(call=>call.sql.includes('INSERT INTO mbox.orders'))).toBe(false)
+  })
+  it('accepts a small additional order once prior table consumption meets the threshold',async()=>{
+    const tx=new ScriptedTransaction([{rows:[{id:sessionId,minimum_spend_minor:'50000'}]},
+      {rows:[priceRow()]},{rows:[{consumed_minor:'50000'}]},
+      {rows:[orderRow()]},{rows:[itemRow()]}])
+    await new OrderRepository(tx).createSubmitted({tableSessionId:sessionId,publicId:'minimum-addition',channel:'guest_qr',lines:[{productId,quantity:1}]})
+    expect(tx.calls.some(call=>call.sql.includes('INSERT INTO mbox.orders'))).toBe(true)
+  })
+
   it('writes a bound discount to the selected second portion, leaving first price and both costs intact',async()=>{
     const lines=[{productId,quantity:1,note:'第一杯原价'},{productId,quantity:1,note:'第二杯9.9元'}]
     const tx=new ScriptedTransaction([{rows:[{id:sessionId}]},{rows:[priceRow(),{...priceRow(),request_index:1}]},
@@ -103,7 +118,7 @@ describe('OrderRepository', () => {
 
     expect(order).toMatchObject({ subtotalAmountMinor: 17600, discountAmountMinor: 0, totalAmountMinor: 17600 })
     expect(order).toMatchObject({ settlementMode: 'table_tab', paymentStatus: 'unpaid' })
-    expect(tx.calls[0]?.sql).toContain("id = $3::uuid AND status = 'open' FOR KEY SHARE")
+    expect(tx.calls[0]?.sql).toContain("id = $3::uuid AND status = 'open' FOR UPDATE")
     expect(tx.calls[1]?.sql).toContain('JOIN LATERAL')
     expect(tx.calls[1]?.sql).toContain("product.status = 'active'")
     expect(tx.calls[1]?.sql).toContain("candidate.price_type = 'standard'")

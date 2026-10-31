@@ -1,4 +1,5 @@
 export type BusinessDayBlockerCode =
+  | 'TABLE_PREPAYMENT_UNSETTLED'
   | 'ORDER_UNSETTLED'
   | 'ORDER_ITEM_UNRESOLVED'
   | 'KDS_ACTIVE'

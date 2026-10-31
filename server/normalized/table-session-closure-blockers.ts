@@ -2,6 +2,7 @@ import {orderCollectionDueSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export type TableSessionClosureBlockerCode =
+  | 'TABLE_PREPAYMENT_UNSETTLED'
   | 'ORDER_UNSETTLED'
   | 'ORDER_ITEM_UNRESOLVED'
   | 'KDS_ACTIVE'
@@ -17,6 +18,7 @@ export type TableSessionClosureBlockerCode =
   | 'CHECKOUT_OFFER_ACTIVE'
 
 export type TableSessionClosureBlockerKey =
+  | 'prepayment_unsettled'
   | 'order_unsettled'
   | 'order_item_unresolved'
   | 'kds_active'
@@ -46,6 +48,7 @@ export interface TableSessionClosureState {
 }
 
 interface ClosureCountRow extends Record<string, unknown> {
+  prepayment_unsettled?:string
   order_unsettled: string
   order_item_unresolved: string
   kds_active: string
@@ -64,6 +67,7 @@ interface ClosureCountRow extends Record<string, unknown> {
 }
 
 export const tableSessionClosureBlockerDefinitions = [
+  ['TABLE_PREPAYMENT_UNSETTLED','prepayment_unsettled','预收款结算待处理','请核对整桌商品达标或减免，并完成待确认付款及原路退款；差额收费未启用'],
   ['ORDER_UNSETTLED', 'order_unsettled', '未结订单', '请先完成付款、退款、订单完成或取消流程'],
   ['ORDER_ITEM_UNRESOLVED', 'order_item_unresolved', '未完成出品', '请先完成或取消相关订单行'],
   ['KDS_ACTIVE', 'kds_active', '进行中的出品任务', '请先完成或取消相关出品任务'],
@@ -184,7 +188,8 @@ export async function readTableSessionClosureState(
       (SELECT count(*) FILTER (WHERE outstanding_amount_minor>0)::text FROM payable_orders)
         AS outstanding_order_count,
       (SELECT COALESCE(sum(outstanding_amount_minor) FILTER (WHERE outstanding_amount_minor>0),0)::text
-        FROM payable_orders) AS outstanding_amount_minor
+        FROM payable_orders) AS outstanding_amount_minor,
+      mbox.table_prepayment_unsettled($1,$2,$3)::integer::text AS prepayment_unsettled
   `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
   const row = result.rows[0]
   if (!row) return { blockers: [], outstandingOrderCount: 0, outstandingAmountMinor: 0 }

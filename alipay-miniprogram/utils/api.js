@@ -833,12 +833,21 @@ async function prepareSharedCartUpgrade(input, idempotencyKey) {
 async function decideSharedCartUpgrade(id, action, variantId) {
   return (await request('/api/guest/shared-cart/upgrade-opportunity/' + encodeURIComponent(id), { method: 'POST', data: { action, ...(variantId ? { variantId } : {}) } })).data
 }
+async function revokeTablePrepayment(paymentId) {
+  return request('/api/guest/table-prepayment/revoke', { method: 'POST', headers: { 'idempotency-key': 'prepay-revoke-' + paymentId }, data: { paymentId } })
+}
+async function prepayTable(amountMinor, idempotencyKey) {
+  return (await request('/api/guest/table-prepayment', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { amountMinor, sharedTableConsent: 'v1' } })).data
+}
+async function queryPrepayment(paymentId) {
+  return request('/api/payments/' + encodeURIComponent(paymentId) + '/provider-query', { method: 'POST', headers: { 'idempotency-key': randomId('prepay-query') }, data: {} })
+}
 async function checkoutSharedCart(input, idempotencyKey) {
   const attribution = checkoutRecommendationAttribution(
     input.checkoutUpgradeOfferPublicId,
     input.recommendationAttribution,
   )
-  return request(input.pointsOnly ? '/api/guest/shared-cart/points-settlement' : '/api/guest/shared-cart/checkout', {
+  return request(input.prepayment ? '/api/guest/shared-cart/prepayment-settlement' : input.pointsOnly ? '/api/guest/shared-cart/points-settlement' : '/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
       note: input.note || null,
@@ -982,7 +991,7 @@ export {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
+  revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,

@@ -34,7 +34,7 @@ describe('durable guest checkout recovery', () => {
     expect(new GuestCheckoutRecovery(saved, 'table', 'another-device').pending()).toBeNull()
   })
 
-  it.each(['GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED', 'SHARED_CART_VERSION_CONFLICT', 'CART_NOTE_STALE'])('permits corrected input only after definitive rejection: %s', async code => {
+  it.each(['GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED', 'SHARED_CART_VERSION_CONFLICT', 'CART_NOTE_STALE', 'TABLE_MINIMUM_SPEND_NOT_MET'])('permits corrected input only after definitive rejection: %s', async code => {
     const recovery = new GuestCheckoutRecovery(storage(), 'table', 'device')
     let firstKey = ''
     await expect(recovery.execute(input, async intent => { firstKey = intent.key; throw new GuestApiError('rejected', 'http', 409, code) })).rejects.toThrow()

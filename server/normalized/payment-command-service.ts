@@ -319,6 +319,8 @@ export class PaymentCommandService {
       if(input.expectedAmountMinor!==undefined && payment.amountMinor!==input.expectedAmountMinor) throw new TypeError('原付款整笔金额已变化，请重新核对')
       if(payment.payableKind==='activity_registration') {
         await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'community.activity.cashier'})
+      } else if(payment.payableKind==='table_prepayment'){
+        await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.collect.all_tables'})
       } else {
         const targets=payment.orderId ? [{id:payment.orderId}] : (await transaction.query<{id:string}>(`
           SELECT order_id AS id FROM mbox.order_payment_allocations WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 ORDER BY order_id`,

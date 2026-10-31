@@ -4,7 +4,7 @@ export type TerminalOnlinePaymentStatus = 'succeeded' | 'partially_refunded' | '
 export interface OnlinePaymentAction {
   paymentId: string
   paymentPublicId: string
-  payableKind?: 'order' | 'activity_registration' | 'order_batch'
+  payableKind?: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'
   orderPublicId: string | null
   activityRegistrationPublicId?: string | null
   status: 'pending' | 'unknown' | 'failed' | 'resolved'

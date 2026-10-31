@@ -6,7 +6,7 @@ const {
   recommendExperience,
   getRecommendationConfiguration,
   recordRecommendationEvent,
-  checkoutSharedCart,
+  checkoutSharedCart, prepayTable, queryPrepayment, revokeTablePrepayment,
   quoteSharedCartCoupons, getCheckoutPoints, quoteSharedCartPoints,
   prepareSharedCartUpgrade,
   decideSharedCartUpgrade,
@@ -63,7 +63,7 @@ const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
   'TABLE_SESSION_ENDED',
   'STORE_ACCESS_FORBIDDEN',
   'GUEST_CAPABILITY_DENIED',
-  'PRODUCT_UNAVAILABLE',
+  'PRODUCT_UNAVAILABLE', 'TABLE_MINIMUM_SPEND_NOT_MET','TABLE_PREPAYMENT_REQUIRED','TABLE_PREPAYMENT_INSUFFICIENT','TABLE_PREPAYMENT_NOT_ENABLED','TABLE_PREPAYMENT_SESSION_CLOSED',
   'SHARED_CART_EMPTY',
   'SHARED_CART_OPERATION_CONFLICT',
   'SHARED_CART_LIMIT_EXCEEDED',
@@ -686,7 +686,9 @@ Page({
 
   beginTableRequest(session) {
     this.finishQuantityReview(false)
-    return this.ensureTableRequestGuard().begin(tableRequestScope(session || getTableSession()))
+    const scope = tableRequestScope(session || getTableSession())
+    if (this.prepaymentConsentScope !== scope) { this.prepaymentConsentScope = scope; this.setData({ prepaymentConsent: false, prepaymentAmount: '', prepaymentBusy: false }) }
+    return this.ensureTableRequestGuard().begin(scope)
   },
   rebaseTableRequest(request) {
     const rebased = this.ensureTableRequestGuard().rebase(request, tableRequestScope(getTableSession()))
@@ -1851,6 +1853,9 @@ Page({
     const attribution = this.data.recommendationAttribution
     this.setData({
       cart,
+      prepayment: sharedCart && sharedCart.prepayment || null,
+      prepaymentAmount: this.data.prepaymentAmount || (sharedCart && sharedCart.prepayment && sharedCart.prepayment.initialFundingRequiredMinor > 0 ? (sharedCart.prepayment.initialFundingRequiredMinor / 100).toFixed(2) : ''),
+      minimumSpendMessage: sharedCart && sharedCart.prepayment ? sharedCart.prepayment.message : sharedCart && sharedCart.minimumSpend ? sharedCart.minimumSpend.message : '',
       cartTotal: money(total),
       cartTotalCompact: compactMoney(total),
       cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
@@ -2149,6 +2154,7 @@ Page({
       expectedGeneration: this.data.cartGeneration,
       expectedVersion: this.data.cartVersion,
       offerPublicId: offerPublicId || null,
+      prepayment: !!this.data.prepayment,
       ...(this.data.couponQuote && this.data.couponQuote.pointsUsed > 0 && this.data.couponQuote.payableMinor === 0 ? { pointsOnly: true } : {}),
       couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
       recommendationPublicId: attribution ? attribution.recommendationPublicId : null,
@@ -2306,6 +2312,7 @@ Page({
           expectedVersion: attempt.expectedVersion,
           ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
           checkoutUpgradeOfferPublicId: attempt.offerPublicId,
+          prepayment: attempt.prepayment === true,
           ...(attempt.pointsOnly ? { pointsOnly: true } : {}),
           ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
           recommendationAttribution: attemptAttribution,
@@ -2314,12 +2321,12 @@ Page({
         submitMeasured = true
         if (!this.isCurrentTableRequest(tableRequest)) return
         const data = result.data || result
-        if (data.pointsSettlement === true && data.payment === null && data.settlement && data.settlement.payableAmountMinor === 0) {
+        if ((data.prepaymentSettlement === true && data.payment === null) || (data.pointsSettlement === true && data.payment === null && data.settlement && data.settlement.payableAmountMinor === 0)) {
           runtime.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
           runtime.removeStorageSync(PENDING_PAYMENT_KEY)
           this.updateCart([], data.sharedCart || null)
           this.invalidateCheckoutCoupons(false, false)
-          this.setData({ pendingPayment: null, checkoutLocked: false, success: '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: '积分结账成功', copy: '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
           return
         }
         const pendingPayment = {
@@ -2423,6 +2430,52 @@ Page({
       idempotencyKey: randomId('guest-order'), confirmedDuplicateOrderId: conflictingOrderId,
     })
     await this.submitOrder(attempt.offerPublicId || null, true, confirmedAttempt, reviewedRequest)
+  },
+
+  async onRevokePrepayment(event) {
+    if (this.data.prepaymentBusy) return
+    const guard = this.currentTableRequest()
+    this.setData({ prepaymentBusy: true })
+    try { await revokeTablePrepayment(event.currentTarget.dataset.id); if (this.isCurrentTableRequest(guard)) { await this.refreshSharedCart(); this.setData({ success: '已停止这笔预收款的未来共享；已确认订单保持原记录，退款请联系员工办理' }) } }
+    catch (error) { if (this.isCurrentTableRequest(guard)) this.setData({ error: customerErrorMessage(error, '撤销结果待核对，请重试') }) }
+    finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }
+  },
+  onPrepaymentAmount(event) { this.setData({ prepaymentAmount: event.detail.value }) },
+  onPrepaymentConsent(event) { this.setData({ prepaymentConsent: (event.detail.value || []).includes('shared') }) },
+  async onPrepayTable() {
+    if (this.data.prepaymentBusy || !this.data.prepayment) return
+    const guard = this.currentTableRequest()
+    if (!guard) return
+    if (!this.data.prepaymentConsent) { this.setData({ error: '请先确认本桌共享预收款规则' }); return }
+    const storageKey = 'mbox.table-prepayment.v1:' + tableSessionCacheScope()
+    let attempt = runtime.getStorageSync(storageKey)
+    if (!attempt || !attempt.key) {
+      const pending = this.data.prepayment.myPendingReceipts && this.data.prepayment.myPendingReceipts[0]
+      const text = pending ? (pending.amountMinor / 100).toFixed(2) : String(this.data.prepaymentAmount || '')
+      const amount = Math.round(Number(text) * 100)
+      if (!/^\d+(\.\d{1,2})?$/.test(text) || !Number.isSafeInteger(amount) || amount <= 0) { this.setData({ error: '请输入有效的预收款金额，最多两位小数' }); return }
+      attempt = { key: randomId('table-prepay'), amount }
+      runtime.setStorageSync(storageKey, attempt)
+    }
+    this.setData({ prepaymentBusy: true, error: '', success: '' })
+    try {
+      const action = await prepayTable(attempt.amount, attempt.key)
+      if (!this.isCurrentTableRequest(guard)) return
+      if (action.status === 'resolved') {
+        runtime.removeStorageSync(storageKey)
+        this.setData({ success: ['succeeded','partially_refunded','refunded'].includes(action.terminalPaymentStatus) ? '原预付款已确认，请查看最新余额' : '原付款已结束，本次未新增收款，请重新填写金额' })
+      } else if (isPresentableAlipayTradeAction(action)) {
+        await new Promise((resolve, reject) => runtime.requestPayment({ tradeNO: action.payload.tradeNO, success: resolve, fail: reject }))
+        try { await queryPrepayment(action.paymentId) } catch (_) { /* Callback and original payment query remain authoritative. */ }
+        if (this.isCurrentTableRequest(guard)) this.setData({ success: '已提交付款，请查看最新余额；未确认时继续核对原付款，请勿重复付款' })
+      } else {
+        if (action.status === 'failed') runtime.removeStorageSync(storageKey)
+        this.setData({ error: '预付款尚未确认，请核对原付款或联系员工处理' })
+      }
+      if (this.isCurrentTableRequest(guard)) await this.refreshSharedCart()
+    } catch (error) {
+      if (this.isCurrentTableRequest(guard)) this.setData({ error: isAlipayCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })
+    } finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }
   },
 
   async handlePaymentAction(action, request) {

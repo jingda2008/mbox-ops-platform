@@ -124,7 +124,7 @@ interface RefundRow extends RefundStoredRow {
 
 interface PaymentForRefundRow extends Record<string, unknown> {
   id: string
-  order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'
+  prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'
   order_id: string | null
   activity_registration_id: string | null
   provider: PaymentProvider
@@ -211,7 +211,7 @@ export class RefundRepository {
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
       throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
     }
-    if (payment.order_id === null && payment.payable_kind!=='order_batch') {
+    if (payment.order_id === null && payment.payable_kind!=='order_batch'&&payment.payable_kind!=='table_prepayment') {
       throw new RefundLimitError('Activity payments require the full activity refund workflow')
     }
 
@@ -220,11 +220,11 @@ export class RefundRepository {
     const retryOf=input.quantityRetryOf??null
     if(retryOf!==null)await this.validateQuantityRetry(input,payment,allocations,amountMinor)
     let orderId=payment.order_id
-    if(payment.payable_kind==='order_batch'){
+    if(payment.payable_kind==='order_batch'||payment.payable_kind==='table_prepayment'){
       const targets=(await this.transaction.query<{order_id:string}>(`SELECT DISTINCT order_id FROM mbox.order_items WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,allocations.map(item=>item.orderItemId)])).rows
       if(targets.length!==1)throw new RefundLimitError('每次退款请选择同一原订单的商品，不同原订单分别退款')
       orderId=targets[0]!.order_id
-      const capacity=(await this.transaction.query<{amount_minor:string;reserved:string}>(`SELECT a.amount_minor::text,COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r WHERE r.tenant_id=a.tenant_id AND r.store_id=a.store_id AND r.payment_id=$4 AND r.order_id=a.order_id AND (r.status=ANY($5::text[]) OR ${approvedFailedRefundReservesSql('r')}) AND r.id IS DISTINCT FROM $7::uuid),0)::text AS reserved FROM mbox.order_payment_allocations a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=$3 AND a.order_id=$6`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.order_batch_id,payment.id,RESERVING_REFUND_STATUSES,orderId,retryOf])).rows[0]
+      const capacity=(await this.transaction.query<{amount_minor:string;reserved:string}>(`SELECT a.amount_minor::text,COALESCE((SELECT sum(r.amount_minor) FROM mbox.refunds r WHERE r.tenant_id=a.tenant_id AND r.store_id=a.store_id AND r.payment_id=$4 AND r.order_id=a.order_id AND (r.status=ANY($5::text[]) OR ${approvedFailedRefundReservesSql('r')}) AND r.id IS DISTINCT FROM $7::uuid),0)::text AS reserved FROM ${payment.payable_kind==='table_prepayment'?'mbox.table_prepayment_allocations':'mbox.order_payment_allocations'} a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.${payment.payable_kind==='table_prepayment'?'payment_id':'batch_id'}=$3 AND a.order_id=$6`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.payable_kind==='table_prepayment'?payment.id:payment.order_batch_id,payment.id,RESERVING_REFUND_STATUSES,orderId,retryOf])).rows[0]
       if(!capacity||amountMinor+Number(capacity.reserved)>Number(capacity.amount_minor))throw new RefundLimitError('退款超过该原订单在本次合并付款中的可退分摊金额')
     }
     if(orderId===null)throw new RefundLimitError('退款缺少原订单归属')
@@ -599,9 +599,9 @@ export class RefundRepository {
 
   private async lockPayment(paymentId: string): Promise<PaymentForRefundRow> {
     const reference = await this.transaction.query<{
-      order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
+      prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT payable_kind, order_batch_id, order_id, activity_registration_id
+      SELECT payable_kind, (to_jsonb(payments)->>'prepaid_table_session_id') AS prepaid_table_session_id, order_batch_id, order_id, activity_registration_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -611,7 +611,7 @@ export class RefundRepository {
     if (target === undefined) throw new RefundNotFoundError(paymentId)
     await this.lockPaymentTarget(target)
     const result = await this.transaction.query<PaymentForRefundRow>(`
-      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id,
+      SELECT id, payable_kind, (to_jsonb(payments)->>'prepaid_table_session_id') AS prepaid_table_session_id, order_batch_id, order_id, activity_registration_id,
         provider, provider_transaction_id, amount_minor, currency, status,provider_snapshot
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
@@ -663,9 +663,9 @@ export class RefundRepository {
 
   private async lockRefund(refundId: string): Promise<RefundRow> {
     const reference = await this.transaction.query<{
-      payment_id:string; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
+      payment_id:string; prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT p.id AS payment_id, p.payable_kind, p.order_batch_id, p.order_id, p.activity_registration_id
+      SELECT p.id AS payment_id, p.payable_kind, (to_jsonb(p)->>'prepaid_table_session_id') AS prepaid_table_session_id, p.order_batch_id, p.order_id, p.activity_registration_id
       FROM mbox.refunds AS r
       JOIN mbox.payments AS p
         ON p.tenant_id = r.tenant_id
@@ -745,8 +745,13 @@ export class RefundRepository {
   }
 
   private async lockPaymentTarget(target: Readonly<{
-    order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch'; order_id: string | null; activity_registration_id: string | null
+    prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
+    if(target.payable_kind==='table_prepayment'&&target.prepaid_table_session_id){
+      const locked=await this.transaction.query('SELECT id FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[this.transaction.scope.tenantId,this.transaction.scope.storeId,target.prepaid_table_session_id])
+      if(locked.rowCount!==1)throw new RefundNotFoundError('prepayment session missing')
+      return
+    }
     if(target.payable_kind==='order_batch'&&target.order_batch_id){
       const session=await this.transaction.query<{id:string}>(`SELECT session.id FROM mbox.order_payment_batches batch
         JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(batch.tenant_id,batch.store_id,batch.table_session_id)

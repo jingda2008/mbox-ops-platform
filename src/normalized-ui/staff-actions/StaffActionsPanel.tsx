@@ -1,3 +1,4 @@
+import {TablePrepaymentPanel,TablePrepaymentDirectory} from './TablePrepaymentPanel'
 import { PrimaryServiceSelect, TableServicePanel } from './TableServicePanel'
 import {ReservationCancel} from './ReservationCancel'
 import {ReservationContact} from './ReservationContact'
@@ -168,6 +169,8 @@ export function StaffActionsPanel({
   const [tableActionDialogOpen, setTableActionDialogOpen] = useState(false)
   const [focusedActionId,setFocusedActionId]=useState<string|null>(initialFactId)
   const [guestCount, setGuestCount] = useState('')
+  const [minimumSpendMode,setMinimumSpendMode]=useState<'order_gate'|'prepaid'>('order_gate')
+  const [minimumSpendYuan,setMinimumSpendYuan]=useState('')
   const [primaryServiceEmployeeId, setPrimaryServiceEmployeeId] = useState('')
   const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
   const [capacityReason, setCapacityReason] = useState('')
@@ -398,6 +401,7 @@ export function StaffActionsPanel({
     secondaryTableSessionIdRef.current = null
     setTableActionDialogOpen(false)
     setGuestCount('')
+    setMinimumSpendYuan('');setMinimumSpendMode('order_gate')
     setPrimaryServiceEmployeeId('')
     setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
@@ -595,6 +599,7 @@ export function StaffActionsPanel({
     setSelectedTableId(table.id)
     setTableActionDialogOpen(openDialog)
     setGuestCount('')
+    setMinimumSpendYuan('');setMinimumSpendMode('order_gate')
     setPrimaryServiceEmployeeId('')
     setOpenTableRecommendationScene('unsure')
     setCapacityReason('')
@@ -614,6 +619,9 @@ export function StaffActionsPanel({
   const openTable = async () => {
     if (operations === null || selectedTable === null) return
     if (!hasPermission(permissions, 'table.open')) return revealPermissionGuidance('table.open')
+    const minimumText=minimumSpendYuan.trim()||'0'
+    const minimumSpendMinor=Math.round(Number(minimumText)*100)
+    if(!/^\d+(\.\d{1,2})?$/.test(minimumText)||!Number.isSafeInteger(minimumSpendMinor)) return showNotice({kind:'error',message:'最低消费请填写非负金额，最多两位小数'})
     const validated = validateOpenTableInput(selectedTable, guestCount, capacityReason)
     if ('error' in validated) return showNotice({ kind: 'error', message: validated.error })
     if (!primaryServiceEmployeeId) return showNotice({ kind:'error',message:'请选择本次主服务员' })
@@ -638,6 +646,7 @@ export function StaffActionsPanel({
     try {
       await api.openTable({
         tableId: selectedTable.id,
+        minimumSpendMinor,minimumSpendMode,
         primaryServiceEmployeeId,
         ...validated,
         guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
@@ -1103,6 +1112,8 @@ export function StaffActionsPanel({
 
   return (
     <section className="staff-actions-panel" aria-label="现场高频操作">
+      {(permissions.includes('reconciliation.view')||(permissions.includes('refund.request')&&permissions.includes('table.view_all')))&&<TablePrepaymentDirectory staffSessionId={staffSessionId} permissions={permissions}/>}
+
       {redeliveryItemId&&operations&&<ItemAfterSalesPanel itemId={redeliveryItemId} employeeId={operations.actor.id} onClose={()=>setRedeliveryItemId(null)} onChanged={()=>void load(true)}/>}
       <header className="staff-actions-header">
         <div>
@@ -1212,6 +1223,10 @@ export function StaffActionsPanel({
               allTables={operations.tables}
               permissions={permissions}
               guestCount={guestCount}
+              minimumSpendMode={minimumSpendMode}
+              onMinimumSpendMode={setMinimumSpendMode}
+              minimumSpendYuan={minimumSpendYuan}
+              onMinimumSpendYuan={setMinimumSpendYuan}
               openTableRecommendationScene={openTableRecommendationScene}
               capacityReason={capacityReason}
               transferTargetId={transferTargetId}
@@ -1794,6 +1809,10 @@ interface TableActionSheetProps {
   allTables: StaffActionTable[]
   permissions: readonly string[]
   guestCount: string
+  minimumSpendMode:'order_gate'|'prepaid'
+  onMinimumSpendMode(value:'order_gate'|'prepaid'):void
+  minimumSpendYuan: string
+  onMinimumSpendYuan(value:string):void
   openTableRecommendationScene: OpenTableRecommendationScene
   capacityReason: string
   transferTargetId: string | null
@@ -1891,9 +1910,13 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
+      {table.activeSession&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession === null ? (
         <div className="staff-open-table">
           {hasPermission(props.permissions, 'table.open')&&<PrimaryServiceSelect tableId={table.id} staffSessionId={props.staffSessionId} value={props.primaryServiceEmployeeId} onChange={props.onPrimaryServiceEmployeeId}/>}
+          <label>最低消费方式<select aria-label="最低消费方式" value={props.minimumSpendMode} onChange={e=>props.onMinimumSpendMode(e.target.value as 'order_gate'|'prepaid')}><option value="order_gate">提交时达标</option><option value="prepaid">先预收款，分次点单</option></select></label>
+          <label>本次开台最低消费（元）<input aria-label="本次开台最低消费（元）" inputMode="decimal" placeholder="不填或0表示不限制" value={props.minimumSpendYuan} onChange={event=>props.onMinimumSpendYuan(event.target.value)} /></label>
+          <small>按本桌本次开台累计优惠前商品金额计算，优惠券和积分抵扣不影响达标。</small>
           <label><Users size={17} /> 实际到店人数</label>
           <div className="staff-count-picks">
             {Array.from({ length: Math.min(8, Math.max(4, table.capacity + 2)) }, (_, index) => index + 1).map((count) => (

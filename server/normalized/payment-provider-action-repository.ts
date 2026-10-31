@@ -8,7 +8,7 @@ export type ProviderActionPayload = Readonly<Record<string, unknown>>
 
 export interface ProviderPaymentContext {
   id: string
-  payableKind: 'order' | 'activity_registration' | 'order_batch'
+  payableKind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'
   orderId: string | null
   orderPublicId: string | null
   activityRegistrationId: string | null
@@ -138,14 +138,14 @@ export class PaymentProviderActionRepository {
     const readContext = async (paymentLock: string): Promise<ContextRow> => {
       const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.payable_kind, payment.order_id,
-        ordering.public_id AS order_public_id,
+        COALESCE(ordering.public_id,CASE WHEN payment.payable_kind='table_prepayment' THEN payment.public_id END) AS order_public_id,
         payment.activity_registration_id,
         activity_registration.public_id AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
-        activity_registration.customer_id,
-        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
+        COALESCE(activity_registration.customer_id,payment.prepaid_customer_id) AS customer_id,
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       LEFT JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
@@ -156,7 +156,7 @@ export class PaymentProviderActionRepository {
       LEFT JOIN mbox.table_sessions table_session
         ON table_session.tenant_id = payment.tenant_id
        AND table_session.store_id = payment.store_id
-       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id)
+       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id)
       LEFT JOIN mbox.tables venue_table
         ON venue_table.tenant_id = table_session.tenant_id
        AND venue_table.store_id = table_session.store_id
@@ -194,14 +194,14 @@ export class PaymentProviderActionRepository {
     const lockClause = options.lock === false ? '' : 'FOR SHARE OF payment'
     const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.payable_kind, payment.order_id,
-        ordering.public_id AS order_public_id,
+        COALESCE(ordering.public_id,CASE WHEN payment.payable_kind='table_prepayment' THEN payment.public_id END) AS order_public_id,
         payment.activity_registration_id,
         activity_registration.public_id AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
-        activity_registration.customer_id,
-        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
+        COALESCE(activity_registration.customer_id,payment.prepaid_customer_id) AS customer_id,
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       LEFT JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
@@ -212,7 +212,7 @@ export class PaymentProviderActionRepository {
       LEFT JOIN mbox.table_sessions table_session
         ON table_session.tenant_id = payment.tenant_id
        AND table_session.store_id = payment.store_id
-       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id)
+       AND table_session.id = COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id)
       LEFT JOIN mbox.tables venue_table
         ON venue_table.tenant_id = table_session.tenant_id
        AND venue_table.store_id = table_session.store_id
@@ -656,14 +656,14 @@ export class PaymentProviderActionRepository {
   ): Promise<ProviderPaymentContext | null> {
     const result = await this.transaction.query<ContextRow>(`
       SELECT payment.id, payment.payable_kind, payment.order_id,
-        ordering.public_id AS order_public_id,
+        COALESCE(ordering.public_id,CASE WHEN payment.payable_kind='table_prepayment' THEN payment.public_id END) AS order_public_id,
         NULL::uuid AS activity_registration_id,
         NULL::text AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
         payment.currency, payment.status, payment.created_at::text,
         NULL::uuid AS customer_id,
-        COALESCE(ordering.table_session_id,payment_batch.table_session_id) AS table_session_id, venue_table.code AS table_code
+        COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
       JOIN mbox.orders ordering
         ON ordering.tenant_id = payment.tenant_id
@@ -886,6 +886,10 @@ export class PaymentProviderActionRepository {
 
   private async assertAccess(row: Readonly<ContextRow>, principal: Readonly<PaymentPrincipal>): Promise<void> {
     if (principal.type === 'employee') return
+    if(row.payable_kind==='table_prepayment'){
+      const owned=(await this.transaction.query<{owned:boolean}>('SELECT mbox.canonical_customer_id($1,$2,$3)=mbox.canonical_customer_id($1,$2,$4) AS owned',[this.transaction.scope.tenantId,this.transaction.scope.storeId,row.customer_id,principal.customerId])).rows[0]?.owned
+      if(!owned)throw new GuestOrderPaymentAccessError('order_not_in_current_table')
+    }
     if (row.payable_kind === 'activity_registration') {
       if (row.customer_id === null) throw new Error('活动报名支付缺少客户归属')
       const owned = await this.transaction.query<{ owned: boolean }>(`

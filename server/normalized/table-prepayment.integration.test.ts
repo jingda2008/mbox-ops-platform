@@ -1,3 +1,4 @@
+import {tableManagementApiPlugin} from './table-management-api.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
 import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
 import {ItemAfterSalesCommandService} from './item-after-sales-command-service.js'
@@ -187,6 +188,19 @@ integration('table prepayment PostgreSQL authority',()=>{
    await run(tx=>new TablePrepaymentRepository(tx).revoke(tableSessionId,canonical,payment.id))
    expect((await pool.query('SELECT prepaid_customer_id FROM mbox.payments WHERE id=$1',[payment.id])).rows[0].prepaid_customer_id).toBe(original)
  })
+ it('pages all historical prepayment tasks with a stable scoped cursor',async()=>{
+   const ids=Array.from({length:101},()=>randomUUID())
+   await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) SELECT id,$2,$3,$4,'P'||substr(id::text,1,20),'历史预收待办',4 FROM unnest($1::uuid[]) id",[ids,tenantId,storeId,areaId])
+   await pool.query("INSERT INTO mbox.table_sessions(tenant_id,store_id,table_id,public_id,business_date,guest_count,minimum_spend_mode,minimum_spend_minor) SELECT $2,$3,id,'PP'||id::text,'2026-10-31',2,'prepaid',100 FROM unnest($1::uuid[]) id",[ids,tenantId,storeId])
+   const app=Fastify();await app.register(tableManagementApiPlugin,{commands:{} as never,transactions,resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-31',capabilities:[]})})
+   try{
+     const first=await app.inject({method:'GET',url:'/table-management/prepayments'});expect(first.statusCode,first.body).toBe(200)
+     const page=first.json();expect(page.data).toHaveLength(100);expect(page.meta.nextCursor).toBeTruthy()
+     const second=await app.inject({method:'GET',url:'/table-management/prepayments?before='+page.meta.nextCursor});expect(second.statusCode,second.body).toBe(200)
+     const all=[...page.data,...second.json().data];expect(new Set(all.map(row=>row.id)).size).toBe(all.length)
+     expect(all.filter(row=>row.publicId.startsWith('PP'))).toHaveLength(101);expect(second.json().meta.nextCursor).toBeNull()
+   }finally{await app.close()}
+ })
  function paymentService(){return new PaymentCommandService(new NormalizedCommandExecutor(transactions),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())}
  async function capture(publicId:string,amount:number){
    const scope={tenantId,storeId},integrationRef='postar-fixture-callback',providerTransactionId=randomUUID(),occurredAt=new Date().toISOString()
@@ -217,7 +231,7 @@ integration('table prepayment PostgreSQL authority',()=>{
     for(const employee of [managerId,salespersonId]){
       const role=randomUUID();await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'测试岗位')",[role,tenantId,storeId,'R_'+role.replaceAll('-','').toUpperCase()])
       await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employee,role])
-      for(const code of ['refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
+      for(const code of ['reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,role,permission])
       }

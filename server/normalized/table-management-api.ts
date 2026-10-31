@@ -68,13 +68,15 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
   registerNativeTableConfiguration(app, options)
   app.get('/table-management/prepayments',async(request,reply)=>handle(reply,async()=>{
     const context=await authorizedContext(options,request)
+    const before=(request.query as {before?:unknown}).before
+    const cursor=before===undefined?null:readUuid(before,'before')
     const data=await options.transactions.run(context.scope,async tx=>{
       await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
       return (await tx.query(`SELECT session.id,t.code AS "tableCode",session.public_id AS "publicId",session.status,session.opened_at::text AS "openedAt",session.business_date::text AS "businessDate",mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id) AS "unsettled"
         FROM mbox.table_sessions session JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(session.tenant_id,session.store_id,session.table_id)
         WHERE session.tenant_id=$1 AND session.store_id=$2 AND session.minimum_spend_mode='prepaid'
-          AND (session.status<>'closed' OR mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id)) ORDER BY session.opened_at DESC LIMIT 100`,[context.scope.tenantId,context.scope.storeId])).rows
-    },{readOnly:true});reply.header('cache-control','no-store');return reply.send({data})
+          AND (session.status<>'closed' OR mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id)) AND ($3::uuid IS NULL OR (session.opened_at,session.id)<(SELECT prior.opened_at,prior.id FROM mbox.table_sessions prior WHERE prior.tenant_id=$1 AND prior.store_id=$2 AND prior.id=$3)) ORDER BY session.opened_at DESC,session.id DESC LIMIT 101`,[context.scope.tenantId,context.scope.storeId,cursor])).rows
+    },{readOnly:true});reply.header('cache-control','no-store');return reply.send({data:data.slice(0,100),meta:{nextCursor:data.length>100?data[99]!.id:null}})
   }))
   app.get('/table-management/sessions/:tableSessionId/prepayment',async(request,reply)=>handle(reply,async()=>{
     const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')

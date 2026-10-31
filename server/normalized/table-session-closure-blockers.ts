@@ -67,7 +67,7 @@ interface ClosureCountRow extends Record<string, unknown> {
 }
 
 export const tableSessionClosureBlockerDefinitions = [
-  ['TABLE_PREPAYMENT_UNSETTLED','prepayment_unsettled','预收款结算待处理','请核对整桌商品达标或减免，并完成待确认付款及原路退款；差额收费未启用'],
+  ['TABLE_PREPAYMENT_UNSETTLED','prepayment_unsettled','整桌低消或预收款待处理','本单放行不取消整桌低消。请核对商品达标或由负责人调整低消，并完成待确认付款及原路退款；差额收费未启用'],
   ['ORDER_UNSETTLED', 'order_unsettled', '未结订单', '请先完成付款、退款、订单完成或取消流程'],
   ['ORDER_ITEM_UNRESOLVED', 'order_item_unresolved', '未完成出品', '请先完成或取消相关订单行'],
   ['KDS_ACTIVE', 'kds_active', '进行中的出品任务', '请先完成或取消相关出品任务'],

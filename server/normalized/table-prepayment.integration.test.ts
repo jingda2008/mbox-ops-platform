@@ -247,7 +247,7 @@ integration('table prepayment PostgreSQL authority',()=>{
     for(const employee of [managerId,salespersonId]){
       const role=randomUUID();await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'测试岗位')",[role,tenantId,storeId,'R_'+role.replaceAll('-','').toUpperCase()])
       await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employee,role])
-      for(const code of ['reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
+      for(const code of ['table.minimum_spend.adjust','reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
         if(code==='reconciliation.view'&&employee===managerId)continue
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,role,permission])

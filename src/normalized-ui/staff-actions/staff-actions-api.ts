@@ -52,6 +52,7 @@ export class StaffActionsApiError extends Error {
 export interface AssistedOrderAccess {
   employeeId?: string
   canCreateOrder: boolean
+  canReleaseMinimumSpend?:boolean
   canInitiatePayment: boolean
   paymentInitiationBlockReason: 'permission_required' | 'provider_not_configured' | 'online_payment_unavailable' | null
   canQueryOnlinePayment: boolean

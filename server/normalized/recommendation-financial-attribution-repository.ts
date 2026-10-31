@@ -184,7 +184,7 @@ export class RecommendationFinancialAttributionRepository {
         ON payment.tenant_id=ordered_event.tenant_id
        AND payment.store_id=ordered_event.store_id
        AND EXISTS(SELECT 1 FROM mbox.order_payment_facts source WHERE (source.tenant_id,source.store_id,source.id,source.order_id)=(payment.tenant_id,payment.store_id,payment.id,ordered_event.order_id))
-       AND payment.id=$3::uuid AND payment.status='succeeded'
+       AND payment.id=$3::uuid AND payment.status IN ('succeeded','partially_refunded','refunded')
        AND payment.currency=item.currency
       WHERE ordered_event.tenant_id=$1::uuid AND ordered_event.store_id=$2::uuid
         AND ordered_event.order_id=$4::uuid AND ordered_event.event_type='ordered'

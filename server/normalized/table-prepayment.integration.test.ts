@@ -1,3 +1,4 @@
+import {createRequire} from 'node:module'
 import {tableManagementApiPlugin} from './table-management-api.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
 import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
@@ -212,6 +213,86 @@ integration('table prepayment PostgreSQL authority',()=>{
      const second=await app.inject({method:'GET',url:'/table-management/prepayments?before='+page.meta.nextCursor});expect(second.statusCode,second.body).toBe(200)
      const all=[...page.data,...second.json().data];expect(new Set(all.map(row=>row.id)).size).toBe(all.length)
      expect(all.filter(row=>row.publicId.startsWith('PP'))).toHaveLength(101);expect(second.json().meta.nextCursor).toBeNull()
+   }finally{await app.close()}
+ })
+ // Exercise the real Mini Program page against real API handlers and restricted
+ // PostgreSQL transactions. Only wx native UI and the external payment provider
+ // are simulated. This does not attest to a WeChat production release.
+ for(const mode of ['order_gate','prepaid'] as const)it(`runs the Mini Program page through ${mode} rejection, correction and successive checkout`,async()=>{
+   const miniTable=randomUUID(),miniSession=randomUUID(),miniCustomer=randomUUID()
+   await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,'Mini Flow',4)",[miniTable,tenantId,storeId,areaId,'MINI'+mode])
+   await pool.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)",[miniCustomer,tenantId,storeId,randomUUID()])
+   await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status,minimum_spend_mode,minimum_spend_minor,guest_cart_protocol_version) VALUES($1,$2,$3,$4,$5,'2026-10-31',2,'open',$6,10000,2)",[miniSession,tenantId,storeId,miniTable,randomUUID(),mode])
+   await pool.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[tenantId,storeId,miniSession,miniCustomer])
+   const miniActor=await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId:miniSession,customerId:miniCustomer})
+   const executor=new NormalizedCommandExecutor(transactions),app=Fastify()
+   await app.register(guestCommerceServiceApiPlugin,{prefix:'/api',paymentActionSecret:'isolated-mini-flow-secret-20261031',transactions,commandExecutor:executor,commerce:new CommerceCommandService(executor),payments:paymentService(),
+    onlinePayments:{assertAvailable:()=>{},assertGuestJsapiReady:async()=> 'jsapi',create:async({paymentId}:{paymentId:string})=>({status:'pending',paymentId,presentation:'jsapi',payload:{timeStamp:'1',nonceStr:'isolated-test',package:'prepay_id=isolated',signType:'RSA',paySign:'isolated-not-a-real-signature'}})} as never,
+    paymentMode:'wechat_jsapi',resolveGuestContext:()=>({scope:{tenantId,storeId},sessionKind:'table',customerId:miniCustomer,tableSessionId:miniSession,reservationId:null,tableCode:'MINI'+mode,tableDisplayName:'Mini Flow',businessDate:'2026-10-31',expiresAt:new Date(Date.now()+60000).toISOString(),capabilities:['guest.order.create','guest.session.read','guest.menu.read','guest.service.create'],actorRef:miniActor})})
+   const replies:Array<{status:number;body:any;key:string}>=[],nativeActions:unknown[]=[]
+   const require=createRequire(import.meta.url)
+   const {fixture}=require('../../scripts/miniprogram-state-fixture.cjs')
+   const {liveMiniHarness}=require('../../scripts/miniprogram-live-contract-harness.mjs')
+   const client=liveMiniHarness('miniprogram',async(call:any)=>{
+    const response=await app.inject({method:call.method,url:call.path,headers:call.headers,payload:call.data})
+    const body=response.json();if(/\/(checkout|prepayment-settlement)$/.test(call.path))replies.push({status:response.statusCode,body,key:call.headers['idempotency-key']})
+    return {status:response.statusCode,data:body}
+   })
+   const h=fixture('order',{checkoutSharedCart:client.api.checkoutSharedCart,prepayTable:client.api.prepayTable,getSharedCart:client.api.getSharedCart,queryPrepayment:async()=>({status:'pending'})})
+   h.page.setData({products:[{productId,name:'Strong Cost Product',amountMinor:8800,available:true}]})
+   let nativeDeposits=0
+   h.wx.requestPayment=(options:any)=>{nativeDeposits++;options.success({})}
+   h.page.checkoutUpgradeReady=async()=>true
+   h.page.handlePaymentAction=async(action:unknown)=>{nativeActions.push(action)}
+   const confirm=async()=>{
+    h.page.setData({checkoutConfirmVisible:true})
+    const pending=h.page.confirmCheckout()
+    const timer=setInterval(()=>{if(h.page.data.quantityReviewVisible)h.page.confirmRepeatedQuantities()},5)
+    try{await pending}finally{clearInterval(timer)}
+   }
+   const add=async()=>{
+    const before=await client.api.getSharedCart()
+    await client.api.adjustSharedCart(productId,1,before.generation,before.version,randomUUID())
+    const cart=await client.api.getSharedCart();h.page.updateCart(cart.lines,cart);h.page.setData({checkoutConfirmVisible:true});return cart
+   }
+   try{
+    await add();await confirm()
+    expect(replies.at(-1)?.body.error.code).toBe(mode==='prepaid'?'TABLE_PREPAYMENT_REQUIRED':'TABLE_MINIMUM_SPEND_NOT_MET')
+    expect(h.page.data.cart).toHaveLength(1);expect(h.page.data.checkoutLocked).toBe(false);expect(nativeActions).toHaveLength(0)
+    expect((await pool.query('SELECT id FROM mbox.orders WHERE table_session_id=$1',[miniSession])).rowCount).toBe(0)
+    if(mode==='prepaid'){
+     h.page.setData({prepaymentAmount:'200.00',prepaymentConsent:true})
+     await h.page.onPrepayTable();expect(nativeDeposits).toBe(1)
+     expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(miniSession))).toMatchObject({availableMinor:0,receivedMinor:0})
+     const receipt=(await pool.query('SELECT public_id FROM mbox.payments WHERE prepaid_table_session_id=$1',[miniSession])).rows[0]
+     await capture(receipt.public_id,20000)
+     await h.page.refreshSharedCart()
+     // Retry the kept first cart: no second item is required to reach minimum.
+     await confirm();expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
+     expect(h.page.data.paymentResult.title).toBe('预收款抵扣成功');expect(nativeActions).toHaveLength(0)
+     expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(miniSession))).toMatchObject({qualifyingGoodsMinor:8800,availableMinor:11200,shortfallMinor:1200,differenceChargingEnabled:false})
+     await add();await confirm()
+     expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
+     expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(miniSession))).toMatchObject({qualifyingGoodsMinor:17600,availableMinor:2400,shortfallMinor:0,differenceChargingEnabled:false})
+     await add();await confirm()
+     expect(replies.at(-1)?.body.error.code).toBe('TABLE_PREPAYMENT_INSUFFICIENT')
+     expect(h.page.data.cart).toHaveLength(1);expect(h.page.data.checkoutLocked).toBe(false);expect(nativeActions).toHaveLength(0)
+     expect((await pool.query('SELECT id FROM mbox.orders WHERE table_session_id=$1',[miniSession])).rowCount).toBe(2)
+    }else{
+     await add();await confirm()
+     expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
+     expect(nativeActions).toHaveLength(1);expect(h.page.data.pendingPayment).toBeTruthy()
+     const payment=replies.at(-1)!.body.data.payment
+     await capture(payment.publicId,17600)
+     h.page.setData({pendingPayment:null});h.page.orderPaymentRead=null
+     await add();await confirm()
+     expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
+     expect(nativeActions).toHaveLength(2)
+     expect(await run(tx=>readTableMinimumSpend(tx,miniSession,0))).toMatchObject({consumedMinor:17600,shortfallMinor:0})
+     await capture(replies.at(-1)!.body.data.payment.publicId,8800)
+     expect(await run(tx=>readTableMinimumSpend(tx,miniSession,0))).toMatchObject({consumedMinor:26400,shortfallMinor:0})
+    }
+    expect(new Set(replies.map(r=>r.key)).size).toBe(replies.length)
    }finally{await app.close()}
  })
  async function staffApp(){

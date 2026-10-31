@@ -250,7 +250,14 @@ export class PostgresCashierWorkbenchQuery {
     const canUseActivityCashier = input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
       const orderResult = await transaction.query<OrderRow>(`
-        WITH ${orderCollectionBalancesCtesSql}, cashier_pending_refund_orders AS MATERIALIZED (
+        WITH ${orderCollectionBalancesCtesSql}, cashier_recent_captured_orders AS MATERIALIZED (
+          -- Read the shared payment facts once. Repeating this union for every
+          -- settled historical order makes queue reads grow with old receipts.
+          SELECT DISTINCT recent_captured.order_id FROM mbox.order_payment_facts recent_captured
+          WHERE recent_captured.tenant_id=$1::uuid AND recent_captured.store_id=$2::uuid
+            AND recent_captured.status IN ('succeeded','partially_refunded','refunded')
+            AND recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
+        ), cashier_pending_refund_orders AS MATERIALIZED (
           SELECT DISTINCT carryover_payment.order_id FROM mbox.refunds carryover_refund
           JOIN LATERAL (
             SELECT payment.order_id FROM mbox.order_payment_facts payment
@@ -325,12 +332,8 @@ export class PostgresCashierWorkbenchQuery {
               -- cashier to verify it on this or another terminal. Older
               -- terminal history remains in the dedicated history search.
               OR EXISTS (
-                SELECT 1 FROM mbox.order_payment_facts recent_captured
-                WHERE recent_captured.tenant_id=orders.tenant_id
-                  AND recent_captured.store_id=orders.store_id
-                  AND recent_captured.order_id=orders.id
-                  AND recent_captured.status IN ('succeeded','partially_refunded','refunded')
-                  AND recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
+                SELECT 1 FROM cashier_recent_captured_orders recent_captured
+                WHERE recent_captured.order_id=orders.id
               )
               OR EXISTS (SELECT 1 FROM cashier_pending_refund_orders pending_refund WHERE pending_refund.order_id=orders.id)
             ))

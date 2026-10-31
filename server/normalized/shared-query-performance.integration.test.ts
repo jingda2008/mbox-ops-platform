@@ -61,6 +61,18 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
     expect(Math.max(...timings)).toBeLessThan(8000)
   },60000)
 
+  it('retains recently captured historical receipts and excludes them again after the six-hour window',async()=>{
+    const receipt=(await admin.query("SELECT id FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND public_id='receipt-perf-order-1'",[scope.tenantId,scope.storeId])).rows[0].id
+    const query=()=>new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId,businessDate:day,capabilities:permissions,limit:50})
+    try{
+      await admin.query("UPDATE mbox.payments SET succeeded_at=clock_timestamp()-interval '5 hours 59 minutes' WHERE id=$1",[receipt])
+      const recent=await query();expect(recent.orders.map(o=>o.publicId).sort()).toEqual(['old-overcollected','old-unpaid','perf-order-1'])
+      expect(recent.orders.find(o=>o.publicId==='perf-order-1')?.paymentStatus).toBe('paid')
+      await admin.query("UPDATE mbox.payments SET succeeded_at=clock_timestamp()-interval '6 hours 1 minute' WHERE id=$1",[receipt])
+      expect((await query()).orders.map(o=>o.publicId)).toEqual(['old-unpaid','old-overcollected'])
+    }finally{await admin.query("UPDATE mbox.payments SET succeeded_at='2026-01-01T01:00:00Z' WHERE id=$1",[receipt])}
+  },60000)
+
   it('retains financial authorization and tenant/store isolation',async()=>{
     await expect(new OperationsQueryService(runner).getOperatingHistory(scope,otherId,{businessDate:day,table:'',employee:'',page:0})).rejects.toThrow('权限')
     await runner.run(scope,async tx=>{

@@ -1112,7 +1112,7 @@ export function StaffActionsPanel({
 
   return (
     <section className="staff-actions-panel" aria-label="现场高频操作">
-      {permissions.includes('reconciliation.view')&&<TablePrepaymentDirectory staffSessionId={staffSessionId} permissions={permissions}/>}
+      {(permissions.includes('reconciliation.view')||(permissions.includes('refund.request')&&permissions.includes('table.view_all')))&&<TablePrepaymentDirectory staffSessionId={staffSessionId} permissions={permissions}/>}
 
       {redeliveryItemId&&operations&&<ItemAfterSalesPanel itemId={redeliveryItemId} employeeId={operations.actor.id} onClose={()=>setRedeliveryItemId(null)} onChanged={()=>void load(true)}/>}
       <header className="staff-actions-header">
@@ -1910,7 +1910,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
-      {table.activeSession&&props.permissions.includes('reconciliation.view')&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
+      {table.activeSession&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession === null ? (
         <div className="staff-open-table">
           {hasPermission(props.permissions, 'table.open')&&<PrimaryServiceSelect tableId={table.id} staffSessionId={props.staffSessionId} value={props.primaryServiceEmployeeId} onChange={props.onPrimaryServiceEmployeeId}/>}

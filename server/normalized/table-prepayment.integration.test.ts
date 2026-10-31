@@ -70,8 +70,13 @@ integration('table prepayment PostgreSQL authority',()=>{
    expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:2400,qualifyingGoodsMinor:17600,shortfallMinor:0})
  })
  it('requests surplus against original payment, and repeat settlement cannot reserve it twice',async()=>{
-   const result=await run(tx=>new TablePrepaymentRepository(tx).requestUnusedRefunds(tableSessionId,managerId,'优惠后剩余余额退回'))
-   expect(result.amountMinor).toBe(2400);expect(result.refundIds).toHaveLength(1)
+   const app=await staffApp()
+   try{
+     const input={method:'POST' as const,url:`/table-management/sessions/${tableSessionId}/prepayment/refund-unused`,headers:{'idempotency-key':randomUUID()},payload:{reason:'优惠后剩余余额退回'}}
+     const response=await app.inject(input);expect(response.statusCode,response.body).toBe(200)
+     const result=response.json().data;expect(result.amountMinor).toBe(2400);expect(result.refundIds).toHaveLength(1)
+     const replay=await app.inject(input);expect(replay.json()).toMatchObject({data:result,meta:{replayed:true}})
+   }finally{await app.close()}
    expect((await run(tx=>new TablePrepaymentRepository(tx).requestUnusedRefunds(tableSessionId,managerId,'重复结算'))).refundIds).toEqual([])
    expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:0})
  })
@@ -93,7 +98,15 @@ integration('table prepayment PostgreSQL authority',()=>{
  })
  it('records waiver instead of charging a fee and rejects out-of-range waivers',async()=>{
    await expect(run(tx=>new TablePrepaymentRepository(tx).waive(tableSessionId,managerId,10001,'超额减免'))).rejects.toMatchObject({code:'TABLE_MINIMUM_WAIVER_INVALID'})
-   await run(tx=>new TablePrepaymentRepository(tx).waive(tableSessionId,managerId,1000,'门店原因部分无法履约'))
+   await pool.query("UPDATE mbox.role_approval_limits SET amount_minor=1000 WHERE role_id IN (SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1) AND approval_code='refund.approve'",[managerId])
+   const app=await staffApp()
+   try{
+     const input={method:'POST' as const,url:`/table-management/sessions/${tableSessionId}/prepayment/waive`,headers:{'idempotency-key':randomUUID()},payload:{amountMinor:1000,reason:'门店原因部分无法履约'}}
+     expect((await app.inject({...input,payload:{...input.payload,collectDifference:true}})).statusCode).toBe(400)
+     const first=await app.inject(input);expect(first.statusCode,first.body).toBe(200)
+     expect((await app.inject(input)).json().meta.replayed).toBe(true)
+     expect((await app.inject({...input,headers:{'idempotency-key':randomUUID()},payload:{...input.payload,amountMinor:1}})).statusCode).toBe(403)
+   }finally{await app.close();await pool.query("UPDATE mbox.role_approval_limits SET amount_minor=100000 WHERE role_id IN (SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1) AND approval_code='refund.approve'",[managerId])}
    expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({waiverMinor:1000,qualifyingGoodsMinor:17600,differenceChargingEnabled:false})
    expect(Number((await pool.query('SELECT sum(amount_minor) amount FROM mbox.payments WHERE tenant_id=$1',[tenantId])).rows[0].amount)).toBe(20000)
  })
@@ -201,6 +214,9 @@ integration('table prepayment PostgreSQL authority',()=>{
      expect(all.filter(row=>row.publicId.startsWith('PP'))).toHaveLength(101);expect(second.json().meta.nextCursor).toBeNull()
    }finally{await app.close()}
  })
+ async function staffApp(){
+   const app=Fastify();await app.register(tableManagementApiPlugin,{commands:{} as never,nativeCommands:new NormalizedCommandExecutor(transactions),transactions,resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-31',capabilities:[]})});return app
+ }
  function paymentService(){return new PaymentCommandService(new NormalizedCommandExecutor(transactions),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())}
  async function capture(publicId:string,amount:number){
    const scope={tenantId,storeId},integrationRef='postar-fixture-callback',providerTransactionId=randomUUID(),occurredAt=new Date().toISOString()
@@ -232,6 +248,7 @@ integration('table prepayment PostgreSQL authority',()=>{
       const role=randomUUID();await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'测试岗位')",[role,tenantId,storeId,'R_'+role.replaceAll('-','').toUpperCase()])
       await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employee,role])
       for(const code of ['reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
+        if(code==='reconciliation.view'&&employee===managerId)continue
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,role,permission])
       }

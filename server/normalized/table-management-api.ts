@@ -71,7 +71,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const before=(request.query as {before?:unknown}).before
     const cursor=before===undefined?null:readUuid(before,'before')
     const data=await options.transactions.run(context.scope,async tx=>{
-      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('refund.request')&&access.permissions.includes('table.view_all')))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
       return (await tx.query(`SELECT session.id,t.code AS "tableCode",session.public_id AS "publicId",session.status,session.opened_at::text AS "openedAt",session.business_date::text AS "businessDate",mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id) AS "unsettled"
         FROM mbox.table_sessions session JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(session.tenant_id,session.store_id,session.table_id)
         WHERE session.tenant_id=$1 AND session.store_id=$2 AND session.minimum_spend_mode='prepaid'
@@ -81,7 +82,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
   app.get('/table-management/sessions/:tableSessionId/prepayment',async(request,reply)=>handle(reply,async()=>{
     const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
     const data=await options.transactions.run(context.scope,async tx=>{
-      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
+      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
+      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('refund.request')&&access.permissions.includes('table.view_all')))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
       const summary=await new TablePrepaymentRepository(tx).snapshot(id)
       if(!summary)return null
       const receipts=(await tx.query(`SELECT p.id,p.public_id AS "publicId",p.status,p.amount_minor::text AS "amountMinor",mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text AS "availableMinor" FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY p.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
@@ -98,6 +100,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const key=readIdempotencyKey(request)
     const execution=await options.nativeCommands.execute<JsonObject>({scope:context.scope,operationScope:`table.prepayment.${action}`,idempotencyKey:key,requestFingerprint:createHash('sha256').update(JSON.stringify({id,action,amount,reason,employeeId:context.employeeId})).digest('hex'),resultCodec:{encode:v=>v,decode:v=>v as JsonObject}},async tx=>{
       const access=await new StaffAccessRepository(tx).assertPermission(context.employeeId,action==='waive'?'refund.approve':'refund.request')
+      if(action==='refund-unused'&&!access.permissions.includes('reconciliation.view')&&!access.permissions.includes('table.view_all'))throw new StaffAccessDeniedError('需要全店桌台退款申请权限')
       if(action==='waive'){
         const session=await new TablePrepaymentRepository(tx).lock(id,true)
         const cumulative=amount+Number(session.minimum_spend_waiver_minor)

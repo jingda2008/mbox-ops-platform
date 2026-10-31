@@ -1,4 +1,6 @@
+import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
 import { randomUUID } from 'node:crypto'
+import {readTableMinimumSpend,TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import {verifyIssuedCouponProductLines, legacyProductDeadlineSql,type IssuedCouponProductLine} from './issued-coupon-product-promise.js'
 import {fulfillmentDueAt} from './fulfillment-sla.js'
 import type { JsonObject } from './command-executor.js'
@@ -50,6 +52,8 @@ export interface BundleUnitSelectionInput {
 }
 
 export interface CreateSubmittedOrderInput {
+  /** Internal checkout route; never populated from arbitrary request fields. */
+  prepaymentSettlement?:boolean
   tableSessionId: string
   publicId: string
   channel: OrderChannel
@@ -91,6 +95,7 @@ export interface OrderItem {
 }
 
 export interface SubmittedOrder {
+  prepaymentRequired?:boolean
   id: string
   tableSessionId: string
   publicId: string
@@ -326,7 +331,7 @@ export class OrderRepository {
     validateCreateInput(input)
     if (pricingAuthorization) assertVerifiedPricingAuthorization(pricingAuthorization)
     const requested = normalizeRequestedLines(input.lines)
-    await this.lockOpenTableSession(input.tableSessionId)
+    const minimumSpendMinor = await this.lockOpenTableSession(input.tableSessionId,input)
     // Lock only capped products before the existing shared price locks. Without
     // this order two different tables could both try to upgrade a shared lock.
     await this.transaction.query(`/* product-sale-quantity */
@@ -353,6 +358,11 @@ export class OrderRepository {
       return item
     })
     const subtotalAmountMinor = sumSafe(grossItems.map((item) => item.unitPriceMinor * item.quantity))
+    if (pricingAuthorization?.kind!=='gift' && minimumSpendMinor>0) {
+      const qualifyingMinor=sumSafe(priced.map((price,index)=>asSafeMoney(price.standard_amount_minor??price.amount_minor,'standard price')*requested[index]!.quantity))
+      const minimum=await readTableMinimumSpend(this.transaction,input.tableSessionId,qualifyingMinor,minimumSpendMinor)
+      if(minimum.shortfallMinor>0)throw new TableMinimumSpendNotMetError(minimum)
+    }
     validatePricingAuthorization(pricingAuthorization, subtotalAmountMinor)
     if(pricingAuthorization?.lineAllocations){
       verifyPricingLineAllocations(pricingAuthorization.lineAllocations,input.lines,pricingAuthorization.amountMinor)
@@ -463,7 +473,12 @@ export class OrderRepository {
       insertedItems.push(mapOrderItem(requireOne(inserted, 'Order item insert')))
     }
 
-    return { ...mapOrder(order), items: insertedItems }
+    const result={...mapOrder(order),items:insertedItems,prepaymentRequired:this.prepaidSession}
+    if(this.prepaidSession&&input.channel!=='guest_qr'&&pricingAuthorization?.kind!=='gift'&&result.totalAmountMinor>0){
+      await new TablePrepaymentRepository(this.transaction).allocate(input.tableSessionId,result.id)
+      result.paymentStatus='paid'
+    }
+    return result
   }
 
   async getSubmittedForFulfillment(orderId: string): Promise<SubmittedOrder> {
@@ -559,18 +574,22 @@ export class OrderRepository {
     return mapOrderItem(row)
   }
 
-  private async lockOpenTableSession(tableSessionId: string): Promise<void> {
+  private prepaidSession=false
+  private async lockOpenTableSession(tableSessionId: string,input:CreateSubmittedOrderInput): Promise<number> {
     requireUuidLike('tableSessionId', tableSessionId)
-    const locked = await this.transaction.query<{ id: string }>(`
-      SELECT id
+    const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string }>(`
+      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE minimum_spend_minor-minimum_spend_waiver_minor END AS minimum_spend_minor
       FROM mbox.table_sessions
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
         AND id = $3::uuid
         AND status = 'open'
-      FOR KEY SHARE
+      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableSessionId])
     if (locked.rowCount !== 1) throw new TableSessionUnavailableForOrderError(tableSessionId)
+    this.prepaidSession=locked.rows[0]?.minimum_spend_mode==='prepaid'
+    if(this.prepaidSession&&input.channel==='guest_qr'&&!input.prepaymentSettlement)throw new TablePrepaymentError('TABLE_PREPAYMENT_REQUIRED','本桌使用预收款点单，请刷新购物车后从预收款结算提交')
+    return Number(locked.rows[0]?.minimum_spend_minor ?? 0)
   }
 
   private async loadCurrentPrices(requested: readonly RequestedLineRecord[],lock=true,customerId=this.customerId,useCardPrice=true,fulfillmentPromises:readonly IssuedCouponProductLine[]=[]): Promise<ProductPriceRow[]> {

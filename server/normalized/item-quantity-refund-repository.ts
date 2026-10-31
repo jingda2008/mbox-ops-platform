@@ -61,10 +61,16 @@ export class ItemQuantityRefundRepository {
         AND payment.status IN ('succeeded','partially_refunded','refunded') ORDER BY payment.id`,[...this.scope,orderId])).rows
     // order_payment_facts already carries this original order's persisted share
     // of a combined payment. Never use the combined payment's whole amount.
-    const selections=funding?[...funding].sort((a,b)=>a.paymentId.localeCompare(b.paymentId)):payments.length===1?[{paymentId:payments[0]!.id,amountMinor:Number(target.amount_minor)}]:null
+    let prepaidFunding: {paymentId:string;amountMinor:number}[]|null=null
+    if(payments.length>0&&payments.every(p=>p.payable_kind==='table_prepayment')){
+      let remaining=Number(target.amount_minor);prepaidFunding=[]
+      for(const payment of payments){const amount=Math.min(remaining,Math.max(0,Number(payment.amount_minor)-Number(payment.reserved)));if(amount>0){prepaidFunding.push({paymentId:payment.id,amountMinor:amount});remaining-=amount}}
+      if(remaining>0)prepaidFunding=null
+    }
+    const selections=funding?[...funding].sort((a,b)=>a.paymentId.localeCompare(b.paymentId)):payments.length===1?[{paymentId:payments[0]!.id,amountMinor:Number(target.amount_minor)}]:prepaidFunding
     if(!selections)return {status:'payment_review' as const,refundIds:[],replayed:false}
     if(!selections.length||selections.length>50||new Set(selections.map(value=>value.paymentId)).size!==selections.length||selections.some(value=>!Number.isSafeInteger(value.amountMinor)||value.amountMinor<=0)||selections.reduce((sum,value)=>sum+BigInt(value.amountMinor),0n)!==BigInt(target.amount_minor))throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','各原付款退回金额合计必须等于本次原成交金额')
-    if(selections.some(value=>{const source=payments.find(payment=>payment.id===value.paymentId);return !source||!['order','order_batch'].includes(source.payable_kind)||BigInt(source.amount_minor)-BigInt(source.reserved)<BigInt(value.amountMinor)})){
+    if(selections.some(value=>{const source=payments.find(payment=>payment.id===value.paymentId);return !source||!['order','order_batch','table_prepayment'].includes(source.payable_kind)||BigInt(source.amount_minor)-BigInt(source.reserved)<BigInt(value.amountMinor)})){
       if(!funding)return {status:'payment_review' as const,refundIds:[],replayed:false}
       throw new ItemQuantityConflict('PRICE_REVIEW_REQUIRED','退款超出该原付款的本单可退余额，尚未创建新的退款')
     }

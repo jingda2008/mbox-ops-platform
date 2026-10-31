@@ -183,7 +183,7 @@ export class RecommendationFinancialAttributionRepository {
       JOIN mbox.payments AS payment
         ON payment.tenant_id=ordered_event.tenant_id
        AND payment.store_id=ordered_event.store_id
-       AND (payment.order_id=ordered_event.order_id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordered_event.order_id))
+       AND EXISTS(SELECT 1 FROM mbox.order_payment_facts source WHERE (source.tenant_id,source.store_id,source.id,source.order_id)=(payment.tenant_id,payment.store_id,payment.id,ordered_event.order_id))
        AND payment.id=$3::uuid AND payment.status='succeeded'
        AND payment.currency=item.currency
       WHERE ordered_event.tenant_id=$1::uuid AND ordered_event.store_id=$2::uuid
@@ -275,7 +275,7 @@ export class RecommendationFinancialAttributionRepository {
        AND refund.status='succeeded'
       JOIN mbox.payments AS payment
        ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
-       AND payment.id=refund.payment_id AND (payment.order_id=ordered_event.order_id OR EXISTS(SELECT 1 FROM mbox.order_payment_allocations batch_allocation WHERE batch_allocation.tenant_id=payment.tenant_id AND batch_allocation.store_id=payment.store_id AND batch_allocation.batch_id=payment.order_batch_id AND batch_allocation.order_id=ordered_event.order_id))
+       AND payment.id=refund.payment_id AND EXISTS(SELECT 1 FROM mbox.order_payment_facts source WHERE (source.tenant_id,source.store_id,source.id,source.order_id)=(payment.tenant_id,payment.store_id,payment.id,ordered_event.order_id))
        AND payment.currency=refund.currency
       JOIN mbox.refund_items AS refund_item
         ON refund_item.tenant_id=refund.tenant_id AND refund_item.store_id=refund.store_id

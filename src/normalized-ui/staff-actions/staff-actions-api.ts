@@ -298,6 +298,8 @@ export interface StaffActionsApiPort {
   endTableAssignment(assignmentId: string, reason: string): Promise<void>
   openTable(input: Readonly<{
     primaryServiceEmployeeId?: string
+    minimumSpendMode?:'order_gate'|'prepaid'
+    minimumSpendMinor?: number
     tableId: string
     guestCount: number
     capacityOverrideReason?: string
@@ -713,6 +715,8 @@ export class StaffActionsApi implements StaffActionsApiPort {
 
   async openTable(input: Readonly<{
     primaryServiceEmployeeId?: string
+    minimumSpendMode?:'order_gate'|'prepaid'
+    minimumSpendMinor?: number
     tableId: string
     guestCount: number
     capacityOverrideReason?: string

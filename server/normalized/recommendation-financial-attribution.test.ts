@@ -1,3 +1,5 @@
+import {PaymentRepository} from './payment-repository.js'
+import {TablePrepaymentRepository} from './table-prepayment-repository.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
@@ -35,6 +37,7 @@ const orderIds = {
   pending: randomUUID(),
   failed: randomUUID(),
   upgrade: randomUUID(),
+  prepaid: randomUUID(),
 } as const
 
 const recommendedItemIds = {
@@ -42,6 +45,7 @@ const recommendedItemIds = {
   pending: randomUUID(),
   failed: randomUUID(),
   upgrade: randomUUID(),
+  prepaid: randomUUID(),
 } as const
 
 const otherItemIds = {
@@ -49,6 +53,7 @@ const otherItemIds = {
   pending: randomUUID(),
   failed: randomUUID(),
   upgrade: randomUUID(),
+  prepaid: randomUUID(),
 } as const
 
 const authorization: PaymentCapabilityAuthorizationPort = {
@@ -233,6 +238,20 @@ integration('recommendation financial attribution PostgreSQL integration', () =>
         AND event.order_id=$4::uuid AND event.event_type='paid'
     `, [unrelatedRefund.value.id, tenantId, storeId, orderIds.paid]))
       .rejects.toThrow(/recommendation_behavior_events_refund_item_fk/)
+  })
+
+  it('attributes prepaid goods once and returns only the original item financial share', async()=>{
+    const session=(await pool.query('SELECT table_session_id FROM mbox.orders WHERE id=$1',[orderIds.prepaid])).rows[0].table_session_id
+    await pool.query("UPDATE mbox.table_sessions SET minimum_spend_mode='prepaid',minimum_spend_minor=10000 WHERE id=$1",[session])
+    const receipt=await runner.run({tenantId,storeId},tx=>new PaymentRepository(tx).createForTablePrepayment({tableSessionId:session,customerId,amountMinor:10000,publicId:'recommendation-prepaid-source',provider:'postar',method:'jsapi'}))
+    const observed=await verifiedCallback(callback(receipt.publicId,10000,'recommendation-prepaid-callback','recommendation-prepaid-provider'))
+    await service.recordSucceededCallback(observed)
+    expect((await financialEvents(pool)).filter(event=>event.order_id===orderIds.prepaid)).toEqual([])
+    await runner.run({tenantId,storeId},tx=>new TablePrepaymentRepository(tx).allocate(session,orderIds.prepaid))
+    const record=()=>runner.run({tenantId,storeId},tx=>new RecommendationFinancialAttributionRepository(tx).recordPaidForOrder({paymentId:receipt.id,orderId:orderIds.prepaid,actorRef:'prepaid-recommendation'}))
+    expect((await record()).recorded).toBe(1);expect((await record()).recorded).toBe(0)
+    await succeedRefund({paymentId:receipt.id,paymentProviderTransactionId:observed.providerTransactionId,code:'prepaid-partial',orderItemId:recommendedItemIds.prepaid,amountMinor:1000})
+    expect((await financialEvents(pool)).filter(event=>event.order_id===orderIds.prepaid).map(event=>[event.event_type,event.attributed_amount_minor])).toEqual([['paid','6000'],['refunded','1000']])
   })
 
   async function initiate(order: keyof typeof orderIds, publicId: string) {

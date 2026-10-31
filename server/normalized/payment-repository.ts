@@ -27,7 +27,8 @@ export type PaymentStatus =
 
 export interface Payment {
   id: string
-  payableKind: 'order' | 'activity_registration' | 'order_batch'
+  payableKind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'
+  prepaidTableSessionId?:string|null
   orderBatchId?:string|null
   orderId: string | null
   activityRegistrationId: string | null
@@ -112,6 +113,7 @@ export interface ReleaseUnresolvedPaymentForRetryInput {
 }
 
 interface PaymentRow extends Record<string, unknown> {
+  prepaid_table_session_id?:string|null
   order_batch_id?:string|null
   id: string
   payable_kind: Payment['payableKind']
@@ -253,14 +255,14 @@ export class PaymentRepository {
    */
   async prepareOrderPaymentForProviderClose(paymentId: string): Promise<Payment> {
     const selected = await this.transaction.query<PaymentRow>(`
-      SELECT ${PAYMENT_COLUMNS}
+      SELECT ${paymentColumns()}
       FROM mbox.payments
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = selected.rows[0]
     if (row === undefined) throw new PaymentNotFoundError(paymentId)
-    if (!['order','order_batch','activity_registration'].includes(row.payable_kind)) throw new OrderNotPayableError(paymentId, 'unsupported payable kind')
+    if (!['order','order_batch','activity_registration','table_prepayment'].includes(row.payable_kind)) throw new OrderNotPayableError(paymentId, 'unsupported payable kind')
     if (!['postar', 'wechat'].includes(row.provider) || !['created', 'pending'].includes(row.status)) {
       throw new OrderNotPayableError(paymentId, 'payment already has a final result or is not an online payment')
     }
@@ -355,7 +357,7 @@ export class PaymentRepository {
       throw new TypeError('retry release reason must contain between 4 and 500 characters')
     }
     const selected = await this.transaction.query<PaymentRow>(`
-      SELECT ${PAYMENT_COLUMNS}
+      SELECT ${paymentColumns()}
       FROM mbox.payments
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
       FOR UPDATE
@@ -396,7 +398,7 @@ export class PaymentRepository {
           updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
         AND retry_released_at IS NULL AND status IN ('created','pending')
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -423,8 +425,20 @@ export class PaymentRepository {
     if(!proof.rows[0]?.safe)throw new OrderNotPayableError(paymentId,'原付款可能已外送或存在渠道结果，不能按本地未外送作废；请查询原付款')
     const result=await this.transaction.query<PaymentRow>(`UPDATE mbox.payments SET status='closed',
       provider_snapshot=provider_snapshot||'{"localUnpresentedHistoryClosed":true}'::jsonb,updated_at=clock_timestamp()
-      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING ${PAYMENT_COLUMNS}`,args)
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING ${paymentColumns()}`,args)
     return mapPayment(result.rows[0]!)
+  }
+
+  async createForTablePrepayment(input:Readonly<{tableSessionId:string;customerId:string;publicId:string;amountMinor:number;provider:'postar'|'simulation';method:PaymentMethod}>):Promise<Payment>{
+    if(!Number.isSafeInteger(input.amountMinor)||input.amountMinor<=0)throw new PaymentEvidenceError('预收款金额无效')
+    const session=(await this.transaction.query<{minimum_spend_mode:string;status:string}>(`SELECT minimum_spend_mode,status FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId])).rows[0]
+    if(session?.status!=='open'||session.minimum_spend_mode!=='prepaid')throw new PaymentEvidenceError('本桌未启用预收款或已经结束')
+    // A still unresolved receipt must be resumed, not replaced by another charge.
+    const unresolved=await this.transaction.query<PaymentRow>(`SELECT ${paymentColumns()} FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND mbox.canonical_customer_id(tenant_id,store_id,prepaid_customer_id)=mbox.canonical_customer_id(tenant_id,store_id,$4) AND status IN ('created','pending') ORDER BY created_at LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId])
+    if(unresolved.rows[0])return mapPayment(unresolved.rows[0])
+    const result=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,prepaid_table_session_id,prepaid_customer_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot)
+      SELECT $1,$2,'table_prepayment',$3,$4,$5,$6,$7,$8,'CNY','created','{"sharedTableConsent":"v1","differenceChargingEnabled":false}'::jsonb RETURNING ${paymentColumns()}`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId,input.publicId,input.provider,input.method,input.amountMinor])
+    return onePayment(result,'预收款创建失败')
   }
 
   async createForOrder(input: Readonly<CreatePaymentForOrderInput>): Promise<Payment> {
@@ -470,7 +484,7 @@ export class PaymentRepository {
         $11::jsonb,
         CASE WHEN $10 = 'succeeded' THEN clock_timestamp() ELSE NULL END
       )
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -527,7 +541,7 @@ export class PaymentRepository {
     await this.transaction.query(`INSERT INTO mbox.order_payment_batches(id,tenant_id,store_id,table_session_id,created_by_employee_id,created_by_customer_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[batchId,...scope,orders[0]!.table_session_id,input.principal.type==='employee'?input.principal.employeeId:null,input.principal.type==='guest'?input.principal.customerId:null,amount,orders[0]!.currency])
     for(const [position,allocation] of allocations.entries())await this.transaction.query(`INSERT INTO mbox.order_payment_allocations(tenant_id,store_id,batch_id,order_id,amount_minor,outstanding_at_creation_minor,position) VALUES($1,$2,$3,$4,$5,$6,$7)`,[...scope,batchId,allocation.orderId,allocation.amountMinor,balances.find(row=>row.id===allocation.orderId)!.outstandingMinor,position])
     const status=input.initialStatus??'created'
-    const inserted=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,order_batch_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at) VALUES($1,$2,'order_batch',$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $10='succeeded' THEN clock_timestamp() ELSE NULL END) RETURNING ${PAYMENT_COLUMNS}`,[...scope,batchId,input.publicId,input.provider,input.providerTransactionId??null,input.method,amount,orders[0]!.currency,status,JSON.stringify(sanitizeProviderSnapshot(input.evidence))])
+    const inserted=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,order_batch_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at) VALUES($1,$2,'order_batch',$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $10='succeeded' THEN clock_timestamp() ELSE NULL END) RETURNING ${paymentColumns()}`,[...scope,batchId,input.publicId,input.provider,input.providerTransactionId??null,input.method,amount,orders[0]!.currency,status,JSON.stringify(sanitizeProviderSnapshot(input.evidence))])
     const payment=onePayment(inserted,'Creating batch payment did not insert one row')
     for(const authorization of authorizations)await recollections.consume(authorization.authorizationId,payment.id)
     return payment
@@ -546,7 +560,7 @@ export class PaymentRepository {
     const expected = allocations.map(a => ({ order_id: a.orderId, amount_minor: a.amountMinor }))
       .sort((a, b) => a.order_id.localeCompare(b.order_id))
     const result = await this.transaction.query<PaymentRow>(`
-      SELECT ${PAYMENT_COLUMNS} FROM mbox.payments p
+      SELECT ${paymentColumns('p')} FROM mbox.payments p
       WHERE tenant_id=$1 AND store_id=$2 AND provider=$3 AND method=$4
         AND status IN ('created','pending') AND retry_released_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM mbox.audit_events h WHERE h.tenant_id=p.tenant_id AND h.store_id=p.store_id
@@ -644,7 +658,7 @@ export class PaymentRepository {
         $1::uuid,$2::uuid,'activity_registration',NULL,$3::uuid,$4,$5,$6,$7,$8,$9::bigint,$10,
         'succeeded',$11::jsonb,clock_timestamp()
       )
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -956,7 +970,7 @@ export class PaymentRepository {
         $5, 'postar', $6, $7::bigint, $8, 'pending',
         jsonb_build_object('source', 'community_activity_registration')
       )
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1027,9 +1041,9 @@ export class PaymentRepository {
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
     const paymentOrder = await this.transaction.query<{
-      id: string; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+      id: string; prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id
+      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id, (to_jsonb(payments)->>'prepaid_table_session_id') AS prepaid_table_session_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -1048,7 +1062,7 @@ export class PaymentRepository {
     }
     await this.lockPayable(reference)
     const selected = await this.transaction.query<PaymentRow>(`
-      SELECT ${PAYMENT_COLUMNS}
+      SELECT ${paymentColumns()}
       FROM mbox.payments
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
@@ -1081,7 +1095,7 @@ export class PaymentRepository {
         -- Never throw it away: record it, reconcile it, and let the normal
         -- refund/over-collection workflow handle any replacement collection.
         AND status IN ('created', 'pending', 'closed')
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1105,9 +1119,9 @@ export class PaymentRepository {
   ): Promise<PaymentCallbackApplication> {
     validateCallbackInput(input)
     const paymentOrder = await this.transaction.query<{
-      id: string; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+      id: string; prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
     }>(`
-      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id
+      SELECT id, payable_kind, order_batch_id, order_id, activity_registration_id, (to_jsonb(payments)->>'prepaid_table_session_id') AS prepaid_table_session_id
       FROM mbox.payments
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND public_id = $3 AND provider = $4
@@ -1124,7 +1138,7 @@ export class PaymentRepository {
     }
     await this.lockPayable(reference)
     const selected = await this.transaction.query<PaymentRow>(`
-      SELECT ${PAYMENT_COLUMNS}
+      SELECT ${paymentColumns()}
       FROM mbox.payments
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
       FOR UPDATE
@@ -1175,7 +1189,7 @@ export class PaymentRepository {
           updated_at = clock_timestamp()
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
         AND status IN ('created', 'pending', 'closed')
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1236,7 +1250,7 @@ export class PaymentRepository {
       SET settlement_channel=$4, updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
         AND settlement_channel IS NULL
-      RETURNING ${PAYMENT_COLUMNS}
+      RETURNING ${paymentColumns()}
     `, [
       this.transaction.scope.tenantId,
       this.transaction.scope.storeId,
@@ -1279,6 +1293,7 @@ export class PaymentRepository {
   }
 
   async syncActivityRegistrationPaymentStatus(payment: Readonly<Payment>): Promise<void> {
+    if(payment.payableKind==='table_prepayment')return
     if (payment.payableKind !== 'activity_registration' || payment.activityRegistrationId === null) {
       throw new TypeError('payment does not target an activity registration')
     }
@@ -1357,6 +1372,7 @@ export class PaymentRepository {
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,
       [this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])
     const payment = result.rows[0]
+    if (!payment?.activity_registration_id && (await this.transaction.query<{ok:boolean}>("SELECT payable_kind='table_prepayment' ok FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3",[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])).rows[0]?.ok)return
     if (!payment?.activity_registration_id) throw new TypeError('payment does not target an activity registration')
     if (!['partially_refunded','refunded'].includes(payment.status)) return
     const compensation = (await this.transaction.query<{activity_disposition:string}>(`
@@ -1421,8 +1437,13 @@ export class PaymentRepository {
   }
 
   private async lockPayable(reference: Readonly<{
-    order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
+    prepaid_table_session_id?:string|null; order_batch_id?:string|null; payable_kind: Payment['payableKind']; order_id: string | null; activity_registration_id: string | null
   }>): Promise<void> {
+    if(reference.payable_kind==='table_prepayment'&&reference.prepaid_table_session_id){
+      const locked=await this.transaction.query('SELECT id FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.prepaid_table_session_id])
+      if(locked.rowCount!==1)throw new PaymentNotFoundError('prepayment session missing')
+      return
+    }
     if(reference.payable_kind==='order_batch'&&reference.order_batch_id){
       // Staff recovery and table operations lock the session before orders.
       // Provider results must use that order too: syncing payment_status later
@@ -1537,13 +1558,14 @@ function effectiveOrderTotal(order: OrderRow, settlement: SettlementRow): number
   return original - reduction
 }
 
-const PAYMENT_COLUMNS = `
+function paymentColumns(alias = 'payments'): string { return `
   id, payable_kind, order_batch_id, order_id, activity_registration_id, activity_registration_cycle, public_id,
   provider, provider_transaction_id, settlement_channel, method,
   amount_minor, currency, status, provider_snapshot,
   retry_released_at::text, retry_release_reason,
-  succeeded_at::text, created_at::text, updated_at::text
-`
+  succeeded_at::text, created_at::text, updated_at::text,
+  (to_jsonb(${alias})->>'prepaid_table_session_id') AS prepaid_table_session_id
+` }
 
 function verifyCallback(payment: PaymentRow, input: Readonly<ApplyPaymentCallbackInput>): void {
   if (payment.provider !== input.provider) {
@@ -1688,6 +1710,7 @@ function mapPayment(row: PaymentRow): Payment {
   return {
     id: row.id,
     payableKind: row.payable_kind,
+    prepaidTableSessionId:row.prepaid_table_session_id??null,
     ...(row.order_batch_id?{orderBatchId:row.order_batch_id}:{}),
     orderId: row.order_id,
     activityRegistrationId: row.activity_registration_id,

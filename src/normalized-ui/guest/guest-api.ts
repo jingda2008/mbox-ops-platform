@@ -50,6 +50,7 @@ export interface GuestSessionView {
 }
 
 export interface GuestOrderResult {
+  prepaymentSettlement?:boolean
   cart: {
     itemCount: number
     lineCount: number
@@ -85,10 +86,12 @@ export interface GuestOrderResult {
     status: string
     simulated: boolean
     providerAction: OnlinePaymentAction
-  }
+  } | null
 }
 
 export interface GuestSharedCart {
+  prepayment?: {mode:'prepaid';minimumMinor:number;waiverMinor:number;availableMinor:number;qualifyingGoodsMinor:number;shortfallMinor:number;initialFundingRequiredMinor:number;differenceChargingEnabled:false;message:string;myPendingReceipts:Array<{id:string;publicId:string;amountMinor:number}>;mySharedReceipts:Array<{id:string;publicId:string;availableMinor:number}>}
+  minimumSpend?: {minimumMinor:number;consumedMinor:number;cartMinor:number;shortfallMinor:number;message:string}
   cartPublicId: string
   generation: number
   version: number
@@ -339,8 +342,20 @@ export class GuestApiClient {
     return data
   }
 
+  async revokeTablePrepayment(paymentId:string):Promise<void>{
+    await this.request('/api/guest/table-prepayment/revoke',{method:'POST',body:{paymentId},idempotencyKey:`prepay-revoke-${paymentId}`})
+  }
+  async prepayTable(amountMinor:number,options:Readonly<RequestOptions>&{idempotencyKey:string}):Promise<OnlinePaymentAction>{
+    const result=await this.request<unknown>('/api/guest/table-prepayment',{method:'POST',body:{amountMinor,sharedTableConsent:'v1'},idempotencyKey:options.idempotencyKey})
+    const data=responseData(result);if(!isOnlinePaymentAction(data))throw invalidResponse();return data
+  }
+  async queryPrepayment(paymentId:string):Promise<void>{
+    await this.request(`/api/payments/${encodeURIComponent(paymentId)}/provider-query`,{method:'POST',body:{},idempotencyKey:`prepay-query-${crypto.randomUUID()}`})
+  }
+
   async checkoutSharedCart(
     input: Readonly<{
+      prepayment?:boolean
       expectedGeneration: number
       expectedVersion: number
       note: string | null
@@ -349,8 +364,9 @@ export class GuestApiClient {
     }>,
     options: Readonly<RequestOptions> & { idempotencyKey: string },
   ): Promise<GuestSharedCartCheckoutResult> {
-    const body = await this.request<unknown>('/api/guest/shared-cart/checkout', {
-      method: 'POST', body: input, signal: options.signal, idempotencyKey: options.idempotencyKey,
+    const {prepayment,...payload}=input
+    const body = await this.request<unknown>(prepayment?'/api/guest/shared-cart/prepayment-settlement':'/api/guest/shared-cart/checkout', {
+      method: 'POST', body: payload, signal: options.signal, idempotencyKey: options.idempotencyKey,
     })
     const data = responseData(body)
     if (!isSharedCartCheckoutResult(data)) throw invalidResponse()
@@ -697,11 +713,11 @@ function isOrderResult(value: unknown): value is GuestOrderResult {
     && isObject(value.settlement)
     && Number.isSafeInteger(value.settlement.payableAmountMinor)
     && typeof value.settlement.currency === 'string'
-    && isObject(value.payment)
+    && ((value.prepaymentSettlement===true&&value.payment===null&&value.order.paymentStatus==='paid') || (isObject(value.payment)
     && ['wechat_jsapi', 'wechat_native_qr', 'simulation'].includes(String(value.payment.mode))
     && typeof value.payment.status === 'string'
     && typeof value.payment.simulated === 'boolean'
-    && isOnlinePaymentAction(value.payment.providerAction)
+    && isOnlinePaymentAction(value.payment.providerAction)))
 }
 
 function isSharedCartCheckoutResult(value: unknown): value is GuestSharedCartCheckoutResult {

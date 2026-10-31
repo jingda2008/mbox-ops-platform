@@ -1,3 +1,4 @@
+import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
 import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
 import { registerNativeAssignmentSchedule } from './native-assignment-schedule.js'
@@ -65,6 +66,49 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
   registerTableService(app, options)
   await registerNativeAssignmentSchedule(app, options)
   registerNativeTableConfiguration(app, options)
+  app.get('/table-management/prepayments',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorizedContext(options,request)
+    const data=await options.transactions.run(context.scope,async tx=>{
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
+      return (await tx.query(`SELECT session.id,t.code AS "tableCode",session.public_id AS "publicId",session.status,session.opened_at::text AS "openedAt",session.business_date::text AS "businessDate",mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id) AS "unsettled"
+        FROM mbox.table_sessions session JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(session.tenant_id,session.store_id,session.table_id)
+        WHERE session.tenant_id=$1 AND session.store_id=$2 AND session.minimum_spend_mode='prepaid'
+          AND (session.status<>'closed' OR mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id)) ORDER BY session.opened_at DESC LIMIT 100`,[context.scope.tenantId,context.scope.storeId])).rows
+    },{readOnly:true});reply.header('cache-control','no-store');return reply.send({data})
+  }))
+  app.get('/table-management/sessions/:tableSessionId/prepayment',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
+    const data=await options.transactions.run(context.scope,async tx=>{
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
+      const summary=await new TablePrepaymentRepository(tx).snapshot(id)
+      if(!summary)return null
+      const receipts=(await tx.query(`SELECT p.id,p.public_id AS "publicId",p.status,p.amount_minor::text AS "amountMinor",mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text AS "availableMinor" FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY p.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
+      const refunds=(await tx.query(`SELECT r.id,r.public_id AS "publicId",r.status,r.amount_minor::text AS "amountMinor",r.requested_by_employee_id AS "requestedByEmployeeId",r.payment_id AS "paymentId" FROM mbox.refunds r JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(r.tenant_id,r.store_id,r.payment_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY r.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
+      return{...summary,receipts,refunds}
+    },{readOnly:true})
+    reply.header('cache-control','no-store');return reply.send({data})
+  }))
+  for(const action of ['waive','refund-unused'] as const)app.post(`/table-management/sessions/:tableSessionId/prepayment/${action}`,async(request,reply)=>handle(reply,async()=>{
+    if(!options.nativeCommands)throw new TableManagementRequestError('桌次结算服务不可用')
+    const context=await authorizedContext(options,request),body=readObject(request.body),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
+    const reason=requiredString(body.reason,'reason',500),amount=action==='waive'?readInteger(body.amountMinor,'amountMinor',1,Number.MAX_SAFE_INTEGER):0
+    if(body.differenceMinor!==undefined||body.collectDifference!==undefined)throw new TableManagementRequestError('差额收费未启用')
+    const key=readIdempotencyKey(request)
+    const execution=await options.nativeCommands.execute<JsonObject>({scope:context.scope,operationScope:`table.prepayment.${action}`,idempotencyKey:key,requestFingerprint:createHash('sha256').update(JSON.stringify({id,action,amount,reason,employeeId:context.employeeId})).digest('hex'),resultCodec:{encode:v=>v,decode:v=>v as JsonObject}},async tx=>{
+      const access=await new StaffAccessRepository(tx).assertPermission(context.employeeId,action==='waive'?'refund.approve':'refund.request')
+      if(action==='waive'){
+        const session=await new TablePrepaymentRepository(tx).lock(id,true)
+        const cumulative=amount+Number(session.minimum_spend_waiver_minor)
+        const limits=access.approvalLimits.filter(limit=>limit.code==='refund.approve'&&limit.currency==='CNY')
+        if(!limits.some(limit=>limit.amountMinor!==null&&limit.amountMinor>=cumulative))throw new StaffAccessDeniedError('最低消费减免超出本岗位金额权限')
+      }
+      const repo=new TablePrepaymentRepository(tx)
+      const value=action==='waive'?await repo.waive(id,context.employeeId,amount,reason):await repo.requestUnusedRefunds(id,context.employeeId,reason)
+      const result=JSON.parse(JSON.stringify(value??{})) as JsonObject
+      return{result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:`table.prepayment.${action}`,objectType:'table_session',objectId:id,businessDate:context.businessDate,afterData:result,reason}],outboxMessages:[]}
+    })
+    return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
+  }))
   app.get('/table-management/areas', async (request, reply) => handle(reply, async () => {
     const context = await authorizedContext(options, request)
     const data = await options.transactions.run(context.scope, async (transaction) => {
@@ -197,6 +241,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       ...(body.primaryServiceEmployeeId === undefined ? {} : { primaryServiceEmployeeId: readUuid(body.primaryServiceEmployeeId, '主服务员') }),
       publicId: optionalString(body.publicId, 'publicId', 128) ?? `table-session-${randomUUID()}`,
       guestCount: readInteger(body.guestCount, 'guestCount', 1, 200),
+      minimumSpendMode: body.minimumSpendMode==='prepaid'?'prepaid':body.minimumSpendMode===undefined||body.minimumSpendMode==='order_gate'?'order_gate':(()=>{throw new TableManagementRequestError('最低消费模式无效')})(),
+      minimumSpendMinor: body.minimumSpendMinor === undefined ? 0 : readInteger(body.minimumSpendMinor, 'minimumSpendMinor', 0, Number.MAX_SAFE_INTEGER),
       capacityOverrideReason: optionalString(body.capacityOverrideReason, 'capacityOverrideReason', 1000),
       guestProfileSnapshot: readOpenTableGuestProfileSnapshot(body),
     }))
@@ -700,6 +746,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  if(error instanceof TablePrepaymentError)return{status:409,code:error.code,message:error.message}
   if (typeof error === 'object' && error !== null && 'code' in error && ['P2701','P2702'].includes(String(error.code))) return { status:409,code:'TABLE_SERVICE_CONFLICT',message:(error instanceof Error ? error.message : '请确认本次主服务员') }
   if (error instanceof ParticipantMovementNotCommittedError) return { status:409,code:'TABLE_PARTICIPANT_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed' }
   if (error instanceof AssignmentNotCommittedError) return { status: 409,

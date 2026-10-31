@@ -1202,6 +1202,8 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await grantActor(employeeId,['refund.request']);await grantActor(reviewerId,['refund.approve','refund.execute'],100000)
     const row=await pricedBundle(),parent=row.parent
     if(paid)await payment(row.orderId,'cash',4000)
+    const qualifying=async()=>Number((await runner.run(scope,tx=>tx.query('SELECT mbox.table_qualifying_goods($1,$2,$3) amount',[tenantId,storeId,sessionId]))).rows[0].amount)
+    const beforeQualifying=await qualifying()
     const service=new ItemAfterSalesCommandService(new NormalizedCommandExecutor(runner),new ItemAfterSalesOperatingEffects())
     const created=await service.request({scope,employeeId,businessDate:businessDate,orderItemId:row.itemId,quantity,reason:'套餐退部分水，保留商品按单点原价',idempotencyKey:randomUUID()})
     const remaining=(5-quantity)*800+2000,refund=paid?Math.max(0,4000-remaining):0
@@ -1210,6 +1212,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(review.cases[0]).toMatchObject({canApprove:paid,pricing:{policy:'broken_bundle',effectiveAmountMinor:remaining,refundAmountMinor:refund}})
     if(paid)await service.decide({scope,employeeId:reviewerId,businessDate:businessDate,caseId:created.value.caseId,decision:'approved',reason:'确认单点重算及本次差额',idempotencyKey:randomUUID()})
     expect(await runner.run(scope,tx=>new ItemQuantityReceivableRepository(tx).readOrder(row.orderId))).toMatchObject({originalAmountMinor:4000,effectiveAmountMinor:remaining})
+    if(paid)expect(await qualifying()).toBe(beforeQualifying-4000+remaining)
     if(refund){
       expect((await pool.query('SELECT order_item_id FROM mbox.refund_items WHERE refund_id=$1',[created.value.refunds[0]!.id])).rows[0].order_item_id).toBe(parent)
       await manualResult(created.value.refunds[0]!.id,true)

@@ -134,7 +134,8 @@ const wechatPolicyTemplateDivergences = {
   // 2026-10-19: reviewed WeChat-only menu-entry invitation with explicit phone consent; Alipay stays frozen.
   // 2026-10-11: both docks retain the original checkout recovery action even for an empty/frozen cart.
   // 2026-10-23: same supply explanation and stale-menu retry added on both platforms; prior consent differences retained.
-  'pages/order/index': { "wechat": "ff8214c43a581feed9dcc2cc7a69d30fe851e3dff215d6d51600111580c12524", "alipay": "d8521148fd364968baa022f9108dea1f7546929f56a24eeb09ffaeb78553d1f4" },
+  // 2026-10-31: both platforms show prepaid balance and consent at the top; checkout names balance deduction.
+  'pages/order/index': {"wechat": "e8935c830cb324274af516f94a69efc8bc0638bb5dc9c881af0bb9b85a97af55", "alipay": "fc0bf8284084301f7cc76d35248e9672e1fe647ff79649054d615902f8cb7ede"},
   'pages/profile/index': {"wechat": "b0ff38b0e715accef87b1a788c4ae2536417bc16692d2c39f0ff8dda602590b3", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
@@ -157,6 +158,8 @@ for (const page of sharedPages) {
   const alipayTemplate = await readFile(`${alipayBase}.axml`, 'utf8')
   const alipayScript = await readFile(`${alipayBase}.js`, 'utf8')
   if (page === 'pages/order/index') {
+    const prepaymentBlock=template=>template.match(/<!-- Shared table prepayment -->([\s\S]*?)<!-- End shared table prepayment -->/)?.[1]
+    assert(prepaymentBlock(wechatTemplate)?.replace(/wx:/g,'a:').replace(/bindtap=/g,'onTap=').replace(/bindinput=/g,'onInput=').replace(/bindchange=/g,'onChange=')===prepaymentBlock(alipayTemplate),'两端预收款规则及操作必须一致')
     const quantityBlock = template => template.match(/<!-- Shared quantity review -->([\s\S]*?)<!-- End shared quantity review -->/)?.[1]
     const block = quantityBlock(wechatTemplate)
     assert(block && block.replace(/wx:/g, 'a:').replace(/bindtap=/g, 'onTap=') === quantityBlock(alipayTemplate), '两端重复数量确认清单必须一致')
@@ -184,7 +187,7 @@ for (const page of sharedPages) {
   if (page === 'pages/order/index') {
     assert(cssSignature(wechatStyle.slice(wechatStyle.indexOf('.quantity-review-mask'))) === cssSignature(alipayStyle.slice(alipayStyle.indexOf('.quantity-review-mask'))), '两端数量确认样式必须一致')
   }
-  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '43dd4b002e558cbb725810756c4a1d7bd684cedadca22a2d64a4de860de16aaf' && digest(alipayStyle) === '961e60f5ebc72e70693ed5deb7cfd88ee8f4f855cbbe2683b98e18a68fcf6988'
+  const reviewedStyleDivergence = (page === 'pages/community/index' && digest(wechatStyle) === 'c486eeedc11bb12747bef53bb0d3cb17ba8a06630e9c28a4534e343fae83a4ac' && digest(alipayStyle) === '8aed83c1c0b9df23001dd5119425e0ab777e5748795746c55269947d6fec7b63') || page === 'pages/order/index' && digest(wechatStyle) === '9df53818039b10d97c80347d4fa38f19565e7590306e3f51aa2c8b16aa68a051' && digest(alipayStyle) === '6033d92a6b4d46e6ebf8f1c46cf39a70fcca09e9a4485df50653568460b826fd'
   const reviewedMemberQrStyle = page === 'pages/member-center/index' && reviewedDivergence
     && digest(wechatStyle) === divergence.wechatStyle && digest(alipayStyle) === divergence.alipayStyle
   const reviewedPinnedStyle = Boolean(

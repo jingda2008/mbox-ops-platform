@@ -121,7 +121,7 @@ test('slow or offline connections keep the last useful mobile state and offer re
   await page.goto(data.guestUrl)
   await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
   await expectNoHorizontalOverflow(page, 'slow network guest')
-  await page.unroute('**/api/**')
+  await page.unrouteAll({ behavior: 'wait' })
 
   await loginManager(page, data)
   await context.setOffline(true)

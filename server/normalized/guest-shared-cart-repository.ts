@@ -1,3 +1,4 @@
+import {TablePrepaymentRepository} from './table-prepayment-repository.js'
 import { createHash } from 'node:crypto'
 import type { JsonObject } from './command-executor.js'
 import { OrderRepository } from './order-repository.js'
@@ -5,6 +6,7 @@ import type { BundleUnitSelectionInput } from './order-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import {MAX_LINE_QUANTITY,MAX_CART_QUANTITY,MAX_CART_AMOUNT_MINOR} from './guest-shared-cart-limits.js'
 import {canReviewIssuedCouponProduct,verifyIssuedCouponProductLines} from './issued-coupon-product-promise.js'
+import {readTableMinimumSpend,type TableMinimumSpend} from './table-minimum-spend.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 
 export interface GuestSharedCartLine {
@@ -22,6 +24,8 @@ export interface GuestSharedCartLine {
 }
 
 export interface GuestSharedCart {
+  prepayment?: Awaited<ReturnType<TablePrepaymentRepository['snapshot']>>
+  minimumSpend?: TableMinimumSpend
   issuedCouponPortionId?: string
 
   id: string
@@ -53,6 +57,7 @@ interface LineRow extends Record<string, unknown> {
   portion_ids?: string[]
   quantity: number | string
   product_name: string | null
+  standard_amount_minor?: number | string | null
   unit_price_minor: number | string | null
   currency: string | null
   available: boolean
@@ -597,7 +602,7 @@ export class GuestSharedCartRepository {
     const lines = await this.transaction.query<LineRow>(`
       SELECT line.product_id,line.quantity,line.bundle_selections,product.name AS product_name,
         ARRAY(SELECT portion.id::text FROM mbox.guest_shared_cart_portions portion WHERE portion.tenant_id=line.tenant_id AND portion.store_id=line.store_id AND portion.line_id=line.id AND portion.removed_at IS NULL ORDER BY portion.ordinal) AS portion_ids,
-        LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) AS unit_price_minor,price.currency,
+        LEAST(price.amount_minor,mbox.customer_card_price(product.tenant_id,product.store_id,product.id,$4::uuid)) AS unit_price_minor,price.amount_minor AS standard_amount_minor,price.currency,
         CASE
           WHEN product.id IS NULL OR product.status<>'active' THEN '商品已下架'
           WHEN NOT mbox.product_visible_now(product.tenant_id,product.store_id,product.id,$4::uuid) OR NOT ('guest_qr'=ANY(product.allowed_channels)) THEN '当前商品暂不对顾客开放'
@@ -944,8 +949,12 @@ export class GuestSharedCartRepository {
     }
     const currencies = new Set(mappedLines.filter((line) => line.available).map((line) => line.currency))
     const allPriced = mappedLines.every((line) => line.available && line.subtotalAmountMinor !== null)
+    const minimumSpend=await readTableMinimumSpend(this.transaction,cart.tableSessionId,
+      lines.rows.reduce((sum,line)=>sum+Number(line.standard_amount_minor??line.unit_price_minor??0)*Number(line.quantity),0))
     return {
       ...cart,
+      minimumSpend,
+      prepayment:await new TablePrepaymentRepository(this.transaction).snapshot(cart.tableSessionId,this.customerId??undefined),
       lines: mappedLines.map(line=>({...line,couponReviewAvailable:couponReview.get(line.productId)??false})),
       totalAmountMinor: allPriced && currencies.size <= 1
         ? mappedLines.reduce((sum, line) => sum + line.subtotalAmountMinor!, 0)

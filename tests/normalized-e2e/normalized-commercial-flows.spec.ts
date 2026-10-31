@@ -987,6 +987,8 @@ test('two guests see the same server cart before either one checks out', async (
 
     const firstCart = page.getByRole('complementary', { name: '订单结算' })
     const secondCart = secondGuest.getByRole('complementary', { name: '订单结算' })
+    await expect(firstCart).toBeVisible()
+    await expect(secondCart).toBeVisible()
     const beforeCount = await guestCartItemCount(firstCart)
     await page.getByLabel('搜索菜单商品').fill(data.orderableProductName)
     const add = page.getByRole('button', { name: `加入${data.orderableProductName}` })

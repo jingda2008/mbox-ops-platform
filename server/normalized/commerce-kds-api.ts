@@ -1,3 +1,5 @@
+import {TablePrepaymentError} from './table-prepayment-repository.js'
+import {TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import {nativePhysicalExecutor,isNativePhysicalKey,NativePhysicalNotCommittedError} from './native-physical-command.js'
 import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
@@ -1942,6 +1944,8 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof TypeError) return apiError(400, 'REQUEST_INVALID', error.message)
   if (error instanceof KdsTaskNotFoundError) return apiError(404, 'KDS_TASK_NOT_FOUND', error.message)
+  if(error instanceof TablePrepaymentError)return apiError(409,error.code,error.message)
+  if (error instanceof TableMinimumSpendNotMetError) return apiError(409, 'TABLE_MINIMUM_SPEND_NOT_MET', error.message)
   if (error instanceof OrderProductUnavailableError) {
     return apiError(409, 'ORDER_PRODUCT_UNAVAILABLE', error.message)
   }

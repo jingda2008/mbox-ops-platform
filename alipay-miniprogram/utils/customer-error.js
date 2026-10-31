@@ -3,6 +3,11 @@
 const CODE_MESSAGES = Object.freeze({
   CHECKOUT_COUPON_RECONFIRM_REQUIRED: '优惠条件已变化，请重新选券或不用券继续，本次没有创建订单',
   COUPON_UPGRADE_REQUOTE_REQUIRED: '套餐已变更，请重新确认商品和优惠报价',
+  TABLE_MINIMUM_SPEND_NOT_MET: '本桌优惠前商品金额尚未达到最低消费，请按页面提示补足商品后提交',
+  TABLE_PREPAYMENT_REQUIRED: '请先补足本桌预收款，再分次提交订单；购物车已保留',
+  TABLE_PREPAYMENT_INSUFFICIENT: '预收款余额不足，还差的金额请在本桌预收款区域核对并补充；购物车已保留',
+  TABLE_PREPAYMENT_SESSION_CLOSED: '本桌已结束，请联系服务员核对原预付款',
+  TABLE_PREPAYMENT_OWNER_REQUIRED: '仅原付款人可撤销这笔预收款的共享授权',
   NETWORK_ERROR: '网络暂时不可用，请检查网络后重试',
   GUEST_SESSION_INVALID: '桌台连接已失效，请重新扫描桌面二维码',
   GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',

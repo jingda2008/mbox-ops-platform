@@ -1,3 +1,7 @@
+import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
+import {RecommendationFinancialAttributionRepository} from './recommendation-financial-attribution-repository.js'
+import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
+import {TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import { customerSupplyProjection, customerSupplyCopy } from './product-supply-presentation.js'
 import {IssuedCouponPromiseError} from './issued-coupon-product-promise.js'
@@ -71,7 +75,7 @@ import {
 } from './guest-request-context.js'
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
-import { OrderNotPayableError, type Payment } from './payment-repository.js'
+import { PaymentRepository,OrderNotPayableError, type Payment } from './payment-repository.js'
 import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { GuestImmediateCheckoutReconciliationRepository } from './guest-immediate-checkout-reconciliation-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
@@ -492,6 +496,69 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       const data:JsonObject={order:{publicId:order.result.order.publicId,status:order.result.order.status,paymentStatus:'paid'},payment:null,pointsSettlement:true,pointsUsed:quote.pointsUsed,settlement:{subtotalAmountMinor:quote.subtotalMinor,discountAmountMinor:quote.discountMinor,payableAmountMinor:0,currency:quote.currency},sharedCart:publicSharedCart(transition.nextCart) as JsonObject}
       const payload={orderId:order.result.order.id,settlementKind:'points',pointsUsed:quote.pointsUsed,inventoryMovementCount:activation.inventoryConsumptions.length,kdsTaskCount:activation.kdsTasks.length}
       return{result:data,auditEvents:[...order.auditEvents,{actor:guestActor(context),action:'order.points_settled',objectType:'order',objectId:order.result.order.id,businessDate:context.businessDate,afterData:payload}],outboxMessages:[...order.outboxMessages,{businessEventKey:`points-settlement:${order.result.order.id}`,aggregateType:'order',aggregateId:order.result.order.id,aggregateVersion:2,eventType:'order.fulfillment_activated_after_payment.v1',payload},{aggregateType:'guest_shared_cart',aggregateId:cart.id,aggregateVersion:transition.submittedCart.version,eventType:'guest.shared_cart.submitted.v1',payload:publicSharedCart(transition.submittedCart) as JsonObject}]}
+    })
+    const cart=await options.transactions.run(context.scope,tx=>new GuestSharedCartRepository(tx,context.customerId).readOpen(context.tableSessionId,createSharedCartPublicId()))
+    reply.header('cache-control','no-store')
+    return reply.code(execution.replayed?200:201).send({data:{...execution.value,sharedCart:publicSharedCart(cart)},meta:{replayed:execution.replayed}})
+  }))
+
+  app.post('/guest/table-prepayment/revoke',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create'),body=readStrictObject(request.body,'撤销共享',['paymentId']),paymentId=readUuid(body.paymentId,'paymentId'),key=readIdempotencyKey(request)
+    const result=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.table-prepayment.revoke',idempotencyKey:key,requestFingerprint:stableJson({paymentId,customerId:context.customerId,sessionId:context.tableSessionId}),resultCodec:{encode:v=>v,decode:jsonObject}},async tx=>{
+      const repo=new TablePrepaymentRepository(tx);await repo.lock(context.tableSessionId)
+      if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
+      const snapshot=await repo.revoke(context.tableSessionId,context.customerId,paymentId)
+      return{result:JSON.parse(JSON.stringify(snapshot)),auditEvents:[{actor:guestActor(context),action:'table.prepayment_sharing_revoked',objectType:'payment',objectId:paymentId,businessDate:context.businessDate,afterData:{futureSharingAllowed:false,originalOrdersPreserved:true}}],outboxMessages:[]}
+    });return reply.send({data:result.value})
+  }))
+
+  app.post('/guest/table-prepayment',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create')
+    const body=readStrictObject(request.body,'预收款',['amountMinor','sharedTableConsent'])
+    if(body.sharedTableConsent!=='v1')throw new TablePrepaymentError('TABLE_PREPAYMENT_CONSENT_REQUIRED','请确认预收款供本桌共同点单使用，余额按原付款退回，差额收费未启用')
+    const amountMinor=readInteger(body.amountMinor,'amountMinor',1,100_000_000),key=readIdempotencyKey(request)
+    const mode=await effectivePaymentMode(options,context.scope,request);assertGuestSelfPaymentMode(mode)
+    options.onlinePayments.assertAvailable(mode==='simulation'?'simulation':'postar')
+    const method=await guestCheckoutPaymentMethod(options,context,mode)
+    const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.table-prepayment',idempotencyKey:key,requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,amountMinor,consent:'v1'}),resultCodec:{encode:v=>v,decode:jsonObject}},async tx=>{
+      const session=await new TablePrepaymentRepository(tx).lock(context.tableSessionId)
+      if(session.minimum_spend_mode!=='prepaid')throw new TablePrepaymentError('TABLE_PREPAYMENT_NOT_ENABLED','本桌未启用预收款，请按当前点单方式提交')
+      if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
+      const payment=await new PaymentRepository(tx).createForTablePrepayment({tableSessionId:context.tableSessionId,customerId:context.customerId,amountMinor,provider:mode==='simulation'?'simulation':'postar',method,publicId:createPublicId('payment',`${context.scope.storeId}:${key}`)})
+      return {result:{paymentId:payment.id},auditEvents:[{actor:guestActor(context),action:'table.prepayment_requested',objectType:'payment',objectId:payment.id,businessDate:context.businessDate,afterData:{amountMinor:payment.amountMinor,sharedTableConsent:'v1',differenceChargingEnabled:false}}],outboxMessages:[]}
+    })
+    const stored=await options.transactions.run(context.scope,tx=>new PaymentProviderActionRepository(tx,options.paymentActionSecret).resolvePaymentContext(String(execution.value.paymentId),guestPaymentPrincipal(context),{lock:false}))
+    const action=await createGuestProviderAction(options,context,paymentFromContext(stored),stored.publicId,request.ip,mode)
+    return reply.send({data:action,meta:{replayed:execution.replayed}})
+  }))
+
+  app.post('/guest/shared-cart/prepayment-settlement',async(request,reply)=>handleRoute(reply,async()=>{
+    const context=await requireTableContext(options,request,'guest.order.create'),input=readSharedCartCheckout(request.body)
+    if(!options.commerce.submitOrderInTransaction)throw new Error('Shared cart checkout service is unavailable')
+    const submit=options.commerce.submitOrderInTransaction.bind(options.commerce),idempotencyKey=readIdempotencyKey(request)
+    await recordSharedCartWriteAttempt(options,context,idempotencyKey,'checkout')
+    const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.shared-cart.prepayment-settlement',idempotencyKey,
+      requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,...input}),resultCodec:{encode:value=>value,decode:value=>jsonObject(value)}},async tx=>{
+      const prepayment=new TablePrepaymentRepository(tx);await prepayment.lock(context.tableSessionId)
+      if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
+      await requireGuestCartProtocol(tx,context.tableSessionId,2)
+      const quote=input.couponQuoteId?await new CheckoutCouponQuoteRepository(tx).find(input.couponQuoteId,context.customerId):null
+      if(quote&&(!quote.current||quote.tableSessionId!==context.tableSessionId||quote.generation!==input.expectedGeneration||quote.version!==input.expectedVersion))throw new CheckoutCartPricingError('优惠报价已失效，请重新确认')
+      const carts=new GuestSharedCartRepository(tx,context.customerId)
+      const cart=await carts.beginCheckout(context.tableSessionId,createSharedCartPublicId(),{expectedGeneration:input.expectedGeneration,expectedVersion:input.expectedVersion,operationId:idempotencyKey,actorSessionRef:context.actorRef})
+      const order=await submit(tx,{scope:context.scope,actor:guestActor(context),businessDate:context.businessDate,idempotencyKey:`prepaid-order-${createHash('sha256').update(idempotencyKey).digest('hex').slice(0,48)}`,publicId:createPublicId('order',`${context.scope.storeId}:${idempotencyKey}`),tableSessionId:context.tableSessionId,channel:'guest_qr',prepaymentSettlement:true,settlementMode:'immediate_payment',lines:checkoutLinesWithNotes(cart.lines,input.lineNotes,Boolean(quote)),...(quote?{pricingAuthorization:{sourceType:'checkout_quote' as const,sourceId:quote.id}}:{}),note:input.note,createdByCustomerId:context.customerId,confirmedDuplicateOrderPublicId:input.confirmedDuplicateOrderId,checkoutUpgradeOfferPublicId:input.checkoutUpgradeOfferPublicId,...(input.recommendationPublicId===null?{}:{recommendationAttribution:{recommendationPublicId:input.recommendationPublicId,selectedProductId:input.selectedRecommendationProductId!}})})
+      const allocated=await prepayment.allocate(context.tableSessionId,order.result.order.id)
+      const activation=await new PaymentFulfillmentRepository(tx).activatePaidOrder(order.result.order.id,{...(allocated.paymentIds[0]?{paymentId:allocated.paymentIds[0]}:{}),metadata:{settlementKind:'table_prepayment'}})
+      if(!activation.activated)throw new CheckoutCartPricingError('订单尚未进入出品，请核对原订单')
+      if(allocated.paymentIds[0]){
+        await new RecommendationFinancialAttributionRepository(tx).recordPaidForOrder({paymentId:allocated.paymentIds[0],orderId:order.result.order.id,actorRef:context.actorRef})
+        await new LoyaltyAccrualRepository(tx).recordPaidOrder({paymentId:allocated.paymentIds[0],orderId:order.result.order.id,occurredAt:new Date().toISOString()})
+      }
+      const transition=await carts.completeCheckout(cart,{orderId:order.result.order.id,expectedVersion:input.expectedVersion,operationId:idempotencyKey,actorSessionRef:context.actorRef,nextCartPublicId:createSharedCartPublicId()})
+      const data:JsonObject={cart:{itemCount:cart.lines.reduce((sum,line)=>sum+line.quantity,0),lineCount:cart.lines.length,items:order.result.order.items.filter(item=>item.billable).map(item=>({productId:item.productId,name:publicString(item.productSnapshot.name)??'',quantity:item.quantity,unitAmountMinor:item.unitPriceMinor,totalAmountMinor:item.totalAmountMinor,currency:item.currency,note:item.note}))},order:{publicId:order.result.order.publicId,status:order.result.order.status,paymentStatus:'paid',note:input.note,attentionRequired:Boolean(input.note?.trim())||order.result.order.items.some(item=>Boolean(item.note?.trim())),kdsNotice:null},payment:null,prepaymentSettlement:true,settlement:{subtotalAmountMinor:order.result.order.subtotalAmountMinor,discountAmountMinor:order.result.order.discountAmountMinor,payableAmountMinor:allocated.amountMinor,currency:'CNY'},sharedCart:publicSharedCart(transition.nextCart) as JsonObject}
+      const payload={orderId:order.result.order.id,settlementKind:'table_prepayment',amountMinor:allocated.amountMinor,paymentIds:allocated.paymentIds,inventoryMovementCount:activation.inventoryConsumptions.length,kdsTaskCount:activation.kdsTasks.length}
+      return{result:data,auditEvents:[...order.auditEvents,{actor:guestActor(context),action:'order.prepayment_settled',objectType:'order',objectId:order.result.order.id,businessDate:context.businessDate,afterData:payload}],outboxMessages:[...order.outboxMessages,{businessEventKey:`prepayment-settlement:${order.result.order.id}`,aggregateType:'order',aggregateId:order.result.order.id,aggregateVersion:2,eventType:'order.fulfillment_activated_after_payment.v1',payload},{aggregateType:'guest_shared_cart',aggregateId:cart.id,aggregateVersion:transition.submittedCart.version,eventType:'guest.shared_cart.submitted.v1',payload:publicSharedCart(transition.submittedCart) as JsonObject}]}
+
     })
     const cart=await options.transactions.run(context.scope,tx=>new GuestSharedCartRepository(tx,context.customerId).readOpen(context.tableSessionId,createSharedCartPublicId()))
     reply.header('cache-control','no-store')
@@ -2098,6 +2165,8 @@ function publicSharedCart(cart: GuestSharedCart) {
     && cart.lines.every((line) => line.available)
   return {
     ...(cart.issuedCouponPortionId?{issuedCouponPortionId:cart.issuedCouponPortionId}:{}),
+    ...(cart.prepayment?{prepayment:{...cart.prepayment}}:{}),
+    ...(cart.minimumSpend ? {minimumSpend: {...cart.minimumSpend}} : {}),
     cartPublicId: cart.publicId,
     generation: cart.generation,
     version: cart.version,
@@ -2747,7 +2816,7 @@ function readPublicId(value: unknown, name: string): string {
 function paymentFromContext(value: Awaited<ReturnType<PaymentProviderActionRepository['resolvePaymentContext']>>): Payment {
   return {
     id: value.id,
-    payableKind: 'order',
+    payableKind: value.payableKind,
     orderId: value.orderId,
     activityRegistrationId: null,
     activityRegistrationCycle: null,
@@ -2834,6 +2903,8 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
       return reply.code(409).send({ error: { code: 'SERVICE_FEEDBACK_STATE_CONFLICT', message: error.message } })
     }
     if (error instanceof ProductSaleQuantityUnavailableError) return reply.code(409).send({error:{code:'PRODUCT_SALE_QUANTITY_UNAVAILABLE',message:error.reason}})
+    if(error instanceof TablePrepaymentError)return reply.code(409).send({error:{code:error.code,message:error.message}})
+    if (error instanceof TableMinimumSpendNotMetError) return reply.code(409).send({error:{code:'TABLE_MINIMUM_SPEND_NOT_MET',message:error.message,details:error.details}})
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })
     }

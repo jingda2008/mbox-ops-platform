@@ -76,7 +76,7 @@ const permission=(provider:Provider)=>provider==='cash'?'payment.manual.cash.rec
     if(authorize)await money.authorizeRecollection({...meta(),orderId:order,reason:'仅补收原普通退款，服务补偿继续有效'})
     // Explicit synthetic legacy closure. Payment/refund/authorization facts
     // use real restricted commands; this is not an old binary or live rail.
-    if(closed)await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1",[session,cashier])
+    if(closed)await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=GREATEST(opened_at,clock_timestamp()),closed_by_employee_id=$2 WHERE id=$1",[session,cashier])
     const authorization=authorize?(await money.authorizeRecollection({...meta(),orderId:order,reason:'重新核实历史普通欠款，原服务补偿保留'})).value:null
     return {order,session,item,original,refunds,authorization,amount:2500-compensation}
   }
@@ -230,7 +230,7 @@ const permission=(provider:Provider)=>provider==='cash'?'payment.manual.cash.rec
   it('rejects an unconsumed verified success on the original payment at projection',async()=>{
     const f=await fixture(false)
     const payment=(await money.initiate({...meta(),orderId:f.order,publicId:randomUUID(),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashier}})).value
-    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=GREATEST(opened_at,clock_timestamp()),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
     await money.closeUnpresentedClosedDebtPayment({...meta(),paymentId:payment.id,reason:'核对原本地尝试未曾送往渠道'})
     const observation=await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef:'fixture-verifier',paymentPublicId:payment.publicId,providerTransactionId:randomUUID(),reportedAmountMinor:2400,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString(),evidence:{fixture:'trusted synthetic observation'}})
     await expect(money.recordManual(manual(f.order))).rejects.toThrow(/原付款结果尚未明确/)
@@ -266,7 +266,7 @@ const permission=(provider:Provider)=>provider==='cash'?'payment.manual.cash.rec
   }
   it('rejects the proven old-pending timestamp and consumed-authorization forgery despite a new ledger',async()=>{
     const f=await fixture(false),{id,reference,evidence}=await oldPending(f)
-    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=GREATEST(opened_at,clock_timestamp()),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
     const before=await balances(f)
     await expect(runner.run(scope,async tx=>{
       const p=(await tx.query<{succeeded_at:string}>("UPDATE mbox.payments SET created_at=clock_timestamp(),succeeded_at=clock_timestamp(),status='succeeded',provider_transaction_id=$2 WHERE id=$1 RETURNING succeeded_at::text",[id,reference])).rows[0]!
@@ -280,7 +280,7 @@ const permission=(provider:Provider)=>provider==='cash'?'payment.manual.cash.rec
   it.each(['nothing','update'] as const)('does not create false admission from INSERT ON CONFLICT DO %s',async conflict=>{
     const f=await fixture(false),{id,reference,publicId,evidence}=await oldPending(f)
     await runner.run(scope,tx=>tx.query("UPDATE mbox.payments SET status='failed' WHERE id=$1",[id]))
-    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp(),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=GREATEST(opened_at,clock_timestamp()),closed_by_employee_id=$2 WHERE id=$1",[f.session,cashier])
     const before=(await admin.query("SELECT to_jsonb(p)-'updated_at' row FROM mbox.payments p WHERE id=$1",[id])).rows[0].row
     await runner.run(scope,async tx=>{
       const result=await tx.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,payable_kind,order_id,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,provider_snapshot,succeeded_at)

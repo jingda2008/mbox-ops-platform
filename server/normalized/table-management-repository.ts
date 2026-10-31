@@ -90,6 +90,8 @@ export interface TableResponsibilityAssignmentBatch {
 }
 
 export interface ManagedTableSession {
+  minimumSpendMinor:number
+  minimumSpendMode:'order_gate'|'prepaid'
   id: string
   tableId: string
   tableCode: string
@@ -218,6 +220,8 @@ export interface EndAssignmentCommand extends TableManagementCommandBase {
 }
 
 export interface OpenManagedTableCommand extends TableManagementCommandBase {
+  minimumSpendMode?: 'order_gate'|'prepaid'
+  minimumSpendMinor?: number
   primaryServiceEmployeeId?: string
   tableId: string
   publicId: string
@@ -324,6 +328,8 @@ interface AssignmentRow extends Record<string, unknown> {
 }
 
 interface SessionRow extends Record<string, unknown> {
+  minimum_spend_minor?:number|string
+  minimum_spend_mode?:'order_gate'|'prepaid'
   location_version?: number
   id: string
   table_id: string
@@ -740,17 +746,17 @@ export class TableManagementRepository {
       INSERT INTO mbox.table_sessions (
         tenant_id, store_id, table_id, public_id, business_date, guest_count,
         capacity_at_open, capacity_override_reason, capacity_overridden_by_employee_id,
-        guest_profile_snapshot, status, opened_by_employee_id, primary_service_employee_id
+        guest_profile_snapshot, status, opened_by_employee_id, primary_service_employee_id, minimum_spend_minor, minimum_spend_mode
       ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::date, $6, $7, $8,
-        $9::uuid, $10::jsonb, 'open', $11::uuid, mbox.resolve_table_primary($1::uuid,$2::uuid,$3::uuid,$13::uuid))
+        $9::uuid, $10::jsonb, 'open', $11::uuid, mbox.resolve_table_primary($1::uuid,$2::uuid,$3::uuid,$13::uuid), $14::bigint,$15::text)
       RETURNING id, table_id, $12::text AS table_code, public_id, business_date::text,
         guest_count, capacity_at_open, capacity_override_reason,
         capacity_overridden_by_employee_id, guest_profile_snapshot, status,
-        opened_by_employee_id, opened_at::text
+        opened_by_employee_id, opened_at::text,minimum_spend_minor,minimum_spend_mode
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.tableId,
       input.publicId, input.businessDate, input.guestCount, table.capacity, overrideReason,
       overCapacity ? input.openedByEmployeeId : null, JSON.stringify(profile), input.openedByEmployeeId,
-      table.code, input.primaryServiceEmployeeId ?? null])
+      table.code, input.primaryServiceEmployeeId ?? null, input.minimumSpendMinor ?? 0,input.minimumSpendMode??'order_gate'])
     return mapSession(requiredRow(result.rows[0], '桌次'))
   }
 
@@ -780,7 +786,7 @@ export class TableManagementRepository {
         session.business_date::text, session.guest_count, session.capacity_at_open,
         session.capacity_override_reason, session.capacity_overridden_by_employee_id,
         session.guest_profile_snapshot, session.status, session.opened_by_employee_id,
-        session.opened_at::text
+        session.opened_at::text,session.minimum_spend_minor,session.minimum_spend_mode
       FROM mbox.table_sessions AS session
       JOIN mbox.tables AS source ON source.tenant_id = session.tenant_id
         AND source.store_id = session.store_id AND source.id = session.table_id
@@ -1291,7 +1297,7 @@ function mapAssignment(row: AssignmentRow): TableResponsibilityAssignment {
 }
 
 function mapSession(row: SessionRow): ManagedTableSession {
-  return { id: row.id, tableId: row.table_id, tableCode: row.table_code,
+  return { minimumSpendMinor:Number(row.minimum_spend_minor??0),minimumSpendMode:row.minimum_spend_mode??'order_gate', id: row.id, tableId: row.table_id, tableCode: row.table_code,
     publicId: row.public_id, businessDate: row.business_date, guestCount: row.guest_count,
     capacityAtOpen: row.capacity_at_open, capacityOverrideReason: row.capacity_override_reason,
     capacityOverriddenByEmployeeId: row.capacity_overridden_by_employee_id,
@@ -1328,7 +1334,8 @@ function validateAssignment(input: { startsAt: string; endsAt?: string | null; r
   if (normalizeReason(input.reason) === null) throw new TypeError('责任分配原因不能为空')
 }
 
-function validateOpen(input: { publicId: string; guestCount: number }): void {
+function validateOpen(input: { publicId: string; guestCount: number; minimumSpendMinor?: number }): void {
+  if (input.minimumSpendMinor !== undefined && (!Number.isSafeInteger(input.minimumSpendMinor) || input.minimumSpendMinor < 0)) throw new TypeError('最低消费无效')
   if (input.publicId.length < 8 || input.publicId.length > 128) throw new TypeError('publicId长度无效')
   if (!Number.isSafeInteger(input.guestCount) || input.guestCount < 1 || input.guestCount > 200) throw new TypeError('开台人数无效')
 }

@@ -1,3 +1,4 @@
+import {GuestPrepaymentPanel} from './GuestPrepaymentPanel'
 import {GuestCartState,GuestReadSequence} from './guest-cart-state'
 import { sameGuestTableCode } from './table-code-alias'
 import {
@@ -49,7 +50,7 @@ import { GuestCheckoutRecovery, guestCheckoutLineNotes, resolveGuestDeviceKey, t
 import { clearPersistedCart } from '../../components/menu-cart-storage'
 import './guest-app.css'
 
-type GuestApiPort = Pick<GuestApiClient, 'waitForTable' | 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'>
+type GuestApiPort = Pick<GuestApiClient, 'waitForTable' | 'scanTable' | 'loadSession' | 'searchMenu' | 'submitOrder' | 'loadSharedCart' | 'adjustSharedCart' | 'replaceSharedCartBundleSelection' | 'removeSharedCartLine' | 'checkoutSharedCart' | 'loadTableOrders' | 'loadTodayPerformance' | 'payTableOrder' | 'abandonCheckout' | 'requestService' | 'recordMood'> & Partial<Pick<GuestApiClient,'prepayTable'|'queryPrepayment'|'revokeTablePrepayment'>>
 type ServiceType = 'call_staff' | 'complaint' | 'custom'
 type Panel = 'orders' | 'complaint' | 'custom' | 'checkout' | null
 export type { GuestGateReason } from './guest-gate-model'
@@ -675,7 +676,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           if (!sharedCart) throw new Error('同桌购物车正在同步，请稍后再试。')
           if (!sharedCart.allowedActions.includes('checkout')) throw new Error('购物车中有暂不可结算的商品，请处理或刷新后再结账。')
           input = { protocol: 2, body: {
-            ...common, expectedGeneration: sharedCart.generation, expectedVersion: sharedCart.version,
+            ...common, prepayment:sharedCart.prepayment?.mode==='prepaid', expectedGeneration: sharedCart.generation, expectedVersion: sharedCart.version,
             lineNotes: guestCheckoutLineNotes(sharedCart, items),
           } }
         } else input = { protocol: 1, body: { ...common, items } }
@@ -703,8 +704,8 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       void loadTableOrders(true)
       // The checkout is already authoritative. Cart refresh must not keep the payment result busy.
       if (cartProtocolVersion === 2) void loadSharedCart(true)
-      notify('订单已经送达吧台与收银，请完成付款。', 'success')
-      if (!result.payment.simulated
+      notify(result.prepaymentSettlement?'预收款抵扣成功，订单已进入出品。':'订单已经送达吧台与收银，请完成付款。', 'success')
+      if (result.payment && !result.payment.simulated
         && result.payment.providerAction.status === 'pending'
         && result.payment.providerAction.payload !== null) {
         try {
@@ -768,9 +769,11 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
     />
   }
 
+  const api=apiRef.current
   return (
     <main className="guest-app guest-app-restored-menu" data-testid="normalized-guest-app">
       <h1 className="guest-page-title">M-BOX {table?.displayName ?? table?.code} 桌边点单</h1>
+      {sharedCart?.prepayment&&api?.prepayTable&&api?.queryPrepayment&&api?.revokeTablePrepayment?<GuestPrepaymentPanel key={cartStorageKey} scope={cartStorageKey??'unbound'} summary={sharedCart.prepayment} prepay={(amount,key)=>api.prepayTable!(amount,{idempotencyKey:key})} query={id=>api.queryPrepayment!(id)} revoke={id=>api.revokeTablePrepayment!(id)} present={presentOnlinePayment} refresh={()=>loadSharedCart(true)}/>:sharedCart?.minimumSpend?.message&&<p role="status">{sharedCart.minimumSpend.message}</p>}
       <header className="guest-header">
         <div className="guest-brand"><span>M</span><div><strong>M-BOX</strong><small>SUPERHIGH CULTURE · LIVEHOUSE</small></div></div>
         <button type="button" className="guest-table" onClick={() => { setPanel('orders'); void loadTableOrders() }}>
@@ -832,7 +835,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
           key={`${cartStorageKey ?? "shared"}:${checkoutViewRevision}`}
           products={menuProducts}
           tableLabel={table?.displayName ?? table?.code ?? ''}
-          submitLabel="确认订单并微信支付"
+          submitLabel={sharedCart?.prepayment?"确认抵扣预收款并下单":"确认订单并微信支付"}
           submitHint={cartProtocolVersion === 2 ? '本桌共同可见，任何人的改动都会同步到这里。' : '这里只提交本次购物车；历史订单不会重复提交。'}
           busy={submittingOrder}
           orderSafety={guestOrderSafety}
@@ -1094,7 +1097,7 @@ export function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose, bus
   onClose: () => void
 }) {
   const paymentCopy = paymentStatusCopy(result, tableOrder)
-  const canPay=!result.payment.simulated && (tableOrder
+  const canPay=result.payment!==null&&!result.payment.simulated && (tableOrder
     ? ['unpaid','pending','partially_paid'].includes(tableOrder.paymentStatus)&&['available','payment_in_progress'].includes(tableOrder.paymentAccess)
     : result.payment.status!=='paid'&&['pending','failed'].includes(result.payment.providerAction.status))
   return <div className="guest-checkout-result">
@@ -1103,7 +1106,7 @@ export function CheckoutPanel({ result, tableOrder, onRetryPayment, onClose, bus
     {result.order.attentionRequired && <div className="guest-attention">{result.order.kdsNotice ?? '备注已保存，付款成功后同步给出品和配送人员'}</div>}
     <div className="guest-checkout-amount"><span>本次应付</span><strong>{formatMoney(tableOrder?.payableAmountMinor ?? result.settlement.payableAmountMinor, result.settlement.currency)}</strong></div>
     {canPay && <button type="button" className="guest-primary" disabled={busy} onClick={onRetryPayment}>
-      {busy?'正在核对付款…':result.payment.providerAction.status==='failed'?'重新发起付款':'继续微信支付'}
+      {busy?'正在核对付款…':result.payment?.providerAction.status==='failed'?'重新发起付款':'继续微信支付'}
     </button>}
     <button type="button" className="guest-secondary" onClick={onClose}>返回菜单</button>
   </div>
@@ -1140,6 +1143,8 @@ export function paymentStatusCopy(result: GuestOrderResult, tableOrder: GuestTab
   if (tableOrder?.paymentAccess === 'not_required' && tableOrder.paymentStatus === 'unpaid') return { title: '本单无需付款', detail: '当前账单已不需要付款，请查看本桌订单的处理记录。' }
   if (tableOrder?.paymentStatus === 'paid') return { title: '支付已经完成', detail: '吧台与收银已经收到付款状态。' }
   if (tableOrder?.paymentAccess === 'status_review') return { title: '订单已建立，付款状态待核对', detail: '系统正在向支付机构核对结果，请勿重复付款。' }
+  if(result.prepaymentSettlement&&result.payment===null)return{title:'预收款抵扣成功',detail:'本单已从本桌预收款抵扣，订单已进入出品，无需再付款。'}
+  if(!result.payment)return{title:'付款状态待核对',detail:'请查看本桌账单'}
   if (result.payment.providerAction.status === 'resolved') {
     if (result.payment.simulated) return { title: '测试订单已恢复', detail: '这是测试付款记录，未产生真实收款；请查看本桌订单的最新状态。' }
     const status = result.payment.providerAction.terminalPaymentStatus

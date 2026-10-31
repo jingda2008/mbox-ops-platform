@@ -7,7 +7,7 @@ export class TableMinimumExceptionsRepository {
  private get scope(){return [this.tx.scope.tenantId,this.tx.scope.storeId]}
  async assertAccess(employeeId:string,sessionId:string,adjust=false){
   const access=adjust?await new StaffAccessRepository(this.tx).assertPermission(employeeId,'table.minimum_spend.adjust'):await new StaffAccessRepository(this.tx).resolve(employeeId)
-  if(!access.permissions.includes('table.view_all')){
+  if(!access.permissions.includes('table.view_all')&&!(!adjust&&access.permissions.includes('reconciliation.view'))){
    if(adjust||!access.permissions.includes('order.create'))throw new StaffAccessDeniedError('无权查看或调整本桌低消')
    const allowed=await this.tx.query(`SELECT 1 FROM mbox.table_sessions s JOIN mbox.table_assignments a ON(a.tenant_id,a.store_id,a.table_id)=(s.tenant_id,s.store_id,s.table_id)
     WHERE(s.tenant_id,s.store_id,s.id) = ($1,$2,$3) AND a.employee_id=$4 AND a.assignment_type IN('primary','backup') AND a.starts_at<=clock_timestamp() AND(a.ends_at IS NULL OR a.ends_at>clock_timestamp())`,[...this.scope,sessionId,employeeId])

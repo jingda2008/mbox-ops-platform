@@ -109,6 +109,27 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
   try{expect((await api.inject({url:`/table-management/sessions/${id}/minimum-spend`})).statusCode).toBe(403);expect((await api.inject({method:'POST',url:`/table-management/sessions/${id}/minimum-spend`,headers:{'idempotency-key':randomUUID()},payload:{expectedMinimumMinor:20000,targetMinimumMinor:0,reason:'越权取消'}})).statusCode).toBe(403)}finally{await api.close()}
   await expect(transactions.run({tenantId,storeId:randomUUID()},tx=>new TableMinimumExceptionsRepository(tx).snapshot(id))).rejects.toThrow()
  })
+ it('allows reconciliation-only finance to read minimum history without releasing, adjusting or refunding',async()=>{
+  const employee=randomUUID(),role=randomUUID(),id=await session()
+  await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'finance-readonly','只读财务')",[employee,tenantId,storeId])
+  await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'MIN_FINANCE','只读财务')",[role,tenantId,storeId])
+  await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employee,role])
+  // New roles inherit default request grants; model the existing read-only finance configuration exactly.
+  await pool.query('DELETE FROM mbox.role_permission_assignments WHERE role_id=$1',[role])
+  const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,'reconciliation.view','财务查询','finance') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId])).rows[0].id
+  await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,role,permission])
+  await submit(id);await lower(id,20000,18000)
+  const api=await app(employee),url=`/table-management/sessions/${id}/minimum-spend`
+  try{
+   const read=await api.inject({url});expect(read.statusCode).toBe(200);expect(read.json().data).toMatchObject({effectiveMinimumMinor:18000,differenceChargingEnabled:false});expect(read.json().data.history).toHaveLength(2)
+   expect((await api.inject({method:'POST',url,headers:{'idempotency-key':randomUUID()},payload:{expectedMinimumMinor:18000,targetMinimumMinor:0,reason:'只读越权'}})).statusCode).toBe(403)
+   expect((await api.inject({method:'POST',url:`/table-management/sessions/${id}/prepayment/refund-unused`,headers:{'idempotency-key':randomUUID()},payload:{reason:'只读越权'}})).statusCode).toBe(403)
+   await expect(submit(id,{createdByEmployeeId:employee})).rejects.toMatchObject({name:'StaffAccessDeniedError'})
+   await pool.query('DELETE FROM mbox.role_permission_assignments WHERE role_id=$1',[role])
+   expect((await api.inject({url})).statusCode).toBe(403)
+  }finally{await api.close()}
+  expect((await summary(id)).effectiveMinimumMinor).toBe(18000)
+ })
  it('does not permit a normal settled historical session to be changed',async()=>{
   const id=await session();await pool.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[id])
   await expect(lower(id,20000,0)).rejects.toMatchObject({code:'TABLE_MINIMUM_SESSION_CLOSED'})

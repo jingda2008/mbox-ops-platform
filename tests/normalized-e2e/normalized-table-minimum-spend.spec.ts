@@ -38,7 +38,7 @@ for(const mode of ['order_gate','prepaid'])test(`opens a table with ${mode}, exa
    const submitted=server.waitForResponse(r=>r.url().endsWith('/commerce/orders')&&r.request().method()==='POST')
    await sheet.getByRole('dialog',{name:'确认上单'}).getByRole('button',{name:'确认上单'}).click();const order=await submitted;expect(order.status(),await order.text()).toBe(201)
    expect((await order.json()).paymentStatus).toBe('unpaid');await expect(sheet).toBeHidden()
-   await minimum.getByRole('button',{name:'刷新本桌低消'}).click();await minimum.locator('summary').click();await expect(minimum).toContainText('本单放行');await expect(minimum).toContainText('Tom')
+   await minimum.getByRole('button',{name:'刷新本桌低消'}).click();await minimum.getByText(/^低消操作记录（/).click();await expect(minimum).toContainText('本单放行');await expect(minimum).toContainText('Tom')
   }finally{await scheduler.close();await server.close()}
  }
  if(mode==='prepaid'){

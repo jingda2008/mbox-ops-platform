@@ -138,6 +138,7 @@
   "overrides": {
     "concurrently": {
       "shell-quote": "1.11.0"
-    }
+    },
+    "glob": "14.0.3"
   }
 }

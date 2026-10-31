@@ -1,3 +1,4 @@
+import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
 import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
@@ -66,16 +67,35 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
   registerTableService(app, options)
   await registerNativeAssignmentSchedule(app, options)
   registerNativeTableConfiguration(app, options)
+  app.get('/table-management/sessions/:tableSessionId/minimum-spend',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
+    const data=await options.transactions.run(context.scope,async tx=>{
+      const repo=new TableMinimumExceptionsRepository(tx);await repo.assertAccess(context.employeeId,id)
+      return repo.snapshot(id)
+    },{readOnly:true})
+    reply.header('cache-control','no-store');return reply.send({data})
+  }))
+  app.post('/table-management/sessions/:tableSessionId/minimum-spend',async(request,reply)=>handle(reply,async()=>{
+    if(!options.nativeCommands)throw new TableManagementRequestError('桌次结算服务不可用')
+    const context=await authorizedContext(options,request),body=readObject(request.body),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
+    if(Object.keys(body).some(key=>!['expectedMinimumMinor','targetMinimumMinor','reason'].includes(key)))throw new TableManagementRequestError('仅支持调整低消，差额收费未启用')
+    const input={sessionId:id,employeeId:context.employeeId,expectedMinimumMinor:readInteger(body.expectedMinimumMinor,'expectedMinimumMinor',0,Number.MAX_SAFE_INTEGER),targetMinimumMinor:readInteger(body.targetMinimumMinor,'targetMinimumMinor',0,Number.MAX_SAFE_INTEGER),reason:requiredString(body.reason,'reason',500)}
+    const execution=await options.nativeCommands.execute<JsonObject>({scope:context.scope,operationScope:'table.minimum_spend.adjust',idempotencyKey:readIdempotencyKey(request),requestFingerprint:createHash('sha256').update(JSON.stringify(input)).digest('hex'),resultCodec:{encode:v=>v,decode:v=>v as JsonObject}},async tx=>{
+      const value=await new TableMinimumExceptionsRepository(tx).adjust(input)
+      const before=JSON.parse(JSON.stringify(value.before)) as JsonObject,after=JSON.parse(JSON.stringify(value.after)) as JsonObject
+      return{result:after,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:input.targetMinimumMinor===0?'table.minimum_spend.cancel':'table.minimum_spend.lower',objectType:'table_session',objectId:id,businessDate:context.businessDate,beforeData:before,afterData:after,reason:input.reason}],outboxMessages:[]}
+    });return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
+  }))
   app.get('/table-management/prepayments',async(request,reply)=>handle(reply,async()=>{
     const context=await authorizedContext(options,request)
     const before=(request.query as {before?:unknown}).before
     const cursor=before===undefined?null:readUuid(before,'before')
     const data=await options.transactions.run(context.scope,async tx=>{
       const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('refund.request')&&access.permissions.includes('table.view_all')))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
+      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('table.view_all')&&(access.permissions.includes('refund.request')||access.permissions.includes('table.minimum_spend.adjust'))))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
       return (await tx.query(`SELECT session.id,t.code AS "tableCode",session.public_id AS "publicId",session.status,session.opened_at::text AS "openedAt",session.business_date::text AS "businessDate",mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id) AS "unsettled"
         FROM mbox.table_sessions session JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(session.tenant_id,session.store_id,session.table_id)
-        WHERE session.tenant_id=$1 AND session.store_id=$2 AND session.minimum_spend_mode='prepaid'
+        WHERE session.tenant_id=$1 AND session.store_id=$2 AND (session.minimum_spend_mode='prepaid' OR EXISTS(SELECT 1 FROM mbox.order_minimum_spend_releases x WHERE(x.tenant_id,x.store_id,x.table_session_id)=(session.tenant_id,session.store_id,session.id)))
           AND (session.status<>'closed' OR mbox.table_prepayment_unsettled(session.tenant_id,session.store_id,session.id)) AND ($3::uuid IS NULL OR (session.opened_at,session.id)<(SELECT prior.opened_at,prior.id FROM mbox.table_sessions prior WHERE prior.tenant_id=$1 AND prior.store_id=$2 AND prior.id=$3)) ORDER BY session.opened_at DESC,session.id DESC LIMIT 101`,[context.scope.tenantId,context.scope.storeId,cursor])).rows
     },{readOnly:true});reply.header('cache-control','no-store');return reply.send({data:data.slice(0,100),meta:{nextCursor:data.length>100?data[99]!.id:null}})
   }))
@@ -83,7 +103,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
     const data=await options.transactions.run(context.scope,async tx=>{
       const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('refund.request')&&access.permissions.includes('table.view_all')))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
+      if(!access.permissions.includes('reconciliation.view')&&!(access.permissions.includes('table.view_all')&&(access.permissions.includes('refund.request')||access.permissions.includes('table.minimum_spend.adjust'))))throw new StaffAccessDeniedError('需要收银核对权限或全店桌台退款申请权限')
       const summary=await new TablePrepaymentRepository(tx).snapshot(id)
       if(!summary)return null
       const receipts=(await tx.query(`SELECT p.id,p.public_id AS "publicId",p.status,p.amount_minor::text AS "amountMinor",mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text AS "availableMinor" FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY p.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
@@ -102,13 +122,16 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       const access=await new StaffAccessRepository(tx).assertPermission(context.employeeId,action==='waive'?'refund.approve':'refund.request')
       if(action==='refund-unused'&&!access.permissions.includes('reconciliation.view')&&!access.permissions.includes('table.view_all'))throw new StaffAccessDeniedError('需要全店桌台退款申请权限')
       if(action==='waive'){
+        await new TableMinimumExceptionsRepository(tx).assertAccess(context.employeeId,id,true)
         const session=await new TablePrepaymentRepository(tx).lock(id,true)
         const cumulative=amount+Number(session.minimum_spend_waiver_minor)
         const limits=access.approvalLimits.filter(limit=>limit.code==='refund.approve'&&limit.currency==='CNY')
         if(!limits.some(limit=>limit.amountMinor!==null&&limit.amountMinor>=cumulative))throw new StaffAccessDeniedError('最低消费减免超出本岗位金额权限')
       }
       const repo=new TablePrepaymentRepository(tx)
-      const value=action==='waive'?await repo.waive(id,context.employeeId,amount,reason):await repo.requestUnusedRefunds(id,context.employeeId,reason)
+      const session=action==='waive'?await repo.lock(id,true):null
+      const current=session?Number(session.minimum_spend_minor)-Number(session.minimum_spend_waiver_minor):0
+      const value=action==='waive'?await new TableMinimumExceptionsRepository(tx).adjust({sessionId:id,employeeId:context.employeeId,expectedMinimumMinor:current,targetMinimumMinor:current-amount,reason}):await repo.requestUnusedRefunds(id,context.employeeId,reason)
       const result=JSON.parse(JSON.stringify(value??{})) as JsonObject
       return{result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:`table.prepayment.${action}`,objectType:'table_session',objectId:id,businessDate:context.businessDate,afterData:result,reason}],outboxMessages:[]}
     })

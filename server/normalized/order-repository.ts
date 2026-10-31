@@ -1,4 +1,6 @@
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
+import type {TableMinimumSpend} from './table-minimum-spend.js'
 import { randomUUID } from 'node:crypto'
 import {readTableMinimumSpend,TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import {verifyIssuedCouponProductLines, legacyProductDeadlineSql,type IssuedCouponProductLine} from './issued-coupon-product-promise.js'
@@ -95,6 +97,7 @@ export interface OrderItem {
 }
 
 export interface SubmittedOrder {
+  minimumSpendRelease?:TableMinimumSpend
   prepaymentRequired?:boolean
   id: string
   tableSessionId: string
@@ -330,6 +333,7 @@ export class OrderRepository {
   ): Promise<SubmittedOrder> {
     validateCreateInput(input)
     if (pricingAuthorization) assertVerifiedPricingAuthorization(pricingAuthorization)
+    let releasedMinimum:TableMinimumSpend|undefined
     const requested = normalizeRequestedLines(input.lines)
     const minimumSpendMinor = await this.lockOpenTableSession(input.tableSessionId,input)
     // Lock only capped products before the existing shared price locks. Without
@@ -361,7 +365,11 @@ export class OrderRepository {
     if (pricingAuthorization?.kind!=='gift' && minimumSpendMinor>0) {
       const qualifyingMinor=sumSafe(priced.map((price,index)=>asSafeMoney(price.standard_amount_minor??price.amount_minor,'standard price')*requested[index]!.quantity))
       const minimum=await readTableMinimumSpend(this.transaction,input.tableSessionId,qualifyingMinor,minimumSpendMinor)
-      if(minimum.shortfallMinor>0)throw new TableMinimumSpendNotMetError(minimum)
+      if(minimum.shortfallMinor>0){
+        if(input.channel!=='staff_assisted'||!input.createdByEmployeeId||input.createdByCustomerId)throw new TableMinimumSpendNotMetError(minimum)
+        await new StaffAccessRepository(this.transaction).assertPermission(input.createdByEmployeeId,'order.minimum_spend.release')
+        releasedMinimum=minimum
+      }
     }
     validatePricingAuthorization(pricingAuthorization, subtotalAmountMinor)
     if(pricingAuthorization?.lineAllocations){
@@ -478,6 +486,10 @@ export class OrderRepository {
       await new TablePrepaymentRepository(this.transaction).allocate(input.tableSessionId,result.id)
       result.paymentStatus='paid'
     }
+    if(releasedMinimum)result.minimumSpendRelease=releasedMinimum
+    if(releasedMinimum)await this.transaction.query(`INSERT INTO mbox.order_minimum_spend_releases
+      (tenant_id,store_id,table_session_id,order_id,employee_id,reason,minimum_minor,consumed_minor,cart_minor,shortfall_minor)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,result.id,input.createdByEmployeeId,'员工账号协助点单，自动放行本单低消拦截',releasedMinimum.minimumMinor,releasedMinimum.consumedMinor,releasedMinimum.cartMinor,releasedMinimum.shortfallMinor])
     return result
   }
 

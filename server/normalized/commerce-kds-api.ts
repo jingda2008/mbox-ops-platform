@@ -483,6 +483,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.send({
       data: {
         canCreateOrder,
+        canReleaseMinimumSpend:access.permissions.includes('order.minimum_spend.release'),
         employeeId: context.employeeId,
         canInitiatePayment: paymentInitiationBlockReason === null,
         paymentInitiationBlockReason,

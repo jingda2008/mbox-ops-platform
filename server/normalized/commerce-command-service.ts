@@ -263,6 +263,7 @@ export class CommerceCommandService {
           orderedRecommendation,
         ),
       }
+      const minimumRelease=order.minimumSpendRelease
       return {
         result,
         auditEvents: [{
@@ -276,7 +277,7 @@ export class CommerceCommandService {
             result, pricingAuthorization, context, schedulingOverride, inventoryControl, selectedUpgrade?.offerId ?? null,
             orderedRecommendation,
           ),
-        }],
+        },...(minimumRelease?[{actor:input.actor,action:'order.minimum_spend.release',objectType:'order',objectId:order.id,businessDate:input.businessDate,reason:'员工账号协助点单，自动放行本单低消拦截',afterData:{...minimumRelease,tableSessionId:order.tableSessionId,automatic:true} as JsonObject}]:[])],
         outboxMessages: [outboxMessage],
       }
   }

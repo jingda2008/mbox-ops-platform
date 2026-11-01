@@ -62,7 +62,8 @@ export function ParticipantMovementSheet(props:Readonly<{
     if (kind==='participant_merge' && participants.length>0 && selected.length===0) {
       setError('人员并桌需要选择顾客；如需全员并桌，请点击“选择全部”并确认整桌人数');return
     }
-    if (Number(guestCount)<selected.length) { setError('移动人数不能少于已选择的顾客人数');return }
+    const isFullMerge=kind==='participant_merge' && Number(guestCount)===session.guestCount
+    if (!isFullMerge && Number(guestCount)<selected.length) { setError('部分移动人数不能少于已选择的顾客账号数');return }
     if (kind==='participant_split' && Number(guestCount)>=session.guestCount) {
       setError('拆桌后源桌必须至少保留一人；全员移动请使用人员并桌');return
     }
@@ -89,9 +90,10 @@ export function ParticipantMovementSheet(props:Readonly<{
   }
   return <div className="staff-participant-mask" role="dialog" aria-modal="true" aria-label="人员拆并桌">
     <section className="staff-participant-sheet">
-      <header><div><strong>人员拆并桌</strong><small>{props.table.code} · 当前{session.guestCount}人</small></div>
+      <header><div><strong>人员拆并桌</strong><small>{props.table.code} · 登记{session.guestCount}人</small></div>
         <button type="button" onClick={props.onClose} aria-label="关闭"><X size={19}/></button></header>
       {phase==='loading' ? <p className="staff-participant-loading"><LoaderCircle className="is-spinning"/>正在核对当前位置…</p> : <>
+        {participants.length>session.guestCount&&<p>关联账号数不等于现场人数。全员并桌请选择全部账号，人数按两桌登记人数合计。</p>}
         <div className="staff-participant-kinds">
           <button className={kind==='participant_split'?'is-active':''} onClick={() => {setKind('participant_split');resetSelection()}}>人员拆桌</button>
           <button className={kind==='participant_merge'?'is-active':''} onClick={() => {setKind('participant_merge');resetSelection()}}>人员并桌</button>
@@ -124,7 +126,7 @@ export function ParticipantMovementSheet(props:Readonly<{
             {preview.blockers.map((blocker) => <li key={blocker.code}>{blocker.label} {blocker.count}项；{blocker.resolution}</li>)}
           </ul></div>}
           <ul><li>{kind==='participant_split'?'人员拆桌':'人员并桌'}：{props.table.code} → {target?.code}</li>
-            <li>移动人数：{preview?.movedGuestCount}人；已识别顾客：{preview?.selectedParticipantCount}人</li>
+            <li>移动人数：{preview?.movedGuestCount}人；关联账号：{preview?.selectedParticipantCount}个</li>
             <li>预计目标桌：{preview?.projectedGuestCount} / 容量{preview?.targetCapacity}人{preview?.requiresCapacityOverride?'（已填写加座说明）':''}</li>
             {preview?.roleAdjustments.map((adjustment) => <li key={adjustment.participantPublicId}>角色调整：{adjustment.reason}</li>)}
             <li>现场原因：{reason.trim()}</li>{needsCapacityReason && <li>加座说明：{capacityReason.trim()}</li>}

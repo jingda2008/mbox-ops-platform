@@ -714,17 +714,28 @@ test('图片上传与月度排班成功回执在页面正确展示',async({brows
   await page.goto('/staff/performance')
   const monthly=page.locator('.monthly-schedule-panel')
   await monthly.locator(':scope > summary').click()
-  await monthly.getByLabel('月份',{exact:true}).fill('2026-11')
+  // The fixture creates a live performance around its startup time. A fixed
+  // calendar month eventually overlaps it; keep this success-path month ahead
+  // of today's Shanghai date without weakening the real conflict checks.
+  const shanghaiNow=new Date(Date.now()+8*3600000)
+  const nextMonth=new Date(Date.UTC(shanghaiNow.getUTCFullYear(),shanghaiNow.getUTCMonth()+1,1))
+  const month=nextMonth.toISOString().slice(0,7)
+  const days=new Date(Date.UTC(nextMonth.getUTCFullYear(),nextMonth.getUTCMonth()+1,0)).getUTCDate()
+  await monthly.getByLabel('月份',{exact:true}).fill(month)
   await monthly.getByRole('button',{name:'按规则生成整月草稿'}).click()
   const preview=page.waitForResponse(response=>response.url().endsWith('/schedules/monthly/preview'))
   await monthly.getByRole('button',{name:'预览冲突与发布范围'}).click()
-  expect((await preview).ok()).toBe(true)
-  await expect(monthly.getByText('共 30 场；0 场已有相同排班，不重复生成。',{exact:true})).toBeVisible()
+  const previewResponse=await preview
+  expect(previewResponse.ok()).toBe(true)
+  const previewBody=await previewResponse.json() as {data:Array<{reasons:string[]}>}
+  expect(previewBody.data.flatMap(slot=>slot.reasons)).toEqual([])
+  await expect(monthly.getByText(`共 ${days} 场；0 场已有相同排班，不重复生成。`,{exact:true})).toBeVisible()
+  await expect(monthly.getByRole('button',{name:'发布已预览的场次'})).toBeEnabled()
   const publish=page.waitForResponse(response=>response.url().endsWith('/schedules/monthly/publish'))
   await monthly.getByRole('button',{name:'发布已预览的场次'}).click()
   expect((await publish).ok()).toBe(true)
-  await expect(monthly.getByText('已发布 30 场，0 场已存在并保留。',{exact:true})).toBeVisible()
-  await expect(monthly.locator(':scope > article')).toHaveCount(30)
+  await expect(monthly.getByText(`已发布 ${days} 场，0 场已存在并保留。`,{exact:true})).toBeVisible()
+  await expect(monthly.locator(':scope > article')).toHaveCount(days)
   expect(errors).toEqual([])
   await manager.context.close()
 })

@@ -24,6 +24,26 @@ afterEach(async () => {
 })
 
 describe('table management API', () => {
+  it('logs an unexpected transfer failure with a safe reference and does not expose SQL or customer data', async () => {
+    const commands=commandPort()
+    commands.transfer.mockRejectedValue(Object.assign(new Error('SQL containing private customer data'),{
+      code:'23514',constraint:'table_customer_movement_events_check',detail:'private row contents',
+    }))
+    const app=await build(commands)
+    const log=vi.fn()
+    app.addHook('onRequest',async request=>{request.log.error=log})
+    const response=await app.inject({method:'POST',url:`/table-management/sessions/${sourceSessionId}/transfer`,
+      headers:{'idempotency-key':'transfer-error-reference-001'},payload:{targetTableId:tableId,
+        expectedSourceTableId:sourceTableId,expectedLocationVersion:0}})
+    expect(response.statusCode).toBe(500)
+    expect(response.json()).toEqual({error:{code:'TABLE_INTERNAL_ERROR',
+      message:'桌台操作暂时无法完成，请刷新核对后联系管理员',referenceId:expect.any(String)}})
+    expect(log).toHaveBeenCalledWith({errorCode:'23514',constraint:'table_customer_movement_events_check',
+      referenceId:response.json().error.referenceId,route:'/table-management/sessions/:tableSessionId/transfer'},
+    'normalized table operation failed')
+    expect(JSON.stringify(log.mock.calls)+response.body).not.toMatch(/private|SQL containing/)
+  })
+
   it('opens any table using table.open without requiring a responsibility assignment', async () => {
     const commands = commandPort()
     commands.open.mockResolvedValue({

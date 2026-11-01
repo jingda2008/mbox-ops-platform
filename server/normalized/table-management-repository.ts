@@ -863,7 +863,14 @@ export class TableManagementRepository {
       )
     `, [session.id, target.id, session.guestCount, input.transferredByEmployeeId,
       input.reason,movementKey,movementFingerprint,targetOverrideReason,
-      JSON.stringify(ownershipSnapshot)])
+      JSON.stringify(ownershipSnapshot)]).catch((error:unknown) => {
+      if (postgresCode(error)==='42501') {
+        throw new StaffAccessDeniedError('Employee lost table transfer permission during movement')
+      }
+      // Preserve unexpected database failures (including constraint violations)
+      // as internal errors instead of disguising defects as business conflicts.
+      throw error
+    })
     const movement = requiredRow(result.rows[0], '转桌事件')
     const value = {
       eventId: movement.movement_event_id,
@@ -1164,6 +1171,7 @@ export class TableManagementCommandService {
     validateCommandBase(command)
     // Separate namespace prevents an old, expired webpage request from being
     // mistaken for a new guarded request without a permanent receipt.
+    const tableMovement=operationScope==='table.transfer' || operationScope==='table.participation.move'
     const nativeMovement=operationScope==='table.participation.move' && command.idempotencyKey.startsWith('native-participants-')
     if(nativeMovement)operationScope+='.native'
     if (guardedAssignment) operationScope += '.guarded'
@@ -1210,7 +1218,7 @@ export class TableManagementCommandService {
       if (objectId === undefined) throw new TypeError('桌台命令结果缺少对象标识')
       const payload = asJsonObject(result)
       const movementStoreReplayed=(result as { movementStoreReplayed?:boolean }).movementStoreReplayed===true
-      if(nativeMovement && movementStoreReplayed)durableReplayed=true
+      if(tableMovement && movementStoreReplayed)durableReplayed=true
       return {
         result,
         auditEvents: movementStoreReplayed ? [] : [{
@@ -1233,7 +1241,7 @@ export class TableManagementCommandService {
           payload,
         }],
       }
-    }, guardedAssignment || nativeMovement ? async (transaction) => {
+    }, guardedAssignment || tableMovement ? async (transaction) => {
       // Runs before cached replay too: revoked employees cannot read old receipts.
       await new StaffAccessRepository(transaction).assertPermission(command.actor.employeeId, permission)
     } : undefined).then((execution) => durableReplayed ? { ...execution, replayed: true } : execution)

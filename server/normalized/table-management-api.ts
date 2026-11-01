@@ -491,8 +491,9 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     if (movementKind==='participant_split' && participantPublicIds.length===0) {
       throw new TableManagementRequestError('拆桌至少要选择一名已识别顾客')
     }
-    if (movedGuestCount<participantPublicIds.length) {
-      throw new TableManagementRequestError('移动人数不能少于已选择的顾客人数')
+    const isFullMerge=movementKind==='participant_merge' && movedGuestCount===targetState.source_guest_count
+    if (!isFullMerge && movedGuestCount<participantPublicIds.length) {
+      throw new TableManagementRequestError('部分移动人数不能少于已选择的顾客账号数')
     }
     if (movementKind==='participant_split' && movedGuestCount>=targetState.source_guest_count) {
       throw new TableManagementRequestError('拆桌后源桌必须至少保留一人；全员移动请使用人员并桌')
@@ -575,8 +576,10 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       throw new TableManagementRequestError('拆桌至少要选择一名已识别顾客')
     }
     const movedGuestCount=readInteger(body.movedGuestCount,'movedGuestCount',1,200)
-    if (movedGuestCount<participantPublicIds.length) {
-      throw new TableManagementRequestError('移动人数不能少于已选择的顾客人数')
+    // Merge fullness and membership are checked against the locked source by
+    // the database command, including callers that bypass preview or use nativeGuard.
+    if (movementKind==='participant_split' && movedGuestCount<participantPublicIds.length) {
+      throw new TableManagementRequestError('部分移动人数不能少于已选择的顾客账号数')
     }
     const execution=await options.commands.moveParticipants(commandBase(request,context,body,'调整顾客所在桌次',{
       ...(nativeGuard?{nativeGuard}:{}),movementKind,sourceTableSessionId:readUuid(readParams(request).tableSessionId,'tableSessionId'),

@@ -767,7 +767,19 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
     return await operation()
   } catch (error) {
     if (guardedAssignment && error instanceof TypeError) throw error
-    const mapped = mapError(error)
+    let mapped: ReturnType<typeof mapError>
+    try { mapped = mapError(error) } catch {
+      const referenceId = reply.request.id.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 64) || 'unknown-request'
+      const diagnostic = error as { code?: unknown; constraint?: unknown } | null
+      const errorCode = typeof diagnostic?.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(diagnostic.code)
+        ? diagnostic.code : 'UNKNOWN_ERROR'
+      const constraint = typeof diagnostic?.constraint === 'string' && /^[a-z0-9_]{1,128}$/.test(diagnostic.constraint)
+        ? diagnostic.constraint : undefined
+      reply.request.log.error({ errorCode, constraint, referenceId, route: reply.request.routeOptions.url },
+        'normalized table operation failed')
+      return reply.code(500).send({ error: { code: 'TABLE_INTERNAL_ERROR',
+        message: '桌台操作暂时无法完成，请刷新核对后联系管理员', referenceId } })
+    }
     return reply.code(mapped.status).send({ error: { code: mapped.code, message: mapped.message,
       ...(mapped.commitDisposition ? { commitDisposition: mapped.commitDisposition } : {}) } } satisfies ApiErrorBody)
   }

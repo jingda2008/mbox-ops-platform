@@ -21,7 +21,7 @@ integration('table customer location movements', () => {
   const employeeId=randomUUID()
   const unauthorizedEmployeeId=randomUUID()
   const roleId=randomUUID()
-  const tables=Array.from({ length: 49 }, () => randomUUID())
+  const tables=Array.from({ length: 54 }, () => randomUUID())
   let pool: Pool
   let runtime: Pool
 
@@ -61,6 +61,98 @@ integration('table customer location movements', () => {
   })
 
   afterAll(async () => { await runtime?.end(); await pool?.end() })
+
+  it('transfers every scanned identity when their count exceeds the declared party size', async () => {
+    const source=await createSession(tables[49]!,2)
+    const credential=await createCredential(tables[49]!)
+    const guestSessions:string[]=[]
+    const customers:string[]=[]
+    for(let index=0;index<3;index++) {
+      const customer=await createCustomer(`whole-extra-identity-${index}`)
+      customers.push(customer)
+      await ensurePosition(credential,source,customer)
+      guestSessions.push(await createGuestSession(source,customer,tables[49]!))
+    }
+    const orderId=randomUUID(),paymentId=randomUUID()
+    await pool.query(`INSERT INTO mbox.orders(
+      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor
+    ) VALUES($1,$2,$3,$4,$5,'guest_qr','submitted','paid',100,0,100)`,
+    [orderId,tenantId,storeId,source,`order-${randomUUID()}`])
+    await pool.query(`INSERT INTO mbox.payments(
+      id,tenant_id,store_id,order_id,public_id,provider,provider_transaction_id,
+      method,amount_minor,status,succeeded_at
+    ) VALUES($1,$2,$3,$4,$5,'cash',$6,'cash',100,'succeeded',clock_timestamp())`,
+    [paymentId,tenantId,storeId,orderId,`payment-${randomUUID()}`,`cash-${randomUUID()}`])
+    const commerceBefore=await pool.query(`SELECT to_jsonb(o) AS order_fact,to_jsonb(p) AS payment_fact
+      FROM mbox.orders o JOIN mbox.payments p ON p.order_id=o.id WHERE o.id=$1`,[orderId])
+    const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
+    const app=Fastify()
+    await app.register(tableManagementApiPlugin,{
+      transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),
+      resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-08-16'}),
+    })
+    try {
+      const key=randomUUID()
+      const request={method:'POST' as const,url:`/table-management/sessions/${source}/transfer`,
+        headers:{'idempotency-key':key},payload:{targetTableId:tables[50],
+          expectedSourceTableId:tables[49],expectedLocationVersion:0}}
+      const stale=await app.inject({...request,payload:{...request.payload,expectedLocationVersion:1}})
+      expect(stale.statusCode).toBe(409)
+      expect((await pool.query('SELECT table_id,location_version FROM mbox.table_sessions WHERE id=$1',[source])).rows[0])
+        .toEqual({table_id:tables[49],location_version:'0'})
+      const response=await app.inject(request)
+      expect(response.statusCode,response.body).toBe(200)
+      const replay=await app.inject(request)
+      expect(replay.json()).toEqual({...response.json(),meta:{replayed:true}})
+      await pool.query(`DELETE FROM mbox.idempotency_records
+        WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='table.transfer' AND idempotency_key=$3`,
+      [tenantId,storeId,key])
+      const recovered=await app.inject(request)
+      expect(recovered.statusCode,recovered.body).toBe(200)
+      expect(recovered.json().data).toEqual(response.json().data)
+      const eventId=response.json().data.eventId
+      const event=(await pool.query(`SELECT moved_guest_count,moved_participant_count,revoked_guest_session_count
+        FROM mbox.table_customer_movement_events WHERE id=$1`,[eventId])).rows[0]
+      expect(event).toEqual({moved_guest_count:2,moved_participant_count:3,revoked_guest_session_count:3})
+      const counts=(await pool.query(`SELECT
+        (SELECT count(*)::int FROM mbox.table_customer_movement_members WHERE movement_event_id=$1) members,
+        (SELECT count(*)::int FROM mbox.table_session_transfer_events WHERE table_session_id=$2) transfers,
+        (SELECT count(*)::int FROM mbox.audit_events WHERE object_id=$1::text AND action='table.session.transferred') audits,
+        (SELECT count(*)::int FROM mbox.outbox_messages WHERE aggregate_id=$1::uuid AND message_type='table.session.transferred.v1') outbox`,
+      [eventId,source])).rows[0]
+      expect(counts).toEqual({members:3,transfers:1,audits:1,outbox:1})
+    } finally { await app.close() }
+    expect((await pool.query(`SELECT table_id,guest_count,location_version,primary_service_employee_id
+      FROM mbox.table_sessions WHERE id=$1`,[source])).rows[0])
+      .toEqual({table_id:tables[50],guest_count:2,location_version:'1',primary_service_employee_id:employeeId})
+    const positions=(await pool.query(`SELECT customer_id,table_id,left_reason_code,left_at
+      FROM mbox.table_session_customer_participations WHERE table_session_id=$1`,[source])).rows
+    expect(positions).toHaveLength(6)
+    expect(positions.filter(row=>row.left_at===null).map(row=>row.customer_id).sort()).toEqual(customers.sort())
+    expect(positions.filter(row=>row.left_at===null).every(row=>row.table_id===tables[50])).toBe(true)
+    expect(positions.filter(row=>row.left_at!==null).every(row=>row.left_reason_code==='whole_table_transfer')).toBe(true)
+    const tokens=(await pool.query('SELECT revoked_at,revoke_reason FROM mbox.guest_sessions WHERE id=ANY($1::uuid[])',[guestSessions])).rows
+    expect(tokens.every(row=>row.revoked_at!==null&&row.revoke_reason==='table_location_changed')).toBe(true)
+    expect((await pool.query(`SELECT to_jsonb(o) AS order_fact,to_jsonb(p) AS payment_fact
+      FROM mbox.orders o JOIN mbox.payments p ON p.order_id=o.id WHERE o.id=$1`,[orderId])).rows).toEqual(commerceBefore.rows)
+  })
+
+  it('still rejects partial split and merge when selected identities exceed the explicitly moved headcount', async () => {
+    const source=await createSession(tables[51]!,3)
+    const target=await createSession(tables[53]!,1)
+    const participantIds:string[]=[]
+    for(let index=0;index<2;index++)participantIds.push(await linkParticipant(source,await createCustomer(`partial-count-${index}`),'guest'))
+    for(const kind of ['participant_split','participant_merge']) {
+      await expect(runtimeMovement({kind,sourceSessionId:source,
+        targetSessionId:kind==='participant_merge'?target:null,
+        targetTableId:kind==='participant_merge'?tables[53]!:tables[52]!,movedGuestCount:1,
+        participantIds,roles:['companion','companion'],confirmations:['confirmed','confirmed'],
+        key:`partial-count-${randomUUID()}`,splitPublicId:randomUUID()})).rejects.toMatchObject({code:'40001'})
+    }
+    expect((await pool.query('SELECT guest_count FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].guest_count).toBe(3)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(0)
+  })
 
   it('moves an unscanned whole table and rejects direct runtime evidence or location writes', async () => {
     const source=await createSession(tables[0]!,2)

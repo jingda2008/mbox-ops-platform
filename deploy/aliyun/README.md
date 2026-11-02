@@ -29,6 +29,17 @@ Configuration, external or migration-compatibility failures happen before any
 database write. Candidate, cutover or formal verification failures restore the
 previous immutable image without rebuilding it.
 
+## Provisioning and live configuration
+
+An already-applied store/catalog version with matching content records the new
+release SHA without replaying initialization over live configuration. Reusing a
+version with different content fails. A new store configuration version may
+apply explicit configuration changes, but existing employee credentials, names,
+status and role history remain owned by staff administration. Existing store
+credential history, including expired or revoked credentials, is preserved.
+Resetting PINs, restoring staff access or rotating credentials requires the
+authorized management flow; application deployment does not perform those actions.
+
 ## Configuration contract
 
 Do not hand-maintain alternate environment examples. Generate validation and

@@ -3,11 +3,11 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type InjectOptions 
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
-import { NormalizedCommandExecutor } from './command-executor.js'
+import { hashRequestFingerprint, NormalizedCommandExecutor } from './command-executor.js'
 import { StaffAccessManagementService } from './staff-access-management-service.js'
 import { staffAccessManagementApiPlugin } from './staff-access-management-api.js'
 import { nativeStaffAdministrationApiPlugin } from './native-staff-administration-api.js'
-import { StaffAuthCommandService } from './staff-auth-command-service.js'
+import { ScryptCredentialHasher, StaffAuthCommandService } from './staff-auth-command-service.js'
 import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
 
@@ -45,7 +45,7 @@ integration('recurring history and staff receipt authorization with a restricted
         employeeId:changeIdentity&&++resolveCount>1?otherEmployeeId:actor,businessDate:'2026-11-02',capabilities:[]}
     }
     for(const native of [false,true])await app.register(ownerFinanceApiPlugin,{prefix:native?'/native':'/api',transactions:runner,commandExecutor:new NormalizedCommandExecutor(runner),resolveContext,nativeReceipts:native})
-    await app.register(staffAccessManagementApiPlugin,{prefix:'/api',service:new StaffAccessManagementService(runner,new NormalizedCommandExecutor(runner)),resolveContext})
+    await app.register(staffAccessManagementApiPlugin,{fingerprintSecret:'local-audit-fixture-key-not-for-production-20261102',prefix:'/api',service:new StaffAccessManagementService(runner,new NormalizedCommandExecutor(runner)),resolveContext})
     await app.register(nativeStaffAdministrationApiPlugin,{prefix:'/native',transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveStaffContext:resolveContext,
       fingerprintSecret:'local-audit-fixture-key-not-for-production-20261102',authFactory:commands=>new StaffAuthCommandService(runner,commands,{consume:async()=>{}})})
     await app.ready()
@@ -177,6 +177,57 @@ integration('recurring history and staff receipt authorization with a restricted
     }
     return request(kind==='create'?'/api/staff-access/employees':`/api/staff-access/employees/${target}/status`,payload)
   }
+  it.each([false,true])('binds create PIN and preserves the original credential and all facts, native=%s',async native=>{
+    const req=await staffRequest(native,'create'),initial=await success(req,native)
+    const before=await snapshot()
+    const changed={...req,payload:{...(req.payload as object),pin:'7391'}}
+    await denied(changed,409)
+    await without('staff.access.configure',()=>denied(changed))
+    expect(await success(req,native)).toEqual({...initial,replayed:true})
+    const hash=(await admin.query('SELECT pin_hash FROM mbox.employees WHERE id=$1',[initial.employeeId])).rows[0].pin_hash
+    const hasher=new ScryptCredentialHasher()
+    expect(await hasher.verify('4826',hash)).toBe(true)
+    expect(await hasher.verify('7391',hash)).toBe(false)
+    expect(await snapshot()).toEqual(before)
+    const stored=JSON.stringify(await receipt(req))
+    expect(stored).not.toContain('"pin"')
+    expect(stored).not.toContain('pin_hash')
+    expect(stored).not.toContain('pinBinding')
+  })
+  it.each([false,true])('recovers the original creation after a later PIN reset without accepting the reset PIN, native=%s',async native=>{
+    const req=await staffRequest(native,'create'),initial=await success(req,native)
+    // Change only the local fixture credential: replay must use immutable request identity, not current PIN state.
+    await admin.query('UPDATE mbox.employees SET pin_hash=$2 WHERE id=$1',[initial.employeeId,await new ScryptCredentialHasher().hash('7391')])
+    const before=await snapshot()
+    expect(await success(req,native)).toEqual({...initial,replayed:true})
+    await denied({...req,payload:{...(req.payload as object),pin:'7391'}},409)
+    expect(await snapshot()).toEqual(before)
+  })
+  it.each(['4826','7391'])('rejects unbound legacy receipts for PIN %s without changing their facts',async pin=>{
+    const req=await staffRequest(false,'create');await success(req)
+    const {employeeCode,displayName,roleId:createdRoleId,reason}=req.payload as Record<string,string>
+    const legacy=hashRequestFingerprint(JSON.stringify({actorEmployeeId:employeeId,employeeCode,displayName,roleId:createdRoleId,reason,pinConfigured:true}))
+    await admin.query('UPDATE mbox.idempotency_records SET request_sha256=$2 WHERE tenant_id=$1 AND idempotency_key=$3',[scope.tenantId,legacy,(req.headers as Record<string,string>)['idempotency-key']])
+    const before=await snapshot()
+    await denied({...req,payload:{...(req.payload as object),pin}},409)
+    expect(await snapshot()).toEqual(before)
+  })
+  it.each([false,true].flatMap(native=>[false,true].map(changed=>({native,changed}))))('serializes concurrent create retries without a second account, native=$native changed=$changed',async({native,changed})=>{
+    const req=await staffRequest(native,'create')
+    const retry={...req,payload:{...(req.payload as object),pin:changed?'7391':'4826'}}
+    const responses=await Promise.all([app.inject(req),app.inject(retry)])
+    const successes=responses.filter(r=>[200,201].includes(r.statusCode))
+    expect(successes).toHaveLength(changed?1:2)
+    if(changed)expect(responses.some(r=>r.statusCode===409)).toBe(true)
+    else expect(successes.map(r=>value(r,native).replayed).sort()).toEqual([false,true])
+    const rows=(await admin.query('SELECT pin_hash FROM mbox.employees WHERE store_id=$1 AND employee_code=$2',[scope.storeId,(req.payload as Record<string,string>).employeeCode])).rows
+    expect(rows).toHaveLength(1)
+    const winner=responses.findIndex(r=>[200,201].includes(r.statusCode))
+    expect(await new ScryptCredentialHasher().verify(changed&&winner===1?'7391':'4826',rows[0].pin_hash)).toBe(true)
+    const before=await snapshot()
+    await success(winner===0?req:retry,native)
+    expect(await snapshot()).toEqual(before)
+  })
   it.each([false,true].flatMap(native=>['create','status'].map(kind=>({native,kind}))))('authorizes $kind before old employee overview, native=$native',async({native,kind})=>{
     const req=await staffRequest(native,kind),initial=await success(req,native)
     const before=await snapshot()

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import { StaffAccessVersionConflictError } from './staff-access-version.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { StaffPermissionDeploymentChange } from '../../src/shared/normalized-contracts.js'
@@ -15,9 +16,11 @@ interface Context {
 }
 
 export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
+  fingerprintSecret: string
   service: StaffAccessManagementService
   resolveContext(request: FastifyRequest): Promise<Context>
 }> = async (app, options) => {
+  if (options.fingerprintSecret.length < 32) throw new Error('Staff credential fingerprint key must contain at least 32 characters')
   app.get('/staff-access/overview', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const data = await options.service.getOverview({ scope: context.scope, actorEmployeeId: context.employeeId })
@@ -34,10 +37,15 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
     const roleId = uuid(body.roleId, '岗位')
     const reason = text(body.reason, '建立原因', 200, 2)
     const idempotencyKey = idempotency(request)
+    // A keyed binding distinguishes low-entropy PINs without storing an enumerable digest.
+    // Legacy receipts without this binding deliberately conflict; never infer their PIN from mutable employee state.
+    const pinBinding = createHmac('sha256', options.fingerprintSecret)
+      .update(JSON.stringify(['staff-employee-create-pin-v1', context.scope.tenantId, context.scope.storeId, context.employeeId, idempotencyKey, pin]))
+      .digest('hex')
     const data = await options.service.createEmployee({
       scope: context.scope, actorEmployeeId: context.employeeId, businessDate: context.businessDate,
       idempotencyKey,
-      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeCode, displayName, roleId, reason, pinConfigured: true }),
+      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeCode, displayName, roleId, reason, pinConfigured: true, pinBinding }),
       employeeCode, displayName, pin, roleId, reason,
     })
     return reply.code(data.replayed ? 200 : 201).send({ data, meta: { generatedAt: data.verifiedAt } })

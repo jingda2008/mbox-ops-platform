@@ -148,7 +148,8 @@ describe('staff access management API', () => {
     expect(response.statusCode).toBe(201)
     const input = service.createEmployee.mock.calls[0]?.[0]
     expect(input?.pin).toBe('4826')
-    expect(input?.requestFingerprint).not.toContain('4826')
+    expect(JSON.parse(input!.requestFingerprint)).not.toHaveProperty('pin')
+    expect(JSON.parse(input!.requestFingerprint).pinBinding).toMatch(/^[a-f0-9]{64}$/)
     expect(input?.requestFingerprint).toContain('"pinConfigured":true')
   })
 
@@ -159,15 +160,42 @@ describe('staff access management API', () => {
     expect(response.statusCode).toBe(400)
     expect(service.setEmployeeStatus).not.toHaveBeenCalled()
   })
+
+  it.each(['pin','actor','tenant','store','key','secret'])('isolates the PIN binding by %s while keeping identical retries stable', async dimension => {
+    const service = servicePort()
+    service.createEmployee.mockResolvedValue({ verifiedAt: '2026-11-02', replayed: false })
+    const context = { scope: { tenantId, storeId }, employeeId, businessDate: '2026-11-02' }
+    const secret = 'local-audit-fixture-key-not-for-production-20261102'
+    const app = await build(service, async () => context, secret)
+    const req = { method: 'POST' as const, url: '/staff-access/employees', headers: { 'idempotency-key': 'staff-create-pin-binding' }, payload: { employeeCode: 'LOCAL', displayName: 'Local', pin: '4826', roleId, reason: 'Local fixture' } }
+    expect((await app.inject(req)).statusCode).toBe(201)
+    expect((await app.inject(req)).statusCode).toBe(201)
+    const original = service.createEmployee.mock.calls[0]![0].requestFingerprint
+    expect(service.createEmployee.mock.calls[1]![0].requestFingerprint).toBe(original)
+    if (dimension === 'actor') context.employeeId = roleId
+    if (dimension === 'tenant') context.scope.tenantId = roleId
+    if (dimension === 'store') context.scope.storeId = roleId
+    if (dimension === 'pin') req.payload.pin = '7391'
+    if (dimension === 'key') req.headers['idempotency-key'] += '-other'
+    const target = dimension === 'secret' ? await build(service, async () => context, `${secret}-rotated`) : app
+    expect((await target.inject(req)).statusCode).toBe(201)
+    expect(JSON.parse(service.createEmployee.mock.calls[2]![0].requestFingerprint).pinBinding).not.toBe(JSON.parse(original).pinBinding)
+  })
+
+  it('fails registration without a sufficiently long fingerprint key', async () => {
+    await expect(build(servicePort(), undefined, 'short')).rejects.toThrow('fingerprint key')
+  })
 })
 
 async function build(
   service = servicePort(),
   resolveContext = async () => ({ scope: { tenantId, storeId }, employeeId, businessDate: '2026-08-13' }),
+  fingerprintSecret = 'local-audit-fixture-key-not-for-production-20261102',
 ) {
   const app = Fastify()
   apps.push(app)
   await app.register(staffAccessManagementApiPlugin, {
+    fingerprintSecret,
     service: service as unknown as StaffAccessManagementService,
     resolveContext,
   })

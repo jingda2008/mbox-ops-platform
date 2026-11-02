@@ -1188,27 +1188,30 @@ async function execute<Result>(
     transaction: ScopedTransaction,
     permissions: readonly string[],
   ) => Promise<Result>,
+  authorizeScope?: (transaction: ScopedTransaction, permissions: readonly string[]) => Promise<void>,
 ): Promise<CommandExecution<Result>> {
   const idempotencyKey = readIdempotencyKey(request);
   const durableWaste = ['inventory.waste.record', 'inventory.waste.submit',
     'inventory.waste-request.approve', 'inventory.waste-request.reject'].includes(operationScope);
-  // Even a transport-cache replay must require current employee permission.
-  let currentPermissions = durableWaste ? await options.transactions.run(context.scope, async transaction => (
-    await (options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction))
-      .assertPermission(context.employeeId, permission)
-  ).permissions, { readOnly: true }) : null;
+  let currentPermissions: readonly string[] = [];
   const requestFingerprint = fingerprint(request, context);
   let domainReplayed = false;
-  const commands = options.nativeProtocol ? nativePhysicalExecutor(options.commands, context, async tx => {
-    const current=await options.resolveContext(request);
-    if(current.employeeId!==context.employeeId||current.scope.storeId!==context.scope.storeId||current.scope.tenantId!==context.scope.tenantId)throw new StaffAccessDeniedError('账号已变化');
+  // Context resolution may borrow another database connection. Complete it
+  // before opening the command transaction to avoid exhausting the same pool.
+  const current = await options.resolveContext(request);
+  if(current.employeeId!==context.employeeId||current.scope.storeId!==context.scope.storeId||current.scope.tenantId!==context.scope.tenantId)throw new StaffAccessDeniedError('账号已变化');
+  // Authorization belongs before both cache and durable receipt lookup. A
+  // replay skips the mutation handler, but must never skip current authority.
+  const authorize = async (tx: ScopedTransaction) => {
     currentPermissions = (await (options.createStaffAccessRepository?.(tx) ?? new StaffAccessRepository(tx)).assertPermission(context.employeeId, permission)).permissions;
-    if(operationScope==='inventory.cost.correct')assertInventoryPermission(currentPermissions,'inventory.cost.view');
-    if(operationScope==='inventory.receipt.receive-and-publish'){
+    if(operationScope==='inventory.cost.correct' || operationScope==='inventory.recipe.cost.apply')assertInventoryPermission(currentPermissions,'inventory.cost.view');
+    if(operationScope==='inventory.receipt.receive-and-publish' || operationScope==='inventory.receipt.receive-and-publish-preview'){
       assertInventoryPermission(currentPermissions,'catalog.product.manage');
       assertInventoryPermission(currentPermissions,'inventory.cost.view');
     }
-  }) : options.commands;
+    await authorizeScope?.(tx, currentPermissions);
+  };
+  const commands = options.nativeProtocol ? nativePhysicalExecutor(options.commands, context, authorize) : options.commands;
   const execution = await commands.execute(
     {
       scope: context.scope,
@@ -1288,10 +1291,11 @@ async function execute<Result>(
         ],
       };
     },
+    options.nativeProtocol ? undefined : authorize,
   );
   // A cached receipt must not restore a cost field after cost access is revoked.
   const encoded = resultCodec.encode(execution.value);
-  if (currentPermissions !== null && !currentPermissions.includes('inventory.cost.view') && isJsonObject(encoded)) {
+  if (!currentPermissions.includes('inventory.cost.view') && isJsonObject(encoded)) {
     const { wasteCostMinor: _cost, unitCostMinor: _unitCost, ...visible } = encoded;
     return { value: resultCodec.decode(visible), replayed: execution.replayed || domainReplayed };
   }
@@ -1314,6 +1318,7 @@ async function executeBottleCommand(
     operation,
     "bottle.manage",
     bottleCodec,
+    async (transaction) => handler(createInventory(transaction)),
     async (transaction, permissions) => {
       const repository = createInventory(transaction);
       if (!permissions.includes("bottle.manage.all")) {
@@ -1330,7 +1335,6 @@ async function executeBottleCommand(
           }
         }
       }
-      return handler(repository);
     },
   );
 }
@@ -1348,6 +1352,19 @@ async function executeBottleMutation(
     action === "transfer"
       ? readUuid(body.toTableSessionId, "toTableSessionId")
       : null;
+  const authorizeBottle = async (transaction: ScopedTransaction, permissions: readonly string[]) => {
+    const repository = createInventory(transaction);
+    const bottle = await repository.findStoredBottle(bottleId);
+    if (!bottle) throw new InventoryNotFoundError("stored bottle", bottleId);
+    if (!permissions.includes("bottle.manage.all")) {
+      const sessions = destination ? [bottle.tableSessionId, destination] : [bottle.tableSessionId];
+      for (const sessionId of sessions) {
+        if (!(await repository.employeeHasTableResponsibility(context.employeeId, sessionId))) {
+          throw new StaffAccessDeniedError("Employee is not assigned to this table session");
+        }
+      }
+    }
+  };
   return execute(
     options,
     context,
@@ -1357,25 +1374,7 @@ async function executeBottleMutation(
     bottleCodec,
     async (transaction, permissions) => {
       const repository = createInventory(transaction);
-      const bottle = await repository.findStoredBottle(bottleId);
-      if (!bottle) throw new InventoryNotFoundError("stored bottle", bottleId);
-      if (!permissions.includes("bottle.manage.all")) {
-        const sessions = destination
-          ? [bottle.tableSessionId, destination]
-          : [bottle.tableSessionId];
-        for (const sessionId of sessions) {
-          if (
-            !(await repository.employeeHasTableResponsibility(
-              context.employeeId,
-              sessionId,
-            ))
-          ) {
-            throw new StaffAccessDeniedError(
-              "Employee is not assigned to this table session",
-            );
-          }
-        }
-      }
+      await authorizeBottle(transaction, permissions);
       if (action === "use")
         return repository.useStoredBottle(
           bottleId,
@@ -1392,6 +1391,7 @@ async function executeBottleMutation(
         );
       return repository.voidStoredBottle(bottleId, context.employeeId, reason);
     },
+    authorizeBottle,
   );
 }
 

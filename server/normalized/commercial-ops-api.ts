@@ -667,9 +667,15 @@ export function readRecordedAmount(body: Record<string, unknown>): { netAmountMi
   };
 }
 
-export async function assertCostSourcePermission(access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string, source: { sourceType: string; category: string }): Promise<void> {
-  if (source.sourceType === 'payroll' || source.category === 'personnel') await access.assertPermission(employeeId, 'commercial.payroll.manage');
-  if (source.sourceType === 'inventory_purchase' || source.category === 'beverage_purchase') await access.assertPermission(employeeId, 'inventory.receive');
+export async function assertCostSourcePermission(access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string, source: { sourceType: string; category: string }, requiredPermissions?: Set<string>): Promise<void> {
+  const permissions = [
+    ...(source.sourceType === 'payroll' || source.category === 'personnel' ? ['commercial.payroll.manage'] : []),
+    ...(source.sourceType === 'inventory_purchase' || source.category === 'beverage_purchase' ? ['inventory.receive'] : []),
+  ];
+  for (const permission of permissions) {
+    await access.assertPermission(employeeId, permission);
+    requiredPermissions?.add(permission);
+  }
 }
 
 export async function assertEditableCost(transaction: ScopedTransaction, costId: string, access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string): Promise<void> {

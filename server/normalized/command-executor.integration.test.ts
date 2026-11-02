@@ -76,6 +76,46 @@ integration('normalized command idempotency expiry', () => {
     expect(count).toBe(1)
     await expect(executor.execute({...input,requestFingerprint:'actor-two'},async()=>({result:'wrong',auditEvents:[],outboxMessages:[]}))).rejects.toBeInstanceOf(IdempotencyConflictError)
   })
+  it('stores server replay requirements outside the result and authorizes before returning a locked receipt', async () => {
+    let permitted = true, writes = 0, replayChecks = 0;
+    const denied = new Error('current source permission revoked');
+    const input = { ...command('receipt-authorization-0001', 'actor-one'), retainReceipt: true,
+      authorizeReplay: async (transaction: import('./transaction-runner.js').ScopedTransaction, evidence: unknown) => {
+        expect(transaction.scope).toEqual(scope);
+        await transaction.query('SELECT 1');
+        expect(evidence).toEqual({ version: 1, permissions: ['sensitive.read'] });
+        replayChecks++;
+        if (!permitted) throw denied;
+      },
+    };
+    const run = () => executor.execute(input, async () => ({ result: `result-${++writes}`,
+      replayAuthorization: { version: 1, permissions: ['sensitive.read'] }, auditEvents: [], outboxMessages: [] }));
+    expect(await run()).toEqual({ value: 'result-1', replayed: false });
+    expect(replayChecks).toBe(0);
+    const stored = () => pool.query('SELECT response_snapshot,updated_at::text,status FROM mbox.idempotency_records WHERE idempotency_key=$1', [input.idempotencyKey]);
+    const before = (await stored()).rows;
+    permitted = false;
+    await expect(run()).rejects.toBe(denied);
+    expect((await stored()).rows).toEqual(before);
+    permitted = true;
+    expect(await run()).toEqual({ value: 'result-1', replayed: true });
+    expect(writes).toBe(1);
+    expect(replayChecks).toBe(2);
+    await expect(executor.execute({ ...input, requestFingerprint: 'different-actor' }, async () => ({ result: 'wrong', auditEvents: [], outboxMessages: [] }))).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect(replayChecks).toBe(2);
+  });
+
+  it('passes absent legacy evidence to the replay authorizer without rebuilding the command', async () => {
+    const input = command('legacy-authorization-0001', 'same-actor');
+    await executor.execute(input, async () => ({ result: 'legacy', auditEvents: [], outboxMessages: [] }));
+    let checks = 0;
+    const replay = await executor.execute({ ...input, authorizeReplay: async (_transaction, evidence) => {
+      expect(evidence).toBeUndefined(); checks++;
+    } }, async () => { throw new Error('must not rerun'); });
+    expect(replay).toEqual({ value: 'legacy', replayed: true });
+    expect(checks).toBe(1);
+  });
+
   it('marks only newly acquired callback rollback as not committed',async()=>{
     const input={...command('native-receipt-rollback-0001','actor-one'),retainReceipt:true}
     await expect(executor.execute(input,async()=>{throw new Error('business changed')})).rejects.toBeInstanceOf(NativeCommandNotCommittedError)

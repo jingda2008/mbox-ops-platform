@@ -65,6 +65,8 @@ interface ExistingOutboxMessageRow extends Record<string, unknown> {
 
 export interface CommandOutcome<Result> {
   result: Result
+  /** Server-derived requirements, stored with the receipt but never sent as its result. */
+  replayAuthorization?: JsonObject
   auditEvents: readonly AuditEvent[]
   outboxMessages: readonly OutboxMessage[]
 }
@@ -75,6 +77,8 @@ export interface IdempotentCommand<Result> {
   idempotencyKey: string
   requestFingerprint: string
   resultCodec: JsonCodec<Result>
+  /** Runs under the receipt lock, before returning a completed receipt. */
+  authorizeReplay?: (transaction: ScopedTransaction, authorization: unknown) => Promise<void>
   /** Opt-in native command receipts survive routine idempotency cleanup. */
   retainReceipt?: boolean
   /** Snapshot reports opt in without changing existing business command isolation. */
@@ -153,6 +157,8 @@ export class NormalizedCommandExecutor {
       await beforeClaim?.(transaction)
       const claim = await claimIdempotency(transaction, command)
       if (claim.kind === 'replay') {
+        await command.authorizeReplay?.(transaction,
+          (claim.responseBody as { replayAuthorization?: unknown } | null)?.replayAuthorization)
         return {
           value: command.resultCodec.decode(readStoredResult(claim.responseBody)),
           replayed: true,
@@ -167,7 +173,7 @@ export class NormalizedCommandExecutor {
       for (const outboxMessage of outcome.outboxMessages) {
         await appendOutboxMessage(transaction, outboxMessage)
       }
-      await completeIdempotency(transaction, command, outcome.result)
+      await completeIdempotency(transaction, command, outcome.result, outcome.replayAuthorization)
       return { value: outcome.result, replayed: false }
       } catch (error) {
         // Only the acquired, never-committed execution is safe to release.
@@ -289,8 +295,10 @@ async function completeIdempotency<Result>(
   transaction: ScopedTransaction,
   command: Readonly<IdempotentCommand<Result>>,
   result: Result,
+  replayAuthorization?: JsonObject,
 ): Promise<void> {
-  const responseBody = JSON.stringify({ result: command.resultCodec.encode(result) })
+  const responseBody = JSON.stringify({ result: command.resultCodec.encode(result),
+    ...(replayAuthorization === undefined ? {} : { replayAuthorization }) })
   const completed = await transaction.query(`
     UPDATE mbox.idempotency_records
     SET status = 'completed',

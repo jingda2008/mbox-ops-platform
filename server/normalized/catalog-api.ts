@@ -423,7 +423,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         idempotencyKey,
         input,
       );
-      const executor = native ? nativePhysicalExecutor(options.commandExecutor,context,tx=>assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION)) : options.commandExecutor;
+      const executor = catalogWriteExecutor(options.commandExecutor, context, native, tx => assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION));
       const execution = await executor.execute(
         command,
         async (transaction) => {
@@ -488,7 +488,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           idempotencyKey,
           { categoryCode, ...patch, ...(native ? {expectedUpdatedAt:expected} : {}) },
         );
-        const executor = native ? nativePhysicalExecutor(options.commandExecutor,context,tx=>assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION)) : options.commandExecutor;
+        const executor = catalogWriteExecutor(options.commandExecutor, context, native, tx => assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION));
         const execution = await executor.execute(
           command,
           async (transaction) => {
@@ -592,12 +592,12 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
         input,
       );
       let mayReadCost=false;
-      const executor=native ? nativePhysicalExecutor(options.commandExecutor,context,async tx=>{
+      const executor=catalogWriteExecutor(options.commandExecutor,context,native,async tx=>{
         await assertLivePermission(tx,context.employeeId,CATALOG_PRODUCT_MANAGE_PERMISSION);
         if(input.standardPrice!==null)await assertLivePermission(tx,context.employeeId,CATALOG_PRICE_MANAGE_PERMISSION);
         if(input.costAmountProvided)await assertCostPermission(tx,context.employeeId);
         mayReadCost=await hasLivePermission(tx,context.employeeId,INVENTORY_COST_VIEW_PERMISSION);
-      }) : options.commandExecutor;
+      });
       const execution = await executor.execute(
         command,
         async (transaction) => {
@@ -716,7 +716,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
       );
       return reply
         .code(execution.replayed ? 200 : 201)
-        .send(executionResponse(native ? {...execution,value:redactProductCost(execution.value,mayReadCost)} : execution));
+        .send(executionResponse({...execution,value:redactProductCost(execution.value,mayReadCost)}));
     }),
   );
 
@@ -740,12 +740,12 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           { productId, ...patch, ...(native ? {expectedVersion: expected} : {}) },
         );
         let mayReadCost = false;
-        const executor = native ? nativePhysicalExecutor(options.commandExecutor, context, async tx => {
+        const executor = catalogWriteExecutor(options.commandExecutor, context, native, async tx => {
           await assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION);
           if (patch.standardPrice !== null) await assertLivePermission(tx, context.employeeId, CATALOG_PRICE_MANAGE_PERMISSION);
           if (patch.costAmountProvided) await assertCostPermission(tx, context.employeeId);
           mayReadCost = await hasLivePermission(tx, context.employeeId, INVENTORY_COST_VIEW_PERMISSION);
-        }) : options.commandExecutor;
+        });
         const execution = await executor.execute(
           command,
           async (transaction) => {
@@ -951,7 +951,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
           },
         );
-        return reply.send(executionResponse(native ? {...execution, value: redactProductCost(execution.value, mayReadCost)} : execution));
+        return reply.send(executionResponse({...execution, value: redactProductCost(execution.value, mayReadCost)}));
       });
   app.patch<{Params:{productId:string}}>('/catalog/products/:productId', productUpdateHandler(false));
   app.post<{Params:{productId:string}}>('/native/catalog/products/:productId', productUpdateHandler(true));
@@ -1016,7 +1016,12 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           idempotencyKey,
           { productId, ...price },
         );
-        const execution = await priceCommandExecutor.execute(
+        let mayReadCost = false;
+        const executor = catalogWriteExecutor(priceCommandExecutor, context, false, async tx => {
+          await assertLivePermission(tx, context.employeeId, CATALOG_PRICE_MANAGE_PERMISSION);
+          mayReadCost = await hasLivePermission(tx, context.employeeId, INVENTORY_COST_VIEW_PERMISSION);
+        });
+        const execution = await executor.execute(
           command,
           async (transaction) => {
             await assertLivePermission(
@@ -1049,7 +1054,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             );
           },
         );
-        return reply.send(executionResponse(execution));
+        return reply.send(executionResponse({...execution, value: redactProductCost(execution.value, mayReadCost)}));
       }),
   );
 };
@@ -2712,6 +2717,26 @@ function menuCategoryCommand(
 
 function jsonFingerprintValue(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+/** Replays disclose a receipt, so current authorization runs before either
+ * cache lookup or durable recovery. Mutable version/shape validation remains
+ * in the write handler: a valid retry must recover the original committed result. */
+function catalogWriteExecutor(
+  executor: CommandExecutorPort,
+  context: NormalizedOperationsRequestContext,
+  native: boolean,
+  authorize: (transaction: ScopedTransaction) => Promise<void>,
+): CommandExecutorPort {
+  if (native) return nativePhysicalExecutor(executor, context, authorize);
+  return {
+    execute(command, handler, beforeClaim) {
+      return executor.execute(command, handler, async transaction => {
+        await authorize(transaction);
+        await beforeClaim?.(transaction);
+      });
+    },
+  };
 }
 
 function createConfiguredCommandExecutor(

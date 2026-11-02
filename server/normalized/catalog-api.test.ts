@@ -1165,6 +1165,7 @@ async function createFixture(options: FixtureOptions = {}) {
   const execute: NormalizedCommandExecutor["execute"] = async <Result>(
     command: Readonly<IdempotentCommand<Result>>,
     handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+    beforeClaim?: (value: ScopedTransaction) => Promise<void>,
   ) => {
     commandAttempts += 1;
     commandCalls.push(command as Readonly<IdempotentCommand<unknown>>);
@@ -1174,6 +1175,7 @@ async function createFixture(options: FixtureOptions = {}) {
         code: "40001",
       });
     }
+    await beforeClaim?.(transaction);
     const outcome = await handler(transaction);
     outcomes.push(outcome as CommandOutcome<unknown>);
     return { value: outcome.result, replayed: false };

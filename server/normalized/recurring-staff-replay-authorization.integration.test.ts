@@ -1,3 +1,5 @@
+import { NormalizedApiClient } from '../../src/normalized-api.js'
+import { StaffEmployeeRecovery, type EmployeeOperation, type EmployeeOperationResult, type EmployeeOperationIntent } from '../../src/normalized-ui/staff-employee-recovery.js'
 import { randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance, type FastifyRequest, type InjectOptions } from 'fastify'
 import { Pool } from 'pg'
@@ -177,6 +179,77 @@ integration('recurring history and staff receipt authorization with a restricted
     }
     return request(kind==='create'?'/api/staff-access/employees':`/api/staff-access/employees/${target}/status`,payload)
   }
+  async function employeeRecoveryFixture(kind:string, failure:'network'|'malformed'|'none'='network') {
+    const req=await staffRequest(false,kind)
+    const body=req.payload as Record<string,string>
+    const operation:EmployeeOperation=kind==='create'?{action:'create',body:{employeeCode:body.employeeCode!,displayName:body.displayName!,roleId:body.roleId!,reason:body.reason!}}:
+      {action:'status',employeeId:req.url!.split('/').at(-2)!,body:{status:'suspended',reason:body.reason!}}
+    const records=new Map<string,string>()
+    const storage={get length(){return records.size},key:(i:number)=>[...records.keys()][i]??null,getItem:(key:string)=>records.get(key)??null,setItem:(key:string,value:string)=>{records.set(key,value)},removeItem:(key:string)=>{records.delete(key)}}
+    const recovery=()=>new StaffEmployeeRecovery(`${scope.tenantId}:${scope.storeId}`,employeeId,storage)
+    let responseFailure=failure
+    const client=new NormalizedApiClient({fetch:async(url,init)=>{
+      const response=await app.inject({method:'POST',url:String(url),headers:Object.fromEntries(new Headers(init?.headers)),payload:JSON.parse(String(init?.body))})
+      if(response.statusCode<300&&responseFailure!=='none'){
+        const mode=responseFailure;responseFailure='none'
+        if(mode==='network')throw new TypeError('Injected loss after real commit')
+        return new Response(JSON.stringify({data:{}}),{status:200,headers:{'content-type':'application/json'}})
+      }
+      return new Response(response.body,{status:response.statusCode,headers:{'content-type':'application/json'}})
+    }})
+    const send=(intent:EmployeeOperationIntent,pin:string|undefined,receiptOnly:boolean)=>{
+      const op=intent.operation
+      return client.postEndpoint<EmployeeOperationResult>(`${op.action==='create'?'/api/staff-access/employees':`/api/staff-access/employees/${op.employeeId}/status`}${receiptOnly?'/recover':''}`,op.action==='create'?{...op.body,pin}:op.body,{idempotencyKey:intent.key})
+    }
+    return {req,operation,records,recovery,send}
+  }
+  it.each(['create','status'])('client recovers committed %s after loss, reload and revoked authority without extra facts',async kind=>{
+    const f=await employeeRecoveryFixture(kind)
+    await expect(f.recovery().execute(f.operation,'4826',f.send)).rejects.toThrow('网络连接失败')
+    const pending=f.recovery().pending(),before=await snapshot()
+    expect(JSON.stringify([...f.records.values()])).not.toContain('"pin"')
+    expect(Object.values(JSON.parse([...f.records.values()][0]!).operation.body)).not.toContain('4826')
+    await expect(f.recovery().execute(f.operation,'4826',f.send)).rejects.toThrow('先恢复')
+    await without('staff.access.configure',async()=>{
+      await expect(f.recovery().execute(null,'4826',f.send)).rejects.toMatchObject({status:403})
+      expect(f.recovery().pending()).toEqual(pending)
+    })
+    expect((await f.recovery().execute(null,'4826',f.send)).replayed).toBe(true)
+    expect(f.records.size).toBe(0);expect(await snapshot()).toEqual(before)
+  })
+  it('client retains original create intent after re-entering a different PIN',async()=>{
+    const f=await employeeRecoveryFixture('create')
+    await expect(f.recovery().execute(f.operation,'4826',f.send)).rejects.toThrow()
+    const before=await snapshot(),pending=f.recovery().pending()
+    await expect(f.recovery().execute(null,'7391',f.send)).rejects.toMatchObject({status:409})
+    expect(f.recovery().pending()).toEqual(pending)
+    expect((await f.recovery().execute(null,'4826',f.send)).replayed).toBe(true)
+    expect(await snapshot()).toEqual(before)
+  })
+  it.each(['create','status'])('client releases only a definitively rejected first %s request',async kind=>{
+    const f=await employeeRecoveryFixture(kind,'none');await success(f.req)
+    const before=await snapshot()
+    await expect(f.recovery().execute(f.operation,'4826',f.send)).rejects.toMatchObject({status:400,code:'PERMISSION_DEPLOYMENT_INVALID'})
+    expect(f.records.size).toBe(0);expect(await snapshot()).toEqual(before)
+  })
+  it('client retains a committed command after malformed success and restores its verified receipt',async()=>{
+    const f=await employeeRecoveryFixture('create','malformed')
+    await expect(f.recovery().execute(f.operation,'4826',f.send)).rejects.toThrow('回执')
+    const before=await snapshot()
+    expect((await f.recovery().execute(null,'4826',f.send)).replayed).toBe(true)
+    expect(await snapshot()).toEqual(before)
+  })
+  it.each(['create','status'].flatMap(kind=>['expired','deleted','never_committed'].map(state=>({kind,state}))))('recovery-only $kind never re-executes when receipt is $state',async({kind,state})=>{
+    const f=await employeeRecoveryFixture(kind)
+    await expect(f.recovery().execute(f.operation,'4826',state==='never_committed'?async()=>{throw new Error('request did not reach server')}:f.send)).rejects.toThrow()
+    const pending=f.recovery().pending()!
+    if(state==='expired')await admin.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND idempotency_key=$2",[scope.tenantId,pending.key])
+    if(state==='deleted')await admin.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[scope.tenantId,pending.key])
+    if(f.operation.action==='status')await admin.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[f.operation.employeeId])
+    const before=await snapshot()
+    await expect(f.recovery().execute(null,'4826',f.send)).rejects.toMatchObject({status:409,code:'STAFF_EMPLOYEE_RECEIPT_UNAVAILABLE'})
+    expect(f.recovery().pending()).toEqual(pending);expect(await snapshot()).toEqual(before)
+  })
   it.each([false,true])('binds create PIN and preserves the original credential and all facts, native=%s',async native=>{
     const req=await staffRequest(native,'create'),initial=await success(req,native)
     const before=await snapshot()

@@ -77,6 +77,8 @@ export interface IdempotentCommand<Result> {
   idempotencyKey: string
   requestFingerprint: string
   resultCodec: JsonCodec<Result>
+  /** Recover an existing, unexpired result without claiming or resuming a write. */
+  replayOnly?: boolean
   /** Runs under the receipt lock, before returning a completed receipt. */
   authorizeReplay?: (transaction: ScopedTransaction, authorization: unknown) => Promise<void>
   /** Opt-in native command receipts survive routine idempotency cleanup. */
@@ -131,6 +133,10 @@ export class IdempotencyRecordError extends Error {
     super(message)
     this.name = 'IdempotencyRecordError'
   }
+}
+
+export class IdempotencyReceiptUnavailableError extends Error {
+  constructor() { super('原操作回执不存在或已过期，请核对当前记录；恢复请求不会重新执行操作'); this.name = 'IdempotencyReceiptUnavailableError' }
 }
 
 export class OutboxMessageConflictError extends Error {
@@ -208,7 +214,7 @@ async function claimIdempotency<Result>(
   // A cleanup worker may delete an expired row after INSERT observes the conflict
   // but before the following SELECT locks it. Retry the claim in that narrow race.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const inserted = await transaction.query<{ id: string }>(`
+    const inserted = command.replayOnly ? null : await transaction.query<{ id: string }>(`
       INSERT INTO mbox.idempotency_records (
         tenant_id, store_id, operation_scope, idempotency_key, request_sha256,
         status, locked_until, expires_at
@@ -220,7 +226,7 @@ async function claimIdempotency<Result>(
       ON CONFLICT (tenant_id, store_id, operation_scope, idempotency_key) DO NOTHING
       RETURNING id
     `, [...values])
-    if (inserted.rowCount === 1) return { kind: 'acquired' }
+    if (inserted?.rowCount === 1) return { kind: 'acquired' }
 
     const selected = await transaction.query<IdempotencyRow>(`
       SELECT id, request_sha256, status, response_snapshot,
@@ -234,10 +240,12 @@ async function claimIdempotency<Result>(
     `, values.slice(0, 4))
     const record = selected.rows[0]
     if (selected.rowCount !== 1 || record === undefined) {
+      if (command.replayOnly) throw new IdempotencyReceiptUnavailableError()
       if (attempt < 2) continue
       throw new IdempotencyRecordError('Idempotency record disappeared while claiming the command')
     }
     if (record.is_expired) {
+      if (command.replayOnly) throw new IdempotencyReceiptUnavailableError()
       const reclaimed = await transaction.query<{ id: string }>(`
         UPDATE mbox.idempotency_records
         SET request_sha256 = $6,
@@ -267,7 +275,7 @@ async function claimIdempotency<Result>(
       throw new IdempotencyConflictError(command.operationScope, command.idempotencyKey)
     }
     if (record.status === 'completed') {
-      const retryAt = command.retryCompletedAfter?.(command.resultCodec.decode(readStoredResult(record.response_snapshot)))
+      const retryAt = command.replayOnly ? null : command.retryCompletedAfter?.(command.resultCodec.decode(readStoredResult(record.response_snapshot)))
       if (retryAt && Number.isFinite(Date.parse(retryAt)) && Date.parse(retryAt) <= Date.parse(record.database_now)) {
         const resumed = await transaction.query(`
           UPDATE mbox.idempotency_records

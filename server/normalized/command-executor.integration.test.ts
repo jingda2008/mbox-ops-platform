@@ -4,6 +4,7 @@ import { runNormalizedMigrations } from '../migrate-normalized.js'
 import {
   hashRequestFingerprint,
   IdempotencyConflictError,
+  IdempotencyReceiptUnavailableError,
   IdempotencyInProgressError,
   NormalizedCommandExecutor,
   NativeCommandNotCommittedError,
@@ -51,6 +52,24 @@ integration('normalized command idempotency expiry', () => {
       VALUES ($1::uuid, $2::uuid, 'idempotency-store', 'Idempotency Store')
       ON CONFLICT (id) DO NOTHING
     `, [storeId, tenantId])
+  })
+
+  it('recovery-only requires a live existing receipt and never invokes resume or handler', async () => {
+    const command={scope,operationScope:'test.recovery_only',idempotencyKey:'recovery-only-test',requestFingerprint:'original',resultCodec:stringCodec}
+    let writes=0,authorizations=0,resumes=0
+    const handler=async()=>{writes++;return {result:'original result',auditEvents:[],outboxMessages:[]}}
+    const authorize=async()=>{authorizations++}
+    await expect(executor.execute({...command,replayOnly:true},handler,authorize)).rejects.toBeInstanceOf(IdempotencyReceiptUnavailableError)
+    expect(writes).toBe(0);expect(authorizations).toBe(1)
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,command.idempotencyKey])).rows[0].n).toBe(0)
+    await executor.execute(command,handler)
+    expect(await executor.execute({...command,replayOnly:true,retryCompletedAfter:()=>{resumes++;return '2000-01-01T00:00:00Z'}},handler,authorize)).toEqual({value:'original result',replayed:true})
+    expect(writes).toBe(1);expect(resumes).toBe(0)
+    await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND idempotency_key=$2",[tenantId,command.idempotencyKey])
+    const before=(await pool.query('SELECT * FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,command.idempotencyKey])).rows
+    await expect(executor.execute({...command,replayOnly:true},handler,authorize)).rejects.toBeInstanceOf(IdempotencyReceiptUnavailableError)
+    expect((await pool.query('SELECT * FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,command.idempotencyKey])).rows).toEqual(before)
+    expect(writes).toBe(1)
   })
 
   beforeEach(async () => {

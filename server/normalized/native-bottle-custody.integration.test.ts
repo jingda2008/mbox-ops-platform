@@ -94,7 +94,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
   const updated=await send('/categories',categoryBody,undefined,undefined,{'x-custody-category':categoryRow.configurationFingerprint});expect(updated.statusCode,updated.body).toBe(200)
   expect((await send('/categories',{...categoryBody,name:'旧版本覆盖'},undefined,undefined,{'x-custody-category':categoryRow.configurationFingerprint})).statusCode).toBe(409)
   const exported=await send('/report-export',{scope:'custody',memberNo:'100001'});expect(exported.statusCode,exported.body).toBe(200);expect(exported.json().data.operation).toBe('report_export');expect(exported.json().data.result.count).toBe(1)
-  expect((await send('/report-export',{scope:'all'})).statusCode).toBe(409) // No order-history permission.
+  expect((await send('/report-export',{scope:'all'})).statusCode).toBe(403) // Authorization fails before receipt claim.
   const print=await send('/'+order.id+'/print',{},order.version);expect(print.statusCode,print.body).toBe(200);expect(print.json().data.result.document.order.id).toBe(order.id)
  })
 })

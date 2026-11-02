@@ -230,6 +230,11 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.cost.created.v1', payload: auditCost(result),
         }],
       }
+    }, async transaction => {
+      // Returning a previous receipt still requires current write/source authority.
+      const access = createAccess(transaction)
+      await access.assertPermission(context.employeeId, 'commercial.cost.manage')
+      await assertCostSourcePermission(access, context.employeeId, input)
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -267,6 +272,13 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
             payload: { ...auditCost(result), correctedCostEntryId: costId },
           }],
         }
+      }, async transaction => {
+        const access = createAccess(transaction)
+        await access.assertPermission(context.employeeId, 'commercial.cost.manage')
+        await assertCostSourcePermission(access, context.employeeId, input)
+        // The original row is append-only. Check its source without rerunning
+        // the already-corrected state guard, which would break receipt recovery.
+        await assertEditableCost(transaction, costId, access, context.employeeId)
       })
       return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
     }),

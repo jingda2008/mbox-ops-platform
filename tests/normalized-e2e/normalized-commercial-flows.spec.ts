@@ -328,8 +328,24 @@ test('mobile guest, reservation and staff work surfaces have no serious accessib
   const data = await fixture()
   await page.setViewportSize({ width: 320, height: 800 })
 
-  await page.goto(data.guestUrl)
-  await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+  // Hold only the performance response so the transient loading surface is
+  // deterministic; a fast network must not hide an inaccessible state.
+  let releasePerformance!: () => void
+  const performanceHeld = new Promise<void>(resolve => { releasePerformance = resolve })
+  await page.route('**/api/guest/performances/today', async route => {
+    await performanceHeld
+    await route.continue()
+  })
+  try {
+    await page.goto(data.guestUrl)
+    await expect(page.getByTestId('normalized-guest-app')).toBeVisible()
+    await expect(page.getByRole('region', {name: '正在加载今晚演出'})).toBeVisible()
+    const loading = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
+    expect(loading.violations.filter(violation => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
+  } finally {
+    releasePerformance()
+  }
+  await expect(page.getByRole('region', {name: '正在加载今晚演出'})).toHaveCount(0)
   const guest = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze()
   expect(guest.violations.filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')).toEqual([])
 

@@ -8,7 +8,7 @@ import type {FastifyPluginAsync,FastifyRequest} from 'fastify'
 import type {CustomerBenefitApiOptions} from './customer-benefit-api.js'
 import type {NormalizedCommandExecutor,JsonCodec,JsonObject} from './command-executor.js'
 import {NativeCommandNotCommittedError,IdempotencyConflictError,IdempotencyInProgressError} from './command-executor.js'
-import {StaffAccessRepository,StaffAccessDeniedError} from './staff-access-repository.js'
+import {StaffAccessRepository,StaffAccessDeniedError,StaffNotFoundError} from './staff-access-repository.js'
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import {BottleCustodyRepository,custodyCreateSchema} from './bottle-custody-repository.js'
@@ -21,7 +21,7 @@ const filters=z.object({memberNo:z.string().min(1).max(64).optional(),categoryId
 export const bottleCustodyApiPlugin:FastifyPluginAsync<Options>=async(app,options)=>{
  app.addHook('onRequest',async(_request,reply)=>{reply.header('Cache-Control','private, no-store')})
  app.setErrorHandler((error,_request,reply)=>{
-  if(isStaffAuthenticationRequiredError(error))return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
+  if(isStaffAuthenticationRequiredError(error)||error instanceof StaffNotFoundError)return reply.code(401).send({error:STAFF_AUTHENTICATION_REQUIRED_ERROR})
   if(error instanceof StaffAccessDeniedError)return reply.code(403).send({error:{code:'CUSTODY_ACCESS_DENIED',message:'没有此项存酒操作权限'}})
   if(error instanceof NativeCommandNotCommittedError)return reply.code(409).send({error:{code:'NATIVE_BUSINESS_NOT_COMMITTED',message:error.original instanceof BottleCustodyError?error.original.message:'本次存酒操作未提交，请刷新核对后重试',commitDisposition:'not_committed'}})
   if(error instanceof BottleCustodyError)return reply.code(error.statusCode).send({error:{code:error.code,message:error.message}})
@@ -33,7 +33,7 @@ export const bottleCustodyApiPlugin:FastifyPluginAsync<Options>=async(app,option
   const ctx=await options.resolveStaffContext(request)
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission),{readOnly:true});return ctx
  }
- async function write(request:FastifyRequest,operation:string,input:unknown,action:(repo:BottleCustodyRepository,employeeId:string)=>Promise<unknown>,permission='bottle.manage.all'){
+ async function write(request:FastifyRequest,operation:string,input:unknown,action:(repo:BottleCustodyRepository,employeeId:string)=>Promise<unknown>,permission='bottle.manage.all',additionalPermissions:readonly string[]=[]){
   const ctx=await context(request,permission),key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   const native=options.nativeReceipts===true
   if(native)z.string().regex(/^native-business-[a-f0-9-]{36}$/).parse(key)
@@ -41,6 +41,10 @@ export const bottleCustodyApiPlugin:FastifyPluginAsync<Options>=async(app,option
   const expectedVersion=guarded?z.coerce.number().int().min(1).parse(request.headers['x-custody-version']):null
   const categoryExpected=native&&operation==='category'&&(input as {id?:string}).id?z.string().regex(/^[a-f0-9]{64}$/).parse(request.headers['x-custody-category']):null
   const fingerprint=options.protection.protect(JSON.stringify({employeeId:ctx.employeeId,input,...(native?{expectedVersion,categoryExpected}:{})})).hash
+  // Context lookup can borrow a connection; finish it before the command
+  // transaction. Every cache/retained receipt must recheck all current rights.
+  const current=await options.resolveStaffContext(request)
+  if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('Account changed')
   const result=await options.commands.execute({scope:ctx.scope,operationScope:`bottle.custody.${operation}${native?'.native':''}`,idempotencyKey:key,requestFingerprint:fingerprint,resultCodec:codec,...(native?{retainReceipt:true}:{})},async tx=>{
    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission)
    if(['export','report_export'].includes(operation))await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'bottle.manage.all')
@@ -55,12 +59,12 @@ export const bottleCustodyApiPlugin:FastifyPluginAsync<Options>=async(app,option
    const value=await action(new BottleCustodyRepository(tx,options.protection),ctx.employeeId)
    const result=native?{operation,employeeId:ctx.employeeId,requestKey:key,result:value}:value
    return{result:JSON.parse(JSON.stringify(result)) as JsonObject,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:`bottle.custody.${operation}`,objectType:'bottle_custody',objectId:ctx.scope.storeId,afterData:{requestFingerprint:fingerprint}}],outboxMessages:[]}
-  },native?async tx=>{
-   const current=await options.resolveStaffContext(request)
-   if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('Account changed')
-   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,permission)
-   if(['export','report_export'].includes(operation))await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'bottle.manage.all')
-  }:undefined);return{data:result.value,meta:{replayed:result.replayed,...(native?{protocol:1}:{})}}
+  },async tx=>{
+   const access=new StaffAccessRepository(tx)
+   await access.assertPermission(ctx.employeeId,permission)
+   if(['export','report_export'].includes(operation))await access.assertPermission(ctx.employeeId,'bottle.manage.all')
+   for(const required of additionalPermissions)await access.assertPermission(ctx.employeeId,required)
+  });return{data:result.value,meta:{replayed:result.replayed,...(native?{protocol:1}:{})}}
  }
  app.get('/staff/bottle-custody/native-capabilities',async request=>{const ctx=await context(request);return{data:{durableCommands:options.nativeReceipts===true,employeeId:ctx.employeeId}}})
  app.get('/staff/bottle-custody/report',async request=>{
@@ -68,8 +72,8 @@ export const bottleCustodyApiPlugin:FastifyPluginAsync<Options>=async(app,option
   return{data:await options.transactions.run(ctx.scope,async tx=>{if(input.scope!=='custody')await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'order.history.all');return custodyReport(tx,input)},{readOnly:true})}
  })
  app.post('/staff/bottle-custody/report-export',{bodyLimit:4096},async request=>{
-  const input=custodyReportFilters.omit({offset:true}).parse(request.body),ctx=await context(request,'bottle.custody.export')
-  return write(request,options.nativeReceipts?'report_export':'export',input,async repo=>repo.exportReport(input,ctx.employeeId),'bottle.custody.export')
+  const input=custodyReportFilters.omit({offset:true}).parse(request.body)
+  return write(request,options.nativeReceipts?'report_export':'export',input,(repo,employeeId)=>repo.exportReport(input,employeeId),'bottle.custody.export',input.scope==='custody'?[]:['order.history.all'])
  })
  if(options.nativeReceipts)app.get('/staff/bottle-custody/source-order',async request=>{
   const input=z.object({memberNo:z.string().trim().min(1).max(64),publicId:z.string().trim().min(8).max(128)}).strict().parse(request.query),ctx=await context(request)

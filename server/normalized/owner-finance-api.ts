@@ -83,7 +83,10 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
         const repo=new CommercialOpsRepository(tx);
         const value=correction?await repo.correctCost(costId!,input,reason!):await repo.createCost(input);
         return {...toCostResult(value),status:"recorded",aggregateVersion:1};
-      },correction?"commercial.cost.corrected":"commercial.cost.created","operating_cost");
+      },correction?"commercial.cost.corrected":"commercial.cost.created","operating_cost", async tx => {
+        await assertCostSourcePermission(access(tx), context.employeeId, input);
+        if (costId) await assertEditableCost(tx, costId, access(tx), context.employeeId);
+      });
     }));
   }
 
@@ -280,6 +283,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
       const editingId = body.ruleId === undefined ? null : uuid(body.ruleId, "周期规则");
       const expectedVersion = editingId ? integer(body.expectedVersion, "规则版本", 1, 1_000_000) : null;
       const changeReason = editingId ? text(body.changeReason, "修改原因", 1000) : null;
+      const sourcePermissions = editingId ? new Set<string>() : undefined;
       return commandReply(
         reply,
         options,
@@ -314,7 +318,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               `SELECT *,starts_on::text,ends_on::text FROM mbox.recurring_operating_cost_rules WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid FOR UPDATE`,
               [...ids(context), editingId],
             ), "周期规则不存在");
-            await assertRecurringSourcePermission(transaction, editingId, access(transaction), context.employeeId);
+            await assertRecurringSourcePermission(transaction, editingId, access(transaction), context.employeeId, sourcePermissions);
             if (previous.version !== expectedVersion || previous.status === "ended") throw new OwnerFinanceConflictError("规则已变更或结束，请刷新后重试");
             if (previous.recurrence !== input.recurrence || previous.starts_on !== input.startsOn || previous.ends_on !== input.endsOn || previous.allocation_period !== input.allocationPeriod)
               throw new OwnerFinanceRequestError("修改规则不改变原周期和日期；调整周期请结束原规则后新建");
@@ -351,6 +355,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
         },
         editingId ? "commercial.recurring_cost.updated" : "commercial.recurring_cost.created",
         "recurring_operating_cost",
+        undefined, sourcePermissions,
       );
     }),
   );
@@ -365,6 +370,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           body.throughDate ?? context.businessDate,
           "生成截止日期",
         );
+        const sourcePermissions = new Set<string>();
         return commandReply(
           reply,
           options,
@@ -384,7 +390,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
             let created = 0;
             const repository = new CommercialOpsRepository(transaction);
             for (const rule of rules.rows) {
-              await assertCostSourcePermission(access(transaction), context.employeeId, { sourceType: rule.source_type, category: rule.system_category });
+              await assertCostSourcePermission(access(transaction), context.employeeId, { sourceType: rule.source_type, category: rule.system_category }, sourcePermissions);
               for (const occurrence of occurrences(
                 rule.starts_on,
                 rule.ends_on,
@@ -436,6 +442,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           },
           "commercial.recurring_cost.materialized",
           "recurring_operating_cost",
+          undefined, sourcePermissions,
         );
       }),
   );
@@ -453,6 +460,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           "规则状态",
         );
         const reasonText = text(body.reason, "变更说明", 1000, 2);
+        const sourcePermissions = new Set<string>();
         return commandReply(
           reply,
           options,
@@ -476,7 +484,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
               ),
               "周期费用规则不存在",
             );
-            await assertRecurringSourcePermission(transaction, ruleId, access(transaction), context.employeeId);
+            await assertRecurringSourcePermission(transaction, ruleId, access(transaction), context.employeeId, sourcePermissions);
             const allowed =
               (current.status === "active" &&
                 (status === "paused" || status === "ended")) ||
@@ -505,6 +513,7 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
           },
           "commercial.recurring_cost.status_changed",
           "recurring_operating_cost",
+          undefined, sourcePermissions,
         );
       }),
   );
@@ -910,6 +919,8 @@ async function commandReply(
   work: (transaction: ScopedTransaction) => Promise<FinanceResult>,
   action: string,
   objectType: string,
+  authorize?: (transaction: ScopedTransaction) => Promise<void>,
+  sourcePermissions?: Set<string>,
 ) {
   const idempotencyKey = idempotency(request);
   const native = options.nativeReceipts === true;
@@ -919,6 +930,11 @@ async function commandReply(
   const expectedVersion=guarded?integer(Number(request.headers["x-owner-version"]),"记录版本",1,1_000_000):null;
   const expectedCompensation=native && operationScope === "commercial.compensation-rule.create"?text(request.headers["x-owner-compensation"],"当前薪资标准",64):null;
   const permission=operationScope.startsWith("commercial.cost")||operationScope.startsWith("commercial.recurring-")?"commercial.cost.manage":operationScope==="commercial.payroll-run.post"?"commercial.payroll.post":"commercial.payroll.manage";
+  // Resolve identity before acquiring the command connection: the resolver may
+  // use the same pool. Permission checks still run inside the command transaction.
+  const current = await options.resolveContext(request);
+  if (current.employeeId !== context.employeeId || current.scope.storeId !== context.scope.storeId || current.scope.tenantId !== context.scope.tenantId)
+    throw new StaffAccessDeniedError("账号已变化");
   const execution = await options.commandExecutor.execute(
     {
       scope: context.scope,
@@ -927,6 +943,10 @@ async function commandReply(
       ...(native ? {retainReceipt:true} : {}),
       requestFingerprint: native ? createHash("sha256").update(JSON.stringify({input,actor:context.employeeId,expectedVersion,expectedCompensation})).digest("hex") : JSON.stringify({ input, actor: context.employeeId }),
       resultCodec: codec<FinanceResult>(),
+      ...(sourcePermissions ? { authorizeReplay: async (transaction: ScopedTransaction, evidence: unknown) => {
+        const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction);
+        await assertRecurringReceiptAuthorization(access, context.employeeId, evidence);
+      } } : {}),
     },
     async (transaction) => {
       if(native) {
@@ -944,6 +964,7 @@ async function commandReply(
       const value = await work(transaction);
       return {
         result: value,
+        ...(sourcePermissions ? { replayAuthorization: { version: 1, sourcePermissions: [...sourcePermissions].sort() } } : {}),
         auditEvents: [
           {
             actor: {
@@ -968,12 +989,11 @@ async function commandReply(
         ],
       };
     },
-    native ? async tx => {
-      const current=await options.resolveContext(request);
-      if(current.employeeId!==context.employeeId || current.scope.storeId!==context.scope.storeId || current.scope.tenantId!==context.scope.tenantId) throw new StaffAccessDeniedError("账号已变化");
+    async tx => {
       const repository=options.createStaffAccessRepository?.(tx)??new StaffAccessRepository(tx);
       await repository.assertPermission(context.employeeId,permission);
-    } : undefined,
+      await authorize?.(tx);
+    },
   );
   return reply.code(execution.replayed ? 200 : 201).send(native
     ? {data:{operation:operationScope,employeeId:context.employeeId,requestKey:idempotencyKey,result:execution.value},meta:{protocol:1,replayed:execution.replayed}}
@@ -1413,10 +1433,34 @@ const PAY_BASES = ["monthly", "daily", "hourly", "per_shift"] as const;
 
 // Authorize the stored source before allowing a caller to reclassify or resume
 // a legacy recurring rule. Expense access never implies payroll/purchasing access.
-async function assertRecurringSourcePermission(transaction: ScopedTransaction, ruleId: string, staffAccess: Pick<StaffAccessRepository, "assertPermission">, employeeId: string): Promise<void> {
+async function assertRecurringSourcePermission(transaction: ScopedTransaction, ruleId: string, staffAccess: Pick<StaffAccessRepository, "assertPermission">, employeeId: string, requiredPermissions?: Set<string>): Promise<void> {
   const stored = one(await transaction.query<{ source_type: string; system_category: string }>(
     `SELECT rule.source_type,definition.system_category FROM mbox.recurring_operating_cost_rules rule JOIN mbox.operating_cost_category_definitions definition ON (definition.tenant_id,definition.store_id,definition.id)=(rule.tenant_id,rule.store_id,rule.category_definition_id) WHERE rule.tenant_id=$1::uuid AND rule.store_id=$2::uuid AND rule.id=$3::uuid`,
     [transaction.scope.tenantId, transaction.scope.storeId, ruleId],
   ), "周期费用规则不存在");
-  await assertCostSourcePermission(staffAccess, employeeId, { sourceType: stored.source_type, category: stored.system_category });
+  await assertCostSourcePermission(staffAccess, employeeId, { sourceType: stored.source_type, category: stored.system_category }, requiredPermissions);
+}
+
+// Old receipts did not preserve which sources were authorized. Requiring the
+// complete source authority is conservative: never infer historical scope from
+// a mutable current rule, and never rerun a committed command to rebuild it.
+async function assertRecurringReceiptAuthorization(access: Pick<StaffAccessRepository, "assertPermission">, employeeId: string, evidence: unknown): Promise<void> {
+  const all = ["commercial.payroll.manage", "inventory.receive"];
+  let required = all;
+  if (evidence !== undefined) {
+    if (!evidence || typeof evidence !== "object" || Array.isArray(evidence))
+      throw new StaffAccessDeniedError("周期费用回执的历史来源授权信息无效，请保留原请求核对");
+    const stored = evidence as { version?: unknown; sourcePermissions?: unknown };
+    if (stored.version !== 1 || !Array.isArray(stored.sourcePermissions)
+      || stored.sourcePermissions.some(permission => typeof permission !== "string" || !all.includes(permission)))
+      throw new StaffAccessDeniedError("周期费用回执的历史来源授权信息无效，请保留原请求核对");
+    required = stored.sourcePermissions as string[];
+  }
+  try {
+    for (const permission of required) await access.assertPermission(employeeId, permission);
+  } catch (error) {
+    if (evidence === undefined && error instanceof StaffAccessDeniedError)
+      throw new StaffAccessDeniedError("该历史回执的费用来源无法完整核实，请由具备工资及采购权限的财务人员核对，勿重复操作");
+    throw error;
+  }
 }

@@ -1,7 +1,8 @@
+import { createHmac } from 'node:crypto'
 import { StaffAccessVersionConflictError } from './staff-access-version.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { StaffPermissionDeploymentChange } from '../../src/shared/normalized-contracts.js'
-import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
+import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyReceiptUnavailableError } from './command-executor.js'
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repository.js'
 import { StaffAccessManagementService } from './staff-access-management-service.js'
@@ -15,16 +16,18 @@ interface Context {
 }
 
 export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
+  fingerprintSecret: string
   service: StaffAccessManagementService
   resolveContext(request: FastifyRequest): Promise<Context>
 }> = async (app, options) => {
+  if (options.fingerprintSecret.length < 32) throw new Error('Staff credential fingerprint key must contain at least 32 characters')
   app.get('/staff-access/overview', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const data = await options.service.getOverview({ scope: context.scope, actorEmployeeId: context.employeeId })
     return reply.send({ data, meta: { generatedAt: data.generatedAt } })
   }))
 
-  app.post('/staff-access/employees', async (request, reply) => handle(reply, async () => {
+  for (const recover of [false, true]) app.post(`/staff-access/employees${recover ? '/recover' : ''}`, async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const body = object(request.body)
     const employeeCode = staffCode(body.employeeCode)
@@ -34,16 +37,21 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
     const roleId = uuid(body.roleId, '岗位')
     const reason = text(body.reason, '建立原因', 200, 2)
     const idempotencyKey = idempotency(request)
+    // A keyed binding distinguishes low-entropy PINs without storing an enumerable digest.
+    // Legacy receipts without this binding deliberately conflict; never infer their PIN from mutable employee state.
+    const pinBinding = createHmac('sha256', options.fingerprintSecret)
+      .update(JSON.stringify(['staff-employee-create-pin-v1', context.scope.tenantId, context.scope.storeId, context.employeeId, idempotencyKey, pin]))
+      .digest('hex')
     const data = await options.service.createEmployee({
       scope: context.scope, actorEmployeeId: context.employeeId, businessDate: context.businessDate,
       idempotencyKey,
-      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeCode, displayName, roleId, reason, pinConfigured: true }),
-      employeeCode, displayName, pin, roleId, reason,
+      requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeCode, displayName, roleId, reason, pinConfigured: true, pinBinding }),
+      employeeCode, displayName, pin, roleId, reason, receiptOnly: recover,
     })
     return reply.code(data.replayed ? 200 : 201).send({ data, meta: { generatedAt: data.verifiedAt } })
   }))
 
-  app.post<{ Params: { employeeId: string } }>('/staff-access/employees/:employeeId/status', async (request, reply) => handle(reply, async () => {
+  for (const recover of [false, true]) app.post<{ Params: { employeeId: string } }>(`/staff-access/employees/:employeeId/status${recover ? '/recover' : ''}`, async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     const body = object(request.body)
     const employeeId = uuid(request.params.employeeId, '员工')
@@ -55,7 +63,7 @@ export const staffAccessManagementApiPlugin: FastifyPluginAsync<{
       scope: context.scope, actorEmployeeId: context.employeeId, businessDate: context.businessDate,
       idempotencyKey,
       requestFingerprint: JSON.stringify({ actorEmployeeId: context.employeeId, employeeId, status, reason }),
-      employeeId, status, reason,
+      employeeId, status, reason, receiptOnly: recover,
     })
     return reply.send({ data, meta: { generatedAt: data.verifiedAt } })
   }))
@@ -93,6 +101,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     }
     if (error instanceof StaffAccessVersionConflictError) {
       return reply.code(409).send({ error: { code: 'STAFF_ACCESS_VERSION_CONFLICT', message: error.message, retryable: false } })
+    }
+    if (error instanceof IdempotencyReceiptUnavailableError) {
+      return reply.code(409).send({ error: { code: 'STAFF_EMPLOYEE_RECEIPT_UNAVAILABLE', message: error.message, retryable: false } })
     }
     if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
       return reply.code(409).send({ error: { code: 'PERMISSION_DEPLOYMENT_CONFLICT', message: '这次发布正在处理或与另一项修改冲突，请刷新确认', retryable: true } })

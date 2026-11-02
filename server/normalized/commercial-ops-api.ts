@@ -230,6 +230,11 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.cost.created.v1', payload: auditCost(result),
         }],
       }
+    }, async transaction => {
+      // Returning a previous receipt still requires current write/source authority.
+      const access = createAccess(transaction)
+      await access.assertPermission(context.employeeId, 'commercial.cost.manage')
+      await assertCostSourcePermission(access, context.employeeId, input)
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -267,6 +272,13 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
             payload: { ...auditCost(result), correctedCostEntryId: costId },
           }],
         }
+      }, async transaction => {
+        const access = createAccess(transaction)
+        await access.assertPermission(context.employeeId, 'commercial.cost.manage')
+        await assertCostSourcePermission(access, context.employeeId, input)
+        // The original row is append-only. Check its source without rerunning
+        // the already-corrected state guard, which would break receipt recovery.
+        await assertEditableCost(transaction, costId, access, context.employeeId)
       })
       return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
     }),
@@ -307,6 +319,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.sales_rule.created.v1', payload: result,
         }],
       }
+    }, async transaction => {
+      await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.rule.manage')
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -340,6 +354,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.sales_attribution.recorded.v1', payload: result,
         }],
       }
+    }, async transaction => {
+      await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.attribute')
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -375,6 +391,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
             payload: toAttributionResult(event),
           })),
         }
+      }, async transaction => {
+        await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.attribute')
       })
       return reply.send({ data: execution.value, replayed: execution.replayed })
     }),
@@ -649,9 +667,15 @@ export function readRecordedAmount(body: Record<string, unknown>): { netAmountMi
   };
 }
 
-export async function assertCostSourcePermission(access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string, source: { sourceType: string; category: string }): Promise<void> {
-  if (source.sourceType === 'payroll' || source.category === 'personnel') await access.assertPermission(employeeId, 'commercial.payroll.manage');
-  if (source.sourceType === 'inventory_purchase' || source.category === 'beverage_purchase') await access.assertPermission(employeeId, 'inventory.receive');
+export async function assertCostSourcePermission(access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string, source: { sourceType: string; category: string }, requiredPermissions?: Set<string>): Promise<void> {
+  const permissions = [
+    ...(source.sourceType === 'payroll' || source.category === 'personnel' ? ['commercial.payroll.manage'] : []),
+    ...(source.sourceType === 'inventory_purchase' || source.category === 'beverage_purchase' ? ['inventory.receive'] : []),
+  ];
+  for (const permission of permissions) {
+    await access.assertPermission(employeeId, permission);
+    requiredPermissions?.add(permission);
+  }
 }
 
 export async function assertEditableCost(transaction: ScopedTransaction, costId: string, access: Pick<StaffAccessRepository, 'assertPermission'>, employeeId: string): Promise<void> {

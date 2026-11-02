@@ -277,6 +277,7 @@ export class StaffAccessManagementService {
     businessDate: string
     idempotencyKey: string
     requestFingerprint: string
+    receiptOnly?: boolean
     employeeCode: string
     displayName: string
     pin: string
@@ -287,7 +288,7 @@ export class StaffAccessManagementService {
     const pinHash = await this.hasher.hash(input.pin)
     const execution = await this.commands.execute({
       scope: input.scope, operationScope: 'staff.employee.create', idempotencyKey: input.idempotencyKey,
-      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
+      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec, replayOnly: input.receiptOnly,
     }, async (transaction) => {
       await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
@@ -316,6 +317,9 @@ export class StaffAccessManagementService {
       if (!access.roleCodes.includes(role.rows[0]!.code)) throw new TypeError('员工岗位写入后复核不一致，已回滚')
       const result: EmployeeLifecycleValue = { employeeId, status: 'active', verifiedAt, overview: await readOverview(transaction) }
       return employeeLifecycleOutcome(input, result, 'staff.employee.created', 1)
+    }, async transaction => {
+      await lockStaffAccessConfiguration(transaction)
+      await requireAdministrator(transaction, input.actorEmployeeId)
     })
     return { ...execution.value, replayed: execution.replayed }
   }
@@ -326,6 +330,7 @@ export class StaffAccessManagementService {
     businessDate: string
     idempotencyKey: string
     requestFingerprint: string
+    receiptOnly?: boolean
     employeeId: string
     status: 'active' | 'suspended'
     reason: string
@@ -333,7 +338,7 @@ export class StaffAccessManagementService {
     if (input.employeeId === input.actorEmployeeId && input.status !== 'active') throw new TypeError('不能停用当前登录账号')
     const execution = await this.commands.execute({
       scope: input.scope, operationScope: 'staff.employee.status', idempotencyKey: input.idempotencyKey,
-      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec,
+      requestFingerprint: input.requestFingerprint, resultCodec: employeeLifecycleCodec, replayOnly: input.receiptOnly,
     }, async (transaction) => {
       await lockStaffAccessConfiguration(transaction)
       await requireAdministrator(transaction, input.actorEmployeeId)
@@ -347,6 +352,9 @@ export class StaffAccessManagementService {
       await assertAdministratorRemains(transaction, new StaffAccessRepository(transaction), verifiedAt)
       const result: EmployeeLifecycleValue = { employeeId: input.employeeId, status: updated.rows[0]!.status, verifiedAt, overview: await readOverview(transaction) }
       return employeeLifecycleOutcome(input, result, 'staff.employee.status_changed', updated.rows[0]!.lifecycle_version)
+    }, async transaction => {
+      await lockStaffAccessConfiguration(transaction)
+      await requireAdministrator(transaction, input.actorEmployeeId)
     })
     return { ...execution.value, replayed: execution.replayed }
   }

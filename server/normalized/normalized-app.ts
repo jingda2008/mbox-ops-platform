@@ -609,6 +609,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     })
     instance.register(nativeStaffAdministrationApiPlugin, {fingerprintSecret:options.config.secret,prefix: '/api',transactions,commands:commandExecutor,resolveStaffContext:operationsContext,authFactory:commands=>new StaffAuthCommandService(transactions,commands,staffRateLimiter)})
     instance.register(staffAccessManagementApiPlugin, {
+      fingerprintSecret: options.config.secret,
       prefix: '/api',
       service: new StaffAccessManagementService(transactions, commandExecutor),
       resolveContext: operationsContext,

@@ -261,8 +261,9 @@ function buildFixture(overrides: {
     run: vi.fn(async (_scope, operation) => operation(transaction)),
   } as CommercialOpsApiOptions['transactions']
   const commandExecutor = {
-    execute: vi.fn(async (command, handler) => {
+    execute: vi.fn(async (command, handler, beforeClaim) => {
       commands.push(command)
+      await beforeClaim?.(transaction)
       const outcome = await handler(transaction)
       outcomes.push(outcome)
       return { value: outcome.result, replayed: false }

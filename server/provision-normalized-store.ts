@@ -85,6 +85,7 @@ export interface StoreProvisionConfig {
 }
 
 export interface ProvisionSummary {
+  replayed: boolean
   tenantId: string
   storeId: string
   areaCount: number
@@ -329,15 +330,14 @@ export async function provisionNormalizedStore(input: {
   sourceCommitSha?: string
   client?: Client
 }): Promise<ProvisionSummary> {
-  const environment = input.environment ?? process.env
-  const hasher = new ScryptCredentialHasher()
-  const provisionEnvironment = validateStoreProvisionEnvironment(input.config, environment)
-  const pins = new Map<string, string>()
-  for (const [employeeCode, pin] of provisionEnvironment.employeePins) {
-    pins.set(employeeCode, await hasher.hash(pin))
+  const { tenant, store } = input.config
+  const configSha256 = createHash('sha256').update(stableJson(input.config), 'utf8').digest('hex')
+  const sourceCommitSha = input.sourceCommitSha ?? process.env.APP_COMMIT_SHA ?? process.env.GITHUB_SHA
+  if (!sourceCommitSha || !/^[0-9a-f]{7,64}$/i.test(sourceCommitSha)) {
+    throw new Error('APP_COMMIT_SHA is required for versioned provisioning')
   }
-  const dailyCredential = provisionEnvironment.dailyCredential
-  const dailyCredentialHash = dailyCredential ? await hasher.hash(dailyCredential) : null
+  const counts = { areaCount: input.config.areas.length, tableCount: input.config.tables.length,
+    roleCount: input.config.roles.length, employeeCount: input.config.employees.length }
   const ownsClient = input.client === undefined
   const client = input.client ?? new Client({ connectionString: input.databaseUrl, application_name: 'mbox-normalized-provisioner' })
   if (ownsClient) await client.connect()
@@ -355,7 +355,39 @@ export async function provisionNormalizedStore(input: {
     if (schema.rows[0]?.schema_flavor !== 'normalized-core-v1' || Number(schema.rows[0]?.schema_version ?? 0) < 45) {
       throw new Error('Normalized schema 046 or later is required')
     }
-    const { tenant, store } = input.config
+    await client.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.store_id', $2, true)`, [tenant.id, store.id])
+    const existingApplication = await client.query<{ config_sha256: string }>(`
+      SELECT config_sha256 FROM mbox.store_configuration_applications
+      WHERE tenant_id=$1 AND store_id=$2 AND config_version=$3
+      FOR UPDATE`, [tenant.id, store.id, input.config.version])
+    if (existingApplication.rows.some(application => application.config_sha256 !== configSha256)) {
+      throw new Error('Configuration version already exists with different content')
+    }
+    if (existingApplication.rows.length > 0) {
+      // An application upgrade must not replay initialization over live business state.
+      // Serialize the receipt check with both standalone and release provisioning.
+      const employees = await client.query<{ employee_code: string; id: string }>(`
+        SELECT employee_code,id FROM mbox.employees
+        WHERE tenant_id=$1 AND store_id=$2 AND employee_code=ANY($3::text[])`,
+      [tenant.id, store.id, input.config.employees.map(employee => employee.code)])
+      const credential = await client.query(`SELECT 1 FROM mbox.store_daily_credentials
+        WHERE tenant_id=$1 AND store_id=$2 LIMIT 1`, [tenant.id, store.id])
+      await recordApplication()
+      if (ownsClient) await client.query('COMMIT')
+      return { ...counts, tenantId: tenant.id, storeId: store.id,
+        employeeIds: Object.fromEntries(employees.rows.map(employee => [employee.employee_code, employee.id])),
+        dailyCredentialConfigured: credential.rows.length > 0,
+        configVersion: input.config.version, configSha256, replayed: true }
+    }
+    const environment = input.environment ?? process.env
+    const hasher = new ScryptCredentialHasher()
+    const provisionEnvironment = validateStoreProvisionEnvironment(input.config, environment)
+    const pins = new Map<string, string>()
+    for (const [employeeCode, pin] of provisionEnvironment.employeePins) {
+      pins.set(employeeCode, await hasher.hash(pin))
+    }
+    const dailyCredential = provisionEnvironment.dailyCredential
+    const dailyCredentialHash = dailyCredential ? await hasher.hash(dailyCredential) : null
     await client.query(`INSERT INTO mbox.tenants(id, code, name) VALUES ($1, $2, $3)
       ON CONFLICT (id) DO UPDATE SET code = EXCLUDED.code, name = EXCLUDED.name`, [tenant.id, tenant.code, tenant.name])
     await client.query(`INSERT INTO mbox.stores(id, tenant_id, code, name, timezone, business_day_cutoff, currency)
@@ -450,15 +482,16 @@ export async function provisionNormalizedStore(input: {
       const result = await client.query<{ id: string }>(`INSERT INTO mbox.employees(
           tenant_id, store_id, employee_code, display_name, pin_hash)
         VALUES ($1,$2,$3,$4,$5)
-        ON CONFLICT (tenant_id, store_id, employee_code) DO UPDATE SET display_name=EXCLUDED.display_name,
-          pin_hash=EXCLUDED.pin_hash, status='active' RETURNING id`,
+        ON CONFLICT (tenant_id, store_id, employee_code) DO NOTHING RETURNING id`,
       [tenant.id, store.id, employee.code, employee.name, pins.get(employee.code)])
-      const employeeId = requiredRow(result.rows[0], `employee ${employee.code}`).id
+      if (!result.rows[0]) {
+        const existing = await client.query<{ id: string }>(`SELECT id FROM mbox.employees
+          WHERE tenant_id=$1 AND store_id=$2 AND employee_code=$3 FOR UPDATE`, [tenant.id, store.id, employee.code])
+        employeeIds[employee.code] = requiredRow(existing.rows[0], `employee ${employee.code}`).id
+        continue // Existing credentials, status, name and role history belong to live administration.
+      }
+      const employeeId = result.rows[0].id
       employeeIds[employee.code] = employeeId
-      const desiredRoleIds = employee.roleCodes.map((roleCode) => roleIds.get(roleCode))
-      await client.query(`UPDATE mbox.employee_roles SET ends_at=clock_timestamp()
-        WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND ends_at IS NULL
-          AND NOT (role_id = ANY($4::uuid[]))`, [tenant.id, store.id, employeeId, desiredRoleIds])
       for (const roleCode of employee.roleCodes) {
         await client.query(`INSERT INTO mbox.employee_roles(tenant_id, store_id, employee_id, role_id)
           SELECT $1,$2,$3,$4 WHERE NOT EXISTS (
@@ -486,14 +519,14 @@ export async function provisionNormalizedStore(input: {
       tenant.id, store.id, automaticTurnover.enabled, automaticTurnover.operatingStartsAt,
     ])
 
-    if (dailyCredentialHash) {
+    const existingCredential = await client.query(`SELECT 1 FROM mbox.store_daily_credentials
+      WHERE tenant_id=$1 AND store_id=$2 LIMIT 1`, [tenant.id, store.id])
+    // Even a revoked/expired credential is history, not permission to recreate it.
+    if (dailyCredentialHash && existingCredential.rows.length === 0) {
       const now = input.now ?? new Date()
       const businessDate = shanghaiBusinessDate(now)
       const validFrom = new Date(now.getTime() - 60_000)
       const validUntil = new Date(now.getTime() + 30 * 60 * 60 * 1_000)
-      await client.query(`UPDATE mbox.store_daily_credentials SET revoked_at=clock_timestamp()
-        WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL
-          AND (business_date=$3 OR reusable_across_business_dates=true)`, [tenant.id, store.id, businessDate])
       await client.query(`INSERT INTO mbox.store_daily_credentials(
           tenant_id, store_id, business_date, credential_hash, valid_from, valid_until,
           configured_by_employee_id, reusable_across_business_dates)
@@ -509,26 +542,7 @@ export async function provisionNormalizedStore(input: {
         tableCount: input.config.tables.length, roleCount: input.config.roles.length,
         employeeCount: input.config.employees.length,
         automaticTableTurnover: input.config.automaticTableTurnover })])
-    const configSha256 = createHash('sha256').update(stableJson(input.config), 'utf8').digest('hex')
-    const sourceCommitSha = input.sourceCommitSha ?? process.env.APP_COMMIT_SHA ?? process.env.GITHUB_SHA
-    if (!sourceCommitSha || !/^[0-9a-f]{7,64}$/i.test(sourceCommitSha)) {
-      throw new Error('APP_COMMIT_SHA is required for versioned provisioning')
-    }
-    const existingApplication = await client.query<{ config_sha256: string }>(`
-      SELECT config_sha256 FROM mbox.store_configuration_applications
-      WHERE tenant_id=$1 AND store_id=$2 AND config_version=$3
-      FOR UPDATE`, [tenant.id, store.id, input.config.version])
-    if (existingApplication.rows.some((application) => application.config_sha256 !== configSha256)) {
-      throw new Error('Configuration version already exists with different content')
-    }
-    await client.query(`INSERT INTO mbox.store_configuration_applications(
-        tenant_id, store_id, config_version, config_sha256, source_commit_sha, summary)
-      VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-      ON CONFLICT (tenant_id, store_id, config_version, source_commit_sha) DO NOTHING`, [
-      tenant.id, store.id, input.config.version, configSha256, sourceCommitSha.toLowerCase(),
-      JSON.stringify({ areaCount: input.config.areas.length, tableCount: input.config.tables.length,
-        roleCount: input.config.roles.length, employeeCount: input.config.employees.length }),
-    ])
+    await recordApplication()
     if (ownsClient) await client.query('COMMIT')
     return {
       tenantId: tenant.id, storeId: store.id, areaCount: input.config.areas.length,
@@ -537,12 +551,21 @@ export async function provisionNormalizedStore(input: {
       dailyCredentialConfigured: dailyCredentialHash !== null,
       configVersion: input.config.version,
       configSha256,
+      replayed: false,
     }
   } catch (error) {
     if (ownsClient) await client.query('ROLLBACK').catch(() => undefined)
     throw error
   } finally {
     if (ownsClient) await client.end()
+  }
+
+  async function recordApplication() {
+    await client.query(`INSERT INTO mbox.store_configuration_applications(
+      tenant_id, store_id, config_version, config_sha256, source_commit_sha, summary)
+      VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+      ON CONFLICT (tenant_id, store_id, config_version, source_commit_sha) DO NOTHING`,
+    [tenant.id, store.id, input.config.version, configSha256, sourceCommitSha!.toLowerCase(), JSON.stringify(counts)])
   }
 }
 

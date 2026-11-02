@@ -83,7 +83,10 @@ export const ownerFinanceApiPlugin: FastifyPluginAsync<
         const repo=new CommercialOpsRepository(tx);
         const value=correction?await repo.correctCost(costId!,input,reason!):await repo.createCost(input);
         return {...toCostResult(value),status:"recorded",aggregateVersion:1};
-      },correction?"commercial.cost.corrected":"commercial.cost.created","operating_cost");
+      },correction?"commercial.cost.corrected":"commercial.cost.created","operating_cost", async tx => {
+        await assertCostSourcePermission(access(tx), context.employeeId, input);
+        if (costId) await assertEditableCost(tx, costId, access(tx), context.employeeId);
+      });
     }));
   }
 
@@ -910,6 +913,7 @@ async function commandReply(
   work: (transaction: ScopedTransaction) => Promise<FinanceResult>,
   action: string,
   objectType: string,
+  authorize?: (transaction: ScopedTransaction) => Promise<void>,
 ) {
   const idempotencyKey = idempotency(request);
   const native = options.nativeReceipts === true;
@@ -919,6 +923,11 @@ async function commandReply(
   const expectedVersion=guarded?integer(Number(request.headers["x-owner-version"]),"记录版本",1,1_000_000):null;
   const expectedCompensation=native && operationScope === "commercial.compensation-rule.create"?text(request.headers["x-owner-compensation"],"当前薪资标准",64):null;
   const permission=operationScope.startsWith("commercial.cost")||operationScope.startsWith("commercial.recurring-")?"commercial.cost.manage":operationScope==="commercial.payroll-run.post"?"commercial.payroll.post":"commercial.payroll.manage";
+  // Resolve identity before acquiring the command connection: the resolver may
+  // use the same pool. Permission checks still run inside the command transaction.
+  const current = await options.resolveContext(request);
+  if (current.employeeId !== context.employeeId || current.scope.storeId !== context.scope.storeId || current.scope.tenantId !== context.scope.tenantId)
+    throw new StaffAccessDeniedError("账号已变化");
   const execution = await options.commandExecutor.execute(
     {
       scope: context.scope,
@@ -968,12 +977,11 @@ async function commandReply(
         ],
       };
     },
-    native ? async tx => {
-      const current=await options.resolveContext(request);
-      if(current.employeeId!==context.employeeId || current.scope.storeId!==context.scope.storeId || current.scope.tenantId!==context.scope.tenantId) throw new StaffAccessDeniedError("账号已变化");
+    async tx => {
       const repository=options.createStaffAccessRepository?.(tx)??new StaffAccessRepository(tx);
       await repository.assertPermission(context.employeeId,permission);
-    } : undefined,
+      await authorize?.(tx);
+    },
   );
   return reply.code(execution.replayed ? 200 : 201).send(native
     ? {data:{operation:operationScope,employeeId:context.employeeId,requestKey:idempotencyKey,result:execution.value},meta:{protocol:1,replayed:execution.replayed}}

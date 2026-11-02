@@ -319,6 +319,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.sales_rule.created.v1', payload: result,
         }],
       }
+    }, async transaction => {
+      await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.rule.manage')
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -352,6 +354,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.sales_attribution.recorded.v1', payload: result,
         }],
       }
+    }, async transaction => {
+      await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.attribute')
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -387,6 +391,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
             payload: toAttributionResult(event),
           })),
         }
+      }, async transaction => {
+        await createAccess(transaction).assertPermission(context.employeeId, 'commercial.sales.attribute')
       })
       return reply.send({ data: execution.value, replayed: execution.replayed })
     }),

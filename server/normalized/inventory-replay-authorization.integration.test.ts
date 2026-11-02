@@ -104,7 +104,9 @@ integration('inventory receipt authorization with a restricted PostgreSQL login'
     const id=await item()
     const seeded=request(`items/${id}/cost-corrections`,{weightedUnitCostMinor:'10',reason:'Initial audit cost'})
     expect((await app.inject(seeded)).statusCode).toBe(200)
-    const observed=(await admin.query('SELECT clock_timestamp() AS at')).rows[0].at.toISOString()
+    // Preserve PostgreSQL microseconds; Date.toISOString() truncation can make
+    // an immediate valid snapshot appear older than the preceding update.
+    const observed=(await admin.query(`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at`)).rows[0].at
     const req=request(`items/${id}/cost-corrections`,{weightedUnitCostMinor:'26.125',reason:'Audit correction',...(native?{expectedObservedAt:observed,expectedWeightedUnitCostMinor:'10'}:{})},native)
     const first=await app.inject(req);expect(first.statusCode,first.body).toBe(200)
     const before=await evidence()

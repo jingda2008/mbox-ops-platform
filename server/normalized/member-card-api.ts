@@ -7,7 +7,8 @@ import { MemberCardPolicyError } from './member-card-policy.js'
 import { StaffAccessDeniedError, StaffAccessRepository } from './staff-access-repository.js'
 import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
 import { ReservationGuestSessionInvalidError } from './reservation-guest-session.js'
-import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
+import type {ScopedTransaction} from './transaction-runner.js'
+import { hashRequestFingerprint, IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
 type Options=Pick<CustomerBenefitApiOptions,'transactions'|'resolveSelfContext'|'resolveStaffContext'>&{commands:Pick<NormalizedCommandExecutor,'execute'>}
 const codec:JsonCodec<JsonObject>={encode:value=>value,decode:value=>{if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('Invalid card command result');return value as JsonObject}}
 function body(request:FastifyRequest,keys:string[]){const value=request.body;if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!keys.includes(key)))throw new MemberCardPolicyError('提交字段不正确');return value as Record<string,unknown>}
@@ -22,10 +23,24 @@ export const memberCardApiPlugin:FastifyPluginAsync<Options>=async(app,options)=
     if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'MEMBER_CARD_COMMAND_CONFLICT',message:'操作正在处理或内容已变化，请先刷新核对'}})
     throw error
   })
-  async function write(request:FastifyRequest,scope:Parameters<Options['transactions']['run']>[0],operation:string,fingerprint:unknown,action:(repository:MemberCardRepository)=>Promise<unknown>){
+  async function write(request:FastifyRequest,scope:Parameters<Options['transactions']['run']>[0],operation:string,fingerprint:unknown,action:(repository:MemberCardRepository)=>Promise<unknown>,recovery?:{authorize:(tx:ScopedTransaction)=>Promise<void>;legacyFingerprint:unknown}){
     const key=string(request.headers['idempotency-key'],'操作编号')
     if(!/^[A-Za-z0-9:_-]{8,128}$/.test(key))throw new MemberCardPolicyError('操作编号格式不正确')
-    return options.commands.execute({scope,operationScope:`member.card.${operation}`,idempotencyKey:key,requestFingerprint:JSON.stringify(fingerprint),resultCodec:codec},async transaction=>({result:json(await action(new MemberCardRepository(transaction))),auditEvents:[],outboxMessages:[]}))
+    let requestFingerprint=JSON.stringify(fingerprint)
+    if(recovery){
+      // Keep exact old explicit-input receipts recoverable without accepting
+      // arbitrary old hashes or recreating an operation under a different key.
+      const legacy=JSON.stringify(recovery.legacyFingerprint)
+      const compatible=await options.transactions.run(scope,async tx=>{
+        await recovery.authorize(tx)
+        return (await tx.query(`SELECT 1 FROM mbox.idempotency_records
+          WHERE tenant_id=$1 AND store_id=$2 AND operation_scope=$3 AND idempotency_key=$4
+            AND request_sha256=$5 AND expires_at>clock_timestamp()`,
+        [scope.tenantId,scope.storeId,`member.card.${operation}`,key,hashRequestFingerprint(legacy)])).rowCount===1
+      },{readOnly:true})
+      if(compatible)requestFingerprint=legacy
+    }
+    return options.commands.execute({scope,operationScope:`member.card.${operation}`,idempotencyKey:key,requestFingerprint,resultCodec:codec},async transaction=>({result:json(await action(new MemberCardRepository(transaction))),auditEvents:[],outboxMessages:[]}),recovery?.authorize)
   }
   async function staff(request:FastifyRequest,permission:string){const context=await options.resolveStaffContext(request);await options.transactions.run(context.scope,tx=>new StaffAccessRepository(tx).assertPermission(context.employeeId,permission),{readOnly:true});return context}
   app.get<{Querystring:Partial<Record<'projects'|'cards'|'applications',string>>}>('/public/mini/member-cards',async request=>{
@@ -79,7 +94,15 @@ export const memberCardApiPlugin:FastifyPluginAsync<Options>=async(app,options)=
       availableFrom:simple&&input.availableFrom===undefined?new Date().toISOString():string(input.availableFrom,'开始时间'),availableUntil:simple&&(input.availableUntil===undefined||input.availableUntil===null)?null:string(input.availableUntil,'结束时间'),cooperationConfirmed:simple?false:input.cooperationConfirmed as boolean,
       cooperationValidUntil:simple||input.cooperationValidUntil===null?null:string(input.cooperationValidUntil,'合作到期时间'),cooperationReference:simple||input.cooperationReference===null?null:string(input.cooperationReference,'合作依据'),employeeId:context.employeeId,businessDate:context.businessDate,
       flowMode:simple?'simple' as const:'legacy' as const,openImmediately:input.openImmediately===true} as const
-    const result=await write(request,context.scope,'project_create',data,repo=>repo.createProject({...data,requireSocialConfiguration:!simple}));return{data:result.value,meta:{replayed:result.replayed}}
+    // Fingerprint intent, not generated defaults or the current business day.
+    // Only the winning execution uses the generated code/time in `data`.
+    const fingerprint={...data,code:simple&&input.code===undefined?null:data.code,
+      availableFrom:simple&&input.availableFrom===undefined?null:data.availableFrom,businessDate:undefined,receiptVersion:2}
+    const authorize=async(tx:ScopedTransaction)=>{
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'member.card.manage')
+      if(data.openImmediately)await new StaffAccessRepository(tx).assertPermission(context.employeeId,'loyalty.policy.publish')
+    }
+    const result=await write(request,context.scope,'project_create',fingerprint,repo=>repo.createProject({...data,requireSocialConfiguration:!simple}),{authorize,legacyFingerprint:data});return{data:result.value,meta:{replayed:result.replayed}}
   })
   app.post<{Params:{id:string}}>('/staff/member-cards/projects/:id/validity',{bodyLimit:4096},async request=>{
     const context=await staff(request,'member.card.manage'),input=body(request,['availableUntil','reason'])

@@ -23,7 +23,7 @@ integration('manual points independent review with real restricted PostgreSQL LO
   for(const e of [id.requester,id.reviewer,id.third])await pool.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name,status) VALUES($1,$2,$3,$4,'Synthetic reviewer','active')",[e,id.tenant,id.store,e])
   await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'MANUAL_TEST','Review')",[id.role,id.tenant,id.store])
   for(const e of [id.requester,id.reviewer,id.third])await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 hour')",[id.tenant,id.store,e,id.role])
-  for(const code of ['loyalty.adjust.manual','loyalty.accrual.approve']){
+  for(const code of ['loyalty.adjust.manual','loyalty.accrual.approve','loyalty.operations.control']){
    const p=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'finance') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[id.tenant,id.store,code])).rows[0].id
    await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[id.tenant,id.store,id.role,p])
   }

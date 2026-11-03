@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import type { AuditActor, JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
+import {IdempotencyConflictError, type AuditActor, type JsonCodec, type JsonObject, type NormalizedCommandExecutor } from './command-executor.js'
+import {StaffAccessDeniedError,StaffAccessRepository} from './staff-access-repository.js'
 import { CustomerExperienceRequestError } from './customer-experience-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -35,6 +36,8 @@ export class LoyaltyTierBenefitManagementService {
 
   configuration(context: TierBenefitStaffContext) {
     return this.transactions.run(context.scope, async (transaction) => {
+      const access=await new StaffAccessRepository(transaction).resolve(context.employeeId)
+      if(!['loyalty.policy.view','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish'].some(permission=>access.permissions.includes(permission)))throw new StaffAccessDeniedError('没有等级权益配置权限')
       // A scoped transaction owns one PostgreSQL client. Keep these reads
       // sequential: pg rejects overlapping queries on one client in its next
       // major version, and transaction-level concurrency adds no useful
@@ -145,6 +148,7 @@ export class LoyaltyTierBenefitManagementService {
       operationScope: 'loyalty.tier-benefit-policy.draft',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(input),
+      authorizeReplay: (transaction) => authorizeTierReceipt(transaction,context,'draft','drafted',input.idempotencyKey),
       resultCodec: objectCodec<{ id: string; version: number; status: string; ruleCount: number }>(),
     }, async (transaction) => {
       await transaction.query(`SELECT id FROM mbox.stores WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE`, [
@@ -177,7 +181,7 @@ export class LoyaltyTierBenefitManagementService {
       const result = { ...policy, ruleCount: input.rules.length }
       return outcome(result, context, 'loyalty.tier-benefit-policy.drafted', policy.id,
         { version: policy.version, ruleCount: input.rules.length, reason: input.reason })
-    })
+    },async transaction=>{await new StaffAccessRepository(transaction).assertPermission(context.employeeId,'loyalty.policy.manage')})
   }
 
   approve(context: TierBenefitStaffContext, input: Readonly<{
@@ -218,6 +222,7 @@ export class LoyaltyTierBenefitManagementService {
       operationScope: 'loyalty.tier-benefit-policy.publish',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(input),
+      authorizeReplay: (transaction) => authorizeTierReceipt(transaction,context,'publish','published',input.idempotencyKey),
       resultCodec: objectCodec<{ id: string; version: number; status: string; ruleCount: number }>(),
     }, async (transaction) => {
       const policy = (await transaction.query<{
@@ -231,9 +236,14 @@ export class LoyaltyTierBenefitManagementService {
       if (!policy || policy.status!=='approved') throw requestError(
         '只有已独立审批的等级权益政策可以发布', 'LOYALTY_TIER_BENEFIT_NOT_APPROVED',
       )
+      const contributed=(await transaction.query<{contributed:boolean}>(`
+        SELECT EXISTS(SELECT 1 FROM mbox.membership_configuration_draft_contributors
+          WHERE tenant_id=$1 AND store_id=$2 AND configuration_domain='tier_benefits'
+            AND configuration_id=$3 AND employee_id=$4) AS contributed
+      `,[transaction.scope.tenantId,transaction.scope.storeId,input.policyId,context.employeeId])).rows[0]!.contributed
       if (context.employeeId===policy.drafted_by_employee_id
-        || context.employeeId===policy.approved_by_employee_id) throw requestError(
-        '起草人和审批人不能执行正式发布', 'LOYALTY_TIER_BENEFIT_PUBLISHER_NOT_INDEPENDENT',
+        || context.employeeId===policy.approved_by_employee_id || contributed) throw requestError(
+        '草稿贡献者和审批人不能执行正式发布', 'LOYALTY_TIER_BENEFIT_PUBLISHER_NOT_INDEPENDENT',
       )
       const tierPolicy = (await transaction.query<{
         effective_from: string; effective_until: string | null
@@ -280,7 +290,27 @@ export class LoyaltyTierBenefitManagementService {
       return outcome(result, context, 'loyalty.tier-benefit-policy.published', row.id,
         { version: row.version, ruleCount: validation.ruleCount,
           effectiveFrom: input.effectiveFrom, reason: input.reason })
-    })
+    },async transaction=>{await new StaffAccessRepository(transaction).assertPermission(context.employeeId,'loyalty.policy.publish')})
+  }
+}
+
+// Keep existing fingerprints and result contracts. The immutable action audit binds
+// both old and new receipts to their original employee, independently of later edits.
+async function authorizeTierReceipt(transaction:ScopedTransaction,context:TierBenefitStaffContext,
+  operation:'draft'|'publish',action:'drafted'|'published',key:string){
+  const events=await transaction.query<{actor_employee_id:string}>(`
+    SELECT audit.actor_employee_id
+    FROM mbox.idempotency_records receipt
+    JOIN mbox.audit_events audit ON audit.tenant_id=receipt.tenant_id AND audit.store_id=receipt.store_id
+      AND audit.object_id=receipt.response_snapshot->'result'->>'id'
+      AND audit.object_type='loyalty_tier_benefit_policy_version'
+      AND audit.action=$5 AND audit.actor_type='employee'
+    WHERE receipt.tenant_id=$1 AND receipt.store_id=$2
+      AND receipt.operation_scope=$3 AND receipt.idempotency_key=$4 AND receipt.status='completed'
+    LIMIT 2
+  `,[context.scope.tenantId,context.scope.storeId,`loyalty.tier-benefit-policy.${operation}`,key,`loyalty.tier-benefit-policy.${action}`])
+  if(events.rows.length!==1||events.rows[0]!.actor_employee_id!==context.employeeId){
+    throw new IdempotencyConflictError(`loyalty.tier-benefit-policy.${operation}`,key)
   }
 }
 

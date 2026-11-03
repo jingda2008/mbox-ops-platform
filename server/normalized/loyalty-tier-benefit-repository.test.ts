@@ -39,6 +39,11 @@ integration('loyalty tier benefit repository PostgreSQL integration', () => {
       new PostgresMembershipConfigurationDraftRepository(runner, { tenantId: ids.tenant, storeId: ids.store }),
     )
     await seed(pool)
+    // Service entrypoints now recheck current authority; independence remains a separate business rule.
+    for(const code of ['loyalty.policy.manage','loyalty.policy.publish','loyalty.policy.view']){
+      await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING',[ids.tenant,ids.store,code])
+      for(const employee of [ids.drafter,ids.approver,ids.publisher])await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'grant','Isolated tier authority fixture',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4",[ids.tenant,ids.store,employee,code])
+    }
     await approveTierBenefit(configuration, ids.benefitPolicy, ids.approver, '独立审批首版等级权益策略')
     await pool.query(`
       UPDATE mbox.loyalty_tier_benefit_policy_versions

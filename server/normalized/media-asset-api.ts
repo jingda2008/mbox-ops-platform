@@ -5,6 +5,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { ActivityOperationsStaffContext } from './activity-operations-service.js'
 import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecordError } from './command-executor.js'
 import { MediaAssetRepository, type MediaAssetView, type MediaPurpose } from './media-asset-repository.js'
+import {assertMediaPermissions,MEDIA_READ_PERMISSIONS,mediaUploadPermissions} from './media-asset-access.js'
 import { MediaAssetService } from './media-asset-service.js'
 import { OutboxMessageConflictError } from './command-executor.js'
 import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR } from './staff-api-authentication.js'
@@ -16,8 +17,7 @@ const MAX_IMAGE_BASE64_LENGTH = Math.ceil(MAX_IMAGE_BYTES / 3) * 4
 // Base64 and the JSON envelope are larger than the source image. This is a
 // transport allowance only; the decoded image remains limited to 200 KiB.
 const MEDIA_UPLOAD_BODY_LIMIT_BYTES = 300_000
-const MEDIA_READ_PERMISSIONS = ['community.activity.view', 'community.activity.manage', 'community.activity.publish',
-  'customer.experience.feature.manage', 'media.asset.menu.manage'] as const
+
 
 export interface MediaAssetApiOptions {
   staticDirectory?: string
@@ -58,11 +58,7 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
   app.post('/staff/media-assets', { bodyLimit: MEDIA_UPLOAD_BODY_LIMIT_BYTES }, async (request, reply) => handle(reply, async () => {
     const body = object(request.body)
     const purpose = enumeration(body.purpose, '图片用途', ['community_activity','home_content','menu','performer','support_contact'] as const) as MediaPurpose
-    const context = purpose === 'support_contact'
-      ? await authorizedAny(options, request, ['community.activity.manage', 'customer.experience.feature.manage'])
-      : purpose === 'menu'
-        ? await authorized(options, request, 'media.asset.menu.manage')
-        : await authorized(options, request, 'community.activity.manage')
+    const context = await authorizedAny(options,request,mediaUploadPermissions(purpose))
     const mimeType = enumeration(body.mimeType, '图片格式', ['image/jpeg','image/png','image/webp'] as const)
     const bytes = decodeBase64(body.base64)
     if (bytes.length > MAX_IMAGE_BYTES) throw invalid('图片压缩后不能超过 200KB')
@@ -128,15 +124,6 @@ export const mediaAssetApiPlugin: FastifyPluginAsync<MediaAssetApiOptions> = asy
   })
 }
 
-async function authorized(options: MediaAssetApiOptions, request: FastifyRequest, permission: string) {
-  const context = await options.resolveStaffContext(request)
-  await options.transactions.run(context.scope, async (transaction) => {
-    const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
-    await access.assertPermission(context.employeeId, permission)
-  }, { readOnly: true })
-  return context
-}
-
 async function authorizedAny(options: MediaAssetApiOptions, request: FastifyRequest, permissions: readonly string[]) {
   const context = await options.resolveStaffContext(request)
   await options.transactions.run(context.scope, transaction=>assertAnyMediaPermission(options,transaction,context.employeeId,permissions), { readOnly: true })
@@ -144,13 +131,7 @@ async function authorizedAny(options: MediaAssetApiOptions, request: FastifyRequ
 }
 
 async function assertAnyMediaPermission(options:MediaAssetApiOptions,transaction:ScopedTransaction,employeeId:string,permissions:readonly string[]){
-    const access = options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction)
-    let denied: unknown = new StaffAccessDeniedError('当前岗位没有图片读取权限')
-    for (const permission of permissions) {
-      try { await access.assertPermission(employeeId, permission); return }
-      catch (error) { if (!(error instanceof StaffAccessDeniedError)) throw error; denied = error }
-    }
-    throw denied
+  return assertMediaPermissions(transaction,employeeId,permissions,options.createStaffAccessRepository?.(transaction))
 }
 
 async function handle(reply: FastifyReply, execute: () => Promise<unknown>) { try { return await execute() } catch (error) {

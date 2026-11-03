@@ -1,7 +1,6 @@
+import {authorizeHardwarePrintSource, stockReturnSourceAccess, authorizeStockReturnReplay, HardwareSourceAccessDeniedError} from './hardware-source-access.js'
 import {InventoryReturnCostProjectionBusyError} from './inventory-return-cost-projection.js'
 import {registerNativeHardware} from './native-hardware-management.js'
-import {currentRefundAttemptSql} from './refund-attempt-sql.js'
-import {orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
 import { buildDailyReportLines, type DailyReportOptions } from './daily-report-format.js'
 import { readOperatingHistory } from './operating-history-query.js'
 import { ProfitQueryService, profitPeriodRange } from './profit-query-service.js'
@@ -32,8 +31,7 @@ import type { NormalizedOperationsRequestContext } from './normalized-operations
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
-import {StaffAccessRepository} from './staff-access-repository.js'
-import {orderHistoryAccess} from './order-history-access.js'
+import {StaffAccessRepository, StaffAccessDeniedError, StaffNotFoundError} from './staff-access-repository.js'
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
 import {OrderStockReturnRepository} from './order-stock-return-repository.js'
@@ -73,8 +71,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const body=readObject(request.body??{})
     const period=readEnum(body.period,['day','month','year']) as 'day'|'month'|'year'
     const anchorDate=readString(body.anchorDate,'anchorDate',10,10)
-    let range:ReturnType<typeof profitPeriodRange>
-    try { range=profitPeriodRange(period,anchorDate) } catch { throw new HardwareRequestError('请选择有效经营期间') }
+    try { profitPeriodRange(period,anchorDate) } catch { throw new HardwareRequestError('请选择有效经营期间') }
     let operatorLabel=''
     const execution=await options.commands.execute({
       ...command(request,context,'operating.report.print',body,codec()),
@@ -90,14 +87,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       return outcome(context,'manual.operating-report.queued.v1','manual_print_request',requestId,'打印经营汇总',
         {requestId,period,anchorDate,asOf:report.asOf,jobIds:jobs.map(job=>job.id),status:'queued'})
     },async tx=>{
-      // Replays also re-check current access; a stored receipt never grants authority.
-      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('commercial.profit.view')||!access.permissions.includes('order.bill.print'))throw new HardwareAccessDeniedError()
-      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-      const policy=orderHistoryAccess(access.permissions,current)
-      if(range.startDate>current)throw new HardwareRequestError('不提供未来实际经营期间')
-      if(policy.earliestBusinessDate&&range.startDate<policy.earliestBusinessDate)throw new HardwarePolicyError('所选期间超出历史权限，请由有全历史权限的人员打印')
-      operatorLabel=access.displayName
+      operatorLabel=await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'operating',period,anchorDate})
     })
     return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
   }))
@@ -112,6 +102,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       const batch=await new DeliveryBatchRepository(tx).create(context.employeeId,items)
       await assertEmployeeTableSessionAccess(tx,{employeeId:context.employeeId,tableSessionId:batch.tableSessionId,allTablePermissionCodes:['kds.deliver'],requiredPermissionCodes:['kds.deliver']})
       return outcome(context,'delivery.batch.ready.v1','delivery_batch',batch.id,'确认本批备齐',batch)
+    },async tx=>{
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'kds.deliver')
     })
     return reply.code(result.replayed?200:202).send({data:result.value,replayed:result.replayed})
   }))
@@ -119,25 +111,18 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const context=await options.resolveContext(request),body=readObject(request.body)
     requireAny(context,['inventory.receive'])
     const itemId=readUuid(readObject(request.params).itemId,'itemId')
-    const result=await options.commands.execute(command(request,context,'order.stock-return',body,codec()),async tx=>{
-      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('inventory.receive'))throw new HardwareAccessDeniedError()
-      if(!access.permissions.some(p=>['order.history.view','order.history.all','reconciliation.view'].includes(p)))throw new HardwareAccessDeniedError()
-      const date=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-      const earliest=orderHistoryAccess(access.permissions,date).earliestBusinessDate
-      const visible=(await tx.query<{id:string}>(`SELECT item.id FROM mbox.order_items item JOIN mbox.orders o ON o.tenant_id=item.tenant_id AND o.store_id=item.store_id AND o.id=item.order_id
-        WHERE item.tenant_id=$1 AND item.store_id=$2 AND item.id=$3 AND ($4::date IS NULL OR o.business_date>=$4::date
-        OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
-        OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-          WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('r')})
-        OR ${orderHasLegacyStockReturnSql('o')})`,
-      [context.scope.tenantId,context.scope.storeId,itemId,earliest])).rows[0]
-      if(!visible)throw new HardwareAccessDeniedError()
+    const result=await options.commands.execute({
+      ...command(request,context,'order.stock-return',body,codec()),
+      authorizeReplay:(tx,authorization)=>authorizeStockReturnReplay(tx,context.employeeId,itemId,authorization),
+    },async tx=>{
+      const source=await stockReturnSourceAccess(tx,context.employeeId,itemId)
+      if(!source.visible)throw new HardwareSourceAccessDeniedError()
       try{
         const value=await new OrderStockReturnRepository(tx).record({orderItemId:itemId,employeeId:context.employeeId,
           quantity:optionalInteger(body.quantity,1,9999)??0,disposition:readEnum(body.disposition,['unmade','returned_unopened']) as 'unmade'|'returned_unopened',
           reason:readString(body.reason,'reason',1000,3),unopenedConfirmed:body.unopenedConfirmed===true})
-        return outcome(context,'order.stock-return.recorded.v1','order_stock_return',value.id,body.reason,value)
+        return {...outcome(context,'order.stock-return.recorded.v1','order_stock_return',value.id,body.reason,value),
+          replayAuthorization:{version:1,itemId,returnId:value.id,workException:source.workException}}
       }catch(error){if(error instanceof InventoryConflictError)throw new OrderStockReturnConflictError(error.message);throw error}
     })
     return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
@@ -145,44 +130,28 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
   app.post('/hardware/table-sessions/:sessionId/bill',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request);requireAny(context,['order.bill.print'])
     const sessionId=readUuid(readObject(request.params).sessionId,'sessionId'),body={...readObject(request.body??{}),sessionId}
+    let operatorLabel=''
     const result=await options.commands.execute(command(request,context,'table.bill.print',body,codec()),async tx=>{
-      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('order.bill.print')||!access.permissions.some(p=>['order.history.view','order.history.all','reconciliation.view'].includes(p)))throw new HardwareAccessDeniedError()
-      const date=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-      const policy=orderHistoryAccess(access.permissions,date)
-      const hidden=(await tx.query<{count:string}>(`SELECT count(*)::text count FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=$3 AND status<>'draft' AND $4::date IS NOT NULL AND business_date<$4::date`,[context.scope.tenantId,context.scope.storeId,sessionId,policy.earliestBusinessDate])).rows[0]!
-      if(Number(hidden.count)>0)throw new HardwarePolicyError('本桌次含超出当前历史权限的订单，请由有全历史权限人员打印整桌账单；可继续查看本人权限内的单笔记录')
       const id=randomUUID(),source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:id,aggregateVersion:1,eventType:'manual.table-bill.requested.v1',payload:{sessionId,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,sessionId,access.displayName)
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,sessionId,operatorLabel)
       if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由，请在设备管理配置收银路由')
       return outcome(context,'manual.table-bill.queued.v1','manual_print_request',id,'订单中心整桌次账单',{requestId:id,jobCount:jobs.length,jobIds:jobs.map(job=>job.id),status:'queued'})
-    });return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
+    },async tx=>{operatorLabel=await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'table',id:sessionId})});return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
   }))
   app.post('/hardware/orders/:orderId/bill',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request)
     requireAny(context,['order.bill.print'])
     const orderId=readUuid(readObject(request.params).orderId,'orderId'),body=readObject(request.body??{})
+    let operatorLabel=''
     const execution=await options.commands.execute(command(request,context,'order.bill.print',body,codec()),async tx=>{
-      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('order.bill.print')||!access.permissions.some(p=>['order.history.view','order.history.all','reconciliation.view'].includes(p)))throw new HardwareAccessDeniedError()
-      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-      const policy=orderHistoryAccess(access.permissions,current)
-      const visible=(await tx.query<{id:string}>(`
-        SELECT o.id FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.status<>'draft'
-          AND ($4::date IS NULL OR o.business_date>=$4::date
-            OR (o.status<>'cancelled' AND o.total_amount_minor>0 AND o.payment_status IN ('unpaid','pending','partially_paid'))
-            OR EXISTS(SELECT 1 FROM mbox.refunds r JOIN mbox.payments p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id
-              WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND COALESCE(r.order_id,p.order_id)=o.id AND r.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('r')}))`,
-      [context.scope.tenantId,context.scope.storeId,orderId,policy.earliestBusinessDate])).rows[0]
-      if(!visible)throw new HardwareAccessDeniedError()
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
         eventType:'manual.order-bill.requested.v1',payload:{orderId,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOrderBill(sourceId,orderId,access.displayName)
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOrderBill(sourceId,orderId,operatorLabel)
       if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由；订单和收款未受影响')
       return outcome(context,'manual.order-bill.queued.v1','manual_print_request',requestId,'订单中心手动打印',
         {requestId,orderId,jobIds:jobs.map(job=>job.id),status:'queued'})
-    })
+    },async tx=>{operatorLabel=await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'order',id:orderId})})
     return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
   }))
   for (const previewOnly of [false,true]) app.post(previewOnly ? '/hardware/business-days/:businessDate/report-preview' : '/hardware/business-days/:businessDate/report',async(request,reply)=>handle(reply,async()=>{
@@ -198,11 +167,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const reportOptions={mode,grouping} as DailyReportOptions
     if(previewOnly){
       const data=await options.transactions.run(context.scope,async tx=>{
-        const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-        if(!access.permissions.includes('order.bill.print')||!access.permissions.includes('reconciliation.view'))throw new HardwareAccessDeniedError()
-        const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-        const policy=orderHistoryAccess(access.permissions,current)
-        if(policy.earliestBusinessDate&&date<policy.earliestBusinessDate)throw new HardwarePolicyError('所选范围超出历史权限，请由有全历史权限的人员打印')
+        await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'day',date})
         const snapshot=await readOperatingHistory(tx,{businessDate:date,endDate,table:'',employee:'',page:0,exportAll:true,allowFinancialSummary:true})
         const lines=buildDailyReportLines(snapshot,date,endDate,reportOptions)
         return {businessDate:date,endDate,...reportOptions,templateVersion:2,generatedAt:snapshot.generatedAt,
@@ -211,20 +176,16 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       },{readOnly:true,isolation:'repeatable-read'})
       return reply.send({data})
     }
+    let operatorLabel=''
     const execution=await options.commands.execute(command(request,context,'business-day.report.print',body,codec()),async tx=>{
-      const access=await new StaffAccessRepository(tx).resolve(context.employeeId)
-      if(!access.permissions.includes('order.bill.print')||!access.permissions.includes('reconciliation.view'))throw new HardwareAccessDeniedError()
-      const current=(await tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS date',[context.scope.tenantId,context.scope.storeId])).rows[0]!.date
-      const policy=orderHistoryAccess(access.permissions,current)
-      if(policy.earliestBusinessDate&&date<policy.earliestBusinessDate)throw new HardwarePolicyError('所选范围超出历史权限，请由有全历史权限的人员打印')
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
         eventType:'manual.daily-report.requested.v1',payload:{businessDate:date,endDate,...reportOptions,templateVersion:2,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(sourceId,date,access.displayName,endDate,reportOptions)
+      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(sourceId,date,operatorLabel,endDate,reportOptions)
       if(!jobs.length)throw new HardwarePolicyError('收银打印路由不可用；请在设备管理检查路由，营业日未结束')
       return outcome(context,'manual.daily-report.queued.v1','manual_print_request',requestId,'收银打印营业日报',
         {requestId,businessDate:date,endDate,jobIds:jobs.map(job=>job.id),status:'queued'})
-    })
+    },async tx=>{operatorLabel=await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'day',date})})
     return reply.code(execution.replayed?200:202).send({data:execution.value,replayed:execution.replayed})
   }))
   app.get('/hardware/print-ticket-policies', async (request,reply) => handle(reply,async()=>{
@@ -256,6 +217,35 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     options.createRepository?.(transaction) ?? new HardwareRepository(transaction)
   )
 
+  // Authorization belongs before the receipt claim too. Workflow state checks
+  // (failed/printed/retired) stay in the handler so recovery never re-executes work.
+  const authorizeCurrent = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, permissions: string[]) => {
+    const access = await new StaffAccessRepository(tx).resolve(context.employeeId)
+    const current = {...context, capabilities: access.permissions}
+    requireAny(current, permissions)
+    return current
+  }
+  const authorizePrintJob = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, jobId: string, permission: string) => {
+    const current = await authorizeCurrent(tx, context, [permission, 'printer.manage'])
+    const original = await repository(tx).getById(jobId)
+    if (!original) throw new HardwareNotFoundError('打印任务不存在')
+    if (!printStationsFor(current).includes(original.stationCode)) throw new HardwareAccessDeniedError()
+  }
+  const authorizeDevice = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, deviceId: string, permission: string, commandType?: string) => {
+    const current = await authorizeCurrent(tx, context, [permission, 'printer.manage'])
+    const printerOnly = !hasCapability(current, permission)
+    if (printerOnly) {
+      if (commandType && !['test_print', 'reconnect', 'ping'].includes(commandType)) throw new HardwareAccessDeniedError()
+      const device = (await tx.query<{device_type: string}>(
+        'SELECT device_type FROM mbox.devices WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+        [context.scope.tenantId, context.scope.storeId, deviceId],
+      )).rows[0]
+      if (!device) throw new HardwareNotFoundError('设备不存在')
+      if (device.device_type !== 'printer') throw new HardwareAccessDeniedError()
+    }
+    return printerOnly
+  }
+
   app.get('/hardware/devices', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     requireAny(context, ['hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage', 'printer.manage'])
@@ -275,12 +265,19 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     requireAny(context,['order.bill.print'])
     const requestId=readUuid(readObject(request.params).requestId,'requestId')
     const data=await options.transactions.run(context.scope,async tx=>{
-      const source=(await tx.query<{id:string}>(`
-        SELECT id FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2
+      const source=(await tx.query<{id:string;message_type:string;payload:unknown}>(`
+        SELECT id,message_type,payload FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2
           AND aggregate_type='manual_print_request' AND aggregate_id=$3::uuid
           AND payload->>'employeeId'=$4::text
       `,[context.scope.tenantId,context.scope.storeId,requestId,context.employeeId])).rows[0]
       if(!source)throw new HardwareAccessDeniedError()
+      const payload=readObject(source.payload)
+      if(source.message_type==='manual.order-bill.requested.v1')await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'order',id:readUuid(payload.orderId,'orderId')})
+      else if(source.message_type==='manual.table-bill.requested.v1')await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'table',id:readUuid(payload.sessionId,'sessionId')})
+      else if(source.message_type==='manual.daily-report.requested.v1')await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'day',date:readString(payload.businessDate,'businessDate',10,10)})
+      else if(source.message_type==='manual.operating-report.requested.v1')await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'operating',period:readEnum(payload.period,['day','month','year']) as 'day'|'month'|'year',anchorDate:readString(payload.anchorDate,'anchorDate',10,10)})
+      else throw new HardwareSourceAccessDeniedError()
+
       return (await tx.query<{id:string;status:string;stationCode:string;failureCode:string|null}>(`
         SELECT id,status,station_code AS "stationCode",last_error_code AS "failureCode"
         FROM mbox.print_jobs WHERE tenant_id=$1 AND store_id=$2 AND source_outbox_message_id=$3
@@ -416,10 +413,11 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const body = readObject(request.body)
     const reason = readString(body.reason, 'reason', 1000, 3)
     requireAny(context, ['hardware.manage', 'printer.manage'])
-    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.manage')
+    let printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.manage')
+    const deviceId = readUuid(readObject(request.params).deviceId, 'deviceId')
     const execution = await options.commands.execute(command(request, context, 'hardware.device.update', body, codec()), async (transaction) => {
       const changed = await repository(transaction).updateDevice({
-        id: readUuid(readObject(request.params).deviceId, 'deviceId'),
+        id: deviceId,
         name: optionalString(body.name, 'name', 120),
         stationCode: optionalEnum(body.stationCode, ['bar', 'kitchen', 'cashier', 'service']) as DeviceStation | undefined,
         status: optionalEnum(body.status, ['active', 'paused', 'retired']) as never,
@@ -437,6 +435,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         changed.device,
         changed.before,
       )
+    }, async tx => {
+      printerManagerOnly = await authorizeDevice(tx, context, deviceId, 'hardware.manage')
     })
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -472,12 +472,9 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const reason = readString(body.reason, 'reason', 1000, 3)
     const jobId = readUuid(readObject(request.params).jobId, 'jobId')
     const execution = await options.commands.execute(command(request, context, 'print.job.retry', body, codec()), async (transaction) => {
-      const original=await repository(transaction).getById(jobId)
-      if(!original)throw new HardwareNotFoundError('打印任务不存在')
-      if(!printStationsFor(context).includes(original.stationCode))throw new HardwareAccessDeniedError()
       const result = await repository(transaction).retryPrintJob(jobId, context.employeeId, reason)
       return outcome(context, 'print.job.manual_retry.v1', 'print_job', result.id, reason, result)
-    })
+    }, tx => authorizePrintJob(tx, context, jobId, 'print.retry'))
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
@@ -489,9 +486,6 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const jobId = readUuid(readObject(request.params).jobId, 'jobId')
     const execution = await options.commands.execute(command(request, context, 'print.job.reprint', body, codec()), async (transaction) => {
       const store = repository(transaction)
-      const original = await store.getById(jobId)
-      if (!original) throw new HardwareNotFoundError('打印任务不存在')
-      if (!printStationsFor(context).includes(original.stationCode)) throw new HardwareAccessDeniedError()
       const result = await store.reprintPrintJob(
         jobId,
         context.employeeId,
@@ -499,7 +493,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         commandIdempotencyKey(request),
       )
       return outcome(context, 'print.job.reprinted.v1', 'print_job', result.id, reason, result)
-    })
+    }, tx => authorizePrintJob(tx, context, jobId, 'print.reprint'))
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
@@ -507,14 +501,15 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const context = await options.resolveContext(request)
     const body = readObject(request.body)
     const commandType = readEnum(body.commandType, ['test_print', 'reconnect', 'ping', 'open_cash_drawer', 'restart'])
-    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.command')
+    let printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.command')
     requireAny(context, ['hardware.command', 'printer.manage'])
     if (printerManagerOnly && !['test_print', 'reconnect', 'ping'].includes(commandType)) throw new HardwareAccessDeniedError()
     const reason = readString(body.reason, 'reason', 1000, 3)
+    const deviceId = readUuid(readObject(request.params).deviceId, 'deviceId')
     const execution = await options.commands.execute(command(request, context, 'hardware.command.request', body, codec()), async (transaction) => {
       const result = await repository(transaction).requestHardwareCommand({
         publicId: `hardware-command-${randomUUID()}`,
-        deviceId: readUuid(readObject(request.params).deviceId, 'deviceId'),
+        deviceId,
         commandType: commandType as never,
         requestedByEmployeeId: context.employeeId,
         reason,
@@ -522,6 +517,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         printerOnly: printerManagerOnly,
       })
       return outcome(context, 'hardware.command.requested.v1', 'hardware_command', result.id, reason, result)
+    }, async tx => {
+      printerManagerOnly = await authorizeDevice(tx, context, deviceId, 'hardware.command', commandType)
     })
     return reply.code(execution.replayed ? 200 : 202).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -706,7 +703,10 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
       return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
     }
-    if (error instanceof HardwareAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) {
+    if (error instanceof StaffAccessDeniedError || error instanceof StaffNotFoundError) {
+      return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: '当前岗位无权执行此操作' } })
+    }
+    if (error instanceof HardwareAccessDeniedError || error instanceof HardwareSourceAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: error.message } })
     }
     if (error instanceof HardwareNotFoundError) {

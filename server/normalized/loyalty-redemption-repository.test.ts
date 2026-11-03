@@ -394,6 +394,9 @@ integration('loyalty redemption PostgreSQL authority', () => {
   })
 
   it('rejects every new redemption under the owner emergency gate without deleting points or fulfilled history', async () => {
+    // This fixture also performs emergency pause/resume through the real authorization boundary.
+    await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'loyalty.operations.control','Synthetic emergency controller') ON CONFLICT DO NOTHING",[id.tenant,id.store])
+    await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'grant','Isolated emergency-control fixture',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='loyalty.operations.control'",[id.tenant,id.store,id.employeeA])
     const service=new LoyaltyOperationalControlService(runner,new NormalizedCommandExecutor(runner))
     await service.set(staff(id.employeeA),{
       capability:'points_redemption',operation:'pause',reason:'现场兑换履约异常，最高管理人员暂停新兑换',

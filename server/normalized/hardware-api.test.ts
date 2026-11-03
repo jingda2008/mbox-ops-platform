@@ -2,6 +2,7 @@ import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedCommandExecutor } from './command-executor.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
 import { hardwareApiPlugin } from './hardware-api.js'
 import type { HardwareRepository } from './hardware-repository.js'
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
@@ -13,7 +14,7 @@ const employeeId = '26200000-0000-4000-8000-000000000003'
 const deviceId = '26200000-0000-4000-8000-000000000004'
 const apps: ReturnType<typeof Fastify>[] = []
 
-afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())))
+afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); vi.restoreAllMocks() })
 
 describe('hardware API role cropping', () => {
   it('exposes cost-lock contention as retryable 503 without the definite stock refusal code', async () => {
@@ -265,6 +266,7 @@ describe('hardware API role cropping', () => {
 })
 
 async function build(capabilities: string[], fake = repository(), commands = commandExecutor()) {
+  vi.spyOn(StaffAccessRepository.prototype, 'resolve').mockResolvedValue({permissions: capabilities} as Awaited<ReturnType<StaffAccessRepository['resolve']>>)
   const app = Fastify()
   apps.push(app)
   await app.register(hardwareApiPlugin, {
@@ -282,7 +284,8 @@ async function build(capabilities: string[], fake = repository(), commands = com
 
 function commandExecutor() {
   return {
-    execute: vi.fn(async (_command, handler) => {
+    execute: vi.fn(async (_command, handler, beforeClaim) => {
+      await beforeClaim?.(transaction())
       const outcome = await handler(transaction())
       return { value: outcome.result, replayed: false }
     }),
@@ -315,6 +318,6 @@ function repository() {
 function transaction(): ScopedTransaction {
   return {
     scope: { tenantId, storeId },
-    query: async () => ({ rows: [], rowCount: 0 }),
+    query: async (sql) => ({ rows: sql.includes('SELECT device_type') ? [{device_type: 'printer'}] as never[] : [], rowCount: sql.includes('SELECT device_type') ? 1 : 0 }),
   }
 }

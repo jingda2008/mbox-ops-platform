@@ -17,6 +17,7 @@ import {
   type NotificationRecord,
   type NotificationStatus,
 } from './notification-repository.js'
+import { StaffAccessRepository, StaffAccessDeniedError, StaffNotFoundError } from './staff-access-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 type CommandExecutorPort = Pick<NormalizedCommandExecutor, 'execute'>
@@ -27,6 +28,7 @@ export interface NormalizedNotificationApiOptions {
   notificationQuery: NotificationQueryPort
   resolveContext(request: FastifyRequest): Promise<NormalizedOperationsRequestContext>
     | NormalizedOperationsRequestContext
+  createStaffAccessRepository?(transaction: ScopedTransaction): Pick<StaffAccessRepository, 'assertPermission'>
   createNotificationRepository(transaction: ScopedTransaction): Pick<NotificationRepository, 'retryFailed'>
 }
 
@@ -60,7 +62,7 @@ export const normalizedNotificationApiPlugin: FastifyPluginAsync<NormalizedNotif
     const context = await options.resolveContext(request)
     requireCapability(context, 'notification.view')
     const query = applyNotificationReadScope(context, readQuery(request.query))
-    const notifications = await options.notificationQuery.list(context.scope, query)
+    const notifications = await options.notificationQuery.list(context.scope, query, context.employeeId)
     return reply.send({ data: notifications.map(toStaffNotification) })
   }))
 
@@ -103,6 +105,9 @@ export const normalizedNotificationApiPlugin: FastifyPluginAsync<NormalizedNotif
           }],
           outboxMessages: [],
         }
+      }, async (transaction) => {
+        await (options.createStaffAccessRepository?.(transaction) ?? new StaffAccessRepository(transaction))
+          .assertPermission(context.employeeId, 'notification.retry')
       })
       return reply.send({ data: execution.value, replayed: execution.replayed })
     }),
@@ -240,7 +245,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<Fastify
   try {
     return await operation()
   } catch (error) {
-    if (error instanceof NotificationCapabilityDeniedError) {
+    if (error instanceof NotificationCapabilityDeniedError || error instanceof StaffAccessDeniedError || error instanceof StaffNotFoundError) {
       return reply.code(403).send({ error: { code: 'NOTIFICATION_FORBIDDEN', message: error.message } })
     }
     if (error instanceof NotificationNotFoundError) {

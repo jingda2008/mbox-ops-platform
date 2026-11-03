@@ -37,12 +37,13 @@ export const nativeMembershipConfigurationApiPlugin:FastifyPluginAsync<Options>=
  app.get('/staff/native-membership-config',async request=>{
   const query=z.object({section:z.enum(['rules','controls']).default('rules')}).strict().parse(request.query)
   const ctx=await authorize(request,query.section==='rules'?'loyalty.configuration.view':'loyalty.operations.view')
-  const result=query.section==='controls'?{items:await new LoyaltyOperationalControlService(options.transactions,executor).list(ctx),references:[]}:await options.transactions.run(ctx.scope,async tx=>({items:await listMembershipConfigurations(tx),references:await membershipConfigurationReferences(tx)}),{readOnly:true})
+  const result=query.section==='controls'?{items:await new LoyaltyOperationalControlService(options.transactions,executor).list(ctx),references:[]}:await options.transactions.run(ctx.scope,async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'loyalty.configuration.view');return{items:await listMembershipConfigurations(tx),references:await membershipConfigurationReferences(tx)}},{readOnly:true})
   return{data:{...result,section:query.section,employeeId:ctx.employeeId,durableCommands:true,protocol:1}}
  })
  app.get<{Params:{domain:string;id:string}}>('/staff/native-membership-config/:domain/:id',async request=>{
   const ctx=await authorize(request,'loyalty.configuration.view'),domain=membershipDomains.parse(request.params.domain),id=z.uuid().parse(request.params.id)
   const detail=await transactions.run(ctx.scope,async tx=>{
+   await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'loyalty.configuration.view')
    const runner:Options['transactions']={run:(_s,fn)=>fn(tx)},repo=new PostgresMembershipConfigurationDraftRepository(runner,ctx.scope)
    return repo.runExclusive(domain,id,async session=>{
     const draft=await session.loadDraft(id);if(!draft)throw new MembershipConfigurationDraftError('MEMBERSHIP_CONFIGURATION_NOT_FOUND','配置不存在')
@@ -81,7 +82,7 @@ export const nativeMembershipConfigurationApiPlugin:FastifyPluginAsync<Options>=
      if(!inserted)throw new MembershipConfigurationDraftError('MEMBERSHIP_NOTIFICATION_DRAFT_FAILED','微信通知草稿没有建立')
      value=await drafts.get('wechat_notifications',inserted.id)
     }
-    configurationId=(value as {id:string}).id
+    configurationId=(value as {id?:string;publicId:string}).id??(value as {publicId:string}).publicId
    }else if(input.action==='edit')value=await drafts.edit({domain:input.domain,publicId:input.configurationId,expectedRevision:input.expectedRevision,employeeId:ctx.employeeId,reason:input.reason,content:input.content})
    else if(input.action==='preview')value=await drafts.preview(input.domain,input.configurationId,ctx.employeeId)
    else if(input.action==='approve')value=await drafts.approve({domain:input.domain,publicId:input.configurationId,expectedRevision:input.expectedRevision,approverEmployeeId:ctx.employeeId,impactPreviewPublicId:input.impactPreviewPublicId,reason:input.reason})

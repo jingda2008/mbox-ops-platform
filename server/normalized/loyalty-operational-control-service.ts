@@ -23,9 +23,10 @@ export class LoyaltyOperationalControlService {
   ) {}
 
   list(context: StaffCustomerExperienceContext): Promise<LoyaltyOperationalStateView[]> {
-    return this.transactions.run(context.scope, (transaction) => (
-      new LoyaltyOperationalControlRepository(transaction).states()
-    ), { readOnly: true })
+    return this.transactions.run(context.scope, async (transaction) => {
+      await new StaffAccessRepository(transaction).assertPermission(context.employeeId, 'loyalty.operations.view')
+      return new LoyaltyOperationalControlRepository(transaction).states()
+    }, { readOnly: true })
   }
 
   set(context: StaffCustomerExperienceContext, input: Readonly<{

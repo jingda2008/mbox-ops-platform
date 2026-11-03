@@ -3,6 +3,7 @@ import {
   type NotificationListQuery,
   type NotificationRecord,
 } from './notification-repository.js'
+import { StaffAccessRepository, StaffAccessDeniedError } from './staff-access-repository.js'
 import {
   ScopedPostgresTransactionRunner,
   type StoreScope,
@@ -15,11 +16,21 @@ export class NotificationQueryService {
 
   list(
     scope: Readonly<StoreScope>,
-    query: Readonly<NotificationListQuery> = {},
+    query: Readonly<NotificationListQuery>,
+    employeeId: string,
   ): Promise<NotificationRecord[]> {
     return this.transactions.run(
       scope,
-      (transaction) => new NotificationRepository(transaction).list(query),
+      async (transaction) => {
+        const access = await new StaffAccessRepository(transaction).assertPermission(employeeId, 'notification.view')
+        if (access.permissions.includes('notification.view_all')) {
+          return new NotificationRepository(transaction).list(query)
+        }
+        if (query.recipient && (query.recipient.type !== 'employee' || query.recipient.id !== employeeId)) {
+          throw new StaffAccessDeniedError('当前员工只能查看自己的通知')
+        }
+        return new NotificationRepository(transaction).list({ ...query, recipient: { type: 'employee', id: employeeId } })
+      },
       { readOnly: true },
     )
   }

@@ -32,7 +32,7 @@ import type { NormalizedOperationsRequestContext } from './normalized-operations
 import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
-import {StaffAccessRepository} from './staff-access-repository.js'
+import {StaffAccessRepository, StaffAccessDeniedError, StaffNotFoundError} from './staff-access-repository.js'
 import {orderHistoryAccess} from './order-history-access.js'
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
@@ -256,6 +256,35 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     options.createRepository?.(transaction) ?? new HardwareRepository(transaction)
   )
 
+  // Authorization belongs before the receipt claim too. Workflow state checks
+  // (failed/printed/retired) stay in the handler so recovery never re-executes work.
+  const authorizeCurrent = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, permissions: string[]) => {
+    const access = await new StaffAccessRepository(tx).resolve(context.employeeId)
+    const current = {...context, capabilities: access.permissions}
+    requireAny(current, permissions)
+    return current
+  }
+  const authorizePrintJob = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, jobId: string, permission: string) => {
+    const current = await authorizeCurrent(tx, context, [permission, 'printer.manage'])
+    const original = await repository(tx).getById(jobId)
+    if (!original) throw new HardwareNotFoundError('打印任务不存在')
+    if (!printStationsFor(current).includes(original.stationCode)) throw new HardwareAccessDeniedError()
+  }
+  const authorizeDevice = async (tx: ScopedTransaction, context: NormalizedOperationsRequestContext, deviceId: string, permission: string, commandType?: string) => {
+    const current = await authorizeCurrent(tx, context, [permission, 'printer.manage'])
+    const printerOnly = !hasCapability(current, permission)
+    if (printerOnly) {
+      if (commandType && !['test_print', 'reconnect', 'ping'].includes(commandType)) throw new HardwareAccessDeniedError()
+      const device = (await tx.query<{device_type: string}>(
+        'SELECT device_type FROM mbox.devices WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+        [context.scope.tenantId, context.scope.storeId, deviceId],
+      )).rows[0]
+      if (!device) throw new HardwareNotFoundError('设备不存在')
+      if (device.device_type !== 'printer') throw new HardwareAccessDeniedError()
+    }
+    return printerOnly
+  }
+
   app.get('/hardware/devices', async (request, reply) => handle(reply, async () => {
     const context = await options.resolveContext(request)
     requireAny(context, ['hardware.view', 'hardware.view_all', 'hardware.command', 'hardware.manage', 'printer.manage'])
@@ -416,10 +445,11 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const body = readObject(request.body)
     const reason = readString(body.reason, 'reason', 1000, 3)
     requireAny(context, ['hardware.manage', 'printer.manage'])
-    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.manage')
+    let printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.manage')
+    const deviceId = readUuid(readObject(request.params).deviceId, 'deviceId')
     const execution = await options.commands.execute(command(request, context, 'hardware.device.update', body, codec()), async (transaction) => {
       const changed = await repository(transaction).updateDevice({
-        id: readUuid(readObject(request.params).deviceId, 'deviceId'),
+        id: deviceId,
         name: optionalString(body.name, 'name', 120),
         stationCode: optionalEnum(body.stationCode, ['bar', 'kitchen', 'cashier', 'service']) as DeviceStation | undefined,
         status: optionalEnum(body.status, ['active', 'paused', 'retired']) as never,
@@ -437,6 +467,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         changed.device,
         changed.before,
       )
+    }, async tx => {
+      printerManagerOnly = await authorizeDevice(tx, context, deviceId, 'hardware.manage')
     })
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -472,12 +504,9 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const reason = readString(body.reason, 'reason', 1000, 3)
     const jobId = readUuid(readObject(request.params).jobId, 'jobId')
     const execution = await options.commands.execute(command(request, context, 'print.job.retry', body, codec()), async (transaction) => {
-      const original=await repository(transaction).getById(jobId)
-      if(!original)throw new HardwareNotFoundError('打印任务不存在')
-      if(!printStationsFor(context).includes(original.stationCode))throw new HardwareAccessDeniedError()
       const result = await repository(transaction).retryPrintJob(jobId, context.employeeId, reason)
       return outcome(context, 'print.job.manual_retry.v1', 'print_job', result.id, reason, result)
-    })
+    }, tx => authorizePrintJob(tx, context, jobId, 'print.retry'))
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
@@ -489,9 +518,6 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const jobId = readUuid(readObject(request.params).jobId, 'jobId')
     const execution = await options.commands.execute(command(request, context, 'print.job.reprint', body, codec()), async (transaction) => {
       const store = repository(transaction)
-      const original = await store.getById(jobId)
-      if (!original) throw new HardwareNotFoundError('打印任务不存在')
-      if (!printStationsFor(context).includes(original.stationCode)) throw new HardwareAccessDeniedError()
       const result = await store.reprintPrintJob(
         jobId,
         context.employeeId,
@@ -499,7 +525,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         commandIdempotencyKey(request),
       )
       return outcome(context, 'print.job.reprinted.v1', 'print_job', result.id, reason, result)
-    })
+    }, tx => authorizePrintJob(tx, context, jobId, 'print.reprint'))
     return reply.send({ data: execution.value, replayed: execution.replayed })
   }))
 
@@ -507,14 +533,15 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const context = await options.resolveContext(request)
     const body = readObject(request.body)
     const commandType = readEnum(body.commandType, ['test_print', 'reconnect', 'ping', 'open_cash_drawer', 'restart'])
-    const printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.command')
+    let printerManagerOnly = hasCapability(context, 'printer.manage') && !hasCapability(context, 'hardware.command')
     requireAny(context, ['hardware.command', 'printer.manage'])
     if (printerManagerOnly && !['test_print', 'reconnect', 'ping'].includes(commandType)) throw new HardwareAccessDeniedError()
     const reason = readString(body.reason, 'reason', 1000, 3)
+    const deviceId = readUuid(readObject(request.params).deviceId, 'deviceId')
     const execution = await options.commands.execute(command(request, context, 'hardware.command.request', body, codec()), async (transaction) => {
       const result = await repository(transaction).requestHardwareCommand({
         publicId: `hardware-command-${randomUUID()}`,
-        deviceId: readUuid(readObject(request.params).deviceId, 'deviceId'),
+        deviceId,
         commandType: commandType as never,
         requestedByEmployeeId: context.employeeId,
         reason,
@@ -522,6 +549,8 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
         printerOnly: printerManagerOnly,
       })
       return outcome(context, 'hardware.command.requested.v1', 'hardware_command', result.id, reason, result)
+    }, async tx => {
+      printerManagerOnly = await authorizeDevice(tx, context, deviceId, 'hardware.command', commandType)
     })
     return reply.code(execution.replayed ? 200 : 202).send({ data: execution.value, replayed: execution.replayed })
   }))
@@ -705,6 +734,9 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     const error=caught instanceof NativeCommandNotCommittedError?caught.original:caught
     if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
       return reply.code(401).send({ error: { code: 'AUTH_REQUIRED', message: '登录信息无效或已过期，请重新登录' } })
+    }
+    if (error instanceof StaffAccessDeniedError || error instanceof StaffNotFoundError) {
+      return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: '当前岗位无权执行此操作' } })
     }
     if (error instanceof HardwareAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'HARDWARE_FORBIDDEN', message: error.message } })

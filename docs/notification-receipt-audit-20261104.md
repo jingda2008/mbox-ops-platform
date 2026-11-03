@@ -27,7 +27,7 @@
 
 最终30项测试放回原始产品代码得到**18失败/12通过**，均为上述实际断言失败。修复后连同原通知API及会员配置仓储回归，**3文件44项通过**。测试准备时曾误用id读取publicId、跳过通知状态机、尝试给managed政策设置不合法paused状态；已改用准确字段及合法状态迁移/retired，不计作产品缺陷，最终基线无此类夹具错误。
 
-证据目录：`/Users/jingda/mbox/outputs/notification-access-audit-20261104/`；`baseline-final.log`、`focused-final.log`分别记录最终基线与修复后结果。完整check、全库回归、最新PR提交CI和作者复核结果在本次PR检查记录补齐。作者复核不等于独立外部批准。
+证据目录：`/Users/jingda/mbox/outputs/notification-access-audit-20261104/`；`baseline-final.log`、`focused-final.log`分别记录最终基线与修复后结果。完整check、全库回归、最新PR提交CI和作者复核结果在[PR419检查记录](https://github.com/jingda2008/mbox-ops-platform/pull/419)补齐。作者复核不等于独立外部批准。
 
 ## 复核边界
 
@@ -39,4 +39,4 @@ Web创建没有新增幂等协议；提交后响应丢失仍须读取核对已�
 
 复核中额外发现的运行开关读取路径，先得到独立的2失败/42通过，补齐授权后44通过。中途全库执行为纳入此修复主动终止；以最终源代码重新执行的完整check和全库结果为准。
 
-2026-11-04 07:54 CST：最终源代码完整`npm run check`退出0，2704项通过、2210项数据库条件跳过，类型检查/构建通过。全库单独执行；最终本地全库、准确提交CI和作者审查以本次PR检查记录为准。
+2026-11-04 07:54 CST：最终源代码完整`npm run check`退出0，2704项通过、2210项数据库条件跳过，类型检查/构建通过。全库单独执行；最终本地全库、准确提交CI和作者审查以[PR419检查记录](https://github.com/jingda2008/mbox-ops-platform/pull/419)为准。

@@ -27,16 +27,9 @@ export class CashHandoverService {
  async execute(c:Context,key:string,input:CashHandoverCommand){
   const reason=input.reason.trim()
   if(reason.length<4||reason.length>500)throw new CashHandoverError('请填写4—500字实际原因或交接说明')
-  await this.transactions.run(c.scope,async tx=>{
-    const access=await new StaffAccessRepository(tx).resolve(c.employeeId)
-    if(!access.permissions.includes('reconciliation.view')||!(access.permissions.includes('payment.manual.cash.record')||access.permissions.includes('reconciliation.manage'))||['movement','approve'].includes(input.action)&&!access.permissions.includes('reconciliation.manage'))throw new CashHandoverError('现金交接权限已撤销')
-  },{readOnly:true})
   const fingerprint=createHash('sha256').update(JSON.stringify({employeeId:c.employeeId,input:{...input,reason}})).digest('hex')
   return this.commands.execute({scope:c.scope,operationScope:'cash.handover.'+input.action,idempotencyKey:key,requestFingerprint:fingerprint,resultCodec:{encode:(v:JsonObject)=>v,decode:(v)=>v as JsonObject}},async tx=>{
    try {
-   const access=await new StaffAccessRepository(tx).resolve(c.employeeId)
-   if(!access.permissions.includes('reconciliation.view')||!(access.permissions.includes('payment.manual.cash.record')||access.permissions.includes('reconciliation.manage')))throw new CashHandoverError('现金盘点权限已撤销')
-   if(['movement','approve'].includes(input.action)&&!access.permissions.includes('reconciliation.manage'))throw new CashHandoverError('需要财务管理权限')
    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${c.scope.tenantId}:${c.scope.storeId}:cash-handover`])
    const original=(await tx.query<{evidence:JsonObject}>(`SELECT evidence FROM mbox.cash_handover_events WHERE tenant_id=$1 AND store_id=$2 AND evidence->>'key'=$3 ORDER BY occurred_at,id LIMIT 1`,[c.scope.tenantId,c.scope.storeId,key])).rows[0]
    if(original){if(original.evidence.fingerprint!==fingerprint)throw new IdempotencyConflictError('cash.handover.'+input.action,key);return {result:original.evidence.result as JsonObject,auditEvents:[],outboxMessages:[]}}
@@ -75,6 +68,11 @@ export class CashHandoverService {
    await tx.query(`INSERT INTO mbox.cash_handover_events(tenant_id,store_id,handover_id,employee_id,action,evidence) VALUES($1,$2,$3,$4,$5,$6::jsonb)`,[c.scope.tenantId,c.scope.storeId,row.id,c.employeeId,input.action,JSON.stringify({key,fingerprint,input:{...input,reason},result})])
    return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:c.employeeId},action:'cash.handover.'+input.action,objectType:'cash_handover',objectId:row.id,businessDate:c.businessDate,reason,afterData:result}],outboxMessages:[]}
    } catch(error){if(error instanceof CashHandoverError)error.notCommitted=true;throw error}
+  },async tx=>{
+   // Check current authority before both claiming a new command and returning an old receipt.
+   // Keep revision, dual-control and ledger checks in the handler: committed retries must not re-run them.
+   const access=await new StaffAccessRepository(tx).resolve(c.employeeId)
+   if(!access.permissions.includes('reconciliation.view')||!(access.permissions.includes('payment.manual.cash.record')||access.permissions.includes('reconciliation.manage'))||['movement','approve'].includes(input.action)&&!access.permissions.includes('reconciliation.manage'))throw new CashHandoverError('现金交接权限已撤销')
   })
  }
  private async ledger(tx:ScopedTransaction):Promise<Ledger>{const row=(await tx.query<{net:string;count:string;foreign_count:string}>(`SELECT COALESCE(SUM(amount_minor),0)::text AS net,count(*)::text AS count,count(*) FILTER(WHERE currency<>'CNY')::text AS foreign_count FROM mbox.reconciliation_entries WHERE tenant_id=$1 AND store_id=$2 AND provider='cash' AND entry_type IN('payment','refund')`,[tx.scope.tenantId,tx.scope.storeId])).rows[0]!;if(Number(row.foreign_count)>0)throw new CashHandoverError('存在其他币种现金，不能混合成人民币盘点');const net=Number(row.net),count=Number(row.count);if(!Number.isSafeInteger(net)||!Number.isSafeInteger(count))throw new CashHandoverError('现金账本超过安全计数范围');return {net,count}}

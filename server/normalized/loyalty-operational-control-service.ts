@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
-import type { JsonCodec, NormalizedCommandExecutor } from './command-executor.js'
+import { IdempotencyConflictError, type JsonCodec, type NormalizedCommandExecutor } from './command-executor.js'
 import type { StaffCustomerExperienceContext } from './customer-experience-service.js'
 import {
   LoyaltyOperationalControlRepository,
   type LoyaltyOperationalCapability,
   type LoyaltyOperationalStateView,
 } from './loyalty-operational-control-repository.js'
+import { StaffAccessRepository } from './staff-access-repository.js'
 import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
 
 export class LoyaltyOperationalControlError extends Error {
@@ -41,7 +42,18 @@ export class LoyaltyOperationalControlService {
       operationScope: 'loyalty.operations.control',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(input),
-      resultCodec: stateCodec,
+      resultCodec: {
+        ...stateCodec,
+        decode: (value) => {
+          const state = stateCodec.decode(value)
+          // Existing receipts already contain the original actor. Keep their fingerprints
+          // compatible, but never acknowledge another employee's action as this retry.
+          if (state?.changedByEmployeeId !== context.employeeId) {
+            throw new IdempotencyConflictError('loyalty.operations.control', input.idempotencyKey)
+          }
+          return state
+        },
+      },
     }, async (transaction) => {
       await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         `loyalty-operational-control:${transaction.scope.tenantId}:${transaction.scope.storeId}:${input.capability}`,
@@ -117,6 +129,8 @@ export class LoyaltyOperationalControlService {
         }],
         outboxMessages: [],
       }
+    }, async (transaction) => {
+      await new StaffAccessRepository(transaction).assertPermission(context.employeeId, 'loyalty.operations.control')
     })
   }
 }

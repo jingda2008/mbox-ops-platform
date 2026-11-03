@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { appendOutboxMessage,NormalizedCommandExecutor } from './command-executor.js'
 import Fastify from 'fastify'
+import {StaffAccessRepository} from './staff-access-repository.js'
 import {hardwareApiPlugin} from './hardware-api.js'
 import { HardwareRepository } from './hardware-repository.js'
 import { PrintSourceWorker } from './print-source-worker.js'
@@ -300,6 +301,20 @@ integration('asynchronous print sources: committed events, isolation and recover
   })
   it('tracks only the requesting employee’s print snapshot without exposing ticket content',async()=>{
     const requestId=randomUUID(),owner=randomUUID(),other=randomUUID()
+    // Tracking now needs the original report authority, not just a supplied
+    // employee id and print capability. Both actors have equal rights here so
+    // the final 403 still proves receipt ownership independently of permission.
+    const role=randomUUID()
+    await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'TRACKING','Tracking')",[role,scope.tenantId,scope.storeId])
+    for(const id of [owner,other]){
+      await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1::uuid,$2,$3,$1::text,$1::text)',[id,scope.tenantId,scope.storeId])
+      await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[scope.tenantId,scope.storeId,id,role])
+    }
+    for(const code of ['order.bill.print','reconciliation.view'])await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING',[scope.tenantId,scope.storeId,code])
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
+      SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($4::text[])`,
+      [scope.tenantId,scope.storeId,role,['order.bill.print','reconciliation.view']])
+
     const date=(await pool.query('SELECT max(business_date)::text AS date FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2',[scope.tenantId,scope.storeId])).rows[0].date
     const jobs=await transactions.run(scope,async tx=>{
       const source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
@@ -309,11 +324,11 @@ integration('asynchronous print sources: committed events, isolation and recover
     let employeeId=owner
     const app=Fastify()
     await app.register(hardwareApiPlugin,{transactions,commands:new NormalizedCommandExecutor(transactions),
-      resolveContext:()=>({scope,employeeId,businessDate:date,capabilities:['order.bill.print']})})
+      resolveContext:async()=>{const access=await transactions.run(scope,tx=>new StaffAccessRepository(tx).resolve(employeeId),{readOnly:true});return {scope,employeeId,businessDate:date,capabilities:access.permissions}}})
     try{
       const read=()=>app.inject({method:'GET',url:`/hardware/print-requests/${requestId}`})
       const response=await read()
-      expect(response.statusCode).toBe(200)
+      expect(response.statusCode,response.body).toBe(200)
       expect(response.json().data.map((job:{id:string})=>job.id).sort()).toEqual(jobs.map(job=>job.id).sort())
       expect(response.json().data.every((job:object)=>Object.keys(job).sort().join(',')==='failureCode,id,stationCode,status')).toBe(true)
       employeeId=other

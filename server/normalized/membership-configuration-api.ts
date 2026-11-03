@@ -55,11 +55,11 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
       if(!inserted)throw invalid('微信通知草稿没有建立')
       return inserted.id
     })
-    return reply.send({data:await service(options,context).get('wechat_notifications',created)})
+    return reply.send({data:await service(options,context,'loyalty.configuration.edit').get('wechat_notifications',created)})
   }))
   app.get('/staff/loyalty/configuration-center',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')
-    const rows=await options.transactions.run(context.scope,async(transaction)=>{
+    const rows=await authorizedTransactions(options,context,'loyalty.configuration.view').run(context.scope,async(transaction)=>{
       return listMembershipConfigurations(transaction)
     },{readOnly:true})
     return reply.send({data:rows})
@@ -67,7 +67,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
 
   app.get('/staff/loyalty/configuration-center/references',async(request,reply)=>handle(reply,async()=>{
     const context=await authorized(options,request,'loyalty.configuration.view')
-    const data=await options.transactions.run(context.scope,async(transaction)=>{
+    const data=await authorizedTransactions(options,context,'loyalty.configuration.view').run(context.scope,async(transaction)=>{
       return membershipConfigurationReferences(transaction)
     },{readOnly:true})
     return reply.send({data})
@@ -78,7 +78,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
     async(request,reply)=>handle(reply,async()=>{
       const context=await authorized(options,request,'loyalty.configuration.view')
       const domain=domainValue(request.params.domain)
-      return reply.send({data:await service(options,context).get(domain,request.params.configurationId)})
+      return reply.send({data:await service(options,context,'loyalty.configuration.view').get(domain,request.params.configurationId)})
     }),
   )
 
@@ -90,7 +90,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
       const body=object(request.body)
       const content=object(body.content) as MembershipConfigurationContent
       if(content.domain!==domain)throw invalid('配置内容与配置域不一致')
-      const result=await service(options,context).edit({domain,publicId:request.params.configurationId,
+      const result=await service(options,context,'loyalty.configuration.edit').edit({domain,publicId:request.params.configurationId,
         expectedRevision:integer(body.expectedRevision,'草稿版本'),employeeId:context.employeeId,
         reason:text(body.reason,'修改原因',2,500),content})
       return reply.send({data:result})
@@ -102,7 +102,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
     async(request,reply)=>handle(reply,async()=>{
       const context=await authorized(options,request,'loyalty.configuration.preview')
       const domain=domainValue(request.params.domain)
-      const result=await service(options,context).preview(domain,request.params.configurationId,context.employeeId)
+      const result=await service(options,context,'loyalty.configuration.preview').preview(domain,request.params.configurationId,context.employeeId)
       return reply.send({data:result})
     }),
   )
@@ -114,7 +114,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
       const domain=domainValue(request.params.domain)
       const body=object(request.body)
       if('impactPreviewAcknowledged' in body)throw invalid('客户端确认不能代替服务端影响预览')
-      const result=await service(options,context).approve({domain,publicId:request.params.configurationId,
+      const result=await service(options,context,'loyalty.configuration.approve').approve({domain,publicId:request.params.configurationId,
         expectedRevision:integer(body.expectedRevision,'草稿版本'),approverEmployeeId:context.employeeId,
         impactPreviewPublicId:text(body.impactPreviewPublicId,'影响预览编号',8,128),
         reason:text(body.reason,'审批原因',2,500)})
@@ -125,11 +125,18 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
 
 interface ConfigurationListRow extends Record<string,unknown>{domain:MembershipConfigurationDomain;id:string;status:string;draft_revision:number;version:number;title:string;updated_at:string;effective_from:string|null;effective_until:string|null;approved_by_employee_id:string|null}
 
-function service(options:MembershipConfigurationApiOptions,context:StaffCustomerExperienceContext){
+function service(options:MembershipConfigurationApiOptions,context:StaffCustomerExperienceContext,permission:string){
   return new MembershipConfigurationDraftService(
-    new PostgresMembershipConfigurationDraftRepository(options.transactions,context.scope),
+    new PostgresMembershipConfigurationDraftRepository(authorizedTransactions(options,context,permission),context.scope),
   )
 }
+function authorizedTransactions(options:MembershipConfigurationApiOptions,context:StaffCustomerExperienceContext,permission:string):Pick<ScopedPostgresTransactionRunner,'run'>{
+  return {run:(scope,work,settings)=>options.transactions.run(scope,async transaction=>{
+    await (options.createStaffAccessRepository?.(transaction)??new StaffAccessRepository(transaction)).assertPermission(context.employeeId,permission)
+    return work(transaction)
+  },settings)}
+}
+
 async function authorized(options:MembershipConfigurationApiOptions,request:FastifyRequest,permission:string){
   const context=await options.resolveStaffContext(request)
   await options.transactions.run(context.scope,(transaction)=>(

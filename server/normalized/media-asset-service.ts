@@ -3,15 +3,19 @@ import type { AuditEvent, JsonCodec, JsonValue, NormalizedCommandExecutor } from
 import { MediaAssetRepository, type MediaAssetView, type MediaAssetListOptions } from './media-asset-repository.js'
 import type { ActivityOperationsStaffContext } from './activity-operations-service.js'
 import type { ScopedPostgresTransactionRunner } from './transaction-runner.js'
+import {assertMediaPermissions,MEDIA_READ_PERMISSIONS,mediaUploadPermissions} from './media-asset-access.js'
 
 export class MediaAssetService {
   constructor(
     private readonly transactions: Pick<ScopedPostgresTransactionRunner,'run'>,
-    private readonly commands: NormalizedCommandExecutor,
+    private readonly commands: Pick<NormalizedCommandExecutor,'execute'>,
   ) {}
 
   list(context: ActivityOperationsStaffContext, options: Readonly<MediaAssetListOptions> = {}) {
-    return this.transactions.run(context.scope, (transaction) => new MediaAssetRepository(transaction).list(options), { readOnly: true })
+    return this.transactions.run(context.scope, async (transaction) => {
+      await assertMediaPermissions(transaction,context.employeeId,MEDIA_READ_PERMISSIONS)
+      return new MediaAssetRepository(transaction).list(options)
+    }, { readOnly: true })
   }
 
   upload(context: ActivityOperationsStaffContext, input: Readonly<{
@@ -32,7 +36,7 @@ export class MediaAssetService {
         afterData: { purpose: created.asset.purpose, mimeType: created.asset.mimeType, byteLength: created.asset.byteLength, sha256: created.asset.sha256 },
       }
       return { result: created.asset, auditEvents: [audit], outboxMessages: [] }
-    })
+    },transaction=>assertMediaPermissions(transaction,context.employeeId,mediaUploadPermissions(input.purpose)))
   }
 }
 

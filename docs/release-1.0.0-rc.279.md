@@ -1,5 +1,7 @@
 # 1.0.0-rc.279 回执授权、来源权限与现场配置保留
 
+**2026-11-04 01:38:18 CST已完成后台及员工Web生产部署**，提交`713e28feb27884f977aa1e2938ee3996d9f42d4c`，schema298。候选、主线、标签CI及Release均成功，标准部署与33项只读回查通过。
+
 本版本汇总PR417六批修复。2026-11-04用户明确授权检查近期全部后台改动、合并并部署；宣传网站保持现状，不合并旧Android、iOS及退款草稿，不改现场桌台、订单和员工账号。
 
 ## 变更
@@ -21,6 +23,24 @@ schema保持298，门店配置2026.10.31-v29、菜单版本2026-07-27-v1及内�
 
 回退目标为已验证rc278提交4c130879051fb1cd53582c27c1ab81026c099207、镜像sha256:738571cb87b85b332b39c838acf37865cd7f5edd30c790a8d092df25e0f693eb，应用镜像回退，不回滚数据库。回退会重新暴露本批修复的授权缺口，应只用于可用性恢复。
 
-当前为发布候选，不代表已部署或现场验收。最终合并SHA、主线/标签CI、Release、镜像、备份、部署及生产只读回查另行记录。证据目录outputs/release-rc279-20261104/。
+以下发布准备过程保留为历史；正式结果见下。工程部署及只读回查不代替真实资金、打印/设备或现场岗位操作验收。证据目录outputs/release-rc279-20261104/。
 
 范围：后台与员工Web；不提交微信小程序审核/发布，不发布Android/iOS或宣传网站，不发起真实资金、打印或设备测试。部分拆并桌02仍待业务明确，未更改。历史经营验收和未审计入口不因本次工程发布自动关闭。
+
+
+## 正式发布与近期改动复核
+
+- [PR417](https://github.com/jingda2008/mbox-ops-platform/pull/417)于北京时间2026-11-04 01:01:35合并；合并SHA`713e28feb27884f977aa1e2938ee3996d9f42d4c`与候选`6a00f049eb6259793d7df124d607b9d769746973`代码树完全一致。
+- [候选CI41675362698](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41675362698)、[主线CI41680125674](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41680125674)、[标签CI41680156166](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41680156166)、[Release41680156207](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41680156207)全部成功。三套数据库日志均4072项通过、受限LOGIN前置130项通过；质量/浏览器/性能及verify通过，标签镜像完成验证。
+- [作者发布前复核5755964695](https://github.com/jingda2008/mbox-ops-platform/pull/417#pullrequestreview-5755964695)及历史六批审查无阻断发现、无未解决线程；不是独立外部批准。
+- [v1.0.0-rc.279](https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.279)发布包摘要`sha256:01c8394ab5750b20454bd485490d29e01a07c5a20e65ca34993544c3ebe69f71`；平台镜像`sha256:35d2410f2a7d488fa16e8261a3383caa743d1d16200326785e4afbc4a3500c05`。
+- 标准入口`deploy/aliyun/deploy-release.sh`试运行和正式部署退出0。部署清单时间2026-11-04 01:38:18 CST，正式ready提交/摘要匹配、workers healthy、runtimeRole normal、writeEnabled true、schema298，无迁移变化；门店与菜单provision均replayed=true。
+- 备份`/opt/mbox/backups/mbox-20261103T173607Z-eYBMn3.dump`、镜像、发布证据及状态按标准流程上传私有OSS并核验。回滚容器`mbox-app-rollback-713e28f-20261104-013815`，目标rc278，application_image模式，不回退数据库。
+- 正式`/`、固定桌码顾客入口、预约和员工深链接的HTTP/资源与真实浏览器验证通过。01:39:09 CST只读核查33项全部通过：17个启用账号权限/导航、14类配置摘要（包括员工/PIN、角色历史与门店凭据）、订单/明细/桌次/参与账号/付款/退款完整记录摘要保持；15个开放桌次和33条历史移动事实保持。未用现场写操作测试撤权或打印。
+- 宣传网站v25容器ID、镜像及启动时间逐字一致，未重新发布或重启。未上传/审核/发布微信小程序，未发布Android/iOS。
+
+近期盘点覆盖239个现存工作树、已跟踪修改与后台目录近期未跟踪源码、全部远端分支及开放/近期合并PR。近期后台改动均已归入PR417或先前主线；PR408/409旧分支因压缩合并不具直接祖先关系，但与对应合并版本完整代码树一致，并非遗漏。旧Android346、iOS340、rc90的91及退款草稿88不混入。网站近期源码有独立上线记录，按用户明确指令保持现状。
+
+原始证据：outputs/release-rc279-20261104/中的recent-worktrees/recent-untracked-source/recent-remote-branches、ci-pr/main/tag/release、三套数据库日志、release-review、dry-run/deploy日志、production-deployment/deployment/deployment-manifest.json、postdeploy-verification.json及网站前后身份。原始权限及业务摘要留在本地受限目录，不写入公共文档。
+
+本机额外release:system:test首次因缺Linux flock退出1，保留日志；准确候选、主线和标签的Linux quality任务已执行并通过同一完整发布系统测试，没有跳过或放宽门禁。未完成经营验收、未审计入口及部分拆并桌02保持原边界，不因本次部署自动关闭。

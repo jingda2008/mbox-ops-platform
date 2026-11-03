@@ -415,6 +415,9 @@ export async function provisionNormalizedStore(input: {
       policy.depositRatioBps ?? null, policy.depositRuleText ?? null,
     ])
 
+    // Lifecycle state is managed independently of versioned configuration. Even a
+    // new version must preserve paused/retired resources and revoked access.
+    // Newly inserted rows still use the schema defaults.
     const areaIds = new Map<string, string>()
     for (const area of input.config.areas) {
       const result = await client.query<{ id: string }>(`INSERT INTO mbox.areas(
@@ -422,7 +425,7 @@ export async function provisionNormalizedStore(input: {
         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET name = EXCLUDED.name,
           area_type = EXCLUDED.area_type, sort_order = EXCLUDED.sort_order,
-          layout_snapshot = EXCLUDED.layout_snapshot, status = 'active' RETURNING id`,
+          layout_snapshot = EXCLUDED.layout_snapshot RETURNING id`,
       [tenant.id, store.id, area.code, area.name, area.type, area.sortOrder, JSON.stringify(area.layout)])
       areaIds.set(area.code, requiredRow(result.rows[0], `area ${area.code}`).id)
     }
@@ -447,8 +450,7 @@ export async function provisionNormalizedStore(input: {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET area_id = EXCLUDED.area_id,
           display_name = EXCLUDED.display_name, capacity = EXCLUDED.capacity,
-          minimum_spend_minor = EXCLUDED.minimum_spend_minor, layout_snapshot = EXCLUDED.layout_snapshot,
-          status = 'available'`, [tenant.id, store.id, areaIds.get(table.areaCode), provisionCode,
+          minimum_spend_minor = EXCLUDED.minimum_spend_minor, layout_snapshot = EXCLUDED.layout_snapshot`, [tenant.id, store.id, areaIds.get(table.areaCode), provisionCode,
         table.name, table.capacity, table.minimumSpendMinor ?? null, store.currency, JSON.stringify(table.layout)])
     }
 
@@ -458,8 +460,7 @@ export async function provisionNormalizedStore(input: {
           tenant_id, store_id, code, name, capabilities, can_receive_tasks)
         VALUES ($1, $2, $3, $4, $5::text[], $6)
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET name = EXCLUDED.name,
-          capabilities = EXCLUDED.capabilities, can_receive_tasks = EXCLUDED.can_receive_tasks,
-          status = 'active' RETURNING id`,
+          capabilities = EXCLUDED.capabilities, can_receive_tasks = EXCLUDED.can_receive_tasks RETURNING id`,
       [tenant.id, store.id, role.code, role.name, role.permissions, role.canReceiveTasks])
       roleIds.set(role.code, requiredRow(result.rows[0], `role ${role.code}`).id)
     }
@@ -468,7 +469,7 @@ export async function provisionNormalizedStore(input: {
       await client.query(`INSERT INTO mbox.staff_permission_definitions(
           tenant_id, store_id, code, name, category, description)
         VALUES ($1, $2, $3, $3, split_part($3, '.', 1), 'Provisioned from versioned store configuration')
-        ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET status = 'active'`, [tenant.id, store.id, permission])
+        ON CONFLICT (tenant_id, store_id, code) DO NOTHING`, [tenant.id, store.id, permission])
     }
     for (const role of input.config.roles) {
       const roleId = roleIds.get(role.code)

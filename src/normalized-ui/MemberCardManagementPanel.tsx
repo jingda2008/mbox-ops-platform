@@ -73,7 +73,7 @@ export function MemberCardManagementPanel({api,auth}:{api:NormalizedApiClient;au
     if(busy)return;setBusy(true);setMessage('')
     try{
       if(form.kind==='cobrand'&&(!form.availableFrom||!form.availableUntil))throw new Error('请填写联名卡明确的开始和结束时间（北京时间）')
-      await command(`${path}/projects`,{...form,openImmediately,availableFrom:form.kind==='interest'?new Date().toISOString():`${form.availableFrom}:00+08:00`,availableUntil:form.availableUntil?`${form.availableUntil}:00+08:00`:null,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
+      await command(`${path}/projects`,{...form,openImmediately,availableFrom:form.kind==='interest'?undefined:`${form.availableFrom}:00+08:00`,availableUntil:form.availableUntil?`${form.availableUntil}:00+08:00`:null,cooperationReference:form.kind==='cobrand'?form.cooperationReference:null,
         cooperationValidUntil:form.kind==='cobrand'&&form.cooperationValidUntil?`${form.cooperationValidUntil}:00+08:00`:null,cooperationConfirmed:form.kind==='cobrand'&&form.cooperationConfirmed})
       if(!mounted.current)return
       setForm(current=>({...current,code:`CARD_${crypto.randomUUID().replaceAll('-','').toUpperCase()}`,name:'',terms:''}));await load();setMessage(openImmediately?'已保存并开放申请；未配置的权益不作承诺。':'已保存草稿，尚未开放申请；可在此配置指定商品后开放。')

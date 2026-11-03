@@ -100,6 +100,8 @@ jobs:
         run: node scripts/product-sale-quantity-browser.mjs
       - name: Verify employee creation and status recovery without persisted PIN
         run: node scripts/staff-employee-recovery-browser.mjs
+      - name: Verify member card creation response-loss recovery
+        run: node scripts/member-card-create-recovery-browser.mjs
       - name: Verify customer purchase, card entry and scan feedback
         run: node scripts/customer-experience-b06-browser.mjs
       - name: Verify candidate, upload and release gate semantics

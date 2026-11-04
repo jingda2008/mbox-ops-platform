@@ -1,5 +1,27 @@
 # 1.0.0-rc.280 通知权限与授权撤回
 
+**2026-11-05 02:01:53 CST 已完成后台及员工Web生产部署**，提交`cca1f0ed3636a0e0312dea1fa9ddce072433a96f`，schema299。正式入口、真实浏览器和39项只读业务回查通过。小程序未上传/审核/发布，宣传网站保持原版本，现场桌台、订单和员工账号保持。
+
+## 正式发布与验证
+
+- 用户2026-11-05明确授权合并PR419并部署后台；[PR #419](https://github.com/jingda2008/mbox-ops-platform/pull/419)于01:24:45 CST合并，合并SHA与候选`b0f23c1cd580730252445284266cab0b4b400883`完整代码树一致。
+- [候选CI41837844399](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41837844399)、[主线CI41877337167](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41877337167)、[标签CI41877355769](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41877355769)、[Release41877355486](https://github.com/jingda2008/mbox-ops-platform/actions/runs/41877355486)全部成功。主线和标签各4149项数据库通过/零跳过，受限LOGIN前置各130通过；质量（含Linux发布系统）、浏览器、性能、verify通过，标签镜像完成验证。主线和标签并行核对同一主线可达提交，等待三项最终成功后才部署，没有用旧CI代替。
+- [作者发布准备复核](https://github.com/jingda2008/mbox-ops-platform/pull/419#pullrequestreview-5769089346)完成，无未解决审查线程；不是独立外部批准。GitHub一度延迟显示任务状态，保留观察记录，未以局部日志绕过最终门禁。
+- [v1.0.0-rc.280](https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.280)发布包摘要`sha256:56ccf2266850e0dc0ecbc80caf041e0241433150e98002f92a14c2e3cf2047df`；平台镜像`sha256:fea300368dae948f5db4af87996b80ee28ef5623e39534b6735ecb23baa38284`。仅使用`deploy/aliyun/deploy-release.sh`，标准试运行及正式部署均退出0，最终release-state=completed。
+- 部署前及激活前只读重核生产版本、营业状态、账号和配置；新备份`/opt/mbox/backups/mbox-20261104T175926Z-JuTogx.dump`已通过私有OSS核验。镜像、发布证据、部署清单和完成状态均已上传私有OSS并验证。
+- 只新增迁移299，门店与菜单provision均replayed=true，版本与内容未变。没有重放现场初始化，没有改员工PIN、姓名、状态、角色或门店凭据。
+- 正式`/`、`/guest?table=W01`、`/reserve`和`/staff/live`的HTTP、静态资源、构建身份和真实浏览器渲染通过；正式ready对应上述SHA/摘要、schema299，workers healthy、runtimeRole normal、writeEnabled true，集成工作进程原关闭状态保持。
+- 02:03:12 CST完成39项只读回查：17个启用账号权限/导航、14类配置摘要、订单/明细/桌次/参与账号/付款/退款全记录摘要保持；29个开放桌次及35条历史转台并桌事实保持；预约授权触发器与299迁移源码一致，原所有者/调用者权限保持，转台并桌函数未变。
+- 宣传站v25容器ID、镜像及启动时间从初始盘点到发布后均一致，公开站HTTP200，未重新发布或重启网站。未上传、审核、发布小程序，也未发布原生App；PR中的客户端原键恢复修复仍待小程序单独发布，不能算作手机端已生效。
+
+当前回滚容器`mbox-app-rollback-cca1f0e-20261105-020151`，对应rc279提交`713e28feb27884f977aa1e2938ee3996d9f42d4c`，application_image模式；保留schema299，不回退经营事实。回滚会重新暴露本批授权缺口，应仅用于可用性恢复。
+
+原始证据目录`outputs/release-rc280-20261105/`：merge/tree核对、ci-main/tag/release、数据库及浏览器日志、dry-run/deploy、production-deployment/deployment/deployment-manifest.json、remote-evidence、postdeploy-verification.json及网站前后身份。权限和业务摘要留在本地受限目录，不附客户或账号明细到PR。
+
+工程发布不替代历史经营TC、真实通知送达、外部适配器幂等、撤回UI与真机验收。部分拆并桌问题02仍待业务明确，未修改。下列发布前准备内容作为历史保留。
+
+## 发布前准备（历史记录）
+
 **发布前准备，尚未合并、打标签或部署。** 用户2026-11-04授权完成最后准备；实际执行须另有合并部署授权，并重新通过执行时门禁。候选为[PR #419](https://github.com/jingda2008/mbox-ops-platform/pull/419)，后台及员工Web范围，schema299。
 
 ## 变更和证据

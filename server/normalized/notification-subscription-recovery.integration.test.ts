@@ -1,3 +1,6 @@
+import { NotificationRepository } from './notification-repository.js'
+import { NotificationWorker } from './notification-worker.js'
+import { CustomerNotificationConsentRepository } from './customer-notification-consent-repository.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
 import { randomUUID } from 'node:crypto'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
@@ -162,6 +165,33 @@ integration('subscription authorization recovery with restricted LOGIN', () => {
     expect((await pool.query('SELECT outcome FROM mbox.reservation_performance_notification_receipts WHERE tenant_id=$1', [f.tenant])).rows).toEqual([{ outcome: change === 'crash' ? 'unknown' : 'provider_rejected' }])
     expect(await worker.runBatch(scope, 'reservation-final-retry')).toMatchObject({ claimed: 0 })
     expect(sendTemplate).not.toHaveBeenCalled()
+  })
+  it.each(['wechat','sms','customer-in-app','employee-in-app','employee-wecom'] as const)('generic %s queue rechecks recipient eligibility and stops retries after revocation', async kind => {
+    const f = await seed(pool), scope = { tenantId: f.tenant, storeId: f.store }
+    const channel = kind === 'wechat' || kind === 'sms' ? kind : kind === 'employee-wecom' ? 'wecom' : 'in_app'
+    const recipient = kind.startsWith('employee-') ? { type: 'employee' as const, id: f.employee } : { type: 'customer' as const, id: f.customer }
+    const consent = { customerId: f.customer, channel: channel === 'sms' ? 'sms' as const : 'wechat' as const,
+      purpose: 'transactional_service' as const, expectedVersion: 0, policyVersion: 'v1', source: 'customer_self_service' as const, actorType: 'customer' as const }
+    if (channel === 'wechat' || channel === 'sms') await transactions.run(scope, tx => new CustomerNotificationConsentRepository(tx).record({ ...consent, decision: 'granted' }))
+    if (channel === 'wecom') {
+      await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'notifications.receive.wecom','接收通知')", [f.tenant,f.store])
+      await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT tenant_id,store_id,$3,id,'grant','合成权限',$4 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='notifications.receive.wecom'", [f.tenant,f.store,f.employee,f.approver])
+    }
+    const allowed = await transactions.run(scope, tx => new NotificationRepository(tx).create({ businessKey: 'generic-notification-allowed', channel, recipient, templateCode: 'service.ready', payload: { status: 'ready' } }))
+    const positiveDelivery = vi.fn(async () => undefined)
+    expect(await new NotificationWorker(transactions).runBatch(scope, 'generic-positive-control', positiveDelivery)).toMatchObject({ delivered: [allowed.id] })
+    expect(positiveDelivery).toHaveBeenCalledOnce()
+    const job = await transactions.run(scope, tx => new NotificationRepository(tx).create({ businessKey: 'generic-notification-revocation', channel, recipient, templateCode: 'service.ready', payload: { status: 'ready' } }))
+    if (channel === 'wechat' || channel === 'sms') await transactions.run(scope, tx => new CustomerNotificationConsentRepository(tx).record({ ...consent, expectedVersion: 1, decision: 'revoked' }))
+    else if (channel === 'wecom') await pool.query("UPDATE mbox.employee_permission_overrides SET effect='deny' WHERE tenant_id=$1 AND employee_id=$2", [f.tenant,f.employee])
+    else if (kind === 'employee-in-app') await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1", [f.employee])
+    else await pool.query("UPDATE mbox.customers SET status='blocked' WHERE id=$1", [f.customer])
+    const deliver = vi.fn(async () => undefined), worker = new NotificationWorker(transactions)
+    expect(await worker.runBatch(scope, 'generic-final-check', deliver)).toMatchObject({ claimed: 1, delivered: [], dead: [job.id] })
+    expect(deliver).not.toHaveBeenCalled()
+    expect((await pool.query('SELECT status,last_error FROM mbox.notifications WHERE id=$1', [job.id])).rows).toEqual([{ status: 'dead', last_error: 'recipient_no_longer_eligible' }])
+    expect(await worker.runBatch(scope, 'generic-final-check-retry', deliver)).toMatchObject({ claimed: 0 })
+    expect(deliver).not.toHaveBeenCalled()
   })
   it('birthday grant and withdrawal receipts cannot be read by another customer and never restore withdrawn consent', async () => {
     const f = await seed(pool), scope = { tenantId: f.tenant, storeId: f.store }

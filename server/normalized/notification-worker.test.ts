@@ -38,7 +38,7 @@ describe('NotificationWorker', () => {
   it('claims no more than 50 rows with SKIP LOCKED and delivers with the business key', async () => {
     const transactions = new ScriptedTransactions([
       response([]),
-      response([notificationRow()]),
+      response([notificationRow()]), response([], 1),
       response([], 1),
     ])
     const keys: string[] = []
@@ -63,15 +63,15 @@ describe('NotificationWorker', () => {
   })
 
   it('never marks a no-op JavaScript response delivered',async()=>{
-    const transactions=new ScriptedTransactions([response([]),response([notificationRow()]),response([],1)])
+    const transactions=new ScriptedTransactions([response([]),response([notificationRow()]), response([], 1),response([],1)])
     const result=await new NotificationWorker(transactions).runBatch(scope,'no-op',async()=>({skipped:true}) as unknown as void)
     expect(result.delivered).toEqual([]);expect(result.retrying).toHaveLength(1)
-    expect(transactions.calls[2]?.values).toContain('delivery_receipt_invalid')
+    expect(transactions.calls[3]?.values).toContain('delivery_receipt_invalid')
   })
   it('stores only a stable failure code and applies exponential retry delay', async () => {
     const transactions = new ScriptedTransactions([
       response([]),
-      response([notificationRow({ attempts: 3 })]),
+      response([notificationRow({ attempts: 3 })]), response([], 1),
       response([], 1),
     ])
     const result = await new NotificationWorker(transactions).runBatch(
@@ -82,15 +82,15 @@ describe('NotificationWorker', () => {
     )
 
     expect(result.retrying).toEqual(['30000000-0000-4000-8000-000000000001'])
-    expect(transactions.calls[2]?.values[5]).toBe(8_000)
-    expect(transactions.calls[2]?.values[6]).toBe('provider_timeout')
-    expect(JSON.stringify(transactions.calls[2]?.values)).not.toContain('secret provider response')
+    expect(transactions.calls[3]?.values[5]).toBe(8_000)
+    expect(transactions.calls[3]?.values[6]).toBe('provider_timeout')
+    expect(JSON.stringify(transactions.calls[3]?.values)).not.toContain('secret provider response')
   })
 
   it('moves an exhausted notification to dead without another retry', async () => {
     const transactions = new ScriptedTransactions([
       response([]),
-      response([notificationRow({ attempts: 5, max_attempts: 5 })]),
+      response([notificationRow({ attempts: 5, max_attempts: 5 })]), response([], 1),
       response([], 1),
     ])
     const result = await new NotificationWorker(transactions).runBatch(
@@ -100,9 +100,9 @@ describe('NotificationWorker', () => {
     )
 
     expect(result.dead).toEqual(['30000000-0000-4000-8000-000000000001'])
-    expect(transactions.calls[2]?.values[4]).toBe(true)
-    expect(transactions.calls[2]?.values[6]).toBe('delivery_failed:unknown')
-    expect(JSON.stringify(transactions.calls[2]?.values)).not.toContain('customer data')
+    expect(transactions.calls[3]?.values[4]).toBe(true)
+    expect(transactions.calls[3]?.values[6]).toBe('delivery_failed:unknown')
+    expect(JSON.stringify(transactions.calls[3]?.values)).not.toContain('customer data')
   })
 
   it('recovers a stale sending row already at its attempt limit as dead', async () => {

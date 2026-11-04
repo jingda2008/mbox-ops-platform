@@ -146,7 +146,7 @@ export class WechatLoyaltyNotificationRepository {
       FROM mbox.wechat_notification_policies policy
       JOIN mbox.customer_memberships membership
         ON membership.tenant_id=policy.tenant_id AND membership.store_id=policy.store_id
-       AND membership.customer_id=$3::uuid AND membership.status='active'
+       AND membership.customer_id=$3::uuid
       LEFT JOIN LATERAL (
         SELECT wechat_identity.external_identity_id
         FROM mbox.wechat_identities wechat_identity
@@ -172,8 +172,8 @@ export class WechatLoyaltyNotificationRepository {
       ) latest ON true
       WHERE policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
         AND policy.id=$4::uuid AND policy.notification_type=$5
-        AND policy.status='published' AND policy.effective_from<=clock_timestamp()
-        AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+        AND (($6::text<>'accept' AND latest.authorization_version IS NOT NULL) OR (membership.status='active' AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+        AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())))
       FOR KEY SHARE OF membership
     `, [
       this.transaction.scope.tenantId,
@@ -181,6 +181,7 @@ export class WechatLoyaltyNotificationRepository {
       input.customerId,
       input.policyId,
       input.notificationType,
+      input.platformResult,
     ])
     const row = selected.rows[0]
     if (!row) throw new WechatNotificationAuthorizationError(

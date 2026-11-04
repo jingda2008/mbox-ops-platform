@@ -86,6 +86,11 @@ async function stillSendable(transaction:ScopedTransaction,jobId:string,workerId
     JOIN mbox.wechat_member_service_notification_policies policy ON policy.tenant_id=auth.tenant_id AND policy.store_id=auth.store_id AND policy.id=auth.policy_id
     JOIN mbox.customer_memberships membership ON membership.tenant_id=auth.tenant_id AND membership.store_id=auth.store_id AND membership.id=auth.membership_id AND membership.customer_id=auth.customer_id AND membership.status='active'
     JOIN mbox.wechat_identities identity ON identity.tenant_id=auth.tenant_id AND identity.store_id=auth.store_id AND identity.external_identity_id=auth.identity_external_id AND identity.channel='mini_program' AND identity.revoked_at IS NULL
+    JOIN mbox.customer_identities customer_identity
+      ON customer_identity.tenant_id=identity.tenant_id AND customer_identity.store_id=identity.store_id
+     AND customer_identity.identity_kind='wechat'
+     AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
+     AND customer_identity.status='active' AND customer_identity.customer_id=auth.customer_id
     WHERE job.tenant_id=$1 AND job.store_id=$2 AND job.id=$3 AND job.locked_by=$4 AND job.status='sending'
       AND auth.decision='granted' AND policy.status='published' AND policy.effective_from<=clock_timestamp()
       AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())

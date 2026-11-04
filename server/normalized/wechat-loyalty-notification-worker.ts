@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { boundedNotificationOperation } from './notification-operation-timeout.js'
 import {
   wechatNotificationValueSources,
   type WechatNotificationFieldMapping,
@@ -100,18 +101,20 @@ export class WechatLoyaltyNotificationWorker {
     batchSize = 50,
   ): Promise<WechatLoyaltyNotificationBatch> {
     validateWorker(workerId, batchSize)
+    batchSize = Math.min(batchSize, 5)
+    const recovered = await this.transactions.run(scope, (transaction) => recoverAbandoned(transaction, batchSize))
     const initiallyPaused = await this.transactions.run(scope, async (transaction) => (
       (await new LoyaltyOperationalControlRepository(transaction).state('wechat_notification')).state==='paused'
     ), { readOnly: true })
     if (initiallyPaused) return {
-      workerId,paused:true,expiryJobsCreated:0,claimed:0,accepted:[],rejected:[],unknown:[],
+      workerId,paused:true,expiryJobsCreated:0,claimed:0,accepted:[],rejected:[],unknown:recovered,
     }
     const expiryJobsCreated = await this.transactions.run(scope, (transaction) => (
       new WechatLoyaltyNotificationRepository(transaction).enqueueExpiringLots(batchSize)
     ))
     // Missing/invalid formal provider configuration must fail before a one-use
     // authorization is consumed or a job is leased.
-    await this.delivery.preflight?.()
+    if (this.delivery.preflight) await boundedNotificationOperation(this.delivery.preflight(), 5000)
     const claimResult = await this.transactions.run(scope, (transaction) => claim(transaction, workerId, batchSize))
     const claimed = claimResult.jobs
     const result: WechatLoyaltyNotificationBatch = {
@@ -121,18 +124,21 @@ export class WechatLoyaltyNotificationWorker {
       claimed: claimed.length,
       accepted: [],
       rejected: [],
-      unknown: [],
+      unknown: recovered,
     }
     for (const job of claimed) {
       let deliveryResult: WechatSubscriptionDeliveryResult
       try {
-        const recipient = await this.recipients.resolveMiniProgramNotificationRecipient(
+        const recipient = await boundedNotificationOperation(this.recipients.resolveMiniProgramNotificationRecipient(
           job.customer_id,
           job.identity_external_id,
-        )
+        ), 2000)
+        const allowed = recipient !== null && await this.transactions.run(scope,
+          (transaction) => stillSendable(transaction, job.id, workerId), { readOnly: true })
         deliveryResult = recipient === null
           ? { outcome: 'provider_rejected', providerReference: null, errorCode: 'recipient_unavailable' }
-          : await this.delivery.send(toDeliveryRequest(job, recipient.openId))
+          : !allowed ? { outcome: 'provider_rejected', providerReference: null, errorCode: 'authorization_or_scope_changed' }
+          : await boundedNotificationOperation(this.delivery.send(toDeliveryRequest(job, recipient.openId)), 5000)
       } catch {
         // Once a provider request might have left the process, retrying a one-use
         // subscription authorization can duplicate a message. Unknown is terminal.
@@ -177,39 +183,7 @@ async function claim(
             AND used.authorization_id=job.authorization_id
         )
         OR NOT EXISTS(
-          SELECT 1
-          FROM mbox.wechat_notification_authorizations active_auth
-          JOIN mbox.wechat_notification_policies policy
-            ON policy.tenant_id=active_auth.tenant_id AND policy.store_id=active_auth.store_id
-           AND policy.id=active_auth.policy_id
-          JOIN mbox.customer_memberships membership
-            ON membership.tenant_id=active_auth.tenant_id AND membership.store_id=active_auth.store_id
-           AND membership.id=active_auth.membership_id
-           AND membership.customer_id=active_auth.customer_id AND membership.status='active'
-          JOIN mbox.wechat_identities identity
-            ON identity.tenant_id=active_auth.tenant_id AND identity.store_id=active_auth.store_id
-           AND identity.external_identity_id=active_auth.identity_external_id
-           AND identity.channel='mini_program' AND identity.revoked_at IS NULL
-          JOIN mbox.customer_identities customer_identity
-            ON customer_identity.tenant_id=identity.tenant_id
-           AND customer_identity.store_id=identity.store_id
-           AND customer_identity.identity_kind='wechat'
-           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
-           AND customer_identity.status='active'
-           AND customer_identity.customer_id=active_auth.customer_id
-          WHERE active_auth.tenant_id=job.tenant_id AND active_auth.store_id=job.store_id
-            AND active_auth.id=job.authorization_id AND active_auth.decision='granted'
-            AND policy.id=job.policy_id AND policy.status='published'
-            AND policy.effective_from<=clock_timestamp()
-            AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
-            AND active_auth.id=(
-              SELECT latest.id FROM mbox.wechat_notification_authorizations latest
-              WHERE latest.tenant_id=active_auth.tenant_id
-                AND latest.store_id=active_auth.store_id
-                AND latest.customer_id=active_auth.customer_id
-                AND latest.policy_id=active_auth.policy_id
-              ORDER BY latest.authorization_version DESC,latest.id DESC LIMIT 1
-            )
+          ${currentAuthorizationSql}
         )
       )
   `, [transaction.scope.tenantId, transaction.scope.storeId])
@@ -455,4 +429,69 @@ function validateWorker(workerId: string, batchSize: number): void {
 function normalizeCode(value: string): string {
   const normalized = value.trim().toLowerCase()
   return /^[a-z][a-z0-9_.:-]{2,95}$/.test(normalized) ? normalized : 'provider_error_invalid'
+}
+
+// Shared by claim filtering and the final check after recipient resolution.
+const currentAuthorizationSql = `
+          SELECT 1
+          FROM mbox.wechat_notification_authorizations active_auth
+          JOIN mbox.wechat_notification_policies policy
+            ON policy.tenant_id=active_auth.tenant_id AND policy.store_id=active_auth.store_id
+           AND policy.id=active_auth.policy_id
+          JOIN mbox.customer_memberships membership
+            ON membership.tenant_id=active_auth.tenant_id AND membership.store_id=active_auth.store_id
+           AND membership.id=active_auth.membership_id
+           AND membership.customer_id=active_auth.customer_id AND membership.status='active'
+          JOIN mbox.wechat_identities identity
+            ON identity.tenant_id=active_auth.tenant_id AND identity.store_id=active_auth.store_id
+           AND identity.external_identity_id=active_auth.identity_external_id
+           AND identity.channel='mini_program' AND identity.revoked_at IS NULL
+          JOIN mbox.customer_identities customer_identity
+            ON customer_identity.tenant_id=identity.tenant_id
+           AND customer_identity.store_id=identity.store_id
+           AND customer_identity.identity_kind='wechat'
+           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
+           AND customer_identity.status='active'
+           AND customer_identity.customer_id=active_auth.customer_id
+          WHERE active_auth.tenant_id=job.tenant_id AND active_auth.store_id=job.store_id
+            AND active_auth.id=job.authorization_id AND active_auth.decision='granted'
+            AND policy.id=job.policy_id AND policy.status='published'
+            AND policy.effective_from<=clock_timestamp()
+            AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+            AND active_auth.id=(
+              SELECT latest.id FROM mbox.wechat_notification_authorizations latest
+              WHERE latest.tenant_id=active_auth.tenant_id
+                AND latest.store_id=active_auth.store_id
+                AND latest.customer_id=active_auth.customer_id
+                AND latest.policy_id=active_auth.policy_id
+              ORDER BY latest.authorization_version DESC,latest.id DESC LIMIT 1
+            )
+`
+
+async function stillSendable(transaction: ScopedTransaction, jobId: string, workerId: string): Promise<boolean> {
+  if ((await new LoyaltyOperationalControlRepository(transaction).state('wechat_notification')).state === 'paused') return false
+  const current = await transaction.query(`
+    SELECT job.id FROM mbox.wechat_customer_notification_jobs job
+    WHERE job.tenant_id=$1::uuid AND job.store_id=$2::uuid AND job.id=$3::uuid
+      AND job.status='sending' AND job.locked_by=$4
+      AND EXISTS(${currentAuthorizationSql})
+  `, [transaction.scope.tenantId, transaction.scope.storeId, jobId, workerId])
+  return current.rowCount === 1
+}
+
+async function recoverAbandoned(transaction: ScopedTransaction, limit: number): Promise<string[]> {
+  const stale = await transaction.query<{id: string; locked_by: string}>(`
+    SELECT id,locked_by FROM mbox.wechat_customer_notification_jobs
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='sending'
+      AND locked_at<clock_timestamp()-interval '5 minutes'
+    ORDER BY locked_at,id LIMIT $3 FOR UPDATE SKIP LOCKED
+  `, [transaction.scope.tenantId, transaction.scope.storeId, limit])
+  for (const job of stale.rows) {
+    // The old process may already have reached the provider. Retain the use,
+    // record an unknown outcome and never put this authorization back in queue.
+    await recordOutcome(transaction, job.id, job.locked_by, {
+      outcome: 'unknown', providerReference: null, errorCode: 'worker_interrupted_outcome_unknown',
+    })
+  }
+  return stale.rows.map((job) => job.id)
 }

@@ -8,7 +8,8 @@ const scope = {
 
 describe('ReservationPerformanceNotificationWorker', () => {
   it('preflights the formal provider before consuming a one-use reservation authorization', async () => {
-    const run = vi.fn()
+    const query = vi.fn(async (_sql: string) => ({ rows: [], rowCount: 0 }))
+    const run = vi.fn(async (_scope, callback) => callback({ scope, query }))
     const worker = new ReservationPerformanceNotificationWorker(
       { run } as never,
       { resolveMiniProgramNotificationRecipient: vi.fn() },
@@ -19,7 +20,9 @@ describe('ReservationPerformanceNotificationWorker', () => {
     )
 
     await expect(worker.runBatch(scope, 'reservation-worker-001')).rejects.toThrow('formal provider unavailable')
-    expect(run).not.toHaveBeenCalled()
+    expect(query).toHaveBeenCalledOnce()
+    expect(query.mock.calls[0]?.[0]).toContain("status='sending'")
+    expect(query.mock.calls[0]?.[0]).not.toContain('authorization_uses')
   })
 
   it('sends only typed reservation-context fields and records the terminal provider result', async () => {

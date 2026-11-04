@@ -9,7 +9,7 @@ afterEach(async()=>{await Promise.all(apps.splice(0).map((app)=>app.close()));vi
 
 describe('WeChat member-service notification API',()=>{
   it('fails closed when the formal WeChat channel or a published template policy is unavailable',async()=>{
-    const execute=vi.fn();const query=vi.fn();const app=Fastify();apps.push(app)
+    const execute=vi.fn(async (_command, handler) => handler({ scope, query } as never));const query=vi.fn();const app=Fastify();apps.push(app)
     await app.register(wechatMemberServiceNotificationApiPlugin,{transactions:{run:async(_scope,operation)=>operation({scope,query} as never)},commands:{execute},channelConfigured:false,
       resolvePublicContext:()=>({scope,customerId:'83000000-0000-4000-8000-000000000003',actorRef:'member-service-notice-customer',businessDate:'2026-08-27'}),})
     const options=await app.inject({method:'GET',url:'/public/mini/wechat-member-service-notification-authorizations'})
@@ -22,6 +22,6 @@ describe('WeChat member-service notification API',()=>{
     }})
     expect(record.statusCode).toBe(503)
     expect(record.json()).toMatchObject({error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED'}})
-    expect(execute).not.toHaveBeenCalled()
+    expect(execute).toHaveBeenCalledOnce(); expect(query).not.toHaveBeenCalled()
   })
 })

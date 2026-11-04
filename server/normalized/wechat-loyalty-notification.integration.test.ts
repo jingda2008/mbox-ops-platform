@@ -283,6 +283,41 @@ integration('typed WeChat loyalty notification authorization and delivery', () =
     `)
     expect(new Date(scheduled.rows[0]!.scheduled).toISOString()).toBe('2026-08-17T00:00:00.000Z')
   })
+  it.each(['revoke', 'retire', 'expire', 'identity', 'membership', 'crash'] as const)('blocks loyalty delivery after %s during recipient resolution', async (change) => {
+    const f = Object.fromEntries(Object.keys(ids).map(key => [key, randomUUID()])) as typeof ids
+    await seed(pool, f)
+    const localScope = { tenantId: f.tenant, storeId: f.store }
+    const input = { customerId: f.customer, notificationType: 'loyalty_points_credited' as const,
+      policyId: f.policy, policyVersion: 1, templateId: 'wechat-template-credit-001' }
+    await transactions.run(localScope, tx => new WechatLoyaltyNotificationRepository(tx).recordAuthorization({
+      ...input, expectedVersion: 0, platformResult: 'accept', platformEventReference: 'loyalty-slow-resolve-grant',
+    }))
+    const fact = (await pool.query('SELECT awarded_at::text AS occurred_at FROM mbox.loyalty_order_awards WHERE id=$1', [f.source])).rows[0]
+    expect(await transactions.run(localScope, tx => new WechatLoyaltyNotificationRepository(tx).enqueuePointsCredited({
+      awardId: f.source, pointsChange: 10, balanceAfter: 110, occurredAt: fact.occurred_at,
+    }))).toBe(true)
+    if (change === 'crash') await transactions.run(localScope, async tx => {
+      await tx.query('INSERT INTO mbox.wechat_notification_authorization_uses(tenant_id,store_id,authorization_id,notification_job_id) SELECT tenant_id,store_id,authorization_id,id FROM mbox.wechat_customer_notification_jobs WHERE tenant_id=$1 AND store_id=$2', [f.tenant,f.store])
+      await tx.query("UPDATE mbox.wechat_customer_notification_jobs SET status='sending',attempts=1,locked_by='old-worker',locked_at=clock_timestamp()-interval '10 minutes' WHERE tenant_id=$1 AND store_id=$2", [f.tenant,f.store])
+    })
+    const send = vi.fn(async () => ({ outcome: 'accepted' as const, providerReference: 'must-not-send' }))
+    const worker = new WechatLoyaltyNotificationWorker(transactions, { resolveMiniProgramNotificationRecipient: async () => {
+      if (change === 'revoke') await transactions.run(localScope, tx => new WechatLoyaltyNotificationRepository(tx).recordAuthorization({ ...input, expectedVersion: 1, platformResult: 'revoke', platformEventReference: 'loyalty-slow-resolve-revoke' }))
+      if (change === 'retire') await pool.query("UPDATE mbox.wechat_notification_policies SET status='retired' WHERE id=$1", [f.policy])
+      if (change === 'expire') await pool.query("UPDATE mbox.wechat_notification_policies SET effective_until=clock_timestamp()-interval '1 second' WHERE id=$1", [f.policy])
+      if (change === 'identity') await pool.query('UPDATE mbox.wechat_identities SET revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2', [f.tenant,f.store])
+      if (change === 'membership') await pool.query("UPDATE mbox.customer_memberships SET status='suspended' WHERE id=$1", [f.membership])
+      return { identityExternalId: `wx-identity-${f.identity}`, openId: 'synthetic-only' }
+    } }, { send })
+    const result = await worker.runBatch(localScope, 'loyalty-final-check')
+    expect(result).toMatchObject(change === 'crash' ? { claimed: 0, unknown: [expect.any(String)] } : { claimed: 1, rejected: [expect.any(String)] })
+    expect(send).not.toHaveBeenCalled()
+    expect((await pool.query('SELECT outcome FROM mbox.wechat_notification_receipts WHERE tenant_id=$1 AND store_id=$2', [f.tenant,f.store])).rows).toEqual([{ outcome: change === 'crash' ? 'unknown' : 'provider_rejected' }])
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.wechat_notification_authorization_uses WHERE tenant_id=$1 AND store_id=$2', [f.tenant,f.store])).rows[0].n).toBe(1)
+    expect(await worker.runBatch(localScope, 'loyalty-final-check-retry')).toMatchObject({ claimed: 0 })
+    expect(send).not.toHaveBeenCalled()
+  })
+
 })
 
 async function insertJob(
@@ -310,7 +345,8 @@ async function insertJob(
   ])
 }
 
-async function seed(pool: Pool): Promise<void> {
+async function seed(pool: Pool, fixtureIds = ids): Promise<void> {
+  const ids = fixtureIds
   const principal = `principal-${ids.identity}`
   const otherPrincipal = `principal-${ids.otherIdentity}`
   await pool.query(`INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Wechat notice tenant')`, [

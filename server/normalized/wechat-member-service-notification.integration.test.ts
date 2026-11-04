@@ -59,7 +59,7 @@ integration('typed WeChat member-service notification delivery',()=>{
     expect(attempts.filter(r=>r.status==='fulfilled')).toHaveLength(1)
     expect(attempts.find(r=>r.status==='rejected')).toMatchObject({reason:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_VERSION_CONFLICT'}})
   })
-  it.each(['revoke','retire','expire','crash'] as const)('does not send after %s invalidates the original attempt',async(change)=>{
+  it.each(['revoke','retire','expire','identity-link','crash'] as const)('does not send after %s invalidates the original attempt',async(change)=>{
     const isolated={tenant:randomUUID(),store:randomUUID(),customer:randomUUID(),membership:randomUUID(),policy:randomUUID()}
     await seed(pool,isolated)
     const currentScope={tenantId:isolated.tenant,storeId:isolated.store}
@@ -75,6 +75,7 @@ integration('typed WeChat member-service notification delivery',()=>{
     const worker=new WechatMemberServiceNotificationWorker(transactions,{resolveMiniProgramNotificationRecipient:async()=>{
       if(change==='revoke')await transactions.run(currentScope,tx=>new WechatMemberServiceNotificationRepository(tx).recordAuthorization({...authorization,expectedVersion:1,platformResult:'revoke',platformEventReference:'member-service-during-resolve-revoke'}))
       else if(change==='retire')await pool.query("UPDATE mbox.wechat_member_service_notification_policies SET status='retired' WHERE id=$1",[isolated.policy])
+      else if(change==='identity-link')await pool.query("UPDATE mbox.customer_identities SET status='revoked',revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2",[isolated.tenant,isolated.store])
       else await pool.query("UPDATE mbox.benefits SET valid_until=clock_timestamp()-interval '1 minute' WHERE id=$1",[benefitId])
       return{identityExternalId:'member-service-identity',openId:'openid-member-service'}
     }},{sendTemplate})

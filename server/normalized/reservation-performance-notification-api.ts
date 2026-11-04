@@ -1,3 +1,4 @@
+import { NotificationChannelUnavailableError, notificationAuthorizationErrorReply } from './notification-authorization-http.js'
 import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonCodec, NormalizedCommandExecutor } from './command-executor.js'
@@ -27,6 +28,7 @@ interface AuthorizationResult {
 
 export const reservationPerformanceNotificationApiPlugin:
 FastifyPluginAsync<ReservationPerformanceNotificationApiOptions> = async (app, options) => {
+  app.setErrorHandler((error, _request, reply) => { const handled = notificationAuthorizationErrorReply(error, reply); if (handled) return handled; throw error })
   app.get('/public/reservation/performance-notification-authorizations', async (request, reply) => {
     const context = await options.resolveCustomerContext(request)
     const authorizations = await options.transactions.run(context.scope, (transaction) => (
@@ -44,10 +46,7 @@ FastifyPluginAsync<ReservationPerformanceNotificationApiOptions> = async (app, o
     reply,
     async () => {
     const context = await options.resolveCustomerContext(request)
-    if (!options.channelConfigured) return reply.status(503).send({
-      code: 'RESERVATION_NOTIFICATION_NOT_CONFIGURED',
-      message: '正式微信预约提醒尚未完整配置',
-    })
+
     const body = object(request.body)
     rejectClaims(body, ['customerId','canonicalCustomerId','reservationId','identityExternalId','scope'])
     const input = {
@@ -72,6 +71,7 @@ FastifyPluginAsync<ReservationPerformanceNotificationApiOptions> = async (app, o
         requestFingerprint: fingerprint({ ...input, customerId: context.customerId }),
         resultCodec: authorizationCodec,
       }, async (transaction) => {
+        if (!options.channelConfigured && input.platformResult === 'accept') throw new NotificationChannelUnavailableError('RESERVATION_NOTIFICATION_NOT_CONFIGURED')
         const recorded = await new ReservationPerformanceNotificationRepository(transaction)
           .recordAuthorization({ customerId: context.customerId, ...input })
         const result: AuthorizationResult = {

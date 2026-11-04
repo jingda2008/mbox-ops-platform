@@ -1,3 +1,4 @@
+import { NativeCommandNotCommittedError } from './command-executor.js'
 import {editActivityParty,activityAddonProducts,resolveActivityParent,customerActivityServiceView} from './activity-customer-service.js'
 import {CustomerRepository} from './customer-repository.js'
 import QRCode from 'qrcode'
@@ -109,7 +110,8 @@ export class CustomerExperienceService {
       scope: context.scope,
       operationScope: 'customer.annual-benefit.birthday-consent',
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint({ ...input, customerId: context.customerId }),
+      retainReceipt: true,
       resultCodec: objectCodec<{ birthdayMonthDay: string; consentStatus: 'granted' }>(),
     }, async (transaction) => {
       const canonical = requiredRow((await transaction.query<{ id: string }>(`
@@ -161,7 +163,7 @@ export class CustomerExperienceService {
           aggregateType: 'customer_annual_benefit_consent', aggregateId: canonical.id, aggregateVersion: 1,
           eventType: 'customer.annual-benefit.birthday-consent.granted.v1', payload: { consentType: 'birthday_month_day' } }],
       }
-    })
+    }).catch((error: unknown) => { throw error instanceof NativeCommandNotCommittedError ? error.original : error })
   }
 
   withdrawBirthdayBenefitConsent(
@@ -176,7 +178,8 @@ export class CustomerExperienceService {
       scope: context.scope,
       operationScope: 'customer.annual-benefit.birthday-consent.withdraw',
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint({ ...input, customerId: context.customerId }),
+      retainReceipt: true,
       resultCodec: objectCodec<{ consentStatus: 'withdrawn' }>(),
     }, async (transaction) => {
       const canonical = requiredRow((await transaction.query<{ id: string }>(`
@@ -205,7 +208,7 @@ export class CustomerExperienceService {
           aggregateType: 'customer_annual_benefit_consent', aggregateId: canonical.id, aggregateVersion: 2,
           eventType: 'customer.annual-benefit.birthday-consent.withdrawn.v1', payload: { consentType: 'birthday_month_day' } }],
       }
-    })
+    }).catch((error: unknown) => { throw error instanceof NativeCommandNotCommittedError ? error.original : error })
   }
 
   listCustomerPublicationEmployees(context: StaffCustomerExperienceContext) {
@@ -617,30 +620,33 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    if (policy === null) throw new CustomerExperienceRequestError(
-      '微信服务通知模板尚未配置', 'WECHAT_NOTIFICATION_TEMPLATE_NOT_CONFIGURED', 503,
-    )
     const decision = input.platformResult === 'accept' ? 'granted'
       : input.platformResult === 'revoke' ? 'revoked' : 'denied'
     return this.commands.execute({
       scope: context.scope,
       operationScope: 'customer.notification-consent.record',
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint({ ...input, customerId: context.customerId, templateId: policy.serviceTemplateId }),
+      requestFingerprint: fingerprint({ ...input, customerId: context.customerId }),
       resultCodec: objectCodec<{
         decision: 'granted' | 'denied' | 'revoked'; consentVersion: number; changedAt: string
       }>(),
     }, async (transaction) => {
-      const consent = await new CustomerNotificationConsentRepository(transaction).record({
+      const repository = new CustomerNotificationConsentRepository(transaction)
+      const previous = decision === 'granted' ? null : await repository.current(context.customerId, 'wechat', 'transactional_service')
+      const evidence = previous ? { serviceTemplateId: previous.templateId, policyVersion: previous.policyVersion } : policy
+      if (evidence === null || (decision === 'granted' && policy === null)) throw new CustomerExperienceRequestError(
+        '微信服务通知模板尚未配置，且没有可撤回的原授权', 'WECHAT_NOTIFICATION_TEMPLATE_NOT_CONFIGURED', 503,
+      )
+      const consent = await repository.record({
         customerId: context.customerId,
         channel: 'wechat',
         purpose: 'transactional_service',
         decision,
         expectedVersion: input.expectedVersion,
-        policyVersion: policy.policyVersion,
+        policyVersion: evidence.policyVersion,
         source: input.platformResult === 'revoke' ? 'customer_self_service' : 'wechat_authorization',
         sourceReference: input.authorizationContext,
-        templateId: policy.serviceTemplateId,
+        templateId: evidence.serviceTemplateId,
         authorizationContext: input.authorizationContext,
         platformResult: input.platformResult === 'revoke' ? null : input.platformResult,
         platformEventReference: input.platformResult === 'revoke' ? null : input.platformEventReference,
@@ -656,7 +662,7 @@ export class CustomerExperienceService {
         output, guestActor(context), 'customer.notification-consent.recorded',
         'customer_notification_consent', consent.id, context.businessDate,
         { channel: 'wechat', purpose: 'transactional_service', decision,
-          authorizationContext: input.authorizationContext, policyVersion: policy.policyVersion },
+          authorizationContext: input.authorizationContext, policyVersion: evidence.policyVersion },
       )
     })
   }

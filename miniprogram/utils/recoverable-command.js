@@ -15,12 +15,12 @@ function checksum(text) {
   return `${(a >>> 0).toString(36)}-${(b >>> 0).toString(36)}`
 }
 
-function recoverableGuestCommand(operation, body, send) {
+function recoverableGuestCommand(operation, body, send, options) {
   const session = getTableSession()
   // cartScope is an opaque, non-authorizing table-session identifier. Never
   // persist QR credentials, cookies, customer text or an authorization token here.
   const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
-  const scope = JSON.stringify([session.cartScope || session.scanNonce || 'unbound', principal.principalId || principal.memberId || 'guest'])
+  const scope = JSON.stringify([options && options.customerOnly ? 'customer' : session.cartScope || session.scanNonce || 'unbound', principal.principalId || principal.memberId || 'guest'])
   const storageKey = `mbox.command.v1:${checksum(scope)}:${checksum(operation + JSON.stringify(body))}`
   if (flights.has(storageKey)) return flights.get(storageKey)
   let key = attempts.get(storageKey)
@@ -34,7 +34,7 @@ function recoverableGuestCommand(operation, body, send) {
   }
   const promise = Promise.resolve().then(() => send(key)).then((result) => { clear(); return result }, (error) => {
     const status = Number(error && (error.statusCode || error.status))
-    if (status >= 400 && status < 500 && ![408, 409, 429].includes(status)) clear()
+    if (status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status)) clear()
     throw error
   }).finally(() => flights.delete(storageKey))
   flights.set(storageKey, promise)

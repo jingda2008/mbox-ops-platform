@@ -1,3 +1,4 @@
+import { NotificationChannelUnavailableError, notificationAuthorizationErrorReply } from './notification-authorization-http.js'
 import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import type { JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
@@ -19,6 +20,7 @@ interface Options {
 interface Result { id:string;notificationType:WechatMemberServiceNotificationType;decision:'granted'|'denied'|'revoked';authorizationVersion:number;changedAt:string }
 
 export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Options> = async (app,options) => {
+  app.setErrorHandler((error, _request, reply) => { const handled = notificationAuthorizationErrorReply(error, reply); if (handled) return handled; throw error })
   app.get('/public/mini/wechat-member-service-notification-authorizations',async(request,reply)=>{
     const context=await options.resolvePublicContext(request)
     const authorizations=await options.transactions.run(context.scope,(transaction)=>(
@@ -28,9 +30,7 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
   })
   app.post('/public/mini/wechat-member-service-notification-authorizations',async(request,reply)=>{
     const context=await options.resolvePublicContext(request)
-    if(!options.channelConfigured)return reply.status(503).send({
-      error:{code:'WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED',message:'正式微信订阅消息配置尚未完整启用'},
-    })
+
     try {
       const body=object(request.body)
       const input={
@@ -46,6 +46,7 @@ export const wechatMemberServiceNotificationApiPlugin: FastifyPluginAsync<Option
         scope:context.scope,operationScope:'customer.wechat-member-service-notification-authorization.record',
         idempotencyKey,requestFingerprint:fingerprint({...input,customerId:context.customerId}),resultCodec,
       },async(transaction)=>{
+        if (!options.channelConfigured && input.platformResult === 'accept') throw new NotificationChannelUnavailableError('WECHAT_MEMBER_SERVICE_NOTIFICATION_NOT_CONFIGURED')
         const authorization=await new WechatMemberServiceNotificationRepository(transaction).recordAuthorization({customerId:context.customerId,...input})
         const result:Result={id:authorization.id,notificationType:authorization.notificationType,
           decision:authorization.decision!,authorizationVersion:authorization.authorizationVersion,changedAt:authorization.changedAt!}

@@ -1,7 +1,7 @@
 import type { JsonObject } from './command-executor.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
 import { ScopedPostgresTransactionRunner } from './transaction-runner.js'
-import type { NotificationChannel, NotificationRecipientType } from './notification-repository.js'
+import { assertRecipientEligible, NotificationPolicyError, type NotificationChannel, type NotificationRecipientType } from './notification-repository.js'
 
 export interface ClaimedNotification {
   id: string
@@ -89,6 +89,12 @@ export class NotificationWorker {
 
     for (const notification of batch.claimed) {
       try {
+        // A queued message is not continuing consent or employee authority.
+        // Reuse the same scope/recipient checks as creation at the last local
+        // handoff boundary, including retries of a previously claimed batch.
+        await this.transactions.run(scope, transaction => assertRecipientEligible(
+          transaction, notification.channel, { type: notification.recipientType, id: notification.recipientId },
+        ))
         if(await deliver({ ...notification, idempotencyKey: notification.businessKey })!==undefined)throw new NotificationDeliveryError('delivery_receipt_invalid')
         const delivered = await this.transactions.run(scope, (transaction) => markDelivered(
           transaction, notification.id, workerId,
@@ -96,12 +102,12 @@ export class NotificationWorker {
         if (delivered) result.delivered.push(notification.id)
         else result.lost.push(notification.id)
       } catch (error) {
-        const terminal = notification.attempts >= notification.maxAttempts
+        const terminal = error instanceof NotificationPolicyError || notification.attempts >= notification.maxAttempts
         const marked = await this.transactions.run(scope, (transaction) => markFailure(
           transaction,
           notification,
           workerId,
-          stableFailureCode(error),
+          error instanceof NotificationPolicyError ? 'recipient_no_longer_eligible' : stableFailureCode(error),
           terminal,
           exponentialDelay(baseRetryDelayMs, maxRetryDelayMs, notification.attempts),
         ))

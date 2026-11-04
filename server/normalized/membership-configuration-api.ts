@@ -36,6 +36,8 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
     const result=await options.commands.execute<JsonObject>({scope:context.scope,operationScope:'membership.notification.publish',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,id,input}),resultCodec:{encode:value=>value,decode:value=>value as JsonObject}},async transaction=>{
       const value=await publishMembershipNotification(transaction,id,context.employeeId,input)
       return {result:value,auditEvents:[{actor:{type:'employee',employeeId:context.employeeId},action:'membership.notification.publish',objectType:'wechat_notification_policy',objectId:id,businessDate:context.businessDate,afterData:{...value,reason:input.reason}}],outboxMessages:[]}
+    },async transaction=>{
+      await (options.createStaffAccessRepository?.(transaction)??new StaffAccessRepository(transaction)).assertPermission(context.employeeId,'loyalty.policy.publish')
     })
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
@@ -46,7 +48,7 @@ export const membershipConfigurationApiPlugin:FastifyPluginAsync<MembershipConfi
     if(content.domain!=='wechat_notifications')throw invalid('只能在这里新建微信通知草稿')
     assertContent(content)
     const reason=text(body.reason,'新建原因',2,500)
-    const created=await options.transactions.run(context.scope,async(transaction)=>{
+    const created=await authorizedTransactions(options,context,'loyalty.configuration.edit').run(context.scope,async(transaction)=>{
       await transaction.query('SELECT id FROM mbox.stores WHERE tenant_id=$1::uuid AND id=$2::uuid FOR UPDATE',[transaction.scope.tenantId,transaction.scope.storeId])
       const inserted=(await transaction.query<{id:string}>(
         'SELECT id FROM mbox.create_managed_notification_draft($1::uuid,$2::jsonb,$3)',

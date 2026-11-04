@@ -15,7 +15,7 @@ afterEach(async () => {
 
 describe('WeChat loyalty notification API', () => {
   it('fails closed without formal channel configuration and exposes no legacy consent as authorization', async () => {
-    const execute = vi.fn()
+    const execute = vi.fn(async (_command, handler) => handler({ scope, query } as never))
     const query = vi.fn()
     const app = Fastify(); apps.push(app)
     await app.register(wechatLoyaltyNotificationApiPlugin, {
@@ -56,6 +56,6 @@ describe('WeChat loyalty notification API', () => {
     })
     expect(record.statusCode).toBe(503)
     expect(record.json()).toMatchObject({ code: 'WECHAT_NOTIFICATION_NOT_CONFIGURED' })
-    expect(execute).not.toHaveBeenCalled()
+    expect(execute).toHaveBeenCalledOnce(); expect(query).not.toHaveBeenCalled()
   })
 })

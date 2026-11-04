@@ -163,11 +163,9 @@ export class ReservationPerformanceNotificationRepository {
       FROM mbox.reservations reservation
       JOIN mbox.reservation_performance_notification_policies policy
         ON policy.tenant_id=reservation.tenant_id AND policy.store_id=reservation.store_id
-       AND policy.id=$5::uuid AND policy.status='published'
+       AND policy.id=$5::uuid
        AND policy.notification_type='reservation_performance_revised'
        AND policy.authorization_context='reservation'
-       AND policy.effective_from<=clock_timestamp()
-       AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
       LEFT JOIN LATERAL (
         SELECT wechat_identity.external_identity_id
         FROM mbox.wechat_identities wechat_identity
@@ -205,8 +203,10 @@ export class ReservationPerformanceNotificationRepository {
         AND mbox.canonical_customer_id(
           reservation.tenant_id,reservation.store_id,reservation.customer_id
         )=mbox.canonical_customer_id(reservation.tenant_id,reservation.store_id,$3::uuid)
-        AND reservation.preferred_schedule_id IS NOT NULL
-        AND reservation.status IN ('pending','confirmed','arrived','seated')
+        AND (($6::text<>'accept' AND latest.authorization_version IS NOT NULL) OR (
+          reservation.preferred_schedule_id IS NOT NULL AND reservation.status IN ('pending','confirmed','arrived','seated')
+          AND policy.status='published' AND policy.effective_from<=clock_timestamp()
+          AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())))
       -- The policy is SELECT-only; its exact template/version is FK-bound and rechecked before delivery.
       FOR KEY SHARE OF reservation
     `, [
@@ -215,6 +215,7 @@ export class ReservationPerformanceNotificationRepository {
       input.customerId,
       input.reservationPublicId,
       input.policyId,
+      input.platformResult,
     ])
     const row = selected.rows[0]
     if (row === undefined) throw new ReservationPerformanceNotificationAuthorizationError(

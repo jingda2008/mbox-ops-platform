@@ -45,7 +45,7 @@ integration('actual-goods refund reward review with restricted LOGIN',()=>{
  async function grantPermissions(){
   const role=randomUUID();await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'FINANCIAL_REVIEW_TEST','Synthetic finance reviewer')",[role,...Object.values(scope)])
   for(const employee of [base.drafter,base.approver,base.publisher])await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 hour')",[...Object.values(scope),employee,role])
-  for(const code of ['reconciliation.view','reconciliation.manage','loyalty.accrual.exception.view','loyalty.accrual.request','loyalty.accrual.approve','loyalty.operations.control']){
+  for(const code of ['reconciliation.view','reconciliation.manage','loyalty.accrual.exception.view','loyalty.accrual.request','loyalty.accrual.approve','loyalty.operations.control','loyalty.operations.view']){
    const id=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'finance') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[...Object.values(scope),code])).rows[0].id
    await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[...Object.values(scope),role,id])
   }

@@ -52,7 +52,9 @@ function fixture(overrides: Partial<NormalizedNotificationApiOptions> = {}) {
     execute: vi.fn(async <Result>(
       _command: Readonly<IdempotentCommand<Result>>,
       handler: (value: ScopedTransaction) => Promise<CommandOutcome<Result>>,
+      beforeClaim?: (value: ScopedTransaction) => Promise<void>,
     ) => {
+      await beforeClaim?.(transaction)
       const outcome = await handler(transaction)
       outcomes.push(outcome as CommandOutcome<unknown>)
       return { value: outcome.result, replayed: false }
@@ -67,6 +69,7 @@ function fixture(overrides: Partial<NormalizedNotificationApiOptions> = {}) {
       businessDate: '2026-08-11',
       capabilities: ['notification.view', 'notification.view_all', 'notification.retry'],
     }),
+    createStaffAccessRepository: () => ({ assertPermission: vi.fn() }),
     createNotificationRepository: () => repository,
     ...overrides,
   }
@@ -93,6 +96,7 @@ describe('normalizedNotificationApiPlugin', () => {
         statuses: ['failed', 'pending'],
         recipient: { type: 'employee', id: employeeId },
       }),
+      employeeId,
     )
   })
 
@@ -138,6 +142,7 @@ describe('normalizedNotificationApiPlugin', () => {
     expect(value.notificationQuery.list).toHaveBeenCalledWith(
       { tenantId, storeId },
       expect.objectContaining({ recipient: { type: 'employee', id: employeeId } }),
+      employeeId,
     )
 
     const wider = await value.app.inject({

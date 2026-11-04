@@ -89,7 +89,7 @@ function validPayload() {
 
 async function application(
   channelConfigured: boolean,
-  execute: (...args: any[]) => Promise<any> = async () => { throw new Error('execute should not run') },
+  execute: (...args: any[]) => Promise<any> = async (_command, handler) => handler({ scope, query: vi.fn() }),
 ) {
   const app = Fastify()
   await app.register(reservationPerformanceNotificationApiPlugin, {

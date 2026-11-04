@@ -125,59 +125,52 @@ async function getMembershipTerms() {
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
 async function recordBirthdayBenefitConsent(birthdayMonthDay) {
-  return (await publicRequest('/api/public/mini/annual-benefits/birthday-consent', {
-    method: 'PUT', headers: { 'idempotency-key': randomId('birthday-benefit-consent') }, data: { birthdayMonthDay },
-  })).data
+  await ensureCustomerSession(false)
+  return (await recoverableGuestCommand('birthday-benefit-consent', { birthdayMonthDay }, key => publicRequest('/api/public/mini/annual-benefits/birthday-consent', {
+    method: 'PUT', headers: { 'idempotency-key': key }, data: { birthdayMonthDay },
+  }), { customerOnly: true })).data
 }
 async function withdrawBirthdayBenefitConsent(reason) {
-  return (await publicRequest('/api/public/mini/annual-benefits/birthday-consent/withdraw', {
-    method: 'POST', headers: { 'idempotency-key': randomId('birthday-benefit-consent-withdraw') },
-    data: { reason: reason || '顾客本人撤回生日礼遇授权' },
-  })).data
+  const data = { reason: reason || '顾客本人撤回生日礼遇授权' }
+  await ensureCustomerSession(false)
+  return (await recoverableGuestCommand('birthday-benefit-consent-withdraw', data, key => publicRequest('/api/public/mini/annual-benefits/birthday-consent/withdraw', {
+    method: 'POST', headers: { 'idempotency-key': key }, data,
+  }), { customerOnly: true })).data
 }
 async function getNotificationConsent() { return (await publicRequest('/api/public/mini/notification-consent')).data }
 async function recordNotificationConsent(input) {
-  return (await publicRequest('/api/public/mini/notification-consent', {
-    method: 'POST', headers: { 'idempotency-key': randomId('notification-consent') }, data: input,
-  })).data
+  await ensureCustomerSession(false)
+  return (await recoverableGuestCommand('notification-consent', input, key => publicRequest('/api/public/mini/notification-consent', {
+    method: 'POST', headers: { 'idempotency-key': key }, data: input,
+  }), { customerOnly: true })).data
 }
 async function getOfficialPointsNotifications() { return (await publicRequest('/api/public/mini/official-points-notifications')).data }
 async function setOfficialPointsNotifications(input) { return (await publicRequest('/api/public/mini/official-points-notifications', { method: 'POST', data: input })).data }
 async function getWechatNotificationAuthorizations() {
   return (await publicRequest('/api/public/mini/wechat-notification-authorizations')).data
 }
-async function recordWechatNotificationAuthorization(input) {
-  const storageKey = `mbox.wechat.notification.authorization.${input.notificationType}.${input.policyId}`
-  const stored = wx.getStorageSync(storageKey)
-  const samePayload = stored && typeof stored === 'object'
-    && stored.policyId === input.policyId
-    && stored.policyVersion === input.policyVersion
-    && stored.templateId === input.templateId
-    && stored.expectedVersion === input.expectedVersion
-    && stored.platformResult === input.platformResult
-  const attempt = samePayload ? stored : Object.assign({}, input, {
-    platformEventReference: input.platformEventReference || randomId(`wx-subscribe-${input.notificationType}`),
-    idempotencyKey: randomId(`wechat-notification-${input.notificationType}`),
-  })
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest('/api/public/mini/wechat-notification-authorizations', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: {
-        notificationType: attempt.notificationType,
-        policyId: attempt.policyId,
-        policyVersion: attempt.policyVersion,
-        templateId: attempt.templateId,
-        expectedVersion: attempt.expectedVersion,
-        platformResult: attempt.platformResult,
-        platformEventReference: attempt.platformEventReference,
-      },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
+async function recoverNotificationAuthorization(kind, path, input, legacyKey) {
+  await ensureCustomerSession(false)
+  const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
+  if (!principal.principalId && !principal.memberId) {
+    throw Object.assign(new Error('请先确认本人微信身份再操作通知授权'), { code: 'NOTIFICATION_IDENTITY_REQUIRED', statusCode: 401 })
   }
+  const legacy = wx.getStorageSync(legacyKey)
+  if (legacy && typeof legacy === 'object') {
+    throw Object.assign(new Error('有旧版授权请求结果待核对，请先查看授权状态并联系工作人员核实，暂不重复提交'), { code: 'NOTIFICATION_LEGACY_ATTEMPT_REVIEW_REQUIRED', statusCode: 409 })
+  }
+  return (await recoverableGuestCommand('wechat-authorization:' + kind, input, key => publicRequest(path, {
+    method: 'POST', headers: { 'idempotency-key': key },
+    data: Object.assign({}, input, { platformEventReference: input.platformEventReference || key }),
+  }), { customerOnly: true })).data
+}
+async function recordWechatNotificationAuthorization(input) {
+  return recoverNotificationAuthorization('loyalty', '/api/public/mini/wechat-notification-authorizations', {
+    notificationType: input.notificationType,
+    policyId: input.policyId, policyVersion: input.policyVersion, templateId: input.templateId,
+    expectedVersion: input.expectedVersion, platformResult: input.platformResult,
+    ...(input.platformEventReference ? { platformEventReference: input.platformEventReference } : {}),
+  }, `mbox.wechat.notification.authorization.${input.notificationType}.${input.policyId}`)
 }
 async function getWechatMemberServiceNotificationAuthorizations() {
   return (await publicRequest('/api/public/mini/wechat-member-service-notification-authorizations')).data
@@ -187,37 +180,12 @@ async function getWechatNotificationPrompt(context) {
   return (await publicRequest(`/api/public/mini/wechat-notification-prompt?context=${encodeURIComponent(value)}`)).data
 }
 async function recordWechatMemberServiceNotificationAuthorization(input) {
-  const storageKey = `mbox.wechat.member-service-notification.authorization.${input.notificationType}.${input.policyId}`
-  const stored = wx.getStorageSync(storageKey)
-  const samePayload = stored && typeof stored === 'object'
-    && stored.policyId === input.policyId
-    && stored.policyVersion === input.policyVersion
-    && stored.templateId === input.templateId
-    && stored.expectedVersion === input.expectedVersion
-    && stored.platformResult === input.platformResult
-  const attempt = samePayload ? stored : Object.assign({}, input, {
-    platformEventReference: input.platformEventReference || randomId(`wx-member-service-subscribe-${input.notificationType}`),
-    idempotencyKey: randomId(`wechat-member-service-notification-${input.notificationType}`),
-  })
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest('/api/public/mini/wechat-member-service-notification-authorizations', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: {
-        notificationType: attempt.notificationType,
-        policyId: attempt.policyId,
-        policyVersion: attempt.policyVersion,
-        templateId: attempt.templateId,
-        expectedVersion: attempt.expectedVersion,
-        platformResult: attempt.platformResult,
-        platformEventReference: attempt.platformEventReference,
-      },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverNotificationAuthorization('member-service', '/api/public/mini/wechat-member-service-notification-authorizations', {
+    notificationType: input.notificationType,
+    policyId: input.policyId, policyVersion: input.policyVersion, templateId: input.templateId,
+    expectedVersion: input.expectedVersion, platformResult: input.platformResult,
+    ...(input.platformEventReference ? { platformEventReference: input.platformEventReference } : {}),
+  }, `mbox.wechat.member-service-notification.authorization.${input.notificationType}.${input.policyId}`)
 }
 async function getProductRestrictions() {
   return (await publicRequest('/api/public/mini/product-restrictions')).data
@@ -634,38 +602,12 @@ async function getReservationPerformanceNotificationAuthorizations() {
 }
 
 async function recordReservationPerformanceNotificationAuthorization(input) {
-  const storageKey = `mbox.reservation.performance.notification.${input.reservationPublicId}.${input.policyId}`
-  const stored = wx.getStorageSync(storageKey)
-  const samePayload = stored && typeof stored === 'object'
-    && stored.reservationPublicId === input.reservationPublicId
-    && stored.policyId === input.policyId
-    && stored.policyVersion === input.policyVersion
-    && stored.templateId === input.templateId
-    && stored.expectedVersion === input.expectedVersion
-    && stored.platformResult === input.platformResult
-  const attempt = samePayload ? stored : Object.assign({}, input, {
-    platformEventReference: input.platformEventReference || randomId('wx-subscribe-reservation-performance'),
-    idempotencyKey: randomId('reservation-performance-notification'),
-  })
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest('/api/public/reservation/performance-notification-authorizations', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: {
-        reservationPublicId: attempt.reservationPublicId,
-        policyId: attempt.policyId,
-        policyVersion: attempt.policyVersion,
-        templateId: attempt.templateId,
-        expectedVersion: attempt.expectedVersion,
-        platformResult: attempt.platformResult,
-        platformEventReference: attempt.platformEventReference,
-      },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverNotificationAuthorization('reservation', '/api/public/reservation/performance-notification-authorizations', {
+    reservationPublicId: input.reservationPublicId,
+    policyId: input.policyId, policyVersion: input.policyVersion, templateId: input.templateId,
+    expectedVersion: input.expectedVersion, platformResult: input.platformResult,
+    ...(input.platformEventReference ? { platformEventReference: input.platformEventReference } : {}),
+  }, `mbox.reservation.performance.notification.${input.reservationPublicId}.${input.policyId}`)
 }
 
 const MENU_PAGE_SIZE = 100

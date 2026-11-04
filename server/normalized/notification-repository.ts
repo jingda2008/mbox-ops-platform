@@ -352,7 +352,7 @@ async function assertSourceOutbox(transaction: ScopedTransaction, id: string) {
   if (result.rowCount !== 1) throw new NotificationSourceOutboxError()
 }
 
-async function assertRecipientEligible(
+export async function assertRecipientEligible(
   transaction: ScopedTransaction,
   channel: NotificationChannel,
   recipient: Readonly<NotificationRecipient>,

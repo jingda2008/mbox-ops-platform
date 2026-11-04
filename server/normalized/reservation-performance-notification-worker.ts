@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { boundedNotificationOperation } from './notification-operation-timeout.js'
 import { notificationLocalTime as providerTime } from './notification-local-time.js'
 import type { WechatMiniProgramNotificationRecipientResolver } from './wechat-loyalty-notification-worker.js'
 import type { WechatTemplateMessageDelivery } from './wechat-subscription-message-adapter.js'
@@ -40,7 +41,9 @@ export class ReservationPerformanceNotificationWorker {
     batchSize = 50,
   ): Promise<ReservationPerformanceNotificationBatch> {
     validate(workerId, batchSize)
-    await this.delivery.preflight?.()
+    batchSize = Math.min(batchSize, 5)
+    const recovered = await this.transactions.run(scope, (transaction) => recoverAbandoned(transaction, batchSize))
+    if (this.delivery.preflight) await boundedNotificationOperation(this.delivery.preflight(), 5000)
     const claimed = await this.transactions.run(scope, (transaction) => claim(
       transaction, workerId, batchSize,
     ))
@@ -49,19 +52,22 @@ export class ReservationPerformanceNotificationWorker {
       claimed: claimed.jobs.length,
       accepted: [],
       rejected: [],
-      unknown: [],
+      unknown: recovered,
       suppressed: claimed.suppressed,
     }
     for (const job of claimed.jobs) {
       let outcome: Awaited<ReturnType<WechatTemplateMessageDelivery['sendTemplate']>>
       try {
-        const recipient = await this.recipients.resolveMiniProgramNotificationRecipient(
+        const recipient = await boundedNotificationOperation(this.recipients.resolveMiniProgramNotificationRecipient(
           job.customer_id,
           job.identity_external_id,
-        )
+        ), 2000)
+        const allowed = recipient !== null && await this.transactions.run(scope,
+          (transaction) => stillSendable(transaction, job.id, workerId), { readOnly: true })
         outcome = recipient === null
           ? { outcome: 'provider_rejected', providerReference: null, errorCode: 'recipient_unavailable' }
-          : await this.delivery.sendTemplate({
+          : !allowed ? { outcome: 'provider_rejected', providerReference: null, errorCode: 'authorization_or_scope_changed' }
+          : await boundedNotificationOperation(this.delivery.sendTemplate({
               jobId: job.id,
               recipientOpenId: recipient.openId,
               templateId: job.template_id,
@@ -72,7 +78,7 @@ export class ReservationPerformanceNotificationWorker {
                   ? '原演出已取消' : providerTime(job.resulting_starts_at),
                 [job.reservation_time_data_key]: providerTime(job.reservation_arrival_at),
               },
-            })
+            }), 5000)
       } catch {
         outcome = { outcome: 'unknown', providerReference: null, errorCode: 'delivery_outcome_unknown' }
       }
@@ -105,47 +111,7 @@ async function claim(transaction: ScopedTransaction, workerId: string, batchSize
             AND used.authorization_id=job.authorization_id
         )
         OR NOT EXISTS(
-          SELECT 1
-          FROM mbox.reservation_performance_notification_authorizations grant_record
-          JOIN mbox.reservation_performance_notification_policies policy
-            ON policy.tenant_id=grant_record.tenant_id AND policy.store_id=grant_record.store_id
-           AND policy.id=grant_record.policy_id
-          JOIN mbox.wechat_identities identity
-            ON identity.tenant_id=grant_record.tenant_id AND identity.store_id=grant_record.store_id
-           AND identity.external_identity_id=grant_record.identity_external_id
-           AND identity.channel='mini_program' AND identity.revoked_at IS NULL
-          JOIN mbox.customer_identities customer_identity
-            ON customer_identity.tenant_id=identity.tenant_id
-           AND customer_identity.store_id=identity.store_id
-           AND customer_identity.identity_kind='wechat'
-           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
-           AND customer_identity.status='active'
-           AND mbox.canonical_customer_id(
-             customer_identity.tenant_id,customer_identity.store_id,customer_identity.customer_id
-           )=grant_record.canonical_customer_id
-          WHERE grant_record.tenant_id=job.tenant_id AND grant_record.store_id=job.store_id
-            AND grant_record.id=job.authorization_id AND grant_record.decision='granted'
-            AND grant_record.reservation_id=job.reservation_id
-            AND grant_record.canonical_customer_id=job.customer_id
-            AND grant_record.authorization_context='reservation'
-            AND grant_record.notification_type='reservation_performance_revised'
-            AND grant_record.template_id=job.template_id
-            AND policy.id=job.policy_id AND policy.status='published'
-            AND policy.authorization_context='reservation'
-            AND policy.notification_type='reservation_performance_revised'
-            AND policy.template_id=job.template_id
-            AND policy.effective_from<=clock_timestamp()
-            AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
-            AND grant_record.id=(
-              SELECT latest.id
-              FROM mbox.reservation_performance_notification_authorizations latest
-              WHERE latest.tenant_id=grant_record.tenant_id
-                AND latest.store_id=grant_record.store_id
-                AND latest.canonical_customer_id=grant_record.canonical_customer_id
-                AND latest.reservation_id=grant_record.reservation_id
-                AND latest.policy_id=grant_record.policy_id
-              ORDER BY latest.authorization_version DESC,latest.id DESC LIMIT 1
-            )
+          ${currentAuthorizationSql}
         )
       )
     RETURNING id
@@ -259,4 +225,76 @@ function validate(workerId: string, batchSize: number) {
 function normalizeCode(value: string): string {
   const normalized = value.trim().toLowerCase()
   return /^[a-z][a-z0-9_.:-]{2,95}$/.test(normalized) ? normalized : 'provider_error_invalid'
+}
+
+// Shared by claim filtering and the final check after recipient resolution.
+const currentAuthorizationSql = `
+          SELECT 1
+          FROM mbox.reservation_performance_notification_authorizations grant_record
+          JOIN mbox.reservation_performance_notification_policies policy
+            ON policy.tenant_id=grant_record.tenant_id AND policy.store_id=grant_record.store_id
+           AND policy.id=grant_record.policy_id
+          JOIN mbox.wechat_identities identity
+            ON identity.tenant_id=grant_record.tenant_id AND identity.store_id=grant_record.store_id
+           AND identity.external_identity_id=grant_record.identity_external_id
+           AND identity.channel='mini_program' AND identity.revoked_at IS NULL
+          JOIN mbox.customer_identities customer_identity
+            ON customer_identity.tenant_id=identity.tenant_id
+           AND customer_identity.store_id=identity.store_id
+           AND customer_identity.identity_kind='wechat'
+           AND customer_identity.identity_hash=encode(sha256(convert_to('wechat:'||identity.principal_id,'UTF8')),'hex')
+           AND customer_identity.status='active'
+           AND mbox.canonical_customer_id(
+             customer_identity.tenant_id,customer_identity.store_id,customer_identity.customer_id
+           )=grant_record.canonical_customer_id
+          WHERE grant_record.tenant_id=job.tenant_id AND grant_record.store_id=job.store_id
+            AND grant_record.id=job.authorization_id AND grant_record.decision='granted'
+            AND grant_record.reservation_id=job.reservation_id
+            AND grant_record.canonical_customer_id=job.customer_id
+            AND grant_record.authorization_context='reservation'
+            AND grant_record.notification_type='reservation_performance_revised'
+            AND grant_record.template_id=job.template_id
+            AND policy.id=job.policy_id AND policy.status='published'
+            AND policy.authorization_context='reservation'
+            AND policy.notification_type='reservation_performance_revised'
+            AND policy.template_id=job.template_id
+            AND policy.effective_from<=clock_timestamp()
+            AND (policy.effective_until IS NULL OR policy.effective_until>clock_timestamp())
+            AND grant_record.id=(
+              SELECT latest.id
+              FROM mbox.reservation_performance_notification_authorizations latest
+              WHERE latest.tenant_id=grant_record.tenant_id
+                AND latest.store_id=grant_record.store_id
+                AND latest.canonical_customer_id=grant_record.canonical_customer_id
+                AND latest.reservation_id=grant_record.reservation_id
+                AND latest.policy_id=grant_record.policy_id
+              ORDER BY latest.authorization_version DESC,latest.id DESC LIMIT 1
+            )
+`
+
+async function stillSendable(transaction: ScopedTransaction, jobId: string, workerId: string): Promise<boolean> {
+  const current = await transaction.query(`
+    SELECT job.id FROM mbox.reservation_performance_notification_jobs job
+    WHERE job.tenant_id=$1::uuid AND job.store_id=$2::uuid AND job.id=$3::uuid
+      AND job.status='sending' AND job.locked_by=$4
+      AND EXISTS(${currentAuthorizationSql})
+  `, [transaction.scope.tenantId, transaction.scope.storeId, jobId, workerId])
+  return current.rowCount === 1
+}
+
+async function recoverAbandoned(transaction: ScopedTransaction, limit: number): Promise<string[]> {
+  const stale = await transaction.query<{id: string; locked_by: string}>(`
+    SELECT id,locked_by FROM mbox.reservation_performance_notification_jobs
+    WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND status='sending'
+      AND locked_at<clock_timestamp()-interval '5 minutes'
+    ORDER BY locked_at,id LIMIT $3 FOR UPDATE SKIP LOCKED
+  `, [transaction.scope.tenantId, transaction.scope.storeId, limit])
+  for (const job of stale.rows) {
+    // The old process may already have reached the provider. Retain the use,
+    // record an unknown outcome and never put this authorization back in queue.
+    await recordOutcome(transaction, job.id, job.locked_by, {
+      outcome: 'unknown', providerReference: null, errorCode: 'worker_interrupted_outcome_unknown',
+    })
+  }
+  return stale.rows.map((job) => job.id)
 }

@@ -1,3 +1,4 @@
+import { NotificationChannelUnavailableError, notificationAuthorizationErrorReply } from './notification-authorization-http.js'
 import { createHash } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import type { JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
@@ -29,6 +30,7 @@ export const wechatLoyaltyNotificationApiPlugin: FastifyPluginAsync<WechatLoyalt
   app,
   options,
 ) => {
+  app.setErrorHandler((error, _request, reply) => { const handled = notificationAuthorizationErrorReply(error, reply); if (handled) return handled; throw error })
   app.get('/public/mini/wechat-notification-authorizations', async (request, reply) => {
     const context = await options.resolvePublicContext(request)
     const authorizations = await options.transactions.run(context.scope, (transaction) => (
@@ -42,10 +44,7 @@ export const wechatLoyaltyNotificationApiPlugin: FastifyPluginAsync<WechatLoyalt
 
   app.post('/public/mini/wechat-notification-authorizations', async (request, reply) => {
     const context = await options.resolvePublicContext(request)
-    if (!options.channelConfigured) return reply.status(503).send({
-      code: 'WECHAT_NOTIFICATION_NOT_CONFIGURED',
-      message: '正式微信订阅消息配置尚未完整启用',
-    })
+
     const body = object(request.body)
     const input = {
       notificationType: enumValue(body.notificationType, WECHAT_LOYALTY_NOTIFICATION_TYPES, '通知类型'),
@@ -65,6 +64,7 @@ export const wechatLoyaltyNotificationApiPlugin: FastifyPluginAsync<WechatLoyalt
         requestFingerprint: fingerprint({ ...input, customerId: context.customerId }),
         resultCodec: authorizationResultCodec,
       }, async (transaction) => {
+        if (!options.channelConfigured && input.platformResult === 'accept') throw new NotificationChannelUnavailableError('WECHAT_NOTIFICATION_NOT_CONFIGURED')
         const recorded = await new WechatLoyaltyNotificationRepository(transaction).recordAuthorization({
           customerId: context.customerId,
           ...input,

@@ -24,9 +24,9 @@ integration('loyalty order financial closure PostgreSQL integration',()=>{
   await runNormalizedMigrations(databaseUrl!)
   pool=new Pool({connectionString:databaseUrl,max:8});runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
   await seedBase(pool)
-  // This fixture also performs emergency pause/resume through the real authorization boundary.
-  await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'loyalty.operations.control','Synthetic emergency controller') ON CONFLICT DO NOTHING",[base.tenant,base.store])
-  await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'grant','Isolated emergency-control fixture',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code='loyalty.operations.control'",[base.tenant,base.store,base.approver])
+  // This fixture reads state before emergency pause/resume; both permissions are required.
+  await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'loyalty.operations.control','Synthetic emergency controller'),($1,$2,'loyalty.operations.view','Synthetic emergency viewer') ON CONFLICT DO NOTHING",[base.tenant,base.store])
+  await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'grant','Isolated emergency-control fixture',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('loyalty.operations.control','loyalty.operations.view')",[base.tenant,base.store,base.approver])
   businessDate=await runner.run(scope,async tx=>(await tx.query<{day:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS day',[base.tenant,base.store])).rows[0]!.day)
   const commands=new NormalizedCommandExecutor(runner)
   service=new PaymentCommandService(commands,{assertEmployeeCapability:async()=>{},assertEmployeeOrderAccess:async()=>{},assertRefundRequestLimit:async()=>{},assertRefundApproval:async()=>{}},new NormalizedProviderObservationAuthority())

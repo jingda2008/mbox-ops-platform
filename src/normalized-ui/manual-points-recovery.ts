@@ -10,7 +10,7 @@ export class ManualPointsRecovery {
  private readonly storage:StoragePort
  constructor(scopeKey:string,employeeId:string,storage:StoragePort){this.scopeKey=scopeKey;this.employeeId=employeeId;this.storage=storage;this.storageKey=`mbox.manual-points.v1:${scopeKey}:${employeeId}`}
  pending():ManualPointsIntent|null{
-  const raw=this.storage.getItem(this.storageKey);if(!raw)return null
+  const raw=this.storage.getItem(this.storageKey);if(raw===null)return null
   let value:unknown;try{value=JSON.parse(raw)}catch{throw new Error('原积分请求损坏，请保留记录并联系管理员')}
   if(!valid(value,this.scopeKey,this.employeeId))throw new Error('原积分请求无法核验，请保留记录并联系管理员')
   return value

@@ -12,7 +12,7 @@ export function activityProductionJournal(api:StaffActionsApiPort,station:'bar'|
   if(pointer){
     if(!storage)throw new Error('设备无法保留原取餐记录，请恢复存储后继续')
     const raw=storage.getItem(pointer)
-    if(raw){try{const value=JSON.parse(raw) as Origin;if(typeof value.staffSessionId!=='string'||!/^[0-9a-f-]{36}$/i.test(value.staffSessionId)||typeof value.commandScope!=='string'||!/^[a-f0-9]{64}$/.test(value.commandScope))throw new Error();origin=value}catch{throw new Error('原取餐登录记录损坏，请交由领班核对，不要重新取餐')}}
+    if(raw!==null){try{const value=JSON.parse(raw) as Origin;if(typeof value.staffSessionId!=='string'||!/^[0-9a-f-]{36}$/i.test(value.staffSessionId)||typeof value.commandScope!=='string'||!/^[a-f0-9]{64}$/.test(value.commandScope))throw new Error();origin=value}catch{throw new Error('原取餐登录记录损坏，请交由领班核对，不要重新取餐')}}
   }
   const create=(old:Origin|null)=>new DurableStaffCommand<ActivityProductionCommand,ActivityProductionResult>(
     `activity-production:${station}:${old?.commandScope??board?.commandScope??fallback}`,

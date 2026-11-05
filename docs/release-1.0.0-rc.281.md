@@ -1,5 +1,25 @@
 # M-BOX 1.0.0-rc.281 后台发布
 
+## 实际发布结果
+
+2026-11-06 02:18:24 CST，[PR #421](https://github.com/jingda2008/mbox-ops-platform/pull/421) 合并；03:24:02 CST 标准流程完成后台及员工 Web 部署，发布状态于03:24:31 CST记录为completed。03:25:20 CST独立只读回查39项全部通过。
+
+| 证据 | 实际结果 |
+|---|---|
+| 发布版本 / 提交 | `v1.0.0-rc.281` / `54c486a44c885008eeed28de5274778bf14e0074`；合并代码树与候选 `62714277d9a6502c97033ca4c060d7af45b0c1bc` 完全一致 |
+| 准确候选 CI / 复核 | [CI #42078175455](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42078175455) 成功；[作者代码复核](https://github.com/jingda2008/mbox-ops-platform/pull/421#pullrequestreview-5789448462)完成，非独立外部批准 |
+| 主线 / 标签 / Release | [主线 CI #42082956862](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42082956862)第二次成功；[标签 CI #42083014330](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42083014330)及[Release #42083014459](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42083014459)成功，均对应发布提交 |
+| 不可变镜像身份 | `sha256:50ef13eb95b854ce53bb858d05246945cb22a1a0b28f779aa9fcef66e3651c2d` |
+| 平台镜像 | `sha256:f73969fe3e81e2f208484b45f8da61a162cc2a0d43823bd7e6bb46f3e7dd75b5` |
+| 数据库 / 配置 | schema299、迁移内容不变；门店与菜单配置均replayed=true；17启用员工权限、14类配置摘要保持 |
+| 备份 / 回退 | `/opt/mbox/backups/mbox-20261105T192144Z-g3vZAs.dump`；已核验私有OSS；application_image模式，回退目标为rc280，旧镜像和发布身份保留，不回滚营业事实 |
+| 部署及只读回查 | 候选/正式ready及浏览器深路由通过；订单、明细、桌次、参与记录、支付退款摘要保持；24开放桌次完全相同、37历史移动事实未改写；网站容器、镜像和启动时间不变 |
+| 证据归档 | 生产release-state=completed；备份、部署与完成阶段OSS核验均verified=true；本地postdeploy-verification.json为39/39通过 |
+
+主线CI首轮数据库4360项、HTTP及架构均通过，但数据库任务整体超过25分钟而取消。保留首轮日志和超时注释，在同一提交重跑未通过任务及依赖，第二次全部成功后才执行生产部署；未修改代码、放宽时限或跳过门禁。主线及标签最终数据库均4360项通过、零跳过；浏览器均160基础通过、45条件跳过全部在专用场景通过，质量、性能及verify通过。主线image条件跳过，生产镜像来自已成功的标签image任务。
+
+本次仅后台及Web发布，原生客户端和小程序未发布，宣传网站保持现状；未执行现场桌台/订单/员工账号写入或真实支付、退款、通知、打印测试。39项回查证明版本、健康及数据保持，不替代每项业务的现场验收。下方保留发布准备阶段记录，文中待执行措辞仅表示当时状态。
+
 ## 范围与候选
 
 用户授权检查近期改动、合并并部署后台。候选来自 PR #421：此前业务 HEAD `948c18e4f5ec3b9bc95473ae94a50ac60fc378b6`，完整 CI #42071356257 成功；4360 数据库用例通过、零跳过，HTTP及性能通过，浏览器160基础通过、45条件跳过全部专门补验。各阶段作者代码复核已留证，非独立外部批准。

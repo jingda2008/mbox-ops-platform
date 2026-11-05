@@ -1,3 +1,4 @@
+import {readRecoveryJournal} from './recovery-journal.js'
 type StoredAttempt<B,R>={key:string;body:B;result?:R}
 type StoragePort=Pick<Storage,'getItem'|'setItem'|'removeItem'>
 const memory=new Map<string,unknown>()
@@ -13,9 +14,11 @@ export class DurableStaffCommand<B,R>{
     this.storageKey=`mbox.staff-command.v1:${namespace}`
   }
   pending():StoredAttempt<B,R>|null{
-    try{const text=this.storage?.getItem(this.storageKey);if(text){const value=JSON.parse(text);if(value&&typeof value.key==='string'&&value.key.length>0&&'body' in value)return value;if(this.requirePersistent)throw new Error('操作记录损坏')}}
-    catch{if(this.requirePersistent)throw new Error('操作记录暂时无法读取，请恢复浏览器存储后再试')}
-    return memory.get(this.storageKey) as StoredAttempt<B,R>??null
+    return readRecoveryJournal(this.storage,this.storageKey,(value):value is StoredAttempt<B,R>=>{
+      if(!value||typeof value!=='object'||Array.isArray(value))return false
+      const row=value as Partial<StoredAttempt<B,R>>
+      return typeof row.key==='string'&&row.key.trim().length>0&&row.body!==undefined
+    },memory.get(this.storageKey) as StoredAttempt<B,R>??null)
   }
   async submit(body:B):Promise<R>{
     const previous=this.pending()

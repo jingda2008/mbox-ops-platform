@@ -2063,6 +2063,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await remake(repo=>repo.releaseUnmade({batchId:batch.id,unitIds:[batch.units[0]!.id],reason:'一份尚未做，本批不再制作'}))
     await remake((_repo,tx)=>new PrintTicketSourceRepository(tx).materializeProductionNotice(notices[0].id,notices[0].aggregate_id))
     expect((await pool.query('SELECT print_snapshot FROM mbox.print_jobs WHERE source_outbox_message_id=$1',[notices[0].id])).rows[0].print_snapshot.lines).toMatchObject([{quantity:1}])
+    expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).value).toEqual(first.value)
     await pool.query("UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1",[staffSessionId])
     await expect(command.create({...input,idempotencyKey:randomUUID()})).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
     if(native){
@@ -2070,7 +2071,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
       await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,input.idempotencyKey])
       await expect(command.create(input)).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
     } else {
-    expect((await new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).value).toEqual(first.value)
+    await expect(new QuantityRemakeCommandService(executor,false).create({...input,businessDate:nextBusinessDate})).rejects.toMatchObject({code:'KDS_SESSION_INVALID'})
     }
     await expect(new QuantityRemakeCommandService(executor,false).create({...input,idempotencyKey:randomUUID()})).rejects.toThrow('暂不新增')
     expect((await pool.query('SELECT count(*)::int n FROM mbox.quantity_remake_batches WHERE order_item_id=$1',[row.itemId])).rows[0].n).toBe(1)

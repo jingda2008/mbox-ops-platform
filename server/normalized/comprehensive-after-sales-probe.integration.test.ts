@@ -1,3 +1,7 @@
+import {QuantityRedeliveryCommandService} from './quantity-redelivery-command-service.js'
+import {QuantityRemakeCommandService} from './quantity-remake-command-service.js'
+import {QuantityRemakeHandoverCommand} from './quantity-remake-handover.js'
+import {IdempotencyReceiptUnavailableError} from './command-executor.js'
 import { itemAfterSalesApiPlugin } from './item-after-sales-api.js';
 import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
@@ -49,6 +53,28 @@ integration('after-sales durable recovery', () => {
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 ON CONFLICT DO NOTHING', [tenantId, storeId, roleId]);
     });
     afterAll(async () => { await app.close(); await pool?.end(); await runtimePool?.end(); });
+    it.each(['request','complete','cancel','remake','handover'])('does not execute missing or expired Web recovery: %s', async action => {
+      const id=randomUUID(),key='item-after-sales-'+randomUUID(),commands=new NormalizedCommandExecutor(runtime)
+      const input={scope,employeeId,businessDate,idempotencyKey:key,reason:'原操作只读恢复',replayOnly:true}
+      const run=()=>action==='request'?new QuantityRedeliveryCommandService(commands).request({...input,orderItemId:id,quantity:1,originalGoodsAvailable:true})
+        :action==='complete'?new QuantityRedeliveryCommandService(commands).complete({...input,redeliveryId:id,quantity:1})
+        :action==='cancel'?new QuantityRedeliveryCommandService(commands).cancel({...input,redeliveryId:id})
+        :action==='remake'?new QuantityRemakeCommandService(commands,true).create({...input,taskId:id,quantity:1,originalGoodsLost:true,staffSessionId,deviceAccessLeaseId:leaseId})
+        :new QuantityRemakeHandoverCommand(commands).dispose({...input,batchId:id,unitIds:[randomUUID()],disposition:'used_loss',unopenedReceived:false})
+      const count=async()=>Number((await pool.query('SELECT count(*) FROM mbox.idempotency_records WHERE tenant_id=$1 AND idempotency_key=$2',[tenantId,key])).rows[0].count)
+      await expect(run()).rejects.toBeInstanceOf(IdempotencyReceiptUnavailableError)
+      expect(await count()).toBe(0)
+      const operationScope=action==='remake'?'quantity.remake.create':action==='handover'?'quantity.remake.handover':`quantity.redelivery.${action}`
+      await commands.execute({scope,operationScope,idempotencyKey:key,requestFingerprint:'old',resultCodec:{encode:()=>({ok:true}),decode:()=>({ok:true})}},async()=>({result:{ok:true},auditEvents:[],outboxMessages:[]}))
+      await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND idempotency_key=$2",[tenantId,key])
+      await expect(run()).rejects.toBeInstanceOf(IdempotencyReceiptUnavailableError)
+      expect(await count()).toBe(1)
+    })
+    it.each(['redeliveries','redeliveries/:id/complete','redeliveries/:id/cancel','remakes/:id/after-visit-physical'])('honors Web recovery header at HTTP entry: %s',async path=>{
+      const response=await app.inject({method:'POST',url:'/api/commerce/item-after-sales/'+path.replace(':id',randomUUID()),headers:{'idempotency-key':'item-after-sales-'+randomUUID(),'x-mbox-replay-only':'true'},payload:{reason:'原记录恢复',orderItemId:randomUUID(),quantity:1,originalGoodsAvailable:true,disposition:'used_loss',unitIds:[randomUUID()]}})
+      expect(response.statusCode,response.body).toBe(409)
+      expect(response.json().error.code).toBe('IDEMPOTENCY_RECEIPT_UNAVAILABLE')
+    })
     async function table() { const id = randomUUID(); await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,8)", [id, tenantId, storeId, areaId, `T${id.slice(0, 8)}`]); return id; }
     async function item(note = '', stock = false) {
         const tableId = await table(), tableSessionId = randomUUID(), orderId = randomUUID(), itemId = randomUUID(), taskId = randomUUID();

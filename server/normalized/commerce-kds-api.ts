@@ -1,3 +1,4 @@
+import {IdempotencyReceiptUnavailableError} from './command-executor.js'
 import { reauthorizingCommands } from './staff-authorized-command.js'
 import {TablePrepaymentError} from './table-prepayment-repository.js'
 import {TableMinimumSpendNotMetError} from './table-minimum-spend.js'
@@ -720,7 +721,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       if(body.quantity!==undefined){
         if(typeof body.quantity!=='number'||!Number.isSafeInteger(body.quantity)||body.quantity<1||body.quantity>999)throw new TypeError('请选择1至999的实际重做份数')
         if(typeof body.originalGoodsLost!=='boolean')throw new TypeError('请确认原实物是否已无法交付')
-        const result=await new QuantityRemakeCommandService(options.commandExecutor,options.quantityActionsEnabled===true).create({...context,taskId,quantity:body.quantity,originalGoodsLost:body.originalGoodsLost,reason:reason.note,idempotencyKey})
+        const result=await new QuantityRemakeCommandService(options.commandExecutor,options.quantityActionsEnabled===true).create({...context,taskId,quantity:body.quantity,originalGoodsLost:body.originalGoodsLost,reason:reason.note,idempotencyKey,replayOnly:request.headers['x-mbox-replay-only']==='true'})
         return reply.send({data:result.value,replayed:result.replayed})
       }
       const execution = await executeKdsRemake(
@@ -2000,6 +2001,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof OrderDeliveryBlockedError) {
     return apiError(409, 'ORDER_ITEM_NOT_READY', `商品 ${error.orderItemId} 当前${fulfillmentStateLabel(error.currentStatus)}，本次未登记送达；请刷新核对制作状态和本人操作权限`)
   }
+  if (error instanceof IdempotencyReceiptUnavailableError) return apiError(409, 'IDEMPOTENCY_RECEIPT_UNAVAILABLE', '原操作回执不可用，请核对原记录，勿重新提交')
   if (error instanceof IdempotencyConflictError) {
     return apiError(409, 'IDEMPOTENCY_CONFLICT', '同一个提交标识不能用于不同操作')
   }

@@ -1,3 +1,4 @@
+import {NativeCommandNotCommittedError} from './command-executor.js'
 import {nativePhysicalExecutor,isNativePhysicalKey} from './native-physical-command.js'
 import {randomUUID} from 'node:crypto'
 import {appendOutboxMessage,type JsonCodec,type NormalizedCommandExecutor} from './command-executor.js'
@@ -17,8 +18,8 @@ const codec:JsonCodec<Result>={encode:value=>value,decode:value=>{
  * recovers its committed result even if new quantity work is later disabled. */
 export class QuantityRemakeCommandService {
   constructor(private readonly commands:Pick<NormalizedCommandExecutor,'execute'>,private readonly enabled:boolean){}
-  create(input:CommerceKdsRequestContext&{taskId:string;quantity:number;originalGoodsLost:boolean;reason:string;idempotencyKey:string}){
-    const commands=isNativePhysicalKey(input.idempotencyKey)?nativePhysicalExecutor(this.commands,input,async tx=>{
+  create(input:CommerceKdsRequestContext&{taskId:string;quantity:number;originalGoodsLost:boolean;reason:string;idempotencyKey:string;replayOnly?:boolean}){
+    const authorize=async (tx:ScopedTransaction)=>{
       const target=(await tx.query<{station_code:string;table_id:string}>(`SELECT task.station_code,visit.table_id
         FROM mbox.kds_tasks task JOIN mbox.order_items item ON (item.tenant_id,item.store_id,item.id)=(task.tenant_id,task.store_id,task.order_item_id)
         JOIN mbox.orders original ON (original.tenant_id,original.store_id,original.id)=(item.tenant_id,item.store_id,item.order_id)
@@ -26,8 +27,9 @@ export class QuantityRemakeCommandService {
         WHERE task.tenant_id=$1 AND task.store_id=$2 AND task.id=$3`,[input.scope.tenantId,input.scope.storeId,input.taskId])).rows[0]
       if(!target)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','原制作任务不存在，请保留原操作记录')
       await new NormalizedKdsAuthorization().assertCanActOnTask({transaction:tx,...input,action:'quantity_remake',stationCode:target.station_code,tableId:target.table_id})
-    }):this.commands
-    return commands.execute({scope:input.scope,operationScope:'quantity.remake.create',idempotencyKey:input.idempotencyKey,
+    }
+    const commands=isNativePhysicalKey(input.idempotencyKey)?nativePhysicalExecutor(this.commands,input,authorize):this.commands
+    return commands.execute({...(!isNativePhysicalKey(input.idempotencyKey)?{replayOnly:input.replayOnly,retainReceipt:true,rejectExpiredReceipt:true,authorizeReplay:authorize}:{}),scope:input.scope,operationScope:'quantity.remake.create',idempotencyKey:input.idempotencyKey,
       requestFingerprint:JSON.stringify({taskId:input.taskId,quantity:input.quantity,originalGoodsLost:input.originalGoodsLost,reason:input.reason.trim(),employeeId:input.employeeId}),resultCodec:codec},async tx=>{
       if(!this.enabled)throw new ItemQuantityConflict('QUANTITY_UNAVAILABLE','暂不新增数量重做批次，已有操作可恢复原结果')
       await lockQuantityTaskOrders(tx,[input.taskId])
@@ -52,7 +54,7 @@ export class QuantityRemakeCommandService {
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:input.employeeId},action:'quantity_remake.created',objectType:'kds_task',objectId:batch.taskId,businessDate:input.businessDate,reason:input.reason,
         metadata:{sourceTaskId:input.taskId,previousBatchId:target.quantity_remake_batch_id,remakeBatchId:batch.id,originalGoodsLost:true,quantity:batch.units.length,originalUnitIds:batch.units.map(unit=>unit.unit_id),newPhysicalUnitIds:batch.units.map(unit=>unit.id)}}],
         outboxMessages:[{aggregateType:'kds_task',aggregateId:batch.taskId,aggregateVersion:1,eventType:'kds.quantity_remake.created.v1',payload:result}]}
-    })
+    }).catch(error=>{throw error instanceof NativeCommandNotCommittedError?error.original:error})
   }
 }
 async function recordRemakeNotice(tx:ScopedTransaction,input:Result&{employeeId:string;stationCode:string;reason:string}){

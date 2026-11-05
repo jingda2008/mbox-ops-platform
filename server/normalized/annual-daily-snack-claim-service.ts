@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import type { AuditActor, JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
 import { BenefitRepository } from './benefit-repository.js'
@@ -111,7 +112,13 @@ export class AnnualDailySnackClaimService {
 
   claim(context: AnnualDailySnackGuestContext, input: Readonly<{ idempotencyKey: string }>) {
     if (context.tableSessionId === null) throw failure('请在入座并连接当前桌台后申请每日点心', 'DAILY_SNACK_TABLE_REQUIRED', 400)
-    return this.commands.execute({
+    const authorize = async (transaction: ScopedTransaction) => {
+      const canonical = await new CustomerRepository(transaction).resolveCanonical(context.customerId)
+      if (!await lockBoundGuestTablePosition(transaction, {
+        tableSessionId: context.tableSessionId!, customerId: canonical.id, actorRef: context.actorRef,
+      })) throw failure('当前桌边会话已失效，请重新扫码连接桌台', 'DAILY_SNACK_TABLE_AUTH_REQUIRED', 401)
+    }
+    return reauthorizingCommands(this.commands).execute({
       scope: context.scope,
       operationScope: 'loyalty.annual-daily-snack.claim',
       idempotencyKey: input.idempotencyKey,
@@ -220,7 +227,7 @@ export class AnnualDailySnackClaimService {
         claimCode: value.claimCode, benefitId: value.benefitId, benefitReservationId: value.benefitReservationId,
         tableSessionId: context.tableSessionId, quantity: value.quantity, expiresAt: value.expiresAt,
       })
-    })
+    }, authorize)
   }
 
   listForStaff(context: AnnualDailySnackStaffContext, tableSessionId?: string | null, nativeBinding = false) {

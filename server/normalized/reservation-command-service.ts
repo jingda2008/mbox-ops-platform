@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {lockReservationPolicy} from './reservation-policy-lock.js'
 import type {
   AuditActor,
@@ -68,7 +69,11 @@ export class ReservationCommandService {
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint,
       resultCodec: reservationCodec,
+      authorizeReplay: async transaction => {
+        if (input.nativeReceipt || input.retireTableBoundCreate) await input.authorizeNative?.(transaction)
+      },
     }, async (transaction) => {
+      if (input.nativeReceipt || input.retireTableBoundCreate) await input.authorizeNative?.(transaction)
       if(input.retireTableBoundCreate && !(input.nativeReceipt && input.tableBoundCreateMode==='legacy-native-v1'))throw new ReservationTablePreassignmentRetiredError()
       const anonymous = input.anonymousCustomer === undefined
         ? null
@@ -177,7 +182,7 @@ export class ReservationCommandService {
     transition: 'confirm' | 'arrive' | 'complete' | 'cancel',
     eventType: string,
   ): Promise<CommandExecution<Reservation>> {
-    return this.commands.execute({
+    return reauthorizingCommands(this.commands).execute({
       scope: input.scope,
       operationScope: input.nativeReceipt ? `reservation.${transition}.native` : `reservation.${transition}`,
       retainReceipt: input.nativeReceipt === true,

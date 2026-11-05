@@ -620,7 +620,7 @@ integration('normalized reservation, customer and benefit transactions', () => {
     const first=await reservations.create(input)
     await nativePool.query(`DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND expires_at<clock_timestamp()`,[tenantId,storeId])
     const replay=await reservations.create(input)
-    expect(replay.replayed).toBe(true);expect(replay.value.id).toBe(first.value.id);expect(preparations).toBe(1);expect(authorizations).toBe(2)
+    expect(replay.replayed).toBe(true);expect(replay.value.id).toBe(first.value.id);expect(preparations).toBe(1);expect(authorizations).toBe(4)
     const evidence=await nativePool.query(`SELECT expires_at::text FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3`,[tenantId,storeId,key])
     expect(evidence.rows[0].expires_at).toBe('infinity')
     revoked=true;await expect(reservations.create(input)).rejects.toThrow('permission revoked')

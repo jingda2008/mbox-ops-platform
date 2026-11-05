@@ -42,6 +42,10 @@ export class CustomerPreferenceService {
       requestFingerprint: fingerprint({ customerId: context.customerId, ...input }),
       resultCodec: objectCodec<CustomerPreferenceSnapshot>(),
     }, async (transaction) => {
+      // A deadline constrains a new declaration, not recovery of its committed receipt.
+      if (input.validUntil !== null && (!Number.isFinite(Date.parse(input.validUntil)) || Date.parse(input.validUntil) <= Date.now())) {
+        throw Object.assign(new Error('有效期必须晚于当前时间'), { statusCode: 400 })
+      }
       const result=await new CustomerPreferenceRepository(transaction).declare({
         ...input,publicId,customerId:context.customerId,
       })
@@ -55,7 +59,9 @@ export class CustomerPreferenceService {
         }],
         outboxMessages:[],
       }
-    })
+    }).then(async execution => execution.replayed
+      ? { ...execution, value: await this.list(context) }
+      : execution)
   }
 
   withdraw(context: PublicCustomerPreferenceContext, input: Readonly<{
@@ -83,7 +89,9 @@ export class CustomerPreferenceService {
         }],
         outboxMessages:[],
       }
-    })
+    }).then(async execution => execution.replayed
+      ? { ...execution, value: await this.list(context) }
+      : execution)
   }
 }
 

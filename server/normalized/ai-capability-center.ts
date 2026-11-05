@@ -143,14 +143,19 @@ export class AiCapabilityCenter implements AiScheduledExecutionPort {
   async execute(input: Readonly<AiExecutionRequestInput>): Promise<AiExecutionResult> {
     validateProposal(input.proposal)
     const capability = this.requiredCapability(input.proposal.toolName)
-    const runAt = validateRunAt(input.proposal.runAt)
     const execution = await this.commands.execute({
       scope: input.context.scope,
       operationScope: 'ai.capability.execute',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint: input.requestFingerprint,
       resultCodec: aiExecutionResultCodec,
+      authorizeReplay: async transaction => {
+        await assertCapabilityAccess(transaction, input.context, capability, new Date().toISOString())
+        if (input.proposal.runAt != null) await new StaffAccessRepository(transaction).assertPermission(input.context.employeeId, 'ai.schedule')
+      },
     }, async (transaction) => {
+      // The schedule window constrains new work, not recovery of a committed request.
+      const runAt = validateRunAt(input.proposal.runAt)
       await assertCapabilityAccess(transaction, input.context, capability, runAt)
       const result = await this.prepareAndExecute(
         transaction,

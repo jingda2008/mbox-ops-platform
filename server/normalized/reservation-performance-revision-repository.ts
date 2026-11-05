@@ -323,6 +323,16 @@ export class ReservationPerformanceRevisionRepository {
     return this.mapImpactsWithEligibleSchedules(result.rows)
   }
 
+  async assertCanAcknowledge(impactPublicId: string, actingCustomerId: string): Promise<void> {
+    const canonical = await this.canonicalCustomerId(actingCustomerId)
+    const result = await this.transaction.query(`
+      SELECT 1 FROM mbox.reservation_performance_impacts
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
+        AND canonical_customer_id=$4::uuid
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, impactPublicId, canonical])
+    if (!result.rowCount) throw error('未找到本人受影响的预约', 'RESERVATION_PERFORMANCE_IMPACT_NOT_FOUND', 404)
+  }
+
   async acknowledge(
     input: Readonly<AcknowledgePerformanceImpactInput>,
   ): Promise<ReservationPerformanceImpact> {

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { StaffAccessRepository } from './staff-access-repository.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   CommandExecution,
   CommandOutcome,
@@ -13,6 +14,8 @@ import {
   TableSessionTransitionError,
   type TableSession,
 } from './table-session-repository.js'
+
+afterEach(() => vi.restoreAllMocks())
 
 const tenantId = '11111111-1111-4111-8111-111111111111'
 const storeId = '22222222-2222-4222-8222-222222222222'
@@ -139,6 +142,8 @@ describe('TableSessionRepository', () => {
   })
 
   it('wraps open-table writes with the normalized idempotent command executor', async () => {
+    // SQL projection unit fixture; current-authority behavior has real database coverage.
+    const permission = vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockResolvedValue({} as never)
     const transaction = new ScriptedTransaction([
       { rows: [tableRow('L01', 4)] },
       { rows: [] },
@@ -160,6 +165,7 @@ describe('TableSessionRepository', () => {
     })
 
     expect(result.replayed).toBe(false)
+    expect(permission).toHaveBeenCalledWith(employeeId, 'table.open')
     expect(executor.operationScope).toBe('table-session.open')
     expect(executor.calls).toBe(1)
   })

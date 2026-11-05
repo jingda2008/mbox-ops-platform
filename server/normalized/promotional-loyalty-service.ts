@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import type { AuditEvent, JsonCodec, JsonValue, NormalizedCommandExecutor } from './command-executor.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
@@ -247,7 +248,7 @@ export class PromotionalLoyaltyService {
 
   draft(context: PromotionalLoyaltyStaffContext, input: Readonly<PromotionPolicyDraftInput>) {
     const normalized = normalizeDraft(input)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.promotion.manage').execute({
       scope: context.scope,
       operationScope: 'loyalty.promotion-policy.draft',
       idempotencyKey: input.idempotencyKey,
@@ -300,7 +301,7 @@ export class PromotionalLoyaltyService {
     reason: string
     idempotencyKey: string
   }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.promotion.approve').execute({
       scope: context.scope,
       operationScope: 'loyalty.promotion-policy.approve',
       idempotencyKey: input.idempotencyKey,
@@ -343,7 +344,7 @@ export class PromotionalLoyaltyService {
     if (effectiveUntil !== null && Date.parse(effectiveUntil) <= Date.parse(effectiveFrom)) {
       throw promotionError('失效时间必须晚于生效时间', 'LOYALTY_PROMOTION_INVALID_WINDOW', 400)
     }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.promotion.publish').execute({
       scope: context.scope,
       operationScope: 'loyalty.promotion-policy.publish',
       idempotencyKey: input.idempotencyKey,

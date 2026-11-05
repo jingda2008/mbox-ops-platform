@@ -72,7 +72,7 @@ export function ItemAfterSalesPanel({itemId,employeeId,onClose,onChanged,initial
     <div className="staff-item-after-sales-body" data-dialog-scroll>
     {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
     {refreshDelayed&&<p role="status" data-action-reveal="off">状态更新暂时延迟，可刷新查看；原处理结果保留。</p>}
-    {!pending&&<button disabled={busy} onClick={()=>{setBusy(true);setError('');void read().then(()=>setNotice('商品状态已更新')).catch(()=>setError('最新商品状态暂未读回，请稍后再刷新')).finally(()=>setBusy(false))}}>刷新商品状态</button>}
+    <button disabled={busy} onClick={()=>{setBusy(true);setError('');void read().then(()=>setNotice('商品状态已更新')).catch(()=>setError('最新商品状态暂未读回，请稍后再刷新')).finally(()=>setBusy(false))}}>刷新商品状态</button>
     {pending&&<p>上次处理结果待确认。<button disabled={busy} onClick={()=>void run(()=>api.recover(itemId))}>恢复上次商品处理</button></p>}
     {!data?<p>正在读取原订单…</p>:<>
       <p>原订单 {data.item.quantity} 份 · {data.item.includedInBundle?'计费包含在原套餐内，不另收费':<>单价 ¥{money(data.item.unitPriceMinor)} · 原成交 ¥{money(data.item.originalAmountMinor)}</>}</p>

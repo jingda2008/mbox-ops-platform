@@ -147,6 +147,8 @@ interface KdsCommandTarget {
 }
 
 interface KdsActionResult {
+  deliveredAt?: string | null
+  deliveredBy?: string | null
   affectedUnitIds?:string[]
   affectedQuantity?:number
   task: KdsTask
@@ -895,6 +897,7 @@ export async function performKdsAction(
       task,
       target,
       orderItem,
+      ...((action==='deliver'||action==='pickupAndDeliver')?{deliveredAt:new Date().toISOString(),deliveredBy:context.employeeId}:{}),
       fulfillmentStatus: quantityOutcome?.fulfillmentStatus??fulfillmentStatus(task, orderItem),
       ...(quantityOutcome?{affectedQuantity:quantityOutcome.quantity,affectedUnitIds:quantityOutcome.unitIds}:{}),
       exceptionEvidence,
@@ -1611,10 +1614,10 @@ function kdsResponse(execution: CommandExecution<KdsActionResult>) {
     completedBy: task.readyAt === null ? null : task.assignedEmployeeId,
     pickedUpAt: null,
     pickedUpBy: null,
-    deliveredAt: result.orderItem?.status === 'delivered' ? new Date().toISOString() : null,
-    deliveredBy: result.orderItem?.status === 'delivered' ? task.assignedEmployeeId : null,
+    deliveredAt: result.deliveredAt ?? null,
+    deliveredBy: result.deliveredBy ?? null,
     fulfillmentStatus: result.fulfillmentStatus,
-    deliveredOrderItem: result.orderItem,
+    deliveredOrderItem: result.orderItem === null ? null : publicDeliveryItem(result.orderItem),
     meta: { replayed: execution.replayed },
   }
 }
@@ -1661,6 +1664,8 @@ const kdsActionResultCodec: JsonCodec<KdsActionResult> = {
 
 function kdsActionResultToJson(result: KdsActionResult): JsonObject {
   return {
+    deliveredAt: result.deliveredAt ?? null,
+    deliveredBy: result.deliveredBy ?? null,
     ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
     ...(result.affectedUnitIds ? {affectedUnitIds:result.affectedUnitIds} : {}),
     task: kdsTaskToJson(result.task),
@@ -1680,6 +1685,17 @@ function kdsActionResultToJson(result: KdsActionResult): JsonObject {
     orderItem: result.orderItem === null ? null : orderItemToJson(result.orderItem),
     fulfillmentStatus: result.fulfillmentStatus,
     exceptionEvidence: result.exceptionEvidence,
+  }
+}
+
+/** Delivery acknowledgements contain fulfillment facts; cost evidence belongs to cost-authorized queries. */
+function publicDeliveryItem(item: OrderItem) {
+  return {
+    id: item.id, orderId: item.orderId, productId: item.productId,
+    quantity: item.quantity, unitPriceMinor: item.unitPriceMinor,
+    discountAmountMinor: item.discountAmountMinor, totalAmountMinor: item.totalAmountMinor,
+    currency: item.currency, fulfillmentStation: item.fulfillmentStation,
+    productSnapshot: item.productSnapshot, status: item.status, note: item.note, createdAt: item.createdAt,
   }
 }
 

@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import {authorizeHardwarePrintSource, stockReturnSourceAccess, authorizeStockReturnReplay, HardwareSourceAccessDeniedError} from './hardware-source-access.js'
 import {InventoryReturnCostProjectionBusyError} from './inventory-return-cost-projection.js'
 import {registerNativeHardware} from './native-hardware-management.js'
@@ -391,7 +392,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     const deviceType = readEnum(body.deviceType, ['printer', 'kds_display', 'cash_drawer', 'headset', 'controller'])
     requireAny(context, ['hardware.manage', 'printer.manage'])
     if (!hasCapability(context, 'hardware.manage') && deviceType !== 'printer') throw new HardwareAccessDeniedError()
-    const execution = await options.commands.execute(command(request, context, 'hardware.device.create', body, codec()), async (transaction) => {
+    const execution = await staffAuthorizedCommands(options.commands, context.employeeId, deviceType === 'printer' ? ['hardware.manage', 'printer.manage'] : 'hardware.manage', true).execute(command(request, context, 'hardware.device.create', body, codec()), async (transaction) => {
       const result = await repository(transaction).createDevice({
         code: readString(body.code, 'code', 64),
         name: readString(body.name, 'name', 120),

@@ -5,7 +5,7 @@ import {QuantityRemakeHandoverQuery,QuantityRemakeHandoverCommand} from './quant
 import {QuantityRedeliveryCommandService} from './quantity-redelivery-command-service.js'
 import type {FastifyPluginAsync,FastifyReply,FastifyRequest} from 'fastify'
 import type {ScopedPostgresTransactionRunner} from './transaction-runner.js'
-import {NormalizedCommandExecutor,IdempotencyConflictError,IdempotencyInProgressError} from './command-executor.js'
+import {NormalizedCommandExecutor,IdempotencyConflictError,IdempotencyInProgressError,IdempotencyReceiptUnavailableError} from './command-executor.js'
 import type {NormalizedOperationsRequestContext} from './normalized-operations-api.js'
 import {NormalizedAuthenticationRequiredError} from './normalized-request-context.js'
 import {StaffSessionNotFoundError} from './staff-session-repository.js'
@@ -41,7 +41,8 @@ export const itemAfterSalesApiPlugin:FastifyPluginAsync<ItemAfterSalesApiOptions
     const idempotencyKey=request.headers['idempotency-key']
     if(typeof idempotencyKey!=='string'||!idempotencyKey.trim()||idempotencyKey.length>160)throw new TypeError('原操作编号无效，请重新打开商品')
     if(typeof body.reason!=='string')throw new TypeError('请选择实际原因')
-    return {...context,idempotencyKey,reason:body.reason}
+    const replayOnly=request.headers['x-mbox-replay-only']==='true'
+    return {...context,idempotencyKey,reason:body.reason,replayOnly}
   }
   app.get('/commerce/item-after-sales/items/:itemId',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request)
@@ -164,6 +165,7 @@ async function handle(reply:FastifyReply,run:()=>Promise<unknown>){
       :error instanceof ItemQuantityConflict?[409,error.code,error.message]
       :error instanceof IdempotencyInProgressError?[409,'IDEMPOTENCY_IN_PROGRESS','原操作处理中，请恢复原结果']
       :error instanceof IdempotencyConflictError?[409,'IDEMPOTENCY_CONFLICT','原操作编号不能更换商品、数量或金额']
+      :error instanceof IdempotencyReceiptUnavailableError?[409,'IDEMPOTENCY_RECEIPT_UNAVAILABLE',error.message]
       :error instanceof TypeError?[400,'REQUEST_INVALID',error.message]:[500,'INTERNAL_ERROR','操作结果待确认，请恢复原结果']
     if(status===500)reply.log.error({err:error},'item after-sales command failed')
     return reply.code(Number(status)).send({error:{code,message}})

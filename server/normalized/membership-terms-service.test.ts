@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -85,6 +86,8 @@ integration('membership terms release and acceptance', () => {
       { role_code: 'OWNER', permission_code: 'membership.terms.view' },
     ])
 
+    // Grant actual authority so the following assertions isolate three-person separation.
+    await grantFixtureStaffPermissions(pool, scope(id.store), [id.drafter,id.approver,id.publisher], ['membership.terms.manage','membership.terms.approve','membership.terms.publish'])
     const first = await terms.createDraft(staff(id.drafter), {
       title: 'M-BOX会员加入与积分权益条款',
       summary: '说明会员积分、权益、退款回收及通知的独立授权边界。',

@@ -44,11 +44,11 @@ export class ItemAfterSalesApi {
         if(attempt.body.succeeded!==true)throw new Error('必须确认现金已实际退付')
         await this.request(attempt.url.replace('/manual-result','/execute'),{method:'POST',body:'{}',headers:{'content-type':'application/json','idempotency-key':`${attempt.key}-begin`}})
       }
-      const result=await this.request<unknown>(attempt.url,{method:'POST',body:JSON.stringify(attempt.body),headers:{'content-type':'application/json','idempotency-key':attempt.key}})
+      const result=await this.request<unknown>(attempt.url,{method:'POST',body:JSON.stringify(attempt.body),headers:{'content-type':'application/json','idempotency-key':attempt.key,...(pending?{'x-mbox-replay-only':'true'}:{})}})
       this.clear(itemId);return result
     }catch(error){
-      if(error instanceof StaffActionsApiError&&[400,403,404].includes(error.status??0))this.clear(itemId)
-      else if(error instanceof StaffActionsApiError&&error.status===409&&[
+      if(!pending&&error instanceof StaffActionsApiError&&[400,403,404].includes(error.status??0))this.clear(itemId)
+      else if(!pending&&error instanceof StaffActionsApiError&&error.status===409&&[
         'QUANTITY_INVALID','QUANTITY_UNAVAILABLE','QUANTITY_FACTS_CONFLICT','PRICE_REVIEW_REQUIRED','PRODUCTION_REVIEW_REQUIRED','QUANTITY_BATCH_NOT_ENABLED',
       ].includes(error.code??''))this.clear(itemId)
       throw error

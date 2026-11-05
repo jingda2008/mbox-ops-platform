@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
   AuditActor,
@@ -166,7 +167,7 @@ export class MembershipTermsService {
       idempotencyKey: string
     }>,
   ): Promise<CommandExecution<MembershipTermsVersionView>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'membership.terms.manage', true).execute({
       scope: context.scope,
       operationScope: 'membership.terms.draft',
       idempotencyKey: input.idempotencyKey,
@@ -198,7 +199,7 @@ export class MembershipTermsService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ version: number; reason: string; idempotencyKey: string }>,
   ): Promise<CommandExecution<MembershipTermsVersionView>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'membership.terms.approve', true).execute({
       scope: context.scope,
       operationScope: 'membership.terms.approve',
       idempotencyKey: input.idempotencyKey,
@@ -238,7 +239,7 @@ export class MembershipTermsService {
       idempotencyKey: string
     }>,
   ): Promise<CommandExecution<MembershipTermsVersionView>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'membership.terms.publish', true).execute({
       scope: context.scope,
       operationScope: 'membership.terms.publish',
       idempotencyKey: input.idempotencyKey,

@@ -57,7 +57,7 @@ export const aiExecutionApiPlugin: FastifyPluginAsync<AiExecutionApiOptions> = a
         employeeId: context.employeeId,
         toolName,
         arguments: argumentsValue,
-        runAt,
+        ...(body.delaySeconds === undefined ? { runAt } : { delaySeconds: body.delaySeconds }),
       }),
     })
     const statusCode = result.replayed ? 200 : result.status === 'succeeded' ? 200 : 202

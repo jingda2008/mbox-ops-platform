@@ -91,10 +91,23 @@ integration('AI capability center PostgreSQL execution bus', () => {
     expect(openTable).toHaveBeenCalledTimes(1)
     const evidence = await pool.query<{ audits: string; outbox: string }>(`
       SELECT
-        (SELECT count(*)::text FROM mbox.audit_events WHERE action = 'ai.execution.succeeded') AS audits,
-        (SELECT count(*)::text FROM mbox.outbox_messages WHERE message_type = 'ai.execution.succeeded.v1') AS outbox
-    `)
+        (SELECT count(*)::text FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND action = 'ai.execution.succeeded') AS audits,
+        (SELECT count(*)::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND message_type = 'ai.execution.succeeded.v1') AS outbox
+    `, [tenantId,storeId])
     expect(evidence.rows[0]).toEqual({ audits: '1', outbox: '1' })
+  })
+
+  it('recovers an original absolute schedule after its execution time but still checks scheduling authority', async () => {
+    const fixedNow=Date.now(),clock=vi.spyOn(Date,'now').mockReturnValue(fixedNow)
+    try {
+      const input={context,proposal:{toolName:'table.open',arguments:{tableCode:'L01',guestCount:3},runAt:new Date(fixedNow+120_000).toISOString()},idempotencyKey:'ai-past-schedule-recovery',requestFingerprint:'original-absolute-time'} as const
+      const first=await center.execute(input);expect(first.status).toBe('scheduled')
+      clock.mockReturnValue(fixedNow+600_000)
+      const recovered=await center.execute(input);expect(recovered).toMatchObject({requestId:first.requestId,runAt:first.runAt,replayed:true})
+      expect(openTable).not.toHaveBeenCalled()
+      await denyPermission('ai.schedule')
+      await expect(center.execute(input)).rejects.toThrow()
+    } finally {clock.mockRestore()}
   })
 
   it('returns candidates for ambiguous entities and never calls the domain port', async () => {

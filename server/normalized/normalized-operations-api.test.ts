@@ -1,5 +1,6 @@
+import { StaffAccessRepository } from './staff-access-repository.js'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CommandOutcome, IdempotentCommand } from './command-executor.js'
 import { IdempotencyConflictError } from './command-executor.js'
 import {
@@ -77,7 +78,11 @@ const transaction: ScopedTransaction = {
 
 const apps: FastifyInstance[] = []
 
+// Route/serialization unit fixtures; real revocation checks run against PostgreSQL.
+beforeEach(() => { vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockResolvedValue({} as never) })
+
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(apps.splice(0).map((app) => app.close()))
 })
 

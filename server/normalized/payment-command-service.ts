@@ -935,7 +935,7 @@ export class PaymentCommandService {
 
   approveRefund(input: Readonly<ApproveRefundCommand>): Promise<CommandExecution<Refund>> {
     const employeeId = requireEmployee(input.actor, 'Refund approval')
-    return this.commands.execute(command(input, 'refund.approve', refundCodec), async (transaction) => {
+    return this.commands.execute({ ...command(input, 'refund.approve', refundCodec), authorizeReplay: transaction => this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId }) }, async (transaction) => {
       await this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId })
       await assertStandaloneRefundDecision(transaction,input.refundId)
       let refund = await new RefundRepository(transaction).approve(
@@ -956,7 +956,7 @@ export class PaymentCommandService {
 
   rejectRefund(input: Readonly<RejectRefundCommand>): Promise<CommandExecution<Refund>> {
     const employeeId = requireEmployee(input.actor, 'Refund rejection')
-    return this.commands.execute(command(input, 'refund.reject', refundCodec), async (transaction) => {
+    return this.commands.execute({ ...command(input, 'refund.reject', refundCodec), authorizeReplay: transaction => this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId }) }, async (transaction) => {
       await this.authorization.assertRefundApproval({ transaction, employeeId, refundId: input.refundId })
       await assertStandaloneRefundDecision(transaction,input.refundId)
       const refund = await new RefundRepository(transaction).reject(

@@ -1009,6 +1009,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         operationScope: 'guest.service.feedback',
         idempotencyKey,
         requestFingerprint: stableJson({ publicId, action }),
+        authorizeReplay: transaction => new GuestServiceRepository(transaction).assertFeedbackAccess({ ...context, publicId }),
         resultCodec: guestServiceFeedbackCodec,
       }, async (transaction) => {
         const result = await new GuestServiceRepository(transaction).feedback({
@@ -1068,7 +1069,10 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
       scope: context.scope,
       operationScope: 'guest.mood.select',
       idempotencyKey,
-      requestFingerprint: mood,
+      requestFingerprint: stableJson({ mood, customerId: context.customerId, tableSessionId: context.tableSessionId }),
+      authorizeReplay: async transaction => {
+        if (!await lockBoundGuestTablePosition(transaction, context)) throw new GuestAuthenticationRequiredError()
+      },
       resultCodec: guestMoodResultCodec,
     }, async (transaction) => {
       const behavior = await new GuestBehaviorRepository(transaction).record({

@@ -1,0 +1,936 @@
+domain,file,line,method,path,dynamicPath,review
+支付退款与收银,server/normalized/activity-customer-refund-api.ts,12,post,'/public/mini/activity-registrations/:registrationPublicId/refund-request',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,41,post,'/staff/activity-operations/scan',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,42,get,'/staff/activity-operations/registrations/:registrationPublicId/service',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,43,post,'/staff/activity-operations/registrations/:registrationPublicId/service',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,44,post,'/staff/activity-operations/:publicId/stop-registration',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,50,post,'/staff/activity-operations/:publicId/close',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,58,post,'/staff/activity-operations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,69,get,'/staff/activity-operations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/activity-operations-api.ts,74,get,'/staff/activity-operations/product-catalog',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/activity-operations-api.ts,75,get,'/staff/activity-operations/component-catalog',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,80,get,'/staff/activity-operations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,88,put,'/staff/activity-operations/:publicId/draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,103,post,'/staff/activity-operations/:publicId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,115,post,'/staff/activity-operations/:publicId/packages/:packagePublicId/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,132,post,'/staff/activity-operations/:publicId/waitlist-retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-operations-api.ts,146,post,'/staff/activity-operations/registrations/:registrationPublicId/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/activity-operations-api.ts,162,post,'/staff/activity-operations/registrations/:registrationPublicId/refund-request',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-production-api.ts,18,get,'/commerce/activity-service/board',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-production-api.ts,60,post,'/commerce/activity-service/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-production-api.ts,65,post,'/commerce/activity-service/recovery',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-service-exception-api.ts,13,post,'/commerce/activity-service/exceptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/activity-share-preview-api.ts,19,get,'/public/mini/activity-previews/:activityPublicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+AI与SOP,server/normalized/ai-execution-api.ts,31,get,'/capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+AI与SOP,server/normalized/ai-execution-api.ts,45,post,'/executions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,69,get,'/staff/bottle-custody/native-capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/bottle-custody-api.ts,70,get,'/staff/bottle-custody/report',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/bottle-custody-api.ts,74,post,'/staff/bottle-custody/report-export',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,78,get,'/staff/bottle-custody/source-order',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,89,get,'/staff/bottle-custody/member-contact',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,90,get,'/staff/bottle-custody/:id/photos/:depositId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,91,get,'/staff/bottle-custody/policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,92,post,'/staff/bottle-custody/policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,93,post,'/staff/bottle-custody/categories',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/bottle-custody-api.ts,94,post,'/staff/bottle-custody/export',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/bottle-custody-api.ts,103,post,'/staff/bottle-custody/:id/print',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,107,get,'/staff/bottle-custody',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,108,post,'/staff/bottle-custody',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,109,get,'/staff/bottle-custody/:id',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,110,post,'/staff/bottle-custody/:id/request-code',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,111,post,'/staff/bottle-custody/:id/verify',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,112,post,'/staff/bottle-custody/:id/collect',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,113,post,'/staff/bottle-custody/:id/resolve-collection',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,114,post,'/staff/bottle-custody/:id/archive',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/bottle-custody-api.ts,115,post,'/staff/bottle-custody/:id/expiry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,337,get,"""/catalog/assisted-order-products""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,363,get,'/native/catalog/products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,378,get,"""/catalog/products""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,392,get,"""/catalog/categories""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,402,get,"""/catalog/menu-categories""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,414,post,"native ? ""/native/catalog/menu-categories"" : ""/catalog/menu-categories""",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,474,route,"{
+    method:native ? ""POST"" : ""PATCH"", url:native ? ""/native/catalog/menu-categories/:categoryCode"" : ""/catalog/menu-categories/:categoryCode"", handler:
+    async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await resolveStaffContext(options, request);
+        const categoryCode = requiredCode(request.params.categoryCode, ""categoryCode"");
+        const input=readJsonObject(request.body,""请求正文"");
+        const expected=native ? requiredText(input.expectedUpdatedAt,""expectedUpdatedAt"",100) : null;
+        const patch = readUpdateMenuCategory(native ? input.patch : request.body);
+        const idempotencyKey = readIdempotencyKey(request);
+        const command = menuCategoryCommand(
+          request,
+          context,
+          ""catalog.menu-category.update"",
+          idempotencyKey,
+          { categoryCode, ...patch, ...(native ? {expectedUpdatedAt:expected} : {}) },
+        );
+        const executor = catalogWriteExecutor(options.commandExecutor, context, native, tx => assertLivePermission(tx, context.employeeId, CATALOG_PRODUCT_MANAGE_PERMISSION));
+        const execution = await executor.execute(
+          command,
+          async (transaction) => {
+            await assertLivePermission(
+              transaction,
+              context.employeeId,
+              CATALOG_PRODUCT_MANAGE_PERMISSION,
+            );
+            const before = await getMenuCategoryByCode(transaction, categoryCode, true);
+            if(native && before.updatedAt!==expected)throw new NativePhysicalNotCommittedError('分类已变化，本次未提交，请刷新原分类');
+            const afterInput = {
+              displayName: patch.displayName ?? before.displayName,
+              parentCode: patch.parentCode === undefined ? before.parentCode : patch.parentCode,
+              sortOrder: patch.sortOrder ?? before.sortOrder,
+              guestVisible: patch.guestVisible ?? before.guestVisible,
+            };
+            await assertMenuCategoryParent(
+              transaction,
+              afterInput.parentCode,
+              before.code,
+            );
+            await assertMenuCategoryStructure(
+              transaction,
+              before,
+              afterInput.parentCode,
+              afterInput.guestVisible,
+            );
+            await transaction.query(`
+              UPDATE mbox.menu_categories
+              SET display_name=$4::text,
+                  parent_code=$5::text,
+                  sort_order=$6::integer,
+                  guest_visible=$7::boolean,
+                  updated_at=clock_timestamp()
+              WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+            `, [
+              transaction.scope.tenantId,
+              transaction.scope.storeId,
+              before.id,
+              afterInput.displayName,
+              afterInput.parentCode,
+              afterInput.sortOrder,
+              afterInput.guestVisible,
+            ]);
+            const category = await getMenuCategory(transaction, before.id);
+            return menuCategoryOutcome(
+              request,
+              context,
+              idempotencyKey,
+              ""catalog.menu-category.updated"",
+              ""catalog.menu-category.updated.v1"",
+              category,
+              before,
+            );
+          },
+        );
+        return reply.send(executionResponse(execution));
+      }),
+  }",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,552,get,"""/guest/catalog/products""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,565,get,"""/guest/catalog/categories""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,572,post,"native ? ""/native/catalog/products"" : ""/catalog/products""",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,956,patch,'/catalog/products/:productId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,957,post,'/native/catalog/products/:productId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,959,get,'/catalog/products/:productId/sale-quantity',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,969,post,'/catalog/products/:productId/sale-quantity',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/catalog-api.ts,1004,put,"""/catalog/products/:productId/standard-price""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/commerce-kds-api.ts,465,get,'/commerce/assisted-order-access',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/commerce-kds-api.ts,512,get,'/commerce/table-sessions/:tableSessionId/payment-orders',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/commerce-kds-api.ts,541,get,'/commerce/table-sessions/:tableSessionId/order-details',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/commerce-kds-api.ts,560,post,'/commerce/assisted-order-contexts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/commerce-kds-api.ts,576,post,'/commerce/orders',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/commerce-kds-api.ts,616,get,'/commerce/fulfillment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/commerce-kds-api.ts,635,post,`/commerce/${kdsPath}/:taskId/actions`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/commerce-kds-api.ts,682,post,`/commerce/${kdsPath}/:taskId/manager-cancel`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/commerce-kds-api.ts,708,post,`/commerce/${kdsPath}/:taskId/remake`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/commercial-ops-api.ts,172,get,'/commercial-ops/profit',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,197,get,'/commercial-ops/costs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,205,post,'/commercial-ops/costs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,243,post,'/commercial-ops/costs/:costId/corrections',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,288,post,'/commercial-ops/sales-rules',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,329,post,'/commercial-ops/sales-attributions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/commercial-ops-api.ts,364,post,'/commercial-ops/refunds/:refundId/sales-reversal',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,402,get,'/commercial-ops/employee-sales',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,419,get,'/commercial-ops/cash-handovers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,422,post,'/commercial-ops/cash-handovers/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,444,get,'/commercial-ops/vouchers/operations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,448,get,'/commercial-ops/vouchers/operations/by-public-id/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,449,post,'/commercial-ops/vouchers/operations/redeem',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,454,post,`/commercial-ops/vouchers/operations/:operationId/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,466,get,'/commercial-ops/vouchers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,474,get,'/commercial-ops/vouchers/platforms',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,484,post,'/commercial-ops/vouchers/prepare',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/commercial-ops-api.ts,524,post,'/commercial-ops/vouchers/redeem',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/coupon-calendar-api.ts,17,get,'/staff/loyalty/coupon-calendar-versions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/coupon-calendar-api.ts,26,post,'/staff/loyalty/coupon-calendar-versions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/coupon-calendar-api.ts,38,post,'/staff/loyalty/coupon-calendar-versions/:id/decisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,140,post,'/staff/member-participation/lookup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-benefit-api.ts,154,get,'/public/mini/customer/orders',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,163,get,'/public/mini/customer/profile',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,175,get,'/public/mini/customer/benefits',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,186,get,'/public/mini/customer/benefit-wallet',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,216,get,'/guest/customer/profile',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,236,get,'/guest/customer/benefits',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,255,post,'/guest/customer/benefits/:benefitId/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,283,post,'/guest/customer/annual-daily-snacks/claim',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,294,post,'/guest/customer/benefit-reservations/:reservationId/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-benefit-api.ts,317,get,'/staff/native-benefit-fulfillment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,329,post,`/staff/native-benefit-reservations/:reservationId/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,384,get,'/staff/annual-benefit-reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,395,post,'/staff/annual-benefit-reservations/:reservationId/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-benefit-api.ts,422,get,'/staff/complimentary-fulfillment-exceptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-benefit-api.ts,431,post,'/staff/complimentary-fulfillment-exceptions/:intentId/retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-benefit-api.ts,510,post,'/staff/complimentary-fulfillment-exceptions/:intentId/resolve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,529,get,'/customers/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/customer-benefit-api.ts,539,get,'/customers/:publicId/history',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,551,patch,'/customers/:customerId/profile',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,572,post,'/customers/:customerId/identities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-benefit-api.ts,595,post,'/customers/merge',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,616,post,'/benefits',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,634,post,'/benefits/:benefitId/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,658,post,'/benefit-reservations/:reservationId/redeem',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,691,post,'/benefit-reservations/:reservationId/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,716,get,'/staff/annual-daily-snack-claims',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,724,post,'/staff/annual-daily-snack-claims/:claimCode/redeem',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-benefit-api.ts,749,post,'/staff/annual-daily-snack-claims/:claimCode/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-custody-api.ts,21,get,'/public/mini/customer/bottle-custody',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-custody-api.ts,26,get,'/public/mini/customer/bottle-custody/:id',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-custody-api.ts,30,get,'/public/mini/customer/bottle-custody/:id/photos/:depositId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/customer-experience-analytics-api.ts,36,get,'/staff/customer-experience/analytics',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/customer-experience-analytics-api.ts,48,get,'/staff/customer-experience/analytics/observations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,145,get,'/public/mini/bootstrap',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,157,put,'/public/mini/annual-benefits/birthday-consent',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,166,post,'/public/mini/annual-benefits/birthday-consent/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,175,get,'/public/mini/privacy-policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,210,get,'/public/mini/membership-terms',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,220,get,'/staff/customer-publication/employees',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,225,get,'/staff/customer-publication/profiles',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,232,put,'/staff/customer-publication/profiles/:employeeId/draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,247,post,'/staff/customer-publication/profiles/:profileId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,263,post,'/staff/customer-publication/profiles/:profileId/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,277,get,'/staff/customer-publication/privacy-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,284,post,'/staff/customer-publication/privacy-policies/drafts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,302,post,'/staff/customer-publication/privacy-policies/:policyVersion/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,319,post,'/staff/customer-publication/privacy-policies/:policyVersion/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,333,get,'/public/mini/loyalty',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,338,get,'/public/mini/loyalty/ledger',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,350,get,'/public/mini/notification-consent',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,357,post,'/public/mini/notification-consent',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,379,get,'/public/mini/product-restrictions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,384,post,'/public/mini/product-restrictions/:publicId/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,398,get,'/public/mini/redemptions/catalog',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,403,get,'/public/mini/redemptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,408,post,'/public/mini/redemptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,421,post,'/public/mini/redemptions/:redemptionPublicId/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,435,get,'/staff/loyalty/redemption-configuration',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,446,get,'/staff/loyalty/redemptions/pending',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,453,post,'/staff/loyalty/redemption-catalogs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,500,post,'/staff/loyalty/redemption-catalogs/:catalogId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,508,post,'/staff/loyalty/redemption-catalogs/:catalogId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,525,put,'/staff/loyalty/redemption-control',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,540,get,'/public/mini/activities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,545,get,'/public/mini/activities/:activityPublicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,550,get,'/public/mini/activities/:publicId/addon-products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,551,post,'/public/mini/activity-registrations/:registrationPublicId/party-size',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,553,post,'/public/mini/activity-parents/resolve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,559,get,'/public/mini/activity-registrations/:registrationPublicId/service-code',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,560,get,'/public/mini/activity-registrations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/customer-experience-api.ts,566,get,'/public/mini/activity-registrations/:registrationPublicId/payment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/customer-experience-api.ts,580,post,'/public/mini/activity-registrations/:registrationPublicId/payment-action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/customer-experience-api.ts,596,post,'/public/mini/activity-registrations/:registrationPublicId/payment-query',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,610,post,'/public/mini/membership/enroll',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,620,post,'/public/mini/membership/enroll-with-phone',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,644,post,'/public/mini/membership/recovery/start',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,654,post,'/public/mini/membership/recovery/verify',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,683,get,'/public/mini/membership/verified-phones',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,692,post,'/public/mini/membership/verified-phones/replace',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,712,post,'/public/mini/membership/verified-phones/:contactPublicId/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,727,patch,'/public/mini/preferences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,741,patch,'/public/mini/wechat-preferences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,765,post,'/public/mini/activities/:activityPublicId/registrations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/customer-experience-api.ts,810,post,'/public/mini/activity-registrations/:registrationPublicId/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,827,get,'/guest/experience/recommendations/configuration',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,834,post,'/guest/experience/recommendations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,845,post,'/guest/experience/recommendations/:recommendationPublicId/events',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,859,post,'/guest/experience/plans',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,871,get,'/guest/experience/plan',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,876,post,'/guest/checkout/upgrade-offers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,889,post,'/guest/checkout/upgrade-offers/:publicId/events',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/customer-experience-api.ts,904,get,'/staff/table-sessions/:tableSessionId/observations/recent',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/customer-experience-api.ts,913,get,'/staff/native-table-sessions/:tableSessionId/observations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/customer-experience-api.ts,919,post,`/staff/${native?'native-table-sessions':'table-sessions'}/:tableSessionId/observations/parse`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,934,post,`/staff/${native?'native-observations':'observations'}/:publicId/confirm`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,948,post,`/staff/${native?'native-observations':'observations'}/:publicId/events/:eventId/revise`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,965,get,'/staff/customer-experience/recommendation-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,970,post,'/staff/customer-experience/recommendation-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,997,post,'/staff/customer-experience/recommendation-policies/:publicId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1008,post,'/staff/customer-experience/recommendation-policies/:publicId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1020,post,'/staff/customer-experience/recommendation-policies/:publicId/clone-draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/customer-experience-api.ts,1031,get,'/staff/customer-experience/performance-phases/current',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,1038,get,'/staff/customer-experience/products/:productId/performance-phases',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/customer-experience-api.ts,1051,put,'/staff/customer-experience/products/:productId/performance-phases',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/customer-experience-api.ts,1066,post,'/staff/customer-experience/schedules/:scheduleId/performance-phases',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/customer-experience-api.ts,1082,post,`/staff/customer-experience/performance-phases/:publicId/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1098,get,'/staff/customer-experience/dashboard',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1103,get,'/staff/customer-experience/support-contact',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1108,put,'/staff/customer-experience/support-contact',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1121,put,'/staff/customer-experience/features/:featureCode',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1139,put,'/staff/customer-experience/checkout-upgrade-rules/:ruleCode',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1171,post,'/staff/customer-experience/checkout-upgrade-rules/:ruleCode/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1182,get,'/staff/customer-experience/checkout-upgrade-rules',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1187,get,'/staff/customer-experience/checkout-upgrade-outcomes',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1192,post,'/staff/customer-experience/checkout-upgrade-rule-versions/:ruleId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/customer-experience-api.ts,1203,post,'/staff/customer-experience/checkout-upgrade-rule-versions/:ruleId/rollback-draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-experience-api.ts,1214,get,'/staff/customer-experience/fulfillment-capacity-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-experience-api.ts,1219,post,'/staff/customer-experience/fulfillment-capacity-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/customer-experience-api.ts,1232,post,`/staff/customer-experience/fulfillment-capacity-policies/:policyId/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/customer-experience-api.ts,1244,post,'/staff/community-activity-registrations/:registrationPublicId/refunds',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1266,post,'/staff/customers/:customerId/points',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1271,get,'/staff/loyalty/accounts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1351,post,'/staff/loyalty/redemptions/:redemptionPublicId/fulfill',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1365,post,'/staff/loyalty/redemptions/:redemptionPublicId/fail',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1384,get,'/staff/loyalty/policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1391,post,'/staff/loyalty/policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1410,post,'/staff/loyalty/policies/:policyId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1424,post,'/staff/loyalty/policies/:policyId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1429,get,'/staff/loyalty/tier-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1436,post,'/staff/loyalty/tier-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1457,post,'/staff/loyalty/tier-policies/:policyId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1465,post,'/staff/loyalty/tier-policies/:policyId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/customer-experience-api.ts,1482,get,'/staff/loyalty/reconciliation',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1487,get,'/staff/loyalty/supplement-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1492,post,'/staff/loyalty/accrual-exceptions/:orderPublicId/requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1506,post,'/staff/loyalty/supplement-requests/:publicId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1521,post,'/staff/loyalty/supplement-requests/:publicId/reject',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1536,post,'/staff/customer-followups',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-experience-api.ts,1553,post,'/staff/customer-experience/cues/:cueId/complete',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1564,post,'/staff/membership-recovery/verified-contacts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1580,get,'/staff/membership-recovery/cases',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1590,get,'/staff/membership-recovery/cases/:casePublicId/candidates',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1605,post,'/staff/membership-recovery/cases/:casePublicId/select',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1624,post,'/staff/membership-recovery/cases/:casePublicId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1642,post,'/staff/membership-recovery/cases/:casePublicId/reject',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1660,get,'/staff/membership-terms',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1668,post,'/staff/membership-terms/drafts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1684,post,'/staff/membership-terms/:version/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/customer-experience-api.ts,1692,post,'/staff/membership-terms/:version/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-preference-api.ts,27,get,'/public/mini/preferences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-preference-api.ts,32,post,'/public/mini/preferences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/customer-preference-api.ts,48,post,'/public/mini/preferences/:publicId/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/guest-commerce-service-api.ts,217,get,'/public/mini/menu/products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/guest-commerce-service-api.ts,231,get,'/guest/menu/products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,255,post,'/guest/orders',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/guest-commerce-service-api.ts,309,get,'/guest/orders/table',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,320,get,'/guest/shared-cart',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,333,post,'/guest/shared-cart/lines',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,350,put,'/guest/shared-cart/lines/:productId/bundle-selections/:unitIndex',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,373,delete,'/guest/shared-cart/lines/:productId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,393,post,'/guest/shared-cart/clear',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,410,post,'/guest/shared-cart/upgrade-opportunity',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,431,post,'/guest/shared-cart/upgrade-opportunity/:opportunityId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/guest-commerce-service-api.ts,455,get,'/guest/shared-cart/points',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/guest-commerce-service-api.ts,463,post,'/guest/shared-cart/points-quote',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/guest-commerce-service-api.ts,476,post,'/guest/shared-cart/points-settlement',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/guest-commerce-service-api.ts,505,post,'/guest/table-prepayment/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/guest-commerce-service-api.ts,515,post,'/guest/table-prepayment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/guest-commerce-service-api.ts,535,post,'/guest/shared-cart/prepayment-settlement',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/guest-commerce-service-api.ts,568,post,'/guest/shared-cart/coupon-quote',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,585,post,'/guest/shared-cart/checkout',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/guest-commerce-service-api.ts,708,post,'/guest/orders/payment-batch',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/guest-commerce-service-api.ts,740,post,'/guest/orders/:orderPublicId/payment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/guest-commerce-service-api.ts,805,post,'/guest/orders/:orderPublicId/abandon-checkout',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-commerce-service-api.ts,892,post,'/guest/service-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-commerce-service-api.ts,986,get,'/guest/service-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-commerce-service-api.ts,1000,post,'/guest/service-requests/:publicId/feedback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-commerce-service-api.ts,1062,post,'/guest/mood',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-session-api.ts,53,post,availabilityOnly ? '/session/wait' : '/session/scan',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/guest-session-api.ts,145,get,'/session',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/hardware-api.ts,67,post,'/hardware/operating-report',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/hardware-api.ts,94,post,'/operations/delivery-batches',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/hardware-api.ts,110,post,'/operations/order-items/:itemId/stock-return',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,130,post,'/hardware/table-sessions/:sessionId/bill',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,141,post,'/hardware/orders/:orderId/bill',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/hardware-api.ts,157,post,previewOnly ? '/hardware/business-days/:businessDate/report-preview' : '/hardware/business-days/:businessDate/report',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,191,get,'/hardware/print-ticket-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,198,post,'/hardware/print-ticket-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,249,get,'/hardware/devices',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,263,get,'/hardware/print-requests/:requestId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,290,get,'/hardware/print-jobs/summary',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,310,get,'/hardware/print-jobs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,330,get,'/hardware/print-sources',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,343,post,'/hardware/print-sources/:sourceId/retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,359,get,'/hardware/printer-routes',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,370,get,'/hardware/work',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,387,post,'/hardware/devices',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,411,patch,'/hardware/devices/:deviceId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,444,put,'/hardware/printer-routes/:routeCode',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,468,post,'/hardware/print-jobs/:jobId/retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,481,post,'/hardware/print-jobs/:jobId/reprint',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/hardware-api.ts,500,post,'/hardware/devices/:deviceId/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,164,get,'/inventory/setup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,184,get,'/inventory/receipts/:receiptId/publish-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,205,get,'/inventory/receipts/:receiptId/receive-and-publish-preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,215,get,'/inventory/scan',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,232,get,"""/inventory""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,251,get,"""/inventory/products/:productId/recipe""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,268,get,"""/inventory/products/:productId/recipe-cost""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,280,post,"""/inventory/items""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,328,post,"""/inventory/items/:itemId/barcodes""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,362,post,"""/inventory/items/:itemId/cost-corrections""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,402,route,"{
+    method:options.nativeProtocol ? ""POST"" : ""PUT"",url:""/inventory/products/:productId/recipe"",handler:async (request, reply) =>
+      handleRoute(reply, async () => {
+        const context = await options.resolveContext(request);
+        const body = readObject(request.body);
+        const components = readArray(body.components, ""components"", 100).map(
+          (raw) => {
+            const component = readObject(raw);
+            return {
+              inventoryItemId: readUuid(
+                component.inventoryItemId,
+                ""inventoryItemId"",
+              ),
+              quantity: readDecimal(component.quantity, ""quantity"", false),
+              expectedWasteQuantity: readDecimal(
+                component.expectedWasteQuantity ?? ""0"",
+                ""expectedWasteQuantity"",
+                true,
+              ),
+            };
+          },
+        );
+        const input: ReplaceRecipeInput = {
+          productId: readUuid(request.params.productId, ""productId""),
+          yieldQuantity: readInteger(
+            body.yieldQuantity ?? 1,
+            ""yieldQuantity"",
+            1,
+            1000,
+          ),
+          instructionsSnapshot: readJsonObject(
+            body.instructionsSnapshot ?? {},
+            ""instructionsSnapshot"",
+          ),
+          components,
+        };
+        const execution = await execute(
+          options,
+          context,
+          request,
+          ""inventory.recipe.replace"",
+          ""inventory.manage"",
+          codec<{ id: string; version: number }>(),
+          async (transaction) => {
+            if(options.nativeProtocol){
+              await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`inventory-recipe:${context.scope.tenantId}:${context.scope.storeId}:${input.productId}`]);
+              const product=(await transaction.query('SELECT id,name,product_kind,inventory_control_mode,updated_at::text FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[context.scope.tenantId,context.scope.storeId,input.productId])).rows[0];
+              const original=await readActiveRecipe(transaction,context.employeeId,input.productId);
+              if(!product||product.product_kind!=='single')throw new InventoryConflictError('配方只用于原单品，套餐请编辑组成商品');
+              if(typeof body.expectedVersion!=='string'||body.expectedVersion!==nativeRecipeVersion(original,product))throw new InventoryConflictError('原配方或商品已修改，本次未提交，请刷新核对');
+            }
+            const inventory = createInventory(transaction);
+            const recipe = await inventory.replaceActiveRecipe(input);
+            await inventory.synchronizeTrackedRecipeCostsForInventoryItems(
+              components.map((component) => component.inventoryItemId),
+              context.employeeId,
+              ""配方更新后按当前移动加权库存成本自动重算"",
+            );
+            return recipe;
+          },
+        );
+        return reply.send(response(execution));
+      }),
+  }",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,467,post,"""/inventory/products/:productId/recipe-cost/apply""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,487,post,"""/inventory/receipts""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,614,post,"""/inventory/receipts/:receiptId/receive""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,637,post,"""/inventory/receipts/:receiptId/receive-and-publish-preview""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,660,post,"""/inventory/receipts/:receiptId/receive-and-publish""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,703,get,"""/inventory/stock-counts""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,714,post,'/inventory/stock-count-submissions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,734,post,"""/inventory/stock-counts""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,777,post,`/inventory/stock-counts/:countId/${transition}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,817,post,"""/inventory/items/:itemId/waste""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,853,post,'/inventory/items/:itemId/waste-allowance',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,864,get,'/inventory/waste-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,873,post,`/inventory/waste-requests/:requestId/${decision}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,882,post,"""/inventory/stored-bottles""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/inventory-api.ts,927,post,`/inventory/stored-bottles/:bottleId/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,30,get,'/commerce/item-after-sales/access',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,46,get,'/commerce/item-after-sales/items/:itemId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,52,get,'/commerce/item-after-sales/pending',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,57,get,'/commerce/item-after-sales/remake-handover',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,62,post,'/commerce/item-after-sales/remakes/:batchId/after-visit-physical',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,69,get,'/commerce/item-after-sales/native-remake-handover',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,75,post,'/commerce/item-after-sales/native-remakes/:batchId/after-visit-physical',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,90,post,`/commerce/item-after-sales/${redeliveryPath}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,95,post,`/commerce/item-after-sales/${redeliveryPath}/:redeliveryId/cancel`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,100,post,`/commerce/item-after-sales/${redeliveryPath}/:redeliveryId/complete`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,106,post,'/commerce/item-after-sales/requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,111,post,'/commerce/item-after-sales/:caseId/decision',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,122,post,'/commerce/item-after-sales/:caseId/revision',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,127,post,'/commerce/item-after-sales/:caseId/resume',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,131,post,'/commerce/item-after-sales/:caseId/physical',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,138,post,'/commerce/item-after-sales/:caseId/notice-ack',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/item-after-sales-api.ts,144,post,'/commerce/item-after-sales/:caseId/refund-retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/item-after-sales-api.ts,149,post,'/commerce/item-after-sales/:caseId/resolve-unpaid',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/kitchen-production-api.ts,20,get,'/commerce/kitchen-board',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/kitchen-production-api.ts,25,get,'/commerce/kitchen-board/handoff-preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/kitchen-production-api.ts,31,post,'/commerce/kitchen-board/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,36,get,'/public/mini/launch-popup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,37,get,'/staff/native-launch-popup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,38,get,'/staff/native-launch-popup/product-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,39,get,'/staff/launch-popup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,40,get,'/staff/launch-popup/product-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/launch-popup-api.ts,48,post,native?'/staff/native-launch-popup':'/staff/launch-popup',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-annual-benefit-api.ts,23,get,'/staff/loyalty/annual-benefit-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-annual-benefit-api.ts,27,post,'/staff/loyalty/annual-benefit-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-annual-benefit-api.ts,38,post,'/staff/loyalty/annual-benefit-policies/:policyId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-annual-benefit-api.ts,46,post,'/staff/loyalty/annual-benefit-policies/:policyId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-annual-benefit-api.ts,56,post,'/staff/loyalty/annual-benefit-occurrences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-operational-control-api.ts,32,get,'/staff/loyalty/operational-controls',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-operational-control-api.ts,37,put,'/staff/loyalty/operational-controls/:capability',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/loyalty-refund-review-api.ts,19,get,'/staff/native-loyalty-refunds',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/loyalty-refund-review-api.ts,29,post,'/staff/native-loyalty-refunds/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/loyalty-refund-review-api.ts,36,get,'/staff/loyalty/refund-reviews',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/loyalty-refund-review-api.ts,42,post,'/staff/loyalty/refund-reviews/:refundId/requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/loyalty-refund-review-api.ts,48,post,'/staff/loyalty/refund-review-requests/:requestId/decisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-tier-benefit-management-api.ts,28,get,'/staff/loyalty/tier-benefits',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-tier-benefit-management-api.ts,35,post,'/staff/loyalty/tier-benefit-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-tier-benefit-management-api.ts,48,post,'/staff/loyalty/tier-benefit-policies/:policyId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/loyalty-tier-benefit-management-api.ts,59,post,'/staff/loyalty/tier-benefit-policies/:policyId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/manual-points-api.ts,13,get,'/staff/loyalty/manual-points',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/manual-points-api.ts,17,post,'/staff/loyalty/manual-points/requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/manual-points-api.ts,21,post,'/staff/loyalty/manual-points/decisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,31,get,'/public/mini/marketing-preferences',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,32,post,'/public/mini/marketing-preferences/choices',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,44,post,'/public/mini/marketing-preferences/stop-all',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,48,post,'/public/mini/marketing-preferences/withdraw-channel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,53,get,'/staff/marketing/notices',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,54,get,'/staff/marketing/customers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,61,post,'/staff/marketing/notices',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,71,post,'/staff/marketing/notices/:id/decision',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,81,post,'/staff/marketing/refusals',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/marketing-contact-api.ts,89,post,'/staff/marketing/consent-history/query',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,93,get,'/staff/marketing/jobs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,94,post,'/staff/marketing/jobs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/marketing-contact-api.ts,104,post,'/staff/marketing/jobs/:id/cancel',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/media-asset-api.ts,40,get,'/public/menu-thumbnail',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/media-asset-api.ts,48,get,'/staff/media-assets',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/media-asset-api.ts,58,post,'/staff/media-assets',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/media-asset-api.ts,74,get,'/staff/media-assets/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/media-asset-api.ts,110,get,'/public/media-assets/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,46,get,'/public/mini/member-cards',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,51,post,'/public/mini/member-cards/applications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,58,post,'/public/mini/member-cards/applications/:id/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,63,post,'/public/mini/member-cards/:id/withdraw',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,68,get,'/staff/member-cards/applications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,69,get,'/staff/member-cards/projects',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,70,get,'/staff/member-cards/holdings',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,74,post,'/staff/member-cards/holdings/:id/state',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,81,post,'/staff/member-cards/applications/:id/review',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,87,post,'/staff/member-cards/projects',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,107,post,'/staff/member-cards/projects/:id/validity',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-card-api.ts,112,post,'/staff/member-cards/projects/:id/state',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,34,get,'/staff/home-content-cards',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,39,post,'/staff/home-content-cards',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,46,put,'/staff/home-content-cards/:code/draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,53,post,'/staff/home-content-cards/:code/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,60,post,'/staff/home-content-cards/:code/pause',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,146,get,base,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/member-content-card-api.ts,156,get,base+'/activity-options',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-content-card-api.ts,164,post,base+'/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,32,get,'/public/mini/member-gift-jobs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,33,get,'/staff/member-gifts/campaigns',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,34,get,'/staff/member-gifts/jobs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/member-gift-campaign-api.ts,35,get,'/staff/member-gifts/refund-reviews',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/member-gift-campaign-api.ts,39,post,'/staff/member-gifts/refund-reviews',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/member-gift-campaign-api.ts,47,get,'/staff/member-gifts/refund-replacement-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,51,get,'/staff/member-gifts/options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,52,post,'/staff/member-gifts/campaigns',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,57,post,'/staff/member-gifts/campaigns/:id/decision',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,63,post,'/staff/member-gifts/campaigns/:id/target',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-gift-campaign-api.ts,69,post,'/staff/member-gifts/jobs/:id/control',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-number-api.ts,34,get,native?'/staff/native-member-number-policy':'/staff/member-number-policy',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-number-api.ts,38,post,native?'/staff/native-member-number-policy':'/staff/member-number-policy',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/member-report-api.ts,18,post,'/staff/member-report',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/member-report-api.ts,26,get,'/staff/member-report/:id/consumption',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-visit-api.ts,32,post,'/staff/member-visits/lookup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-visit-api.ts,43,post,`/staff/${namespace}/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-visit-reward-api.ts,31,get,'/staff/member-visit-rewards',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/member-visit-reward-api.ts,40,post,`/staff/${namespace}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,31,post,'/staff/loyalty/configuration-center/wechat_notifications/:configurationId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,44,post,'/staff/loyalty/configuration-center/wechat_notifications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,62,get,'/staff/loyalty/configuration-center',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,70,get,'/staff/loyalty/configuration-center/references',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,78,get,'/staff/loyalty/configuration-center/:domain/:configurationId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,87,put,'/staff/loyalty/configuration-center/:domain/:configurationId/draft',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,102,post,'/staff/loyalty/configuration-center/:domain/:configurationId/impact-preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/membership-configuration-api.ts,112,post,'/staff/loyalty/configuration-center/:domain/:configurationId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-activity-operations-api.ts,44,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-activity-operations-api.ts,45,get,root+'/components',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-activity-operations-api.ts,46,get,root+'/:publicId',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-activity-operations-api.ts,47,post,root+'/commands/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-annual-policy-api.ts,35,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-annual-policy-api.ts,36,get,root+'/occurrences',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-annual-policy-api.ts,37,get,root+'/options',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-annual-policy-api.ts,38,post,root+'/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-assignment-schedule.ts,31,get,'/table-management/native-assignment-schedule',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-assignment-schedule.ts,44,post,'/table-management/native-assignment-schedule/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-benefit-exceptions-api.ts,28,get,'/staff/native-benefit-exceptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-benefit-exceptions-api.ts,33,post,'/staff/native-benefit-exceptions/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-benefit-wallet-api.ts,28,post,'/staff/native-benefit-wallet/lookup',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/native-benefit-wallet-api.ts,66,get,'/staff/native-benefit-wallet/products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-benefit-wallet-api.ts,74,post,'/staff/native-benefit-wallet/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/native-checkout-management-api.ts,34,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/native-checkout-management-api.ts,35,get,root+'/products',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/native-checkout-management-api.ts,36,post,root+'/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-contact-governance-api.ts,27,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-contact-governance-api.ts,31,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-coupon-calendar-api.ts,27,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-coupon-calendar-api.ts,31,post,root+'/preview',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-coupon-calendar-api.ts,34,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/native-customer-publication-api.ts,40,get,'/staff/native-publication',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/native-customer-publication-api.ts,47,post,'/staff/native-publication/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/native-experience-plan-api.ts,51,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/native-experience-plan-api.ts,63,post,root+'/:planId',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/native-hardware-management.ts,45,get,'/hardware/native-management',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/native-hardware-management.ts,62,post,'/hardware/native-management/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-loyalty-supplements-api.ts,23,get,'/staff/native-loyalty-supplements',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-loyalty-supplements-api.ts,29,post,'/staff/native-loyalty-supplements/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-marketing-contact-api.ts,37,get,root+'/workspace',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-marketing-contact-api.ts,38,get,root+'/notices',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/native-marketing-contact-api.ts,48,get,root+'/customers',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/native-marketing-contact-api.ts,52,post,root+'/history',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-marketing-contact-api.ts,56,get,root+'/jobs',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-marketing-contact-api.ts,60,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-member-cards-api.ts,37,get,'/staff/native-member-cards',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-member-cards-api.ts,45,get,'/staff/native-member-cards/projects/:id/config',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+商品库存与媒体,server/normalized/native-member-cards-api.ts,54,get,'/staff/native-member-cards/products',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-member-cards-api.ts,58,post,'/staff/native-member-cards/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/native-member-gift-api.ts,40,get,root+'/refund-'+state,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/native-member-gift-api.ts,44,get,root+'/refund-options',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-member-gift-api.ts,47,get,root+'/'+kind,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-member-gift-api.ts,51,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-configuration-api.ts,37,get,'/staff/native-membership-config',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-configuration-api.ts,43,get,'/staff/native-membership-config/:domain/:id',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-configuration-api.ts,56,post,'/staff/native-membership-config/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-recovery-api.ts,40,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-recovery-api.ts,41,get,root+'/candidates',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-membership-recovery-api.ts,46,post,root+'/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-performance-api.ts,50,get,'/staff/native-performances',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-performance-api.ts,63,post,'/staff/native-performances/preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-performance-api.ts,66,get,'/staff/native-performances/performers/:performerId/songs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-performance-api.ts,76,get,'/staff/native-performances/revisions/:publicId/impacts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/native-performance-api.ts,79,post,'/staff/native-performances/commands/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-product-phase-api.ts,28,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-product-phase-api.ts,29,post,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-push-api.ts,59,get,'/capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-push-api.ts,60,get,'/installations/:installationId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-push-api.ts,61,put,'/installations/:installationId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-push-api.ts,66,post,'/installations/:installationId/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-push-api.ts,71,post,'/installations/:installationId/revoke-capability',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/native-push-api.ts,76,get,'/deliveries/:deliveryId/target',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/native-push-api.ts,77,post,'/deliveries/:deliveryId/observations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-recommendation-policy-api.ts,36,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-recommendation-policy-api.ts,41,post,root+'/:action',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/native-service-api.ts,53,get,'/native-service-center',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/native-service-api.ts,62,post,'/native-service-tasks/:taskId/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/native-service-api.ts,92,post,'/native-service-recovery',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-social-operations-api.ts,30,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-social-operations-api.ts,31,get,root+'/account-options',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/native-social-operations-api.ts,32,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-stacking-policy-api.ts,27,get,root,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-stacking-policy-api.ts,31,post,root+'/preview',True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/native-stacking-policy-api.ts,34,post,root+'/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-staff-administration-api.ts,40,get,'/staff/native-administration',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/native-staff-administration-api.ts,47,post,'/staff/native-administration/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/native-table-configuration.ts,27,get,'/table-management/native-configuration',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/native-table-configuration.ts,35,post,'/table-management/native-configuration/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/native-update-distribution.ts,15,route,"{
+    method: ['GET', 'HEAD'], url: `${PREFIX}/*`,
+    async handler(request, reply) {
+      const name = request.params['*']
+      const manifest = name === 'stable.json' || name === 'preview.json'
+      if (directory === null || (!manifest && (!APK.test(name) || name.includes('..')))) return missing(reply)
+      const root = resolve(directory)
+      let file: Awaited<ReturnType<typeof open>> | undefined
+      try {
+        const rootStat = await lstat(root)
+        if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || await realpath(root) !== root) return missing(reply)
+        // O_NOFOLLOW prevents a swap of a checked public filename to a symlink.
+        file = await open(join(root, name), constants.O_RDONLY | constants.O_NOFOLLOW)
+        const stat = await file.stat()
+        if (!stat.isFile() || stat.size <= 0 || stat.size > (manifest ? 65_536 : MAX_APK_BYTES)) return missing(reply)
+        reply.header('x-content-type-options', 'nosniff')
+        if (manifest) {
+          const bytes = await file.readFile()
+          const feed: unknown = JSON.parse(bytes.toString('utf8'))
+          if (typeof feed !== 'object' || feed === null || !('schemaVersion' in feed) || feed.schemaVersion !== 1
+            || !('channel' in feed) || feed.channel !== name.slice(0, -5) || !('releases' in feed) || !Array.isArray(feed.releases)) return missing(reply)
+          return reply.header('cache-control', 'no-store').type('application/json; charset=utf-8')
+            .header('content-length', bytes.length).send(request.method === 'HEAD' ? undefined : bytes)
+        }
+        reply.type('application/vnd.android.package-archive')
+          .header('cache-control', 'public, max-age=31536000, immutable')
+          .header('content-length', stat.size)
+          .header('etag', `""${name}""`)
+        if (request.method === 'HEAD') return reply.send()
+        const stream = file.createReadStream({ autoClose: true })
+        file = undefined // The response stream now owns this descriptor.
+        return reply.send(stream)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP' || error instanceof SyntaxError) return missing(reply)
+        request.log.error({ err: error }, 'native update file could not be read')
+        return reply.header('cache-control', 'no-store').code(503).send({ error: { code: 'NATIVE_UPDATE_UNAVAILABLE', message: '更新文件暂时无法读取' } })
+      } finally {
+        await file?.close()
+      }
+    },
+  }",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-update-distribution.ts,57,route,"{ method: ['GET', 'HEAD'], url: PREFIX, handler: (_request, reply) => missing(reply) }",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/native-update-distribution.ts,58,route,"{
+    method: ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], url,
+    handler: (_request, reply) => reply.header('allow', 'GET, HEAD').header('cache-control', 'no-store')
+      .code(405).send({ error: { code: 'NATIVE_UPDATE_READ_ONLY', message: '更新文件仅供读取' } }),
+  }",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-app.ts,1548,get,'/api/live',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-app.ts,1549,get,'/api/version',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-app.ts,1566,get,'/api/ready',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-observability.ts,62,get,'/api/metrics',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-operations-api.ts,183,get,'/business-days/end-current/preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/normalized-operations-api.ts,187,get,'/operations/history',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-operations-api.ts,215,get,'/operations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/normalized-operations-api.ts,225,post,'/table-sessions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/normalized-operations-api.ts,257,post,'/table-sessions/:sessionId/begin-closing',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/normalized-operations-api.ts,278,post,'/table-sessions/:sessionId/close',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/normalized-operations-api.ts,299,post,'/table-sessions/:sessionId/close-after-customer-left',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/normalized-operations-api.ts,323,post,'/table-sessions/:sessionId/guest-cart-freeze',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-operations-api.ts,412,post,'/business-days/end-current',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/normalized-operations-api.ts,417,post,'/business-days/close-pending',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/normalized-operations-api.ts,437,post,'/service-tasks',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/normalized-operations-api.ts,487,post,`/service-tasks/:taskId/${transition}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/notification-api.ts,61,get,'/notifications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/notification-api.ts,69,post,'/notifications/:notificationId/retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/official-points-notification-api.ts,23,get,'/staff/loyalty/official-notifications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/official-points-notification-api.ts,33,get,'/staff/loyalty/official-notifications/accounts/:id/templates',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/official-points-notification-api.ts,38,post,'/staff/loyalty/official-notifications/settings',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/official-points-notification-api.ts,57,get,'/public/mini/official-points-notifications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/official-points-notification-api.ts,67,post,'/public/mini/official-points-notifications',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/order-financial-recovery-api.ts,13,get,'/staff/order-financial-recovery',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/order-financial-recovery-api.ts,19,post,'/staff/order-financial-recovery/:orderId/requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/order-financial-recovery-api.ts,24,post,'/staff/order-financial-recovery-requests/:requestId/decisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,66,get,"""/commercial-ops/native-capabilities""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,72,post,"correction?""/commercial-ops/costs/:costId/corrections"":""/commercial-ops/costs""",True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,93,get,"""/commercial-ops/owner-finance""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,176,post,"""/commercial-ops/cost-categories""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,221,post,"""/commercial-ops/cost-centers""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,255,post,"""/commercial-ops/recurring-costs""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,363,post,"""/commercial-ops/recurring-costs/materialize""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,450,post,"""/commercial-ops/recurring-costs/:ruleId/status""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,521,post,"""/commercial-ops/compensation-rules""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,593,post,"""/commercial-ops/payroll-runs""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,742,post,"""/commercial-ops/payroll-runs/:runId/approve""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,780,post,"""/commercial-ops/payroll-runs/:runId/void""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+财务费用薪酬与交接,server/normalized/owner-finance-api.ts,818,post,"""/commercial-ops/payroll-runs/:runId/post""",False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,301,post,'/payments',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+报表与历史范围,server/normalized/payment-api.ts,365,post,'/payments/:paymentId/close-unpresented-history',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,374,post,path,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/payment-api.ts,433,post,'/activity-registrations/:registrationPublicId/manual-collections',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,488,post,'/orders/:orderId/recollection-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,503,post,'/activity-registrations/:registrationPublicId/recollection-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,527,post,'/payments/:paymentId/retry-release',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,546,post,'/payments/:paymentId/provider-close',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,569,post,'/payments/:paymentId/provider-query',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,624,get,'/payments/:paymentId/status',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,648,post,'/payments/providers/:provider/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,656,post,'/payments/:paymentId/refunds',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,693,post,'/refunds/:refundId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,697,post,'/refunds/:refundId/reject',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,701,post,'/refunds/:refundId/execute',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,750,post,'/refunds/:refundId/provider-query',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,770,post,'/refunds/:refundId/manual-result',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,801,post,'/refunds/providers/:provider/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,809,get,'/reconciliation',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,829,get,'/payments/workbench/todo-summary',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-api.ts,840,get,'/payments/workbench',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/payment-api.ts,883,post,'/orders/:orderId/cancel-unpaid',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/payment-api.ts,904,post,'/orders/:orderId/settle-exception',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-finance-api.ts,11,get,'/payments/finance-review',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/payment-finance-api.ts,49,post,'/payments/:paymentId/finance-review',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,29,put,'/public/mini/activity-registrations/:registrationPublicId/contact',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,46,post,'/staff/activity-contacts/:contactVersionPublicId/reveal',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,62,get,'/staff/personal-contact-governance/policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,67,get,'/staff/personal-contact-governance/evidence',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,72,post,'/staff/personal-contact-governance/policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,86,post,'/staff/personal-contact-governance/policies/:publicId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,97,post,'/staff/personal-contact-governance/policies/:publicId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,110,post,'/staff/personal-contact-governance/legal-holds',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/personal-contact-governance-api.ts,125,post,'/staff/personal-contact-governance/legal-holds/:publicId/release',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/pickup-workflow-api.ts,16,get,'/commerce/pickup-board',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/pickup-workflow-api.ts,23,post,'/commerce/pickup-board/commands',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/pickup-workflow-api.ts,30,post,'/commerce/pickup-board/device',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+出品配送服务与售后,server/normalized/pickup-workflow-api.ts,37,post,'/commerce/pickup-board/recovery',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,36,get,'/hardware/native-print-bridges/capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,40,post,'/hardware/native-print-bridges/:bridgeId/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,61,get,'/hardware/print-bridges',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,68,post,'/hardware/print-bridges/pairing-code',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,87,post,'/hardware/print-bridges/:bridgeId/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,107,post,'/print-bridge/pair',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,119,post,'/print-bridge/heartbeat',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,130,post,'/print-bridge/work/claim',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,136,post,'/print-bridge/jobs/:jobId/result',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+打印与硬件,server/normalized/print-bridge-api.ts,146,post,'/print-bridge/commands/:commandId/result',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/promotional-loyalty-api.ts,33,get,'/staff/loyalty/promotion-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/promotional-loyalty-api.ts,38,post,'/staff/loyalty/promotion-policies',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/promotional-loyalty-api.ts,63,post,'/staff/loyalty/promotion-policies/:policyId/approve',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/promotional-loyalty-api.ts,74,post,'/staff/loyalty/promotion-policies/:policyId/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/promotional-loyalty-public-api.ts,73,get,'/public/community-activities/:activityPublicId/loyalty-benefits',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,218,post,'/public/reservation/session',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,252,get,'/public/reservation/availability',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/public-reservation-api.ts,280,get,'/public/reservation/performances',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,293,post,'/public/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,442,get,'/public/reservations/mine',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,448,get,'/public/reservations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,456,patch,'/public/reservations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,596,delete,'/public/reservations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,643,post,'/public/waitlist',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,678,get,'/public/waitlist/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,692,delete,'/public/waitlist/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,715,get,'/staff/native-waitlist-capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,721,post,'/staff/native-waitlist/:publicId/transition',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,766,post,`/staff/${namespace}/:kind/:publicId/priority-override`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/public-reservation-api.ts,848,get,'/staff/reservation-intake',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/recommendation-staff-modification-api.ts,33,get,'/staff/customer-experience/recommendations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/recommendation-staff-modification-api.ts,39,get,'/staff/native-customer-experience/recommendations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+顾客隐私偏好与档案,server/normalized/recommendation-staff-modification-api.ts,45,post,`/staff/${native?'native-customer-experience':'customer-experience'}/recommendations/:recommendationPublicId/modifications`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,207,get,'/guest/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,221,get,'/guest/reservations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,236,post,'/guest/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,276,delete,'/guest/reservations/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,304,get,'/guest/performances/today',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,312,post,'/guest/song-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,340,delete,'/guest/song-requests/:requestId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,361,get,'/staff/native-reservation-capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,366,get,'/staff/native-reservation-tables',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,377,post,'/staff/native-reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,412,get,'/staff/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,512,post,'/staff/reservations/:reservationId/contact',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,534,post,'/staff/reservations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,574,post,`/staff/${namespace}/:reservationId/${transition}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-performance-api.ts,601,post,`/staff/${namespace}/:reservationId/cancel`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,637,get,'/staff/performers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,656,post,'/staff/performers',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,673,patch,'/staff/performers/:performerId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,694,get,'/staff/performers/:performerId/songs',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,709,post,'/staff/performers/:performerId/songs/import',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,730,patch,'/staff/songs/:songId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,752,get,'/staff/performances/today',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,762,get,'/staff/schedules/monthly',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,769,post,'/staff/schedules/monthly/preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,775,post,'/staff/schedules/monthly/publish',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,783,post,'/staff/schedules',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,800,patch,'/staff/schedules/:scheduleId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,821,post,'/staff/schedules/:scheduleId/status',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,843,get,'/staff/native-song-capabilities',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/reservation-performance-api.ts,848,get,'/staff/native-song-requests/:requestId/payment-evidence',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,868,post,'/staff/native-song-requests/:requestId/:action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,892,get,'/staff/song-requests',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,915,post,'/staff/song-requests/:requestId/confirm',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,940,post,'/staff/song-requests/:requestId/paid',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-api.ts,966,post,`/staff/song-requests/:requestId/${transition}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/reservation-performance-notification-api.ts,32,get,'/public/reservation/performance-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/reservation-performance-notification-api.ts,45,post,'/public/reservation/performance-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-revision-api.ts,36,post,'/staff/performance-revisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-revision-api.ts,59,get,'/staff/performance-revisions/:publicId/impacts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-revision-api.ts,71,get,'/public/reservation/performance-impacts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+演出与点歌,server/normalized/reservation-performance-revision-api.ts,77,post,'/public/reservation/performance-impacts/:publicId/acknowledgements',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,48,get,'/staff/reservation-receptions/options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,60,post,'/staff/reservation-receptions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,96,get,'/staff/reservation-receptions/by-public-id/:publicId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,109,get,'/staff/reservation-receptions/:reservationId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,118,get,'/staff/reservation-receptions/:reservationId/table-sessions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/reservation-reception-api.ts,134,post,'/staff/reservation-receptions/:reservationId/seat',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/social-account-api.ts,28,get,'/staff/member-cards/product-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,36,get,'/staff/social-accounts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,37,get,'/staff/social-accounts/events',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,38,post,'/staff/social-accounts/events/:id/retry',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,47,post,'/staff/social-accounts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/social-account-api.ts,60,post,'/staff/member-cards/projects/:id/social-policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/social-account-api.ts,81,get,'/staff/member-cards/projects/:id/menu',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/social-account-api.ts,85,post,'/staff/member-cards/projects/:id/menu',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/social-account-api.ts,108,post,'/staff/member-cards/projects/:id/menu/remove',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,118,get,'/social-accounts/:id/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-account-api.ts,121,post,'/social-accounts/:id/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-broadcast-api.ts,22,get,'/staff/social-broadcasts/accounts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-broadcast-api.ts,23,get,'/staff/social-broadcasts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-broadcast-api.ts,24,post,'/staff/social-broadcasts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/social-broadcast-api.ts,33,post,'/staff/social-broadcasts/:id/action',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/stacking-pricing-api.ts,12,post,'/staff/loyalty/coupon-calendar-preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/stacking-pricing-api.ts,36,get,'/staff/loyalty/stacking-price-drafts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/stacking-pricing-api.ts,48,post,'/staff/loyalty/stacking-price-drafts',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/stacking-pricing-api.ts,64,post,'/staff/loyalty/stacking-price-preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/stacking-pricing-api.ts,80,post,'/staff/loyalty/stacking-price-drafts/:id/decisions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-access-management-api.ts,24,get,'/staff-access/overview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-access-management-api.ts,30,post,`/staff-access/employees${recover ? '/recover' : ''}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-access-management-api.ts,54,post,`/staff-access/employees/:employeeId/status${recover ? '/recover' : ''}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-access-management-api.ts,71,post,'/staff-access/deploy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,61,post,'/device-access',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,81,post,'/login',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,95,post,'/switch',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,110,get,'/session',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,127,post,'/heartbeat',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/normalized/staff-auth-api.ts,137,post,'/logout',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/staff-workspace-api.ts,27,get,'/staff/workspace',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/store-commerce-policy.ts,147,get,'/staff/native-commerce-policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/store-commerce-policy.ts,152,post,'/staff/native-commerce-policy/'+action,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+订单购物车与结算,server/normalized/store-commerce-policy.ts,165,get,'/store/commerce-policy',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/store-commerce-policy.ts,174,patch,'/store/commerce-policy/online-payment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/store-commerce-policy.ts,218,patch,'/store/commerce-policy/payment-reservation',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,70,get,'/table-management/sessions/:tableSessionId/minimum-spend',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,78,post,'/table-management/sessions/:tableSessionId/minimum-spend',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/table-management-api.ts,89,get,'/table-management/prepayments',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/table-management-api.ts,102,get,'/table-management/sessions/:tableSessionId/prepayment',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+支付退款与收银,server/normalized/table-management-api.ts,115,post,`/table-management/sessions/:tableSessionId/prepayment/${action}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,140,get,'/table-management/areas',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,149,get,'/table-management/tables',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,158,get,'/table-management/assignments',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,167,get,'/table-management/assignment-options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,179,post,'/table-management/areas',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,190,patch,'/table-management/areas/:areaId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,201,post,'/table-management/tables',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,213,patch,'/table-management/tables/:tableId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,226,post,`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,240,post,`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}/batch`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,254,post,`/table-management/${guarded ? 'guarded-assignments' : 'assignments'}/:assignmentId/end`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,264,post,'/table-management/sessions/open',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,280,post,'/table-management/sessions/:tableSessionId/transfer',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,293,get,'/table-management/sessions/:tableSessionId/participants',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,305,post,'/table-management/sessions/:tableSessionId/participant-movements/preview',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-management-api.ts,558,post,`/table-management/sessions/:tableSessionId/${movementRoute}`,True,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-service-api.ts,14,get,'/table-service/tables',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-service-api.ts,20,get,'/table-service/tables/:tableId/options',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-service-api.ts,26,get,'/table-service/tables/:tableId/sessions',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-service-api.ts,32,get,'/table-service/sessions/:sessionId',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+桌台预约与候位,server/normalized/table-service-api.ts,38,post,'/table-service/sessions/:sessionId/handover',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/website-menu-api.ts,28,get,'/public/website/menu',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/wechat-loyalty-notification-api.ts,34,get,'/public/mini/wechat-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/wechat-loyalty-notification-api.ts,45,post,'/public/mini/wechat-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/wechat-member-service-notification-api.ts,24,get,'/public/mini/wechat-member-service-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/normalized/wechat-member-service-notification-api.ts,31,post,'/public/mini/wechat-member-service-notification-authorizations',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+活动营销与通知,server/normalized/wechat-notification-prompt-api.ts,22,get,'/public/mini/wechat-notification-prompt',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-callback.ts,42,get,'/wechat/service-account/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-callback.ts,51,post,'/wechat/service-account/callback',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-subscribe.ts,26,get,'/wechat/service-account/subscribe',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-subscribe.ts,57,get,'/wechat/service-account/subscribe/result',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-subscribe.ts,75,get,'/wechat/service-account/subscribe/jssdk-config',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-subscribe.ts,110,post,'/wechat/service-account/subscribe/send-test',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/normalized/wechat-service-account-subscribe.ts,111,post,'/wechat/service-account/subscribe/authorize',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/presence.ts,219,post,'/api/auth/presence/heartbeat',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/presence.ts,286,post,'/api/auth/logout',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/wechat-api.ts,286,post,'/api/wechat/challenges',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+认证员工与设备会话,server/wechat-api.ts,314,post,'/api/wechat/code-authentication',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/wechat-api.ts,407,post,'/api/wechat/logout',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+会员积分与权益,server/wechat-api.ts,433,delete,'/api/wechat/member-binding',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收
+平台基础与后台协调,server/wechat-api.ts,458,post,'/api/wechat/authorization/revoke',False,路由登记索引；领域复核与代表性动态证据见总报告，不等同逐端点验收

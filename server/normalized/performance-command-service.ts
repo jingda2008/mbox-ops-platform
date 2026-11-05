@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import {executeNativeSong, type NativeSongInput} from './native-song-command.js'
 import {randomUUID} from 'node:crypto'
 import {readMonthlySchedule,previewMonthlySchedule,type MonthlyScheduleInput} from './monthly-schedule.js'
@@ -87,7 +88,7 @@ export class PerformanceCommandService {
   nativeSong(input: NativeSongInput) { return executeNativeSong(this.commands, input) }
 
   createPerformer(input: Readonly<CreatePerformerCommand>): Promise<CommandExecution<Performer>> {
-    return this.commands.execute(command(input, 'performer.create', performerCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performer.create', performerCodec), async (transaction) => {
       const performer = await new PerformerRepository(transaction).create(input)
       return outcome(
         performer,
@@ -103,7 +104,7 @@ export class PerformanceCommandService {
   }
 
   updatePerformer(input: Readonly<UpdatePerformerCommand>): Promise<CommandExecution<Performer>> {
-    return this.commands.execute(command(input, 'performer.update', performerCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performer.update', performerCodec), async (transaction) => {
       const repository = new PerformerRepository(transaction)
       const before = await repository.findById(input.performerId)
       const performer = await repository.update(input)
@@ -124,7 +125,7 @@ export class PerformanceCommandService {
   importPerformerSongs(
     input: Readonly<ImportPerformerSongsCommand>,
   ): Promise<CommandExecution<PerformerSongImportResult>> {
-    return this.commands.execute(command(input, 'performer-song.import', songImportCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performer-song.import', songImportCodec), async (transaction) => {
       const result = await new PerformerSongRepository(transaction).import({
         performerId: input.performerId,
         employeeId: input.actor.type === 'employee' ? input.actor.employeeId : null,
@@ -155,7 +156,7 @@ export class PerformanceCommandService {
   updatePerformerSong(
     input: Readonly<UpdatePerformerSongCommand>,
   ): Promise<CommandExecution<PerformerSong>> {
-    return this.commands.execute(command(input, 'performer-song.update', performerSongCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performer-song.update', performerSongCodec), async (transaction) => {
       const repository = new PerformerSongRepository(transaction)
       const before = await repository.findById(input.songId, true)
       const song = await repository.update(input.songId, input.changes)
@@ -174,7 +175,7 @@ export class PerformanceCommandService {
   }
 
   createSchedule(input: Readonly<CreateScheduleCommand>): Promise<CommandExecution<PerformanceSchedule>> {
-    return this.commands.execute(command(input, 'performance-schedule.create', scheduleCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performance-schedule.create', scheduleCodec), async (transaction) => {
       const schedule = await new ScheduleRepository(transaction).create(input)
       return outcome(
         schedule,
@@ -191,7 +192,7 @@ export class PerformanceCommandService {
 
   publishMonthly(input:Readonly<MonthlyScheduleInput & CommandMetadata>):Promise<CommandExecution<JsonObject>> {
     const validated=readMonthlySchedule(input)
-    return this.commands.execute(command(input,'performance-schedule.monthly-publish',{encode:value=>value,decode:value=>{if(value===null||Array.isArray(value)||typeof value!=='object')throw new TypeError('排班结果无效');return value as JsonObject}}),async transaction=>{
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input,'performance-schedule.monthly-publish',{encode:value=>value,decode:value=>{if(value===null||Array.isArray(value)||typeof value!=='object')throw new TypeError('排班结果无效');return value as JsonObject}}),async transaction=>{
       if(input.actor.type!=='employee')throw new TypeError('需要员工身份')
       await new StaffAccessRepository(transaction).assertPermission(input.actor.employeeId,'song.manage')
       await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${transaction.scope.tenantId}:${transaction.scope.storeId}:performance-timeline`])
@@ -206,7 +207,7 @@ export class PerformanceCommandService {
   }
 
   updateSchedule(input: Readonly<UpdateScheduleCommand>): Promise<CommandExecution<PerformanceSchedule>> {
-    return this.commands.execute(command(input, 'performance-schedule.update', scheduleCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, 'performance-schedule.update', scheduleCodec), async (transaction) => {
       const repository = new ScheduleRepository(transaction)
       const before = await repository.findById(input.scheduleId)
       const schedule = await repository.update(input)
@@ -227,7 +228,7 @@ export class PerformanceCommandService {
   transitionSchedule(
     input: Readonly<ScheduleTransitionCommand>,
   ): Promise<CommandExecution<PerformanceSchedule>> {
-    return this.commands.execute(command(input, `performance-schedule.${input.targetStatus}`, scheduleCodec), async (transaction) => {
+    return staffAuthorizedCommands(this.commands, requireStaffActor(input.actor), 'song.manage', true).execute(command(input, `performance-schedule.${input.targetStatus}`, scheduleCodec), async (transaction) => {
       const repository = new ScheduleRepository(transaction)
       const before = await repository.findById(input.scheduleId)
       const schedule = input.targetStatus === 'performing'
@@ -512,3 +513,8 @@ const songImportCodec = jsonCodec<PerformerSongImportResult>()
 const scheduleCodec = jsonCodec<PerformanceSchedule>()
 const songRequestCodec = jsonCodec<SongRequest>()
 const submissionCodec = jsonCodec<SongRequestSubmission>()
+
+function requireStaffActor(actor: AuditActor): string {
+  if (actor.type !== 'employee') throw new TypeError('演出配置操作需要员工身份')
+  return actor.employeeId
+}

@@ -1,5 +1,6 @@
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
-import {NormalizedCommandExecutor,type JsonCodec,type JsonValue} from './command-executor.js'
+import {NormalizedCommandExecutor,NativeCommandNotCommittedError,type JsonCodec,type JsonValue} from './command-executor.js'
+import {reauthorizingCommands} from './staff-authorized-command.js'
 import type {ScopedTransaction,StoreScope} from './transaction-runner.js'
 import {assertEmployeeEffectivePermission} from './employee-table-access.js'
 import {StaffAccessRepository} from './staff-access-repository.js'
@@ -14,7 +15,7 @@ import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import {assertUnpaidMadeStopPermission} from './item-unpaid-made-stop.js'
 
 type Progress=Awaited<ReturnType<ItemAfterSalesProgressRepository['read']>>
-interface Metadata {scope:Readonly<StoreScope>;employeeId:string;businessDate:string;idempotencyKey:string;reason:string}
+interface Metadata {scope:Readonly<StoreScope>;employeeId:string;businessDate:string;idempotencyKey:string;reason:string;replayOnly?:boolean}
 /** Must persist KDS/delivery aggregates and station notifications in this same
  * transaction. Never call a printer or payment provider inside this callback. */
 export interface QuantityOperatingEffects {
@@ -217,7 +218,8 @@ export class ItemAfterSalesCommandService {
 
   private execute(input:Metadata,action:'request'|'approved'|'rejected'|'withdrawn'|'resume'|'physical'|'notice_ack'|'payment_resolved'|'refund_retry'|'revision',selection:Record<string,JsonValue>,handler:(tx:ScopedTransaction)=>Promise<string>,unitIds?:readonly string[]){
     if(input.reason.trim().length<2||input.reason.length>1000)throw new ItemQuantityConflict('QUANTITY_INVALID','请填写简短的实际原因')
-    return this.commands.execute({scope:input.scope,operationScope:`item.after-sales.${action}`,idempotencyKey:input.idempotencyKey,
+    return reauthorizingCommands(this.commands).execute({scope:input.scope,operationScope:`item.after-sales.${action}`,idempotencyKey:input.idempotencyKey,
+      retainReceipt:true,rejectExpiredReceipt:true,replayOnly:input.replayOnly,
       // Business date is assigned when the command first commits. A next-day
       // retry with the same action must read that result, never create a new case.
       requestFingerprint:JSON.stringify({employeeId:input.employeeId,action,...selection,reason:input.reason.trim()}),resultCodec:progressCodec},async tx=>{
@@ -226,7 +228,16 @@ export class ItemAfterSalesCommandService {
       await new CheckoutPointsRepository(tx).restoreStoppedCase(caseId)
       const result=await new ItemAfterSalesProgressRepository(tx).synchronize(caseId)
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:input.employeeId},action:`item_after_sales.${action}`,objectType:'item_after_sales_case',objectId:caseId,businessDate:input.businessDate,reason:input.reason.trim(),metadata:{orderId:result.orderId,quantity:result.selectedQuantity,...(action==='refund_retry'?{previousRefundId:selection.refundId!}:action==='revision'?{previousCaseId:selection.caseId!}:{})}}],outboxMessages:[]}
-    })
+    },async tx=>{
+      if(action==='approved'||action==='rejected'){
+        const current=await new ItemAfterSalesProgressRepository(tx).read(String(selection.caseId))
+        if(current.kind==='unpaid_stop')await assertUnpaidMadeStopPermission(tx,String(selection.caseId),input.employeeId)
+        else await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.approve')
+      }else{
+        await assertEmployeeEffectivePermission(tx,input.employeeId,action==='refund_retry'?'refund.execute':'refund.request')
+        if(action==='physical')await assertEmployeeEffectivePermission(tx,input.employeeId,selection.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')
+      }
+    }).catch(error=>{throw error instanceof NativeCommandNotCommittedError?error.original:error})
   }
 }
 

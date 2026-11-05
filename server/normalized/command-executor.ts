@@ -79,6 +79,8 @@ export interface IdempotentCommand<Result> {
   resultCodec: JsonCodec<Result>
   /** Recover an existing, unexpired result without claiming or resuming a write. */
   replayOnly?: boolean
+  /** An old key is never a new intent, even after its cached response expires. */
+  rejectExpiredReceipt?: boolean
   /** Runs under the receipt lock, before returning a completed receipt. */
   authorizeReplay?: (transaction: ScopedTransaction, authorization: unknown) => Promise<void>
   /** Opt-in native command receipts survive routine idempotency cleanup. */
@@ -245,7 +247,7 @@ async function claimIdempotency<Result>(
       throw new IdempotencyRecordError('Idempotency record disappeared while claiming the command')
     }
     if (record.is_expired) {
-      if (command.replayOnly) throw new IdempotencyReceiptUnavailableError()
+      if (command.replayOnly || command.rejectExpiredReceipt) throw new IdempotencyReceiptUnavailableError()
       const reclaimed = await transaction.query<{ id: string }>(`
         UPDATE mbox.idempotency_records
         SET request_sha256 = $6,

@@ -79,6 +79,7 @@ integration('normalized PostgreSQL transaction integration', () => {
         INSERT INTO mbox.staff_permission_definitions(tenant_id, store_id, code, name)
         VALUES
           ($1::uuid, $2::uuid, 'table.view_all', 'View all tables'),
+          ($1::uuid, $2::uuid, 'table.open', 'Open tables'),
           ($1::uuid, $2::uuid, 'service.manage', 'Manage service tasks')
         ON CONFLICT (tenant_id, store_id, code) DO UPDATE SET name = EXCLUDED.name
         RETURNING id

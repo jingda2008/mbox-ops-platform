@@ -10,6 +10,7 @@ import {readKitchenBatches,readKitchenBoard,readKitchenSources,readKitchenHandof
 import type {ScopedTransaction} from './transaction-runner.js'
 import {executeKitchenHandoff} from './kitchen-production-handoff.js'
 import {ItemQuantityRepository} from './item-quantity-repository.js'
+import {reauthorizingCommands} from './staff-authorized-command.js'
 
 type Options=Pick<CommerceKdsApiOptions,'resolveContext'|'staffAccessTransactions'|'commandExecutor'|'createKdsRepository'|'createOrderRepository'>&{enabled?:boolean;barEnabled?:boolean}
 const codec:JsonCodec<KitchenCommandResult>={encode:value=>({...value}),decode:value=>value as KitchenCommandResult}
@@ -37,9 +38,10 @@ export const kitchenProductionApiPlugin:FastifyPluginAsync<Options>=async(app,op
     // Authorize even when the generic executor returns a cached result.
     await options.staffAccessTransactions.run(context.scope,tx=>authorize(tx,context,stationCode,command.action==='handoff'))
     const operationKey=createHash('sha256').update(`${context.employeeId}:${stationCode==='bar'?'bar/':''}${key}`).digest('hex')
-    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'commerce.kitchen.batch',
+    const execution=await reauthorizingCommands(options.commandExecutor).execute({scope:context.scope,operationScope:'commerce.kitchen.batch',
       idempotencyKey:operationKey,requestFingerprint:JSON.stringify(stationCode==='bar'?{employeeId:context.employeeId,command,stationCode}:{employeeId:context.employeeId,command}),resultCodec:codec},
-    tx=>executeKitchenCommand(tx,options,context,command,key,request.id,stationCode))
+    tx=>executeKitchenCommand(tx,options,context,command,key,request.id,stationCode),
+    tx=>authorize(tx,context,stationCode,command.action==='handoff'))
     return reply.send({data:execution.value,replayed:execution.replayed})
   }))
 }

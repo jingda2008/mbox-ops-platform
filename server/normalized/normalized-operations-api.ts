@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { registerNativeServiceRoutes } from './native-service-api.js'
 import {ExperiencePlanLifecycleRepository,ExperiencePlanLifecycleConflict} from './experience-plan-lifecycle-repository.js'
 import {QuantityRedeliveryRepository} from './quantity-redelivery-repository.js'
@@ -442,7 +443,7 @@ export const normalizedOperationsApiPlugin: FastifyPluginAsync<NormalizedOperati
     const idempotencyKey = readIdempotencyKey(request)
     const input = readCreateTaskInput(body, context.employeeId)
     const publicId = input.publicId ?? createPublicId('service-task')
-    const execution = await options.commandExecutor.execute({
+    const execution = await staffAuthorizedCommands(options.commandExecutor, context.employeeId, 'service.execute', true).execute({
       scope: context.scope,
       operationScope: 'service-task.create',
       idempotencyKey,

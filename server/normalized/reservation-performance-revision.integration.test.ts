@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -44,6 +45,7 @@ integration('reservation performance revision PostgreSQL integration', () => {
     runner = new ScopedPostgresTransactionRunner(asPool(runtime))
     service = new ReservationPerformanceRevisionService(runner, new NormalizedCommandExecutor(runner))
     await seed(pool)
+    await grantFixtureStaffPermissions(pool, { tenantId, storeId }, [employeeId], ['performance.schedule.revise'])
   })
 
   afterAll(async () => { await runtime?.end(); await pool?.end() })
@@ -127,6 +129,10 @@ integration('reservation performance revision PostgreSQL integration', () => {
         resultingPreferredScheduleId: alternateScheduleId,
       },
     })
+    const recovered = await acknowledge(canonicalCustomerId, canonical[0]!.publicId, 'reselect', alternateScheduleId, 'family-ack-0001')
+    expect(recovered).toEqual({ value: acknowledged.value, replayed: true })
+    await expect(acknowledge(outsiderCustomerId, canonical[0]!.publicId, 'reselect', alternateScheduleId, 'family-ack-0001'))
+      .rejects.toMatchObject({ code: 'RESERVATION_PERFORMANCE_IMPACT_NOT_FOUND', statusCode: 404 })
     const reservation = await pool.query<{ status: string; preferred_schedule_id: string; aggregate_version: string }>(`
       SELECT status,preferred_schedule_id,aggregate_version::text
       FROM mbox.reservations WHERE id=$1::uuid

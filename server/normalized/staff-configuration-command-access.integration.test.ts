@@ -15,7 +15,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
  let scope:{tenantId:string;storeId:string},actor:string,approver:string,publisher:string,role:string
  let lastFingerprint=''
  let beforeExecute:(()=>Promise<void>)|undefined,beforeRun:(()=>Promise<void>)|undefined,runsUntilHook=0
- const permissions=['customer.experience.feature.manage','recommendation.rule.draft','recommendation.rule.approve','recommendation.rule.publish','customer.public-profile.manage','customer.public-profile.publish','privacy.policy.manage','privacy.policy.publish','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish','loyalty.redemption.control','fulfillment.capacity.draft','fulfillment.capacity.approve','fulfillment.capacity.publish','community.activity.manage','community.activity.publish']
+ const permissions=['customer.experience.feature.manage','recommendation.rule.draft','recommendation.rule.approve','recommendation.rule.publish','customer.public-profile.manage','customer.public-profile.publish','privacy.policy.manage','privacy.policy.publish','loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish','loyalty.redemption.control','fulfillment.capacity.draft','fulfillment.capacity.approve','fulfillment.capacity.publish','community.activity.manage','community.activity.publish','community.activity.verify']
  const grant=async(codes=permissions)=>{
   await admin.query('DELETE FROM mbox.role_permission_assignments WHERE tenant_id=$1 AND role_id=$2',[scope.tenantId,role])
   await admin.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($4::text[])',[scope.tenantId,scope.storeId,role,codes])
@@ -83,7 +83,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
    if(kind==='policy-draft')return(employeeId=actor)=>service.draftLoyaltyPolicy(ctx(employeeId),draft)
    const created=await service.draftLoyaltyPolicy(ctx(approver),{...draft,idempotencyKey:randomUUID()})
    const approve={...common,policyId:created.value.id}
-   
+
    await service.approveLoyaltyPolicy(ctx(publisher),{...approve,idempotencyKey:randomUUID()})
    return(employeeId=actor)=>service.publishLoyaltyPolicy(ctx(employeeId),{...common,policyId:created.value.id,effectiveFrom:now,effectiveUntil:null})
   }
@@ -92,7 +92,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
    if(kind==='tier-draft')return(employeeId=actor)=>service.draftLoyaltyTierPolicy(ctx(employeeId),draft)
    const created=await service.draftLoyaltyTierPolicy(ctx(approver),{...draft,idempotencyKey:randomUUID()})
    const approve={...common,policyId:created.value.id,impactPreviewAcknowledged:true}
-   
+
    await service.approveLoyaltyTierPolicy(ctx(publisher),{...approve,idempotencyKey:randomUUID()})
    return(employeeId=actor)=>service.publishLoyaltyTierPolicy(ctx(employeeId),{...common,policyId:created.value.id,effectiveFrom:now,effectiveUntil:null})
   }
@@ -146,5 +146,16 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
   await grant(['customer.experience.feature.manage']);await expect(call()).rejects.toThrow()
   await grant(['recommendation.rule.publish']);expect((await call()).replayed).toBe(false)
   await grant(['customer.experience.feature.manage']);await expect(call()).rejects.toThrow()
+ })
+ it('retains already actor-bound activity door receipts and its verifier-only permission',async()=>{
+  const context={scope,employeeId:actor,businessDate:'2026-11-05'},publicId='historical-activity-receipt',command={action:'admit' as const,arrivedCount:1},key=randomUUID()
+  const result={historicalReceipt:true}
+  // Represent a completed pre-upgrade receipt; recovery must never run the door mutation again.
+  await new NormalizedCommandExecutor(runner).execute({scope,operationScope:'activity.service.door',idempotencyKey:key,retainReceipt:true,requestFingerprint:JSON.stringify({employeeId:actor,publicId,command}),resultCodec:{encode:v=>v,decode:v=>v as typeof result}},async()=>({result,auditEvents:[],outboxMessages:[]}))
+  await grant(['community.activity.verify']);const before=await snapshot()
+  expect(await activities.serviceCommand(context,publicId,command,key)).toEqual({value:result,replayed:true})
+  await expect(activities.serviceCommand({...context,employeeId:approver},publicId,command,key)).rejects.toMatchObject({name:'IdempotencyConflictError'})
+  await expect(activities.serviceCommand(context,publicId,{action:'restore_plaque'},randomUUID())).rejects.toThrow()
+  expect(await snapshot()).toEqual(before)
  })
 })

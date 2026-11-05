@@ -10,6 +10,7 @@ export function staffAuthorizedCommands(
   commands: Pick<NormalizedCommandExecutor, 'execute'>,
   employeeId: string,
   permission: string | readonly string[],
+  actorAlreadyBound = false,
 ): Pick<NormalizedCommandExecutor, 'execute'> {
   return {
     execute<Result>(command: Readonly<IdempotentCommand<Result>>,
@@ -17,7 +18,7 @@ export function staffAuthorizedCommands(
       beforeClaim?: (tx: ScopedTransaction) => Promise<void>): Promise<CommandExecution<Result>> {
       return reauthorizingCommands(commands).execute({
         ...command,
-        requestFingerprint: JSON.stringify({ employeeId, requestFingerprint: command.requestFingerprint }),
+        requestFingerprint: actorAlreadyBound ? command.requestFingerprint : JSON.stringify({ employeeId, requestFingerprint: command.requestFingerprint }),
       }, handler, async tx => {
         const permissions = typeof permission === 'string' ? [permission] : permission
         const access = new StaffAccessRepository(tx)

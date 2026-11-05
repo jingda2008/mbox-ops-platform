@@ -33,7 +33,7 @@ integration('loyalty accrual PostgreSQL integration', () => {
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
     runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
     await seed(pool)
-    await grantFixtureStaffPermissions(pool, {tenantId:id.tenant,storeId:id.store}, [id.drafter,id.approver,id.publisher], ['loyalty.policy.manage','loyalty.policy.publish','loyalty.accrual.request','loyalty.accrual.approve'])
+    await grantFixtureStaffPermissions(pool, {tenantId:id.tenant,storeId:id.store}, [id.drafter,id.approver,id.publisher], ['loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish','loyalty.accrual.request','loyalty.accrual.approve'])
   })
 
   afterAll(async () => pool?.end())

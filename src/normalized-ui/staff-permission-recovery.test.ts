@@ -10,7 +10,7 @@ function storage() {
 }
 const body = { expectedVersion: 'a'.repeat(64), reason: '调整员工职责',
   changes: [{ kind: 'employee_override' as const, employeeId: 'target', permissionCode: 'order.create', effect: 'grant' as const }] }
-const result: StaffPermissionDeploymentResult = { status: 'verified', replayed: true, verifiedAt: '2026-09-21T00:00:00Z', changes: [],
+const result: StaffPermissionDeploymentResult = { status: 'verified', replayed: true, verifiedAt: '2026-09-21T00:00:00Z', changes: [{kind:'employee_override',targetId:'target',configurationCode:'order.create',applied:true,effectiveEmployeeCount:1,affectedEmployeeCount:1}],
   overview: { generatedAt: '', scopeKey: 'tenant:store', configurationVersion: 'b'.repeat(64), roles: [], employees: [], permissions: [], areas: [], configurationDefinitions: [] } }
 
 describe('permission publication durable original intent', () => {
@@ -24,7 +24,7 @@ describe('permission publication durable original intent', () => {
     const freshPage = new StaffPermissionRecovery('tenant:store', 'admin', saved)
     const retry = vi.fn(async () => result)
     await freshPage.execute({ ...body, reason: '后来编辑的新原因' }, retry)
-    expect(retry).toHaveBeenCalledWith(persisted)
+    expect(retry).toHaveBeenCalledWith(persisted,true)
     expect(freshPage.pending()).toBeNull()
   })
 

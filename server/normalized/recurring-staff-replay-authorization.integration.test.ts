@@ -330,6 +330,19 @@ integration('recurring history and staff receipt authorization with a restricted
       await success(req,native)
     }finally{resolveViaDatabase=false}
   })
+  it('permission recovery with a missing receipt does not publish a fresh configuration',async()=>{
+    const board=await app.inject({url:'/api/staff-access/overview'});expect(board.statusCode,board.body).toBe(200)
+    const payload={expectedVersion:board.json().data.configurationVersion,reason:'Missing receipt recovery probe',changes:[{kind:'employee_override',employeeId:otherEmployeeId,permissionCode:'order.create',effect:'grant'}]}
+    const req=request('/api/staff-access/deploy',payload),before=await snapshot()
+    await denied({...req,payload:{...payload,receiptOnly:true}})
+    expect(await snapshot()).toEqual(before)
+    const current=await app.inject({url:'/api/staff-access/overview'})
+    expect(current.json().data.configurationVersion).toBe(payload.expectedVersion)
+    const result=await success(req);expect(result.changes).toMatchObject([{kind:'employee_override',targetId:otherEmployeeId,configurationCode:'order.create',applied:true}])
+    const committed=await snapshot(),replay=await success({...req,payload:{...payload,receiptOnly:true}})
+    expect(replay).toMatchObject({replayed:true,verifiedAt:result.verifiedAt,changes:result.changes})
+    expect(await snapshot()).toEqual(committed)
+  })
   it('keeps the original permission handoff receipt available with no management overview',async()=>{
     const board=await app.inject({url:'/api/staff-access/overview'});expect(board.statusCode,board.body).toBe(200)
     const req=request('/api/staff-access/deploy',{expectedVersion:board.json().data.configurationVersion,reason:'Audit handoff receipt',changes:[{kind:'employee_override',employeeId:otherEmployeeId,permissionCode:'order.create',effect:'grant'}]})

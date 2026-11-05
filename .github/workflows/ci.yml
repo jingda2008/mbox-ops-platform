@@ -99,7 +99,7 @@ jobs:
       - name: Verify optional product sale quantity editing and receipt recovery
         run: node scripts/product-sale-quantity-browser.mjs
       - name: Verify employee creation and status recovery without persisted PIN
-        run: node scripts/staff-employee-recovery-browser.mjs
+        run: node scripts/staff-employee-recovery-browser.mjs && node scripts/staff-permission-recovery-browser.mjs
       - name: Verify member card creation response-loss recovery
         run: node scripts/member-card-create-recovery-browser.mjs
       - name: Verify customer purchase, card entry and scan feedback

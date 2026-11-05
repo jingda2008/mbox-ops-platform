@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {z} from 'zod'
 import type {FastifyPluginAsync} from 'fastify'
 import type {CustomerBenefitApiOptions} from './customer-benefit-api.js'
@@ -23,13 +24,21 @@ export const socialBroadcastApiPlugin:FastifyPluginAsync<Options>=async(app,opti
  app.post('/staff/social-broadcasts',{bodyLimit:4096},async request=>{
   const ctx=await options.resolveStaffContext(request),input=broadcastSchema.parse(request.body),key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage'),{readOnly:true})
-  const result=await options.commands.execute({scope:ctx.scope,operationScope:'social.broadcast.create',idempotencyKey:key,requestFingerprint:JSON.stringify({input,employee:ctx.employeeId}),resultCodec:codec},async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');const row=await new SocialBroadcastRepository(tx).create(input,ctx.employeeId);return{result:row,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'social.broadcast.drafted',objectType:'social_broadcast',objectId:row.id,afterData:input}],outboxMessages:[]}});return{data:result.value,meta:{replayed:result.replayed}}
+  const result=await reauthorizingCommands(options.commands).execute({scope:ctx.scope,operationScope:'social.broadcast.create',idempotencyKey:key,requestFingerprint:JSON.stringify({input,employee:ctx.employeeId}),resultCodec:codec},async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');const row=await new SocialBroadcastRepository(tx).create(input,ctx.employeeId);return{result:row,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'social.broadcast.drafted',objectType:'social_broadcast',objectId:row.id,afterData:input}],outboxMessages:[]}}, async tx => {
+    const current = await options.resolveStaffContext(request)
+    if (current.employeeId !== ctx.employeeId || current.scope.tenantId !== ctx.scope.tenantId || current.scope.storeId !== ctx.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'community.activity.manage')
+  });return{data:result.value,meta:{replayed:result.replayed}}
  })
  app.post<{Params:{id:string}}>('/staff/social-broadcasts/:id/action',async request=>{
   const ctx=await options.resolveStaffContext(request),id=z.string().uuid().parse(request.params.id),input=z.object({action:z.enum(['schedule','cancel']),audienceConfirmed:z.boolean()}).strict().parse(request.body)
   if(input.action==='schedule'&&!input.audienceConfirmed)throw new BottleCustodyError('请确认内容和所有关注者发送范围')
   const key=z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/).parse(request.headers['idempotency-key'])
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage'),{readOnly:true})
-  const result=await options.commands.execute({scope:ctx.scope,operationScope:'social.broadcast.action',idempotencyKey:key,requestFingerprint:JSON.stringify({id,input,employee:ctx.employeeId}),resultCodec:codec},async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');const row=await new SocialBroadcastRepository(tx).transition(id,input.action);return{result:row,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:`social.broadcast.${input.action}`,objectType:'social_broadcast',objectId:id,afterData:input}],outboxMessages:[]}});return{data:result.value,meta:{replayed:result.replayed}}
+  const result=await reauthorizingCommands(options.commands).execute({scope:ctx.scope,operationScope:'social.broadcast.action',idempotencyKey:key,requestFingerprint:JSON.stringify({id,input,employee:ctx.employeeId}),resultCodec:codec},async tx=>{await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage');const row=await new SocialBroadcastRepository(tx).transition(id,input.action);return{result:row,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:`social.broadcast.${input.action}`,objectType:'social_broadcast',objectId:id,afterData:input}],outboxMessages:[]}}, async tx => {
+    const current = await options.resolveStaffContext(request)
+    if (current.employeeId !== ctx.employeeId || current.scope.tenantId !== ctx.scope.tenantId || current.scope.storeId !== ctx.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'community.activity.manage')
+  });return{data:result.value,meta:{replayed:result.replayed}}
  })
 }

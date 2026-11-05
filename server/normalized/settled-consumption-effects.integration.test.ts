@@ -53,7 +53,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
       const role=randomUUID()
       await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'Audit actor')",[role,scope.tenantId,scope.storeId,`M_${role.replaceAll('-','').toUpperCase()}`])
       await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 minute')",[scope.tenantId,scope.storeId,id,role])
-      const codes=id===requester?['refund.request','table.view_all']:['payment.initiate.staff','payment.manual.cash.record','payment.collect.all_tables','refund.request','refund.approve','refund.execute','table.view_all','table.close','loyalty.operations.control','loyalty.operations.view']
+      const codes=id===requester?['refund.request','table.view_all','loyalty.accrual.request','loyalty.accrual.approve']:['payment.initiate.staff','payment.manual.cash.record','payment.collect.all_tables','refund.request','refund.approve','refund.execute','table.view_all','table.close','loyalty.operations.control','loyalty.operations.view','loyalty.accrual.approve']
       for(const code of codes){
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[scope.tenantId,scope.storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[scope.tenantId,scope.storeId,role,permission])

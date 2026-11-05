@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {nativePhysicalExecutor} from './native-physical-command.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
 import {searchGuestCatalog,publicCatalogProduct} from './guest-commerce-service-api.js'
@@ -49,7 +50,7 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
   await options.transactions.run(ctx.scope,tx=>new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage'),{readOnly:true})
   if(native&&!/^native-business-[a-f0-9-]{36}$/.test(key))throw new z.ZodError([])
   const executor=native?nativePhysicalExecutor(options.commands,ctx,async tx=>{const current=await options.resolveStaffContext(request);if(current.employeeId!==ctx.employeeId||current.scope.tenantId!==ctx.scope.tenantId||current.scope.storeId!==ctx.scope.storeId)throw new StaffAccessDeniedError('身份变化');await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')}):options.commands
-  const result=await executor.execute({scope:ctx.scope,operationScope:native?'launch.popup.configure.native':'launch.popup.configure',retainReceipt:native,idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:ctx.employeeId,input}),resultCodec:codec},async tx=>{
+  const result=await reauthorizingCommands(executor).execute({scope:ctx.scope,operationScope:native?'launch.popup.configure.native':'launch.popup.configure',retainReceipt:native,idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:ctx.employeeId,input}),resultCodec:codec},async tx=>{
    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'community.activity.manage')
    const s=[ctx.scope.tenantId,ctx.scope.storeId],inserted=await tx.query('INSERT INTO mbox.launch_popup_policies(tenant_id,store_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING store_id',s)
    const row=(await tx.query<{version:number}>('SELECT version FROM mbox.launch_popup_policies WHERE tenant_id=$1 AND store_id=$2 FOR UPDATE',s)).rows[0]!
@@ -60,6 +61,10 @@ export const launchPopupApiPlugin:FastifyPluginAsync<Options>=async(app,options)
    await tx.query('DELETE FROM mbox.launch_popup_products WHERE tenant_id=$1 AND store_id=$2',s)
    for(const [index,id] of input.productIds.entries())await tx.query('INSERT INTO mbox.launch_popup_products(tenant_id,store_id,product_id,sort_order) VALUES($1,$2,$3,$4)',[...s,id,index])
    return{result:JSON.parse(JSON.stringify(await readLaunchPopup(tx))) as JsonObject,auditEvents:[{actor:{type:'employee' as const,employeeId:ctx.employeeId},businessDate:ctx.businessDate,action:'launch.popup.configured',objectType:'launch_popup_policy',objectId:ctx.scope.storeId,afterData:input}],outboxMessages:[]}
+  }, async tx => {
+    const current = await options.resolveStaffContext(request)
+    if (current.employeeId !== ctx.employeeId || current.scope.tenantId !== ctx.scope.tenantId || current.scope.storeId !== ctx.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+    await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'community.activity.manage')
   });return native?{data:{employeeId:ctx.employeeId,requestKey:key,row:result.value},meta:{protocol:1,replayed:result.replayed}}:{data:result.value,meta:{replayed:result.replayed}}
  })
 }

@@ -14,7 +14,7 @@ describe('activity closure live permission',()=>{
     await expect(service.closeActivity({scope,employeeId:'employee',businessDate:'2026-09-10'},
       {publicId:'activity',status:'cancelled',reason:'取消测试',idempotencyKey:'close-attempt-1'})).rejects.toBeInstanceOf(StaffAccessDeniedError)
     expect(query).toHaveBeenCalledTimes(1)
-    expect(query.mock.calls[0]).toEqual([expect.stringContaining('employee_has_effective_permission'),['tenant','store','employee','community.activity.manage']])
+    expect(query.mock.calls[0]).toEqual([expect.stringContaining('FROM mbox.employees'),['tenant','store','employee']])
     query.mockClear()
     await expect(service.stopRegistration({scope,employeeId:'employee',businessDate:'2026-09-10'},
       {publicId:'activity',reason:'停止报名测试',idempotencyKey:'stop-attempt-1'})).rejects.toBeInstanceOf(StaffAccessDeniedError)

@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import {ProfitQueryService} from './profit-query-service.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
 import { MembershipConfigurationDraftService } from './membership-configuration-draft-service.js'
@@ -693,6 +694,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
   },30_000)
 
   it('creates, edits, previews, independently approves and publishes the cash rule with the restricted runtime login',async()=>{
+    await grantFixtureStaffPermissions(pool, scope, [editor,publisher], ['loyalty.policy.manage','loyalty.policy.publish'])
     const staff=(employeeId:string)=>({scope,employeeId,businessDate})
     const experience=new CustomerExperienceService(runner,new NormalizedCommandExecutor(runner),{updateProfile:async()=>{throw Error('unused')}})
     const draft=await experience.draftLoyaltyPolicy(staff(editor),{policyCode:'BASE',pointsNumerator:1,pointsDenominatorMinor:1000,growthNumerator:1,growthDenominatorMinor:100,roundingMode:'floor',pointsValidityMonths:18,pointsRoundingScope:'order',cashRedemptionEnabled:false,reason:'确认逐单实付规则',idempotencyKey:randomUUID()})

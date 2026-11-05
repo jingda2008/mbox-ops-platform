@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -32,6 +33,7 @@ integration('loyalty redemption PostgreSQL authority', () => {
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
     runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
     await seed(pool)
+    await grantFixtureStaffPermissions(pool, {tenantId:id.tenant,storeId:id.store}, [id.employeeA,id.employeeB,id.employeeC], ['loyalty.policy.manage','loyalty.policy.publish','loyalty.redemption.catalog.manage','loyalty.redemption.catalog.publish','loyalty.redemption.control','loyalty.redemption.fulfill','loyalty.redemption.exception'])
     const configuration = new MembershipConfigurationDraftService(
       new PostgresMembershipConfigurationDraftRepository(runner, scope()),
     )

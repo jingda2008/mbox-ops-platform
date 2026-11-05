@@ -11,6 +11,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
 ;(database?describe:describe.skip)('activity pickup original-login recovery',()=>{
  const scope={tenantId:randomUUID(),storeId:randomUUID()},employee=randomUUID(),otherEmployee=randomUUID(),role=randomUUID(),credential=randomUUID(),lease=randomUUID(),oldSession=randomUUID(),device=randomUUID()
  let admin:Pool,runtime:Pool,runner:ScopedPostgresTransactionRunner,commands:NormalizedCommandExecutor
+ let beforeExecute:(()=>Promise<void>)|undefined
  let session=oldSession,currentEmployee=employee,currentLease=lease,requestScope=scope
  const app=Fastify(),digest=(text:string)=>createHash('sha256').update(text).digest('hex')
  beforeAll(async()=>{
@@ -24,7 +25,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   await admin.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[scope.tenantId,scope.storeId,role,permission])
   await admin.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$recovery',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credential,scope.tenantId,scope.storeId,employee])
   await deviceLease(lease,'a',device);await login(oldSession,employee,lease)
-  await registerActivityProductionRoutes(app,{staffAccessTransactions:runner,commandExecutor:commands,resolveContext:()=>({scope:requestScope,employeeId:currentEmployee,staffSessionId:session,deviceAccessLeaseId:currentLease,businessDate:'2026-10-22'})})
+  await registerActivityProductionRoutes(app,{staffAccessTransactions:runner,commandExecutor:{execute:((...args:Parameters<NormalizedCommandExecutor['execute']>)=>{const hook=beforeExecute;beforeExecute=undefined;return(async()=>{await hook?.();return commands.execute(...args)})()}) as NormalizedCommandExecutor['execute']},resolveContext:()=>({scope:requestScope,employeeId:currentEmployee,staffSessionId:session,deviceAccessLeaseId:currentLease,businessDate:'2026-10-22'})})
  })
  afterAll(async()=>{await app.close();await runtime?.end();await admin?.end()})
  async function deviceLease(id:string,marker:string,deviceId:string){await admin.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat($5,64),$6,clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[id,scope.tenantId,scope.storeId,credential,marker,digest(id)]);await admin.query("INSERT INTO mbox.pickup_devices(id,tenant_id,store_id,device_key_hash,label,enabled,configured_by_employee_id) VALUES($1,$2,$3,repeat($4,64),'共用取餐屏',true,$5)",[deviceId,scope.tenantId,scope.storeId,marker,employee])}
@@ -63,6 +64,12 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   await admin.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[session])
   expect((await recover(old.payload)).statusCode).toBe(403)
  })
+ it('rejects cached pickup recovery when its device is disabled after route preflight',async()=>{
+  const old=await original();session=randomUUID();await login(session,employee,lease)
+  beforeExecute=async()=>{await admin.query('UPDATE mbox.pickup_devices SET enabled=false WHERE id=$1',[device])}
+  try{expect((await recover(old.payload)).statusCode).toBe(403)}finally{await admin.query('UPDATE mbox.pickup_devices SET enabled=true WHERE id=$1',[device])}
+  expect((await recover(old.payload)).json()).toMatchObject({data:old.result,replayed:true})
+ })
  async function exceptionLine(){
   const activity=randomUUID(),customer=randomUUID(),product=randomUUID(),registration=randomUUID(),meal=randomUUID(),line=randomUUID();
   await admin.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1::uuid,$2,$3,$1::text)",[customer,scope.tenantId,scope.storeId]);
@@ -87,6 +94,10 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   expect((await post()).statusCode).toBe(403);
   await admin.query(`INSERT INTO mbox.role_data_scopes(tenant_id,store_id,role_id,scope_key,effect,scope_value,value_kind,text_values,enabled) VALUES($1,$2,$3,'kds.station_codes','include','["kitchen"]','text_set',ARRAY['kitchen'],true)`,[scope.tenantId,scope.storeId,role]);
   const allowed=await post();expect(allowed.statusCode,allowed.body).toBe(200);expect(allowed.json().data.lines[0]).toMatchObject({held:true,quantity:2,takenQuantity:0});
+  expect((await post()).json().data.receiptId).toBe(allowed.json().data.receiptId);
+  beforeExecute=async()=>{await admin.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[session])}
+  expect((await post()).statusCode).toBe(403);
+  await admin.query('UPDATE mbox.staff_sessions SET revoked_at=NULL WHERE id=$1',[session]);
   expect((await post()).json().data.receiptId).toBe(allowed.json().data.receiptId);
   await admin.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[session]);expect((await post()).statusCode).toBe(403);
   requestScope={tenantId:randomUUID(),storeId:randomUUID()};

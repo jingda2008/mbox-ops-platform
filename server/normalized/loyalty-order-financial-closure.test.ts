@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import {afterAll,afterEach,beforeAll,describe,expect,it} from 'vitest'
@@ -24,6 +25,7 @@ integration('loyalty order financial closure PostgreSQL integration',()=>{
   await runNormalizedMigrations(databaseUrl!)
   pool=new Pool({connectionString:databaseUrl,max:8});runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
   await seedBase(pool)
+    await grantFixtureStaffPermissions(pool, scope, [base.drafter,base.approver], ['loyalty.accrual.request','loyalty.accrual.approve'])
   // This fixture reads state before emergency pause/resume; both permissions are required.
   await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,'loyalty.operations.control','Synthetic emergency controller'),($1,$2,'loyalty.operations.view','Synthetic emergency viewer') ON CONFLICT DO NOTHING",[base.tenant,base.store])
   await pool.query("INSERT INTO mbox.employee_permission_overrides(tenant_id,store_id,employee_id,permission_id,effect,reason,configured_by_employee_id) SELECT $1,$2,$3,id,'grant','Isolated emergency-control fixture',$3 FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code IN ('loyalty.operations.control','loyalty.operations.view')",[base.tenant,base.store,base.approver])

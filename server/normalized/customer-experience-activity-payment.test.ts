@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { Pool } from 'pg'
@@ -186,6 +187,9 @@ describe('activity payment configuration', () => {
     const transaction = {
       scope,
       async query<Row extends Record<string, unknown>>(sql: string) {
+        if (sql.includes('FROM mbox.employees')) return rows<Row>([{id:'82000000-0000-4000-8000-000000000099',employee_code:'TEST',display_name:'Test publisher',status:'active',resolved_at:new Date().toISOString()}])
+        if (sql.includes('role_granted')) return rows<Row>([{code:'community.activity.publish',role_granted:true,override_granted:false,override_denied:false}])
+        if (!sql.includes('UPDATE mbox.community_activities')) return rows<Row>([])
         publishSql = sql
         return rows<Row>([{ id: '82000000-0000-4000-8000-000000000004', public_id: 'community-activity-test-0001', status: 'published' }])
       },
@@ -751,6 +755,7 @@ integration('activity registration state and contact privacy with PostgreSQL', (
   })
 
   it('publishes a public activity id while writing only the internal UUID to its outbox aggregate', async () => {
+    await grantFixtureStaffPermissions(pool, dbScope, [employeeId,approverEmployeeId], ['community.activity.manage','community.activity.publish'])
     const service = new CustomerExperienceService(
       transactions,
       new NormalizedCommandExecutor(transactions),

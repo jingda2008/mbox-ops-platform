@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {TablePrepaymentError} from './table-prepayment-repository.js'
 import {TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
@@ -749,7 +750,7 @@ async function executeKdsAction(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: action === 'pickupAndDeliver' || action === 'deliver' ? 'deliver' : action, stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.action',
     idempotencyKey,
@@ -763,6 +764,10 @@ async function executeKdsAction(
       throw new CommerceKdsRequestError('SHARED_PICKUP_REQUIRED','请在吧台取餐屏确认取走，手机会自动同步，无需再次确认',409)
     }
     return performKdsAction(transaction, options, context, taskId, action, idempotencyKey, requestId, reason, quantity)
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: action === 'pickupAndDeliver' || action === 'deliver' ? 'deliver' : action, stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 
@@ -932,7 +937,7 @@ async function executeManagerCancellation(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: 'manager_cancel', stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.manager_cancel',
     idempotencyKey,
@@ -1033,6 +1038,10 @@ async function executeManagerCancellation(
         headers: { requestId },
       }],
     }
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_cancel', stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 
@@ -1049,7 +1058,7 @@ async function executeKdsRemake(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: 'manager_remake', stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.remake',
     idempotencyKey,
@@ -1199,6 +1208,10 @@ async function executeKdsRemake(
         headers: { requestId },
       }],
     }
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_remake', stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 

@@ -634,6 +634,18 @@ export class CustomerExperienceObservationRepository {
     return result.rows
   }
 
+  async authorizeReceipt(input: Readonly<{
+    tableSessionId?: string; publicId?: string; employeeId: string; allowAllTables: boolean
+  }>): Promise<void> {
+    const tableSessionId = input.tableSessionId ?? (await this.transaction.query<{ table_session_id: string }>(`
+      SELECT table_session_id FROM mbox.observation_inputs
+      WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.publicId])).rows[0]?.table_session_id
+    if (!tableSessionId) throw new CustomerExperienceRequestError('观察记录不存在', 'OBSERVATION_NOT_FOUND', 404)
+    // Authorization only: confirmed/revised state must still allow original-key recovery.
+    await this.assertEmployeeTableAccess(tableSessionId, input.employeeId, input.allowAllTables)
+  }
+
   private async assertEmployeeTableAccess(
     tableSessionId: string,
     employeeId: string,

@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import type { AuditEvent, JsonCodec, JsonValue } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
@@ -43,8 +44,8 @@ export class ReservationPerformanceRevisionService {
     }>,
   ) {
     const revisionPublicId = publicId('performance-revision', context.scope.storeId, input.idempotencyKey)
-    const requestFingerprint = fingerprint(input)
-    return this.commands.execute({
+    const requestFingerprint = fingerprint({ ...input, employeeId: context.employeeId })
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'performance.schedule.revise').execute({
       scope: context.scope,
       operationScope: 'performance-schedule.revise',
       idempotencyKey: input.idempotencyKey,
@@ -116,6 +117,8 @@ export class ReservationPerformanceRevisionService {
       operationScope: 'reservation.performance-impact.acknowledge',
       idempotencyKey: input.idempotencyKey,
       requestFingerprint,
+      authorizeReplay: transaction => new ReservationPerformanceRevisionRepository(transaction)
+        .assertCanAcknowledge(input.impactPublicId, context.customerId),
       resultCodec: objectCodec<ReservationPerformanceImpact>('reservation performance acknowledgement'),
     }, async (transaction) => {
       const impact = await new ReservationPerformanceRevisionRepository(transaction)

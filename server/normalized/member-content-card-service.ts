@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import type { AuditEvent, JsonCodec, JsonValue, NormalizedCommandExecutor } from './command-executor.js'
 import {
@@ -23,7 +24,7 @@ export class MemberContentCardService {
   create(context: ActivityOperationsStaffContext, input: Readonly<{
     draft:MemberContentCardDraft;reason:string;idempotencyKey:string
   }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope:context.scope,operationScope:'home.content.create',idempotencyKey:input.idempotencyKey,
       requestFingerprint:fingerprint(input),resultCodec:codec(),
     }, async (transaction) => {
@@ -35,7 +36,7 @@ export class MemberContentCardService {
   update(context: ActivityOperationsStaffContext, input: Readonly<{
     code:string;draft:MemberContentCardDraft;reason:string;idempotencyKey:string
   }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope:context.scope,operationScope:'home.content.update',idempotencyKey:input.idempotencyKey,
       requestFingerprint:fingerprint(input),resultCodec:codec(),
     }, async (transaction) => {
@@ -47,7 +48,7 @@ export class MemberContentCardService {
   publish(context: ActivityOperationsStaffContext, input: Readonly<{
     code:string;reason:string;idempotencyKey:string
   }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.publish').execute({
       scope:context.scope,operationScope:'home.content.publish',idempotencyKey:input.idempotencyKey,
       requestFingerprint:fingerprint(input),resultCodec:codec(),
     }, async (transaction) => {
@@ -59,7 +60,7 @@ export class MemberContentCardService {
   pause(context: ActivityOperationsStaffContext, input: Readonly<{
     code:string;reason:string;idempotencyKey:string
   }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.publish').execute({
       scope:context.scope,operationScope:'home.content.pause',idempotencyKey:input.idempotencyKey,
       requestFingerprint:fingerprint(input),resultCodec:codec(),
     }, async (transaction) => {

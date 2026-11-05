@@ -27,7 +27,13 @@ export function nativePhysicalExecutor(
       const operationScope = `${command.operationScope}.native`
       const trace = `native-physical:${hashRequestFingerprint(`${operationScope}:${command.idempotencyKey}`)}`
       let durableReplayed = false
-      const execution = await executor.execute({...command, operationScope}, async tx => {
+      const execution = await executor.execute({...command, operationScope, authorizeReplay: async (tx, evidence) => {
+        await authorize(tx)
+        await command.authorizeReplay?.(tx, evidence)
+      }}, async tx => {
+        // Claiming the cache may wait. Reauthorize before either durable audit
+        // recovery or fresh execution; recovery deliberately skips the handler.
+        await authorize(tx)
         const original = (await tx.query<{actor_employee_id: string; after_snapshot: JsonObject; metadata: JsonObject}>(`
           SELECT actor_employee_id, after_snapshot, metadata FROM mbox.audit_events
           WHERE tenant_id=$1 AND store_id=$2 AND action='native.physical.receipt' AND trace_id=$3

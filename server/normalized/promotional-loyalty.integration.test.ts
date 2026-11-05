@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import {assertRuntimeDatabasePool} from './runtime-database-identity.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
@@ -70,6 +71,9 @@ integration('promotional loyalty PostgreSQL authority',()=>{
       {role_code:'OWNER',permission_code:'loyalty.promotion.publish'},
       {role_code:'OWNER',permission_code:'loyalty.promotion.view'},
     ])
+    // Exercise separation with genuinely authorized actors, independently of default roles.
+    await grantFixtureStaffPermissions(pool, scope, [id.manager], ['loyalty.promotion.approve'])
+    await grantFixtureStaffPermissions(pool, scope, [id.ops], ['loyalty.promotion.publish'])
     const drafted=await service.draft(staff(id.manager),{
       campaignCode:'SUPERHIGH-OPENING',name:'超嗨到场积分',activityId:id.activity,
       stackingGroup:'SUPERHIGH',stackingMode:'exclusive_highest',priority:100,

@@ -1,3 +1,4 @@
+import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecordError } from './command-executor.js'
 import Fastify from 'fastify'
 import { describe,expect,it } from 'vitest'
 import { customerPreferenceApiPlugin } from './customer-preference-api.js'
@@ -76,5 +77,27 @@ describe('customer preference public API',()=>{
     expect(unsupported.statusCode).toBe(400)
     expect(malformed.statusCode).toBe(400)
     await app.close()
+  })
+})
+
+
+describe('preference recovery error boundary',()=>{
+  const errors=[
+    {error:new IdempotencyConflictError('customer.preference','private-key'),status:409,code:'CUSTOMER_PREFERENCE_CONFLICT'},
+    {error:new IdempotencyInProgressError('customer.preference','private-key'),status:425,code:'CUSTOMER_PREFERENCE_IN_PROGRESS'},
+    {error:new IdempotencyRecordError('private backend detail'),status:503,code:'CUSTOMER_PREFERENCE_UNAVAILABLE'},
+    {error:new Error('private backend detail'),status:500,code:'CUSTOMER_PREFERENCE_FAILED'},
+  ]
+  it.each(['declare','withdraw'].flatMap(action=>errors.map(fault=>({action,...fault}))))('$action maps $code without exposing original keys or internals',async({action,error,status,code})=>{
+    const app=Fastify()
+    await app.register(customerPreferenceApiPlugin,{
+      service:{declare:async()=>{throw error},withdraw:async()=>{throw error}} as unknown as CustomerPreferenceService,
+      resolvePublicContext:()=>({scope:{tenantId:'local',storeId:'local'},customerId:'local',actorRef:'local',businessDate:'2026-11-06'}),
+    })
+    try {
+      const response=await app.inject({method:'POST',url:action==='declare'?'/public/mini/preferences':'/public/mini/preferences/preference-source-001/withdraw',headers:{'idempotency-key':'original-local-key'},payload:action==='declare'?{key:'beverage.family',value:'wine',polarity:'supports'}:{reason:'Local withdrawal'}})
+      expect(response.statusCode,response.body).toBe(status);expect(response.json().error.code).toBe(code)
+      expect(response.body).not.toMatch(/private-key|private backend detail/)
+    }finally{await app.close()}
   })
 })

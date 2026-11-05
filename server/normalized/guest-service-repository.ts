@@ -277,6 +277,11 @@ export class GuestServiceRepository {
     }))
   }
 
+  async assertFeedbackAccess(input: Readonly<{ tableSessionId: string; customerId: string; actorRef: string; publicId: string }>): Promise<void> {
+    await this.requireOpenTableMembership(input.tableSessionId, input.customerId, true, input.actorRef)
+    await this.lockOwnedTask(input.tableSessionId, input.publicId)
+  }
+
   async feedback(input: Readonly<{
     tableSessionId: string
     customerId: string

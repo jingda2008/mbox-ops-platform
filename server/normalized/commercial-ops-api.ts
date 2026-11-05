@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import { orderHistoryAccess } from './order-history-access.js'
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import {CashHandoverService,CashHandoverError,type CashHandoverCommand} from './cash-handover-service.js'
@@ -570,7 +571,7 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
     }
     const voucherHash = voucherCodeDigest(voucherCode)
     const idempotencyKey = readIdempotencyKey(request)
-    const execution = await options.commandExecutor.execute({
+    const execution = await reauthorizingCommands(options.commandExecutor).execute({
       scope: context.scope, operationScope: 'commercial.voucher.redeem', idempotencyKey,
       requestFingerprint: fingerprint({
         ...input, publicId: body.publicId ?? null, voucherCode: voucherHash, actor: context.employeeId,
@@ -593,6 +594,8 @@ export const commercialOpsApiPlugin: FastifyPluginAsync<CommercialOpsApiOptions>
           eventType: 'commercial.voucher.redeemed.v1', payload: result,
         }],
       }
+    }, async transaction => {
+      await createAccess(transaction).assertPermission(context.employeeId, 'commercial.voucher.redeem')
     })
     return reply.code(execution.replayed ? 200 : 201).send({ data: execution.value, replayed: execution.replayed })
   }))

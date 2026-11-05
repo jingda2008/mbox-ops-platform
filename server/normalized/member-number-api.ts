@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import { z } from 'zod'
 import {nativePhysicalExecutor} from './native-physical-command.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
@@ -42,7 +43,7 @@ export const memberNumberApiPlugin:FastifyPluginAsync<Options>=async(app,options
   const authorize=async(tx:ScopedTransaction)=>{const fresh=await options.resolveStaffContext(request);if(fresh.employeeId!==context.employeeId||fresh.scope.tenantId!==context.scope.tenantId||fresh.scope.storeId!==context.scope.storeId)throw new StaffAccessDeniedError('身份变化');await new StaffAccessRepository(tx).assertPermission(context.employeeId,'member.card.manage')}
   await options.transactions.run(context.scope,tx=>new StaffAccessRepository(tx).assertPermission(context.employeeId,'member.card.manage'),{readOnly:true})
   const executor=native?nativePhysicalExecutor(options.commands,context,authorize):options.commands
-  const result=await executor.execute({retainReceipt:native,scope:context.scope,operationScope:'member.number.configure',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,...input}),resultCodec:codec},async tx=>{
+  const result=await reauthorizingCommands(executor).execute({retainReceipt:native,scope:context.scope,operationScope:'member.number.configure',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,...input}),resultCodec:codec},async tx=>{
    await new StaffAccessRepository(tx).assertPermission(context.employeeId,'member.card.manage')
    const scope=[tx.scope.tenantId,tx.scope.storeId]
    const inserted=await tx.query('INSERT INTO mbox.member_number_policies(tenant_id,store_id,version) VALUES($1,$2,1) ON CONFLICT DO NOTHING RETURNING store_id',scope)
@@ -53,6 +54,10 @@ export const memberNumberApiPlugin:FastifyPluginAsync<Options>=async(app,options
    await tx.query('UPDATE mbox.member_number_policies SET width=$3,start_number=$4,pad_zero=$5,alphabet=$6,maximum_prefix_length=$7,version=version+1,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2',[...scope,p.width,p.startNumber,p.padZero,p.alphabet,p.maximumPrefixLength])
    const result=await readMemberNumberPolicy(tx)
    return {result:JSON.parse(JSON.stringify(result)) as JsonObject,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},businessDate:context.businessDate,action:'member.number.configured',objectType:'member_number_policy',objectId:tx.scope.storeId,reason:input.reason,beforeData:before.policy,afterData:result.policy}],outboxMessages:[]}
+  }, async tx => {
+    const current = await options.resolveStaffContext(request)
+    if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+    await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'member.card.manage')
   })
   return native?{data:{employeeId:context.employeeId,requestKey:key,accepted:input,row:result.value},meta:{protocol:1,replayed:result.replayed}}:{data:result.value,meta:{replayed:result.replayed}}
  })

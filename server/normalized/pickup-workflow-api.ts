@@ -23,14 +23,14 @@ export const pickupWorkflowApiPlugin:FastifyPluginAsync<PickupWorkflowApiOptions
   app.post('/commerce/pickup-board/commands',async(request,reply)=>route(reply,async()=>{
     const context=await options.resolveContext(request),command=parsePickupCommand(request.body),key=readKey(request.headers['idempotency-key'])
     const access=await options.staffAccessTransactions.run(context.scope,tx=>authorizePickup(tx,context))
-    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'commerce.pickup',idempotencyKey:operationKey(access.commandScope,key),requestFingerprint:JSON.stringify({scope:access.commandScope,command}),resultCodec},
+    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'commerce.pickup',idempotencyKey:operationKey(access.commandScope,key),requestFingerprint:JSON.stringify({scope:access.commandScope,command}),authorizeReplay:async tx=>{await authorizePickup(tx,context)},resultCodec},
       tx=>executePickupCommand(tx,context,command,key,request.id,options.enabled===true))
     return reply.send({data:{...execution.value,replayed:execution.replayed||execution.value.replayed}})
   }))
   app.post('/commerce/pickup-board/device',async(request,reply)=>route(reply,async()=>{
     const context=await options.resolveContext(request),command=parsePickupDeviceCommand(request.body),key=readKey(request.headers['idempotency-key'])
     const access=await options.staffAccessTransactions.run(context.scope,tx=>authorizePickup(tx,context,true))
-    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'commerce.pickup.device',idempotencyKey:operationKey(access.commandScope,key),requestFingerprint:JSON.stringify({scope:access.commandScope,command}),resultCodec:boardCodec},
+    const execution=await options.commandExecutor.execute({scope:context.scope,operationScope:'commerce.pickup.device',idempotencyKey:operationKey(access.commandScope,key),requestFingerprint:JSON.stringify({scope:access.commandScope,command}),authorizeReplay:async tx=>{await authorizePickup(tx,context,true)},resultCodec:boardCodec},
       tx=>configurePickupDevice(tx,context,command,key,request.id,options.enabled===true))
     return reply.send({data:execution.value,replayed:execution.replayed})
   }))
@@ -38,7 +38,7 @@ export const pickupWorkflowApiPlugin:FastifyPluginAsync<PickupWorkflowApiOptions
     const context=await options.resolveContext(request),recovery=parsePickupRecoveryCommand(request.body)
     const originalScope=await options.staffAccessTransactions.run(context.scope,tx=>authorizePickupRecovery(tx,context,recovery))
     const key=recovery.idempotencyKey,command=recovery.request.command
-    const base={scope:context.scope,idempotencyKey:operationKey(originalScope,key),requestFingerprint:JSON.stringify({scope:originalScope,command})}
+    const base={scope:context.scope,idempotencyKey:operationKey(originalScope,key),authorizeReplay:async (tx:import('./transaction-runner.js').ScopedTransaction)=>{await authorizePickupRecovery(tx,context,recovery)},requestFingerprint:JSON.stringify({scope:originalScope,command})}
     if(recovery.request.kind==='command'){
       const original=recovery.request.command
       const execution=await options.commandExecutor.execute({...base,operationScope:'commerce.pickup',resultCodec},tx=>executePickupCommand(tx,context,original,key,request.id,options.enabled===true,recovery))

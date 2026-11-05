@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import {ActivityServiceRepository} from './activity-service-repository.js'
 import type {ActivityDoorCommand} from '../../src/shared/activity-service.js'
 import { createHash } from 'node:crypto'
@@ -34,7 +35,7 @@ export class ActivityOperationsService {
 
   serviceView(context:ActivityOperationsStaffContext,publicId:string){return this.transactions.run(context.scope,tx=>new ActivityServiceRepository(tx).view(publicId),{readOnly:true})}
   scanService(context:ActivityOperationsStaffContext,code:string){return this.transactions.run(context.scope,tx=>new ActivityServiceRepository(tx).scan(code),{readOnly:true})}
-  serviceCommand(context:ActivityOperationsStaffContext,publicId:string,command:ActivityDoorCommand,key:string){return this.commands.execute({scope:context.scope,operationScope:'activity.service.door',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,publicId,command}),resultCodec:objectCodec<import('../../src/shared/activity-service.js').ActivityServiceView>(),retainReceipt:true},async tx=>{const result=await new ActivityServiceRepository(tx).door(publicId,command,key,context.employeeId,context.businessDate);return {result,auditEvents:[audit(context,{action:`activity.service.${command.action}`,objectType:'community_activity_registration',objectId:publicId,afterData:{action:command.action,arrivedCount:command.arrivedCount??0}})],outboxMessages:[]}})}
+  serviceCommand(context:ActivityOperationsStaffContext,publicId:string,command:ActivityDoorCommand,key:string){return staffAuthorizedCommands(this.commands, context.employeeId, ['recover','restore_plaque'].includes(command.action) ? 'community.activity.manage' : ['community.activity.manage','community.activity.verify'], true).execute({scope:context.scope,operationScope:'activity.service.door',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,publicId,command}),resultCodec:objectCodec<import('../../src/shared/activity-service.js').ActivityServiceView>(),retainReceipt:true},async tx=>{const result=await new ActivityServiceRepository(tx).door(publicId,command,key,context.employeeId,context.businessDate);return {result,auditEvents:[audit(context,{action:`activity.service.${command.action}`,objectType:'community_activity_registration',objectId:publicId,afterData:{action:command.action,arrivedCount:command.arrivedCount??0}})],outboxMessages:[]}})}
 
   list(context: ActivityOperationsStaffContext) {
     return this.transactions.run(
@@ -69,7 +70,7 @@ export class ActivityOperationsService {
     const publicId = `community-activity-${createHash('sha256')
       .update(`${context.scope.storeId}:${input.idempotencyKey}`)
       .digest('hex').slice(0, 24)}`
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: 'community.activity.draft.create',
       idempotencyKey: input.idempotencyKey,
@@ -103,7 +104,7 @@ export class ActivityOperationsService {
     context: ActivityOperationsStaffContext,
     input: Readonly<{ publicId: string; draft: ActivityDraftInput; reason: string; idempotencyKey: string }>,
   ): Promise<CommandExecution<ActivityOperationsActivity>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: 'community.activity.draft.update',
       idempotencyKey: input.idempotencyKey,
@@ -144,7 +145,7 @@ export class ActivityOperationsService {
       idempotencyKey: string
     }>,
   ): Promise<CommandExecution<ActivityOperationsActivity>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: `community.activity.package.${input.operation}`,
       idempotencyKey: input.idempotencyKey,
@@ -169,7 +170,7 @@ export class ActivityOperationsService {
   }
 
   stopRegistration(context:ActivityOperationsStaffContext,input:Readonly<{publicId:string;reason:string;idempotencyKey:string}>):Promise<CommandExecution<ActivityOperationsActivity>> {
-    return this.commands.execute({scope:context.scope,operationScope:'community.activity.stop-registration',
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({scope:context.scope,operationScope:'community.activity.stop-registration',
       idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),resultCodec:objectCodec<ActivityOperationsActivity>()},async transaction=>{
       await assertEmployeeEffectivePermission(transaction,context.employeeId,'community.activity.manage')
       const result=await new ActivityOperationsRepository(transaction).stopRegistration(input.publicId)
@@ -180,7 +181,7 @@ export class ActivityOperationsService {
   closeActivity(context: ActivityOperationsStaffContext, input: Readonly<{
     publicId: string; status: 'cancelled' | 'completed'; reason: string; idempotencyKey: string
   }>): Promise<CommandExecution<ActivityOperationsActivity>> {
-    return this.commands.execute({scope: context.scope, operationScope: 'community.activity.close',
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({scope: context.scope, operationScope: 'community.activity.close',
       idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint(input), resultCodec: objectCodec<ActivityOperationsActivity>(),
     }, async transaction => {
       await assertEmployeeEffectivePermission(transaction,context.employeeId,'community.activity.manage')
@@ -203,7 +204,7 @@ export class ActivityOperationsService {
       ? 'check-in'
       : input.operation === 'fulfill_package' ? 'fulfill-package'
         : input.operation === 'no_show' ? 'no-show' : 'cancel'
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: `community.activity.registration.${operationCode}`,
       idempotencyKey: input.idempotencyKey,
@@ -234,7 +235,7 @@ export class ActivityOperationsService {
     context: ActivityOperationsStaffContext,
     input: Readonly<{ publicId: string; reason: string; idempotencyKey: string }>,
   ): Promise<CommandExecution<ActivityWaitlistRetry>> {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: 'community.activity.waitlist.retry',
       idempotencyKey: input.idempotencyKey,

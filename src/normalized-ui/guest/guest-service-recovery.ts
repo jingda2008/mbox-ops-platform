@@ -36,6 +36,12 @@ export class GuestServiceRecovery {
   }
 
   execute(input: ServiceInput | null, send: GuestApiClient['requestService']): Promise<GuestServiceResult> {
+    try {
+      const original = this.pending()
+      if (original && input && JSON.stringify(original.input) !== JSON.stringify(input)) {
+        return Promise.reject(new Error('请先恢复上一条服务请求，确认结果后再提交新的需要。'))
+      }
+    } catch (error) { return Promise.reject(error) }
     if (this.flight) return this.flight
     const execute = async () => {
       let intent = this.pending()

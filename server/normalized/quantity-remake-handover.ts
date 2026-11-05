@@ -1,3 +1,4 @@
+import {NativeCommandNotCommittedError} from './command-executor.js'
 import {nativePhysicalExecutor,isNativePhysicalKey} from './native-physical-command.js'
 import {readPackagedReturnEligibility} from './packaged-return-evidence.js'
 import type {ScopedPostgresTransactionRunner,ScopedTransaction,StoreScope} from './transaction-runner.js'
@@ -47,11 +48,11 @@ const codec:JsonCodec<Result>={encode:value=>value,decode:value=>{
 }}
 export class QuantityRemakeHandoverCommand {
   constructor(private readonly commands:NormalizedCommandExecutor){}
-  dispose(input:{scope:Readonly<StoreScope>;employeeId:string;businessDate:string;idempotencyKey:string;batchId:string;unitIds:readonly string[];reason:string;disposition:'used_loss'|'returned_unopened';unopenedReceived:boolean}){
+  dispose(input:{scope:Readonly<StoreScope>;employeeId:string;businessDate:string;idempotencyKey:string;batchId:string;unitIds:readonly string[];reason:string;disposition:'used_loss'|'returned_unopened';unopenedReceived:boolean;replayOnly?:boolean}){
     const unitIds=[...input.unitIds].sort()
     if(!unitIds.length||unitIds.length>999||new Set(unitIds).size!==unitIds.length)throw new ItemQuantityConflict('QUANTITY_INVALID','请选择本批实际处理份数')
     const commands=isNativePhysicalKey(input.idempotencyKey)?nativePhysicalExecutor(this.commands,input,async tx=>{await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request');await assertEmployeeEffectivePermission(tx,input.employeeId,input.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')}):this.commands
-    return commands.execute({scope:input.scope,operationScope:'quantity.remake.handover',idempotencyKey:input.idempotencyKey,
+    return commands.execute({...(!isNativePhysicalKey(input.idempotencyKey)?{replayOnly:input.replayOnly,retainReceipt:true,rejectExpiredReceipt:true,authorizeReplay:async tx=>{await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request');await assertEmployeeEffectivePermission(tx,input.employeeId,input.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')}}:{}),scope:input.scope,operationScope:'quantity.remake.handover',idempotencyKey:input.idempotencyKey,
       requestFingerprint:JSON.stringify({batchId:input.batchId,unitIds,employeeId:input.employeeId,reason:input.reason.trim(),disposition:input.disposition,unopenedReceived:input.unopenedReceived}),resultCodec:codec},async tx=>{
       await assertEmployeeEffectivePermission(tx,input.employeeId,'refund.request')
       await assertEmployeeEffectivePermission(tx,input.employeeId,input.disposition==='returned_unopened'?'inventory.receive':'inventory.waste')
@@ -63,7 +64,7 @@ export class QuantityRemakeHandoverCommand {
       await repository.disposeMade({...input,unitIds})
       const after=await repository.read(input.batchId),result={batchId:input.batchId,itemId:target.itemId,remainingQuantity:after.units.filter(unit=>!unit.cancelled_at&&!unit.held&&['started','ready'].includes(unit.production_state)).length}
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:input.employeeId},action:'quantity_remake.after_visit_disposition',objectType:'kds_task',objectId:target.taskId,businessDate:input.businessDate,reason:input.reason.trim(),metadata:{batchId:input.batchId,unitIds,disposition:input.disposition,unopenedReceived:input.unopenedReceived}}],outboxMessages:[{aggregateType:'kds_task',aggregateId:target.taskId,aggregateVersion:after.units.filter(unit=>!!unit.cancelled_at).length,eventType:'kds.remake.disposition.v1',payload:result}]}
-    })
+    }).catch(error=>{throw error instanceof NativeCommandNotCommittedError?error.original:error})
   }
 }
 async function requireEndedVisit(tx:ScopedTransaction,itemId:string){

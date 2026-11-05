@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
@@ -396,6 +397,7 @@ integration('observation confirmation privacy with PostgreSQL', () => {
     await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id)
       SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2
       AND code IN ('observation.record','observation.confirm')`,[tenantId,storeId,roleId])
+    await grantFixtureStaffPermissions(pool, integrationScope, [employeeId], ['recommendation.rule.draft'])
     const service=new CustomerExperienceService(transactions,new NormalizedCommandExecutor(transactions),{updateProfile:async()=>{throw new Error('unused')}})
     const context={scope:integrationScope,employeeId,businessDate:new Date().toISOString().slice(0,10)}
     const input={tableSessionId,rawContent:'客人需要立即加水',inputKind:'text' as const,needsImmediateAction:true,idempotencyKey:randomUUID()}

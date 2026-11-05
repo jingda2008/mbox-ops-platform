@@ -1007,9 +1007,13 @@ describe('commerceKdsApiPlugin', () => {
     })
     expect(value.orderRepository.markDelivered).toHaveBeenCalledWith(orderItemId, employeeId)
     expect(value.kdsRepository.markReady).not.toHaveBeenCalled()
-    expect(value.commandQueries[4]).toContain('mbox.kds_tasks')
-    expect(value.commandQueries[4]).not.toContain('mbox.order_items')
-    expect(value.commandQueries[5]).toContain('mbox.order_items')
+    const taskLocks = value.commandQueries.flatMap((sql,index) => sql.includes('FOR UPDATE OF task') ? [index] : [])
+    expect(taskLocks.length).toBeGreaterThan(0)
+    for (const index of taskLocks) {
+      expect(value.commandQueries[index]).toContain('mbox.kds_tasks')
+      expect(value.commandQueries[index]).not.toContain('mbox.order_items')
+      expect(value.commandQueries[index+1]).toContain('mbox.order_items')
+    }
   })
 
   it('removes ordinary cancel and requires failure reasons with actionable audit evidence', async () => {

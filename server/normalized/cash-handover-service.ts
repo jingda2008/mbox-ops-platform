@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {createHash} from 'node:crypto'
 import {IdempotencyConflictError,type NormalizedCommandExecutor,type JsonObject} from './command-executor.js'
 import type {ScopedPostgresTransactionRunner,ScopedTransaction} from './transaction-runner.js'
@@ -28,7 +29,7 @@ export class CashHandoverService {
   const reason=input.reason.trim()
   if(reason.length<4||reason.length>500)throw new CashHandoverError('请填写4—500字实际原因或交接说明')
   const fingerprint=createHash('sha256').update(JSON.stringify({employeeId:c.employeeId,input:{...input,reason}})).digest('hex')
-  return this.commands.execute({scope:c.scope,operationScope:'cash.handover.'+input.action,idempotencyKey:key,requestFingerprint:fingerprint,resultCodec:{encode:(v:JsonObject)=>v,decode:(v)=>v as JsonObject}},async tx=>{
+  return reauthorizingCommands(this.commands).execute({scope:c.scope,operationScope:'cash.handover.'+input.action,idempotencyKey:key,requestFingerprint:fingerprint,resultCodec:{encode:(v:JsonObject)=>v,decode:(v)=>v as JsonObject}},async tx=>{
    try {
    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${c.scope.tenantId}:${c.scope.storeId}:cash-handover`])
    const original=(await tx.query<{evidence:JsonObject}>(`SELECT evidence FROM mbox.cash_handover_events WHERE tenant_id=$1 AND store_id=$2 AND evidence->>'key'=$3 ORDER BY occurred_at,id LIMIT 1`,[c.scope.tenantId,c.scope.storeId,key])).rows[0]

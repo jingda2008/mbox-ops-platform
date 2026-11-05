@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {createHash} from 'node:crypto'
 import type {FastifyInstance,FastifyReply} from 'fastify'
 import type {ActivityProductionCommand,ActivityProductionResult} from '../../src/shared/activity-service.js'
@@ -50,11 +51,11 @@ export async function registerActivityProductionRoutes(app:FastifyInstance,optio
     // Reauthorize even a cached command, then again before a new mutation.
     await options.staffAccessTransactions.run(context.scope,authorize)
     const key=digest(`${commandScope}:${raw}`)
-    return options.commandExecutor.execute({scope:context.scope,operationScope:'activity.service.production',idempotencyKey:key,requestFingerprint:JSON.stringify({commandScope,command}),retainReceipt:true,resultCodec:{encode:value=>value as unknown as JsonValue,decode:value=>value as ActivityProductionResult}},async tx=>{
+    return reauthorizingCommands(options.commandExecutor).execute({scope:context.scope,operationScope:'activity.service.production',idempotencyKey:key,requestFingerprint:JSON.stringify({commandScope,command}),retainReceipt:true,resultCodec:{encode:value=>value as unknown as JsonValue,decode:value=>value as ActivityProductionResult}},async tx=>{
       await authorize(tx)
       const result=await new ActivityServiceRepository(tx).production(command,key,command.action==='take'||command.action==='undo_take'?null:context.employeeId,source)
       return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:`activity.service.${command.action}`,objectType:'activity_service_receipt',objectId:result.receiptId,businessDate:context.businessDate,afterData:{action:command.action,pickerEmployeeId:null,...(recovery?{recoveredFromSession:recovery.staffSessionId}:{})},requestId}],outboxMessages:[]}
-    })
+    }, authorize)
   }
   app.post('/commerce/activity-service/commands',async(request,reply)=>route(reply,async()=>{
     const context=await options.resolveContext(request),command=parse(request.body),raw=key(request.headers['idempotency-key'])

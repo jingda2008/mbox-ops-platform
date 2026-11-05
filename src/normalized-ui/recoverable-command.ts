@@ -1,3 +1,4 @@
+import { readRecoveryJournal } from './recovery-journal.js'
 type Attempt = { fingerprint: string; key: string }
 const memory = new Map<string, Attempt>()
 const flights = new Map<string, Promise<unknown>>()
@@ -9,16 +10,13 @@ export async function executeRecoverableCommand<T>(
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body)))
   const fingerprint = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
   const storageKey = `mbox.command-attempt.v1:${namespace}:${fingerprint}`
-  let attempt = memory.get(storageKey)
-  try {
-    const stored = typeof sessionStorage === 'undefined' ? null : sessionStorage.getItem(storageKey)
-    if (stored) {
-      const parsed: unknown = JSON.parse(stored)
-      if (parsed && typeof parsed === 'object' && 'fingerprint' in parsed && parsed.fingerprint === fingerprint
-        && 'key' in parsed && typeof parsed.key === 'string') attempt = { fingerprint, key: parsed.key }
-    }
-  } catch { /* In-memory protection remains available when storage is restricted. */ }
-  const recovering = attempt !== undefined
+  const storage = typeof sessionStorage === 'undefined' ? undefined : sessionStorage
+  let attempt = readRecoveryJournal(storage, storageKey, (value): value is Attempt => {
+    if (!value || typeof value !== 'object') return false
+    const row = value as Partial<Attempt>
+    return row.fingerprint === fingerprint && typeof row.key === 'string' && row.key.trim().length > 0
+  }, memory.get(storageKey) ?? null)
+  const recovering = attempt !== null
   if (!attempt) attempt = { fingerprint, key: proposedKey }
   memory.set(storageKey, attempt)
   try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(storageKey, JSON.stringify(attempt)) } catch { /* Same-tab retry remains protected. */ }

@@ -1,3 +1,4 @@
+import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyRecordError } from './command-executor.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import {
   CustomerPreferenceNotFoundError,
@@ -36,7 +37,7 @@ export const customerPreferenceApiPlugin:FastifyPluginAsync<CustomerPreferenceAp
     const key=preferenceKey(body.key)
     const value=preferenceValue(key,body.value)
     const polarity=enumValue(body.polarity,'偏好方向',['supports','contradicts'] as const) as PreferencePolarity
-    const validUntil=optionalFutureTimestamp(body.validUntil)
+    const validUntil=optionalTimestamp(body.validUntil)
     const result=await options.service.declare(context,{
       key,value,polarity,validUntil,idempotencyKey:idempotencyKey(request),
     })
@@ -81,6 +82,9 @@ function publicPreferenceSnapshot(snapshot:CustomerPreferenceSnapshot){
 
 async function handle(reply:FastifyReply,action:()=>Promise<unknown>){
   try{return await action()}catch(error){
+    if(error instanceof IdempotencyConflictError)return reply.code(409).send({error:{code:'CUSTOMER_PREFERENCE_CONFLICT',message:'原请求内容不一致，请核对当前偏好，不要更换请求键重试'}})
+    if(error instanceof IdempotencyInProgressError)return reply.code(425).send({error:{code:'CUSTOMER_PREFERENCE_IN_PROGRESS',message:'原请求仍在处理，请保留原请求稍后恢复'}})
+    if(error instanceof IdempotencyRecordError)return reply.code(503).send({error:{code:'CUSTOMER_PREFERENCE_UNAVAILABLE',message:'暂时无法核对原请求，请保留原记录稍后恢复'}})
     if(error instanceof CustomerPreferenceNotFoundError){
       return reply.code(error.statusCode).send({error:{code:error.code,message:error.message}})
     }
@@ -123,11 +127,10 @@ function enumValue<const Values extends readonly string[]>(value:unknown,label:s
   if(typeof value!=='string'||!values.includes(value))throw requestError(`${label}不正确`)
   return value as Values[number]
 }
-function optionalFutureTimestamp(value:unknown):string|null{
+function optionalTimestamp(value:unknown):string|null{
   if(value===undefined||value===null||value==='')return null
   if(typeof value!=='string'||!Number.isFinite(Date.parse(value)))throw requestError('有效期不正确')
   const result=new Date(value).toISOString()
-  if(Date.parse(result)<=Date.now())throw requestError('有效期必须晚于当前时间')
   return result
 }
 function idempotencyKey(request:FastifyRequest):string{

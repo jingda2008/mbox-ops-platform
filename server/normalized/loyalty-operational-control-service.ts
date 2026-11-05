@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import { IdempotencyConflictError, type JsonCodec, type NormalizedCommandExecutor } from './command-executor.js'
 import type { StaffCustomerExperienceContext } from './customer-experience-service.js'
@@ -38,7 +39,7 @@ export class LoyaltyOperationalControlService {
     idempotencyKey: string
   }>) {
     const targetState = input.operation==='pause' ? 'paused' as const : 'active' as const
-    return this.commands.execute({
+    return reauthorizingCommands(this.commands).execute({
       scope: context.scope,
       operationScope: 'loyalty.operations.control',
       idempotencyKey: input.idempotencyKey,

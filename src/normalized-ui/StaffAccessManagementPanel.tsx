@@ -168,14 +168,16 @@ function StaffAccessManagementContent({ api, currentEmployeeId }: { api: Normali
     if (!overview || publishing || recoveryError || (!recover && (pendingChanges.length === 0 || reason.trim().length < 2))) return
     setPublishing(true); setNotice(null)
     let recovery: StaffPermissionRecovery | null = null
+    let recovering = false
     try {
       recovery = new StaffPermissionRecovery(overview.scopeKey, currentEmployeeId, localStorage)
       const existing = recovery.pending()
+      recovering = existing !== null
       const result = await recovery.execute(recover ? null : {
         expectedVersion: overview.configurationVersion, reason: reason.trim(), changes: pendingChanges,
-      }, (intent) => {
+      }, (intent, receiptOnly) => {
         setPendingDeployment(intent)
-        return api.postEndpoint<StaffPermissionDeploymentResult>('/api/staff-access/deploy', intent.body,
+        return api.postEndpoint<StaffPermissionDeploymentResult>('/api/staff-access/deploy', { ...intent.body, receiptOnly },
           { idempotencyKey: intent.key, timeoutMs: 20_000 })
       })
       setOverview(result.overview); resetDrafts()
@@ -185,7 +187,7 @@ function StaffAccessManagementContent({ api, currentEmployeeId }: { api: Normali
       })
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : null
-      const rejected = code === 'STAFF_ACCESS_VERSION_CONFLICT' || code === 'PERMISSION_DEPLOYMENT_INVALID'
+      const rejected = !recovering && (code === 'STAFF_ACCESS_VERSION_CONFLICT' || code === 'PERMISSION_DEPLOYMENT_INVALID')
       if (rejected) {
         resetDrafts()
         try {

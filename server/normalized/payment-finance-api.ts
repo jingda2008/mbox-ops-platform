@@ -57,6 +57,7 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
    const requestFingerprint=createHash('sha256').update(JSON.stringify({employeeId:context.employeeId,paymentId,note,resolve})).digest('hex')
    const result=await options.commands.execute({scope:context.scope,operationScope:'payment.finance-review',idempotencyKey:key,
     requestFingerprint,
+    authorizeReplay:async tx=>{await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view');await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.manage')},
     resultCodec:{encode:(value:JsonObject)=>value,decode:value=>value as JsonObject}},async tx=>{
      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.view')
      await new StaffAccessRepository(tx).assertPermission(context.employeeId,'reconciliation.manage')

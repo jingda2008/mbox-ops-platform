@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -42,6 +43,7 @@ integration('loyalty supplement and refund consistency PostgreSQL integration', 
       { updateProfile: async () => { throw new Error('not used') } },
     )
     await seedBase(pool)
+    await grantFixtureStaffPermissions(pool, {tenantId:base.tenant,storeId:base.store}, [base.drafter,base.approver], ['loyalty.accrual.request','loyalty.accrual.approve'])
   })
 
   afterAll(async () => pool?.end())

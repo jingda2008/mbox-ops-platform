@@ -43,6 +43,7 @@ export class GuestCheckoutRecovery {
     // Check changed requests even when another call is in flight.
     const execute = async () => {
       let intent = this.pending()
+      const recovering = intent !== null
       if (intent && input && JSON.stringify(intent.input) !== JSON.stringify(input)) {
         throw new Error('上一笔下单结果尚未确认，请先恢复原订单。')
       }
@@ -62,7 +63,7 @@ export class GuestCheckoutRecovery {
           if (this.storage.getItem(this.storageKey) !== null) throw new Error('原订单已返回，但恢复记录未能清理，请恢复原订单核对。')
           return result
         } catch (error) {
-          if (error instanceof GuestApiError && error.kind === 'http' && error.status !== null
+          if (!recovering && error instanceof GuestApiError && error.kind === 'http' && error.status !== null
             && error.status >= 400 && error.status < 500 && uncommittedCodes.has(error.code)) {
             this.storage.removeItem(this.storageKey)
           }

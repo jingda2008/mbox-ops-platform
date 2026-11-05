@@ -1,3 +1,4 @@
+import { reauthorizingCommands, staffAuthorizedCommands } from './staff-authorized-command.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
 import {editActivityParty,activityAddonProducts,resolveActivityParent,customerActivityServiceView} from './activity-customer-service.js'
 import {CustomerRepository} from './customer-repository.js'
@@ -266,7 +267,7 @@ export class CustomerExperienceService {
       employeeId: string; publicDisplayName: string; reason: string; idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'customer.public-profile.manage').execute({
       scope: context.scope,
       operationScope: 'customer.public-profile.draft',
       idempotencyKey: input.idempotencyKey,
@@ -317,7 +318,7 @@ export class CustomerExperienceService {
       profileId: string; approvalReference: string; effectiveAt: string; reason: string; idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'customer.public-profile.publish').execute({
       scope: context.scope,
       operationScope: 'customer.public-profile.publish',
       idempotencyKey: input.idempotencyKey,
@@ -378,7 +379,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ profileId: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'customer.public-profile.publish').execute({
       scope: context.scope,
       operationScope: 'customer.public-profile.withdraw',
       idempotencyKey: input.idempotencyKey,
@@ -444,7 +445,7 @@ export class CustomerExperienceService {
     if (createHash('sha256').update(input.content).digest('hex') !== input.contentSha256) {
       throw new CustomerExperienceRequestError('政策内容摘要与正文不一致', 'PRIVACY_POLICY_HASH_MISMATCH', 409)
     }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'privacy.policy.manage').execute({
       scope: context.scope,
       operationScope: 'privacy.policy.draft',
       idempotencyKey: input.idempotencyKey,
@@ -493,7 +494,7 @@ export class CustomerExperienceService {
     if (Date.parse(input.effectiveAt) > Date.now() + 60_000) throw new CustomerExperienceRequestError(
       '当前隐私政策仅支持立即生效；未来版本请在生效时重新发布', 'PRIVACY_POLICY_SCHEDULE_UNSUPPORTED', 409,
     )
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'privacy.policy.publish').execute({
       scope: context.scope,
       operationScope: 'privacy.policy.publish',
       idempotencyKey: input.idempotencyKey,
@@ -559,7 +560,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ policyVersion: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'privacy.policy.publish').execute({
       scope: context.scope,
       operationScope: 'privacy.policy.withdraw',
       idempotencyKey: input.idempotencyKey,
@@ -745,7 +746,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ publicId: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.fulfill').execute({
       scope: context.scope,
       operationScope: 'loyalty.redemption.fulfill',
       idempotencyKey: input.idempotencyKey,
@@ -778,7 +779,7 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.exception').execute({
       scope: context.scope,
       operationScope: 'loyalty.redemption.fail',
       idempotencyKey: input.idempotencyKey,
@@ -881,7 +882,7 @@ export class CustomerExperienceService {
       || (input.cashRedemptionEnabled && (input.pointsRoundingScope !== 'order' || input.policyCode !== 'BASE'))) {
       throw new CustomerExperienceRequestError('积分抵扣须使用基础规则：每笔实付满10元积1分，零头不累计', 'LOYALTY_POLICY_RULE_INVALID', 400)
     }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.manage').execute({
       scope: context.scope,
       operationScope: 'loyalty.policy.draft',
       idempotencyKey: input.idempotencyKey,
@@ -937,7 +938,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ policyId: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.approve').execute({
       scope: context.scope,
       operationScope: 'loyalty.policy.approve',
       idempotencyKey: input.idempotencyKey,
@@ -976,7 +977,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     assertReleaseWindow(input.effectiveFrom, input.effectiveUntil)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.publish').execute({
       scope: context.scope,
       operationScope: 'loyalty.policy.publish',
       idempotencyKey: input.idempotencyKey,
@@ -1109,7 +1110,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     assertTierPolicy(input)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.manage').execute({
       scope: context.scope,
       operationScope: 'loyalty.tier-policy.draft',
       idempotencyKey: input.idempotencyKey,
@@ -1159,7 +1160,7 @@ export class CustomerExperienceService {
       '审批等级规则前必须确认已复核历史会员分布与权益成本影响',
       'LOYALTY_TIER_IMPACT_NOT_ACKNOWLEDGED', 409,
     )
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.approve').execute({
       scope: context.scope,
       operationScope: 'loyalty.tier-policy.approve',
       idempotencyKey: input.idempotencyKey,
@@ -1191,7 +1192,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     assertReleaseWindow(input.effectiveFrom, input.effectiveUntil)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.publish').execute({
       scope: context.scope,
       operationScope: 'loyalty.tier-policy.publish',
       idempotencyKey: input.idempotencyKey,
@@ -1440,7 +1441,7 @@ export class CustomerExperienceService {
       || new Set(input.items.map((item) => item.publicId)).size !== input.items.length) {
       throw new CustomerExperienceRequestError('兑换项代码或公开编号重复', 'LOYALTY_REDEMPTION_CATALOG_DUPLICATE', 409)
     }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.catalog.manage').execute({
       scope: context.scope,
       operationScope: 'loyalty.redemption.catalog.draft',
       idempotencyKey: input.idempotencyKey,
@@ -1503,7 +1504,7 @@ export class CustomerExperienceService {
       '审批前必须确认真实成本、库存与履约能力已经复核',
       'LOYALTY_REDEMPTION_REVIEW_REQUIRED', 409,
     )
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.catalog.approve').execute({
       scope: context.scope, operationScope: 'loyalty.redemption.catalog.approve',
       idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ id: string; version: number; status: string; itemCount: number }>(),
@@ -1545,7 +1546,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     assertReleaseWindow(input.effectiveFrom, input.effectiveUntil)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.catalog.publish').execute({
       scope: context.scope, operationScope: 'loyalty.redemption.catalog.publish',
       idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ id: string; version: number; status: string; itemCount: number }>(),
@@ -1607,7 +1608,7 @@ export class CustomerExperienceService {
       reason: string; idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.redemption.control').execute({
       scope: context.scope, operationScope: 'loyalty.redemption.control',
       idempotencyKey: input.idempotencyKey, requestFingerprint: fingerprint(input),
       resultCodec: objectCodec<{ state: string; pilotStartsAt: string | null; pilotEndsAt: string | null }>(),
@@ -1839,7 +1840,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ orderPublicId: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.accrual.request').execute({
       scope: context.scope,
       operationScope: 'loyalty.supplement.request',
       idempotencyKey: input.idempotencyKey,
@@ -1984,7 +1985,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ publicId: string; decision: 'approve' | 'reject'; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.accrual.approve').execute({
       scope: context.scope,
       operationScope: `loyalty.supplement.${input.decision}`,
       idempotencyKey: input.idempotencyKey,
@@ -2308,7 +2309,7 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'recommendation.phase.configure').execute({
       scope: context.scope,
       operationScope: 'recommendation.product-performance-phases.configure',
       idempotencyKey: input.idempotencyKey,
@@ -2347,7 +2348,7 @@ export class CustomerExperienceService {
     const publicId = deterministicPublicId(
       'performance-phase', context.scope.storeId, input.idempotencyKey,
     )
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'performance.phase.manage').execute({
       scope: context.scope,
       operationScope: 'performance.phase.start',
       idempotencyKey: input.idempotencyKey,
@@ -2382,7 +2383,7 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'performance.phase.manage').execute({
       scope: context.scope,
       operationScope: `performance.phase.${input.action}`,
       idempotencyKey: input.idempotencyKey,
@@ -2674,7 +2675,7 @@ export class CustomerExperienceService {
       ? (input.rolloutState === 'disabled' && Object.keys(input.configuration).length === 0
         ? {} : supportContactConfiguration(input.configuration))
       : input.configuration
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, input.featureCode === 'recommendation.engine' ? 'recommendation.rule.publish' : 'customer.experience.feature.manage').execute({
       scope: context.scope,
       operationScope: 'customer.experience.feature.set',
       idempotencyKey: input.idempotencyKey,
@@ -2739,7 +2740,7 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'checkout.upgrade.rule.draft').execute({
       scope: context.scope,
       operationScope: 'customer.checkout.upgrade.rule.upsert',
       idempotencyKey: input.idempotencyKey,
@@ -2826,7 +2827,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ code: string; reason: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'checkout.upgrade.rule.approve').execute({
       scope: context.scope,
       operationScope: 'customer.checkout.upgrade.rule.approve',
       idempotencyKey: input.idempotencyKey,
@@ -2963,7 +2964,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ ruleId:string; reason:string; idempotencyKey:string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'checkout.upgrade.rule.publish').execute({
       scope:context.scope,operationScope:'customer.checkout.upgrade.rule.publish',
       idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),
       resultCodec:objectCodec<{ id:string; code:string; revision:number; status:string }>(),
@@ -2980,7 +2981,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ ruleId:string; reason:string; idempotencyKey:string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'checkout.upgrade.rule.publish').execute({
       scope:context.scope,operationScope:'customer.checkout.upgrade.rule.rollback-draft',
       idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),
       resultCodec:objectCodec<{ id:string; code:string; revision:number; status:string }>(),
@@ -3008,7 +3009,7 @@ export class CustomerExperienceService {
       idempotencyKey:string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'fulfillment.capacity.draft').execute({
       scope:context.scope,operationScope:'fulfillment.capacity.draft',
       idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),
       resultCodec:objectCodec<{ id:string; stationCode:string; policyVersion:number; status:string }>(),
@@ -3032,7 +3033,7 @@ export class CustomerExperienceService {
       idempotencyKey:string
     }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, `fulfillment.capacity.${input.action}`).execute({
       scope:context.scope,operationScope:`fulfillment.capacity.${input.action}`,
       idempotencyKey:input.idempotencyKey,requestFingerprint:fingerprint(input),
       resultCodec:objectCodec<{ id:string; stationCode:string; policyVersion:number; status:string }>(),
@@ -3084,7 +3085,7 @@ export class CustomerExperienceService {
       input.salesCopy,
     )
     const publicId = deterministicPublicId('community-activity', context.scope.storeId, input.idempotencyKey)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.manage').execute({
       scope: context.scope,
       operationScope: 'community.activity.create',
       idempotencyKey: input.idempotencyKey,
@@ -3169,7 +3170,7 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ publicId: string; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.publish').execute({
       scope: context.scope,
       operationScope: 'community.activity.publish',
       idempotencyKey: input.idempotencyKey,
@@ -3379,7 +3380,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     const publicId = deterministicPublicId('customer-followup', context.scope.storeId, input.idempotencyKey)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'customer.relationship.manage').execute({
       scope: context.scope,
       operationScope: 'customer.followup.create',
       idempotencyKey: input.idempotencyKey,
@@ -3435,12 +3436,12 @@ export class CustomerExperienceService {
     }>,
   ): Promise<CommandExecution<ObservationDraftView>> {
     const publicId = deterministicPublicId('observation', context.scope.storeId, input.idempotencyKey)
-    return this.commands.execute({
+    return reauthorizingCommands(this.commands).execute({
       scope: context.scope,
       operationScope: input.nativeReceipt ? 'customer.observation.parse.native' : 'customer.observation.parse',
       retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
+      requestFingerprint: fingerprint({...input,employeeId:context.employeeId}),
       resultCodec: objectCodec<ObservationDraftView>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3466,7 +3467,13 @@ export class CustomerExperienceService {
           parseConfidence: result.parseConfidence,
         },
       )
-    },input.nativeReceipt ? async tx=>{await new StaffAccessRepository(tx).assertPermission(context.employeeId,'observation.record')} : undefined)
+    }, async tx => {
+      const access = await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'observation.record')
+      await new CustomerExperienceObservationRepository(tx).authorizeReceipt({
+        tableSessionId: input.tableSessionId, employeeId: context.employeeId,
+        allowAllTables: access.permissions.includes('observation.record.all'),
+      })
+    })
   }
 
   nativeObservationBoard(context:StaffCustomerExperienceContext,tableSessionId:string){
@@ -3506,12 +3513,12 @@ export class CustomerExperienceService {
     context: StaffCustomerExperienceContext,
     input: Readonly<{ nativeReceipt?:boolean; publicId: string; events: readonly ObservationEventInput[]; idempotencyKey: string }>,
   ) {
-    return this.commands.execute({
+    return reauthorizingCommands(this.commands).execute({
       scope: context.scope,
       operationScope: input.nativeReceipt ? 'customer.observation.confirm.native' : 'customer.observation.confirm',
       retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
+      requestFingerprint: fingerprint({...input,employeeId:context.employeeId}),
       resultCodec: objectCodec<{ publicId: string; status: 'confirmed'; events: JsonObject[]; serviceTaskId: string | null }>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3531,7 +3538,13 @@ export class CustomerExperienceService {
         context.businessDate,
         { eventCount: result.events.length, serviceTaskId: result.serviceTaskId },
       )
-    },input.nativeReceipt ? async tx=>{await new StaffAccessRepository(tx).assertPermission(context.employeeId,'observation.confirm')} : undefined)
+    }, async tx => {
+      const access = await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'observation.confirm')
+      await new CustomerExperienceObservationRepository(tx).authorizeReceipt({
+        publicId: input.publicId, employeeId: context.employeeId,
+        allowAllTables: access.permissions.includes('observation.record.all'),
+      })
+    })
   }
 
   reviseObservation(
@@ -3545,12 +3558,12 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    return this.commands.execute({
+    return reauthorizingCommands(this.commands).execute({
       scope: context.scope,
       operationScope: input.nativeReceipt ? 'customer.observation.revise.native' : 'customer.observation.revise',
       retainReceipt: input.nativeReceipt===true,
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input.nativeReceipt ? {...input,employeeId:context.employeeId} : input),
+      requestFingerprint: fingerprint({...input,employeeId:context.employeeId}),
       resultCodec: objectCodec<JsonObject>(),
     }, async (transaction) => {
       const access = await new StaffAccessRepository(transaction)
@@ -3572,7 +3585,14 @@ export class CustomerExperienceService {
         context.businessDate,
         { previousEventId: input.previousEventId, reason: input.reason },
       )
-    },input.nativeReceipt ? async tx=>{const access=new StaffAccessRepository(tx);await access.assertPermission(context.employeeId,'observation.correct');await access.assertPermission(context.employeeId,'observation.view.raw')} : undefined)
+    }, async tx => {
+      const access = await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'observation.correct')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'observation.view.raw')
+      await new CustomerExperienceObservationRepository(tx).authorizeReceipt({
+        publicId: input.publicId, employeeId: context.employeeId,
+        allowAllTables: access.permissions.includes('observation.record.all'),
+      })
+    })
   }
 
   createRecommendationPolicy(
@@ -3598,7 +3618,7 @@ export class CustomerExperienceService {
     }>,
   ) {
     const publicId = deterministicPublicId('recommendation-policy', context.scope.storeId, input.idempotencyKey)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'recommendation.rule.draft').execute({
       scope: context.scope,
       operationScope: 'customer.recommendation.policy.create',
       idempotencyKey: input.idempotencyKey,
@@ -3627,7 +3647,7 @@ export class CustomerExperienceService {
     input: Readonly<{ sourcePublicId: string; draftReason: string; idempotencyKey: string }>,
   ) {
     const publicId = deterministicPublicId('recommendation-policy-clone', context.scope.storeId, input.idempotencyKey)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'recommendation.rule.draft').execute({
       scope: context.scope,
       operationScope: 'customer.recommendation.policy.clone',
       idempotencyKey: input.idempotencyKey,
@@ -3671,7 +3691,7 @@ export class CustomerExperienceService {
     input: Readonly<{ publicId: string; reason: string; effectiveFrom?: string; idempotencyKey: string }>,
     transition: 'approve' | 'publish',
   ) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, `recommendation.rule.${transition}`).execute({
       scope: context.scope,
       operationScope: `customer.recommendation.policy.${transition}`,
       idempotencyKey: input.idempotencyKey,

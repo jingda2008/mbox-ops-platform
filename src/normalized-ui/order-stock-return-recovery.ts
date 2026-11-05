@@ -1,3 +1,4 @@
+import {readRecoveryJournal} from './recovery-journal.js'
 import type {NormalizedApiClient} from '../normalized-api'
 import {executeRecoverableCommand} from './recoverable-command'
 
@@ -23,13 +24,13 @@ export class OrderStockReturnRecovery {
     this.storageKey=`mbox-stock-return-recovery-v1:${this.namespace}`
   }
   pending():Attempt|null{
-    try{
-      const text=this.storage?.getItem(this.storageKey),value=text?JSON.parse(text):null
-      if(value&&typeof value.key==='string'&&value.body&&Number.isSafeInteger(value.body.quantity)&&value.body.quantity>0
-        &&['unmade','returned_unopened'].includes(value.body.disposition)&&typeof value.body.reason==='string'&&value.body.unopenedConfirmed===true
-        &&(value.recordId===null||typeof value.recordId==='string'))return value as Attempt
-    }catch{/* The same-tab recovery record remains available. */}
-    return memory.get(this.storageKey)??null
+    return readRecoveryJournal(this.storage,this.storageKey,(value):value is Attempt=>{
+      if(!value||typeof value!=='object'||Array.isArray(value))return false
+      const row=value as Partial<Attempt>
+      return typeof row.key==='string'&&row.key.trim().length>0&&!!row.body&&Number.isSafeInteger(row.body.quantity)&&row.body.quantity>0
+        &&['unmade','returned_unopened'].includes(row.body.disposition)&&typeof row.body.reason==='string'&&row.body.unopenedConfirmed===true
+        &&(row.recordId===null||typeof row.recordId==='string')
+    },memory.get(this.storageKey)??null)
   }
   async submit(body:StockReturnBody){
     const previous=this.pending()
@@ -47,10 +48,9 @@ export class OrderStockReturnRecovery {
       return result.id
     }).then(id=>{this.save({...attempt,recordId:id});return id}).catch((error:unknown)=>{
       const status=error&&typeof error==='object'&&'status' in error?error.status:null
-      // Authorization/validation refusals are definite; conflict and unknown
-      // results retain the original intent, as on the existing endpoint.
+      // A refusal of recovery cannot prove that the original request never committed.
       const code=error&&typeof error==='object'&&'code' in error?error.code:null
-      if(typeof status==='number'&&[400,403,404].includes(status)||status===409&&code==='STOCK_RETURN_CONFLICT')this.clear()
+      if(!previous&&(typeof status==='number'&&[400,403,404].includes(status)||status===409&&code==='STOCK_RETURN_CONFLICT'))this.clear()
       throw error
     }).finally(()=>{flights.delete(this.storageKey)})
     flights.set(this.storageKey,execution)

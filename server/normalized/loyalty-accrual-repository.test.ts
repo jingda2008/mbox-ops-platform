@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -32,6 +33,7 @@ integration('loyalty accrual PostgreSQL integration', () => {
     pool = new Pool({ connectionString: databaseUrl, max: 4 })
     runner = new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
     await seed(pool)
+    await grantFixtureStaffPermissions(pool, {tenantId:id.tenant,storeId:id.store}, [id.drafter,id.approver,id.publisher], ['loyalty.policy.manage','loyalty.policy.approve','loyalty.policy.publish','loyalty.accrual.request','loyalty.accrual.approve'])
   })
 
   afterAll(async () => pool?.end())

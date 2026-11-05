@@ -1,3 +1,5 @@
+import {IdempotencyReceiptUnavailableError} from './command-executor.js'
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {TablePrepaymentError} from './table-prepayment-repository.js'
 import {TableMinimumSpendNotMetError} from './table-minimum-spend.js'
 import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
@@ -146,6 +148,8 @@ interface KdsCommandTarget {
 }
 
 interface KdsActionResult {
+  deliveredAt?: string | null
+  deliveredBy?: string | null
   affectedUnitIds?:string[]
   affectedQuantity?:number
   task: KdsTask
@@ -717,7 +721,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       if(body.quantity!==undefined){
         if(typeof body.quantity!=='number'||!Number.isSafeInteger(body.quantity)||body.quantity<1||body.quantity>999)throw new TypeError('请选择1至999的实际重做份数')
         if(typeof body.originalGoodsLost!=='boolean')throw new TypeError('请确认原实物是否已无法交付')
-        const result=await new QuantityRemakeCommandService(options.commandExecutor,options.quantityActionsEnabled===true).create({...context,taskId,quantity:body.quantity,originalGoodsLost:body.originalGoodsLost,reason:reason.note,idempotencyKey})
+        const result=await new QuantityRemakeCommandService(options.commandExecutor,options.quantityActionsEnabled===true).create({...context,taskId,quantity:body.quantity,originalGoodsLost:body.originalGoodsLost,reason:reason.note,idempotencyKey,replayOnly:request.headers['x-mbox-replay-only']==='true'})
         return reply.send({data:result.value,replayed:result.replayed})
       }
       const execution = await executeKdsRemake(
@@ -749,7 +753,7 @@ async function executeKdsAction(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: action === 'pickupAndDeliver' || action === 'deliver' ? 'deliver' : action, stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.action',
     idempotencyKey,
@@ -763,6 +767,10 @@ async function executeKdsAction(
       throw new CommerceKdsRequestError('SHARED_PICKUP_REQUIRED','请在吧台取餐屏确认取走，手机会自动同步，无需再次确认',409)
     }
     return performKdsAction(transaction, options, context, taskId, action, idempotencyKey, requestId, reason, quantity)
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: action === 'pickupAndDeliver' || action === 'deliver' ? 'deliver' : action, stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 
@@ -890,6 +898,7 @@ export async function performKdsAction(
       task,
       target,
       orderItem,
+      ...((action==='deliver'||action==='pickupAndDeliver')?{deliveredAt:new Date().toISOString(),deliveredBy:context.employeeId}:{}),
       fulfillmentStatus: quantityOutcome?.fulfillmentStatus??fulfillmentStatus(task, orderItem),
       ...(quantityOutcome?{affectedQuantity:quantityOutcome.quantity,affectedUnitIds:quantityOutcome.unitIds}:{}),
       exceptionEvidence,
@@ -932,7 +941,7 @@ async function executeManagerCancellation(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: 'manager_cancel', stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.manager_cancel',
     idempotencyKey,
@@ -1033,6 +1042,10 @@ async function executeManagerCancellation(
         headers: { requestId },
       }],
     }
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_cancel', stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 
@@ -1049,7 +1062,7 @@ async function executeKdsRemake(
     await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
       action: 'manager_remake', stationCode: target.task.stationCode, tableId: target.tableId})
   }) : options.commandExecutor
-  return commands.execute({
+  return reauthorizingCommands(commands).execute({
     scope: context.scope,
     operationScope: 'commerce.kds.remake',
     idempotencyKey,
@@ -1199,6 +1212,10 @@ async function executeKdsRemake(
         headers: { requestId },
       }],
     }
+  }, async transaction => {
+    const target = await lockKdsCommandTarget(transaction, taskId)
+    await new NormalizedKdsAuthorization().assertCanActOnTask({transaction, ...context,
+      action: 'manager_remake', stationCode: target.task.stationCode, tableId: target.tableId})
   })
 }
 
@@ -1598,10 +1615,10 @@ function kdsResponse(execution: CommandExecution<KdsActionResult>) {
     completedBy: task.readyAt === null ? null : task.assignedEmployeeId,
     pickedUpAt: null,
     pickedUpBy: null,
-    deliveredAt: result.orderItem?.status === 'delivered' ? new Date().toISOString() : null,
-    deliveredBy: result.orderItem?.status === 'delivered' ? task.assignedEmployeeId : null,
+    deliveredAt: result.deliveredAt ?? null,
+    deliveredBy: result.deliveredBy ?? null,
     fulfillmentStatus: result.fulfillmentStatus,
-    deliveredOrderItem: result.orderItem,
+    deliveredOrderItem: result.orderItem === null ? null : publicDeliveryItem(result.orderItem),
     meta: { replayed: execution.replayed },
   }
 }
@@ -1648,6 +1665,8 @@ const kdsActionResultCodec: JsonCodec<KdsActionResult> = {
 
 function kdsActionResultToJson(result: KdsActionResult): JsonObject {
   return {
+    deliveredAt: result.deliveredAt ?? null,
+    deliveredBy: result.deliveredBy ?? null,
     ...(result.affectedQuantity===undefined?{}:{affectedQuantity:result.affectedQuantity}),
     ...(result.affectedUnitIds ? {affectedUnitIds:result.affectedUnitIds} : {}),
     task: kdsTaskToJson(result.task),
@@ -1667,6 +1686,17 @@ function kdsActionResultToJson(result: KdsActionResult): JsonObject {
     orderItem: result.orderItem === null ? null : orderItemToJson(result.orderItem),
     fulfillmentStatus: result.fulfillmentStatus,
     exceptionEvidence: result.exceptionEvidence,
+  }
+}
+
+/** Delivery acknowledgements contain fulfillment facts; cost evidence belongs to cost-authorized queries. */
+function publicDeliveryItem(item: OrderItem) {
+  return {
+    id: item.id, orderId: item.orderId, productId: item.productId,
+    quantity: item.quantity, unitPriceMinor: item.unitPriceMinor,
+    discountAmountMinor: item.discountAmountMinor, totalAmountMinor: item.totalAmountMinor,
+    currency: item.currency, fulfillmentStation: item.fulfillmentStation,
+    productSnapshot: item.productSnapshot, status: item.status, note: item.note, createdAt: item.createdAt,
   }
 }
 
@@ -1971,6 +2001,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof OrderDeliveryBlockedError) {
     return apiError(409, 'ORDER_ITEM_NOT_READY', `商品 ${error.orderItemId} 当前${fulfillmentStateLabel(error.currentStatus)}，本次未登记送达；请刷新核对制作状态和本人操作权限`)
   }
+  if (error instanceof IdempotencyReceiptUnavailableError) return apiError(409, 'IDEMPOTENCY_RECEIPT_UNAVAILABLE', '原操作回执不可用，请核对原记录，勿重新提交')
   if (error instanceof IdempotencyConflictError) {
     return apiError(409, 'IDEMPOTENCY_CONFLICT', '同一个提交标识不能用于不同操作')
   }

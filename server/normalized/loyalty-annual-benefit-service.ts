@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { createHash } from 'node:crypto'
 import type { AuditActor, JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
@@ -179,7 +180,7 @@ export class LoyaltyAnnualBenefitService {
   }>) {
     validateRules(input.rules)
     const normalized = { ...input, policyCode: code(input.policyCode), timezone: timezone(input.timezone), reason: reason(input.reason) }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.annual-benefit.manage').execute({
       scope: context.scope, operationScope: 'loyalty.annual-benefit.draft', idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(normalized), resultCodec: objectCodec<{ id: string; version: number; status: string; ruleCount: number }>(),
     }, async (transaction) => {
@@ -203,7 +204,7 @@ export class LoyaltyAnnualBenefitService {
   }
 
   approve(context: AnnualBenefitStaffContext, input: Readonly<{ policyId: string; reason: string; idempotencyKey: string }>) {
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.annual-benefit.approve').execute({
       scope: context.scope, operationScope: 'loyalty.annual-benefit.approve', idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint(input), resultCodec: objectCodec<{ id: string; status: string }>(),
     }, async (transaction) => {
@@ -224,7 +225,7 @@ export class LoyaltyAnnualBenefitService {
     const effectiveFrom = timestamp(input.effectiveFrom, '生效时间')
     const effectiveUntil = input.effectiveUntil === null ? null : timestamp(input.effectiveUntil, '失效时间')
     if (effectiveUntil !== null && Date.parse(effectiveUntil) <= Date.parse(effectiveFrom)) throw failure('失效时间必须晚于生效时间', 'ANNUAL_BENEFIT_WINDOW_INVALID', 400)
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.annual-benefit.publish').execute({
       scope: context.scope, operationScope: 'loyalty.annual-benefit.publish', idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint({ ...input, effectiveFrom, effectiveUntil }), resultCodec: objectCodec<{ id: string; status: string }>(),
     }, async (transaction) => {
@@ -269,7 +270,7 @@ export class LoyaltyAnnualBenefitService {
     if (startsOn > endsOn || Number(startsOn.slice(0, 4)) !== input.cycleYear || Number(endsOn.slice(0, 4)) !== input.cycleYear) {
       throw failure('节日日期必须在同一自然年且结束不早于开始', 'ANNUAL_BENEFIT_OCCURRENCE_WINDOW_INVALID', 400)
     }
-    return this.commands.execute({
+    return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.annual-benefit.occurrence.confirm').execute({
       scope: context.scope, operationScope: 'loyalty.annual-benefit.occurrence.confirm', idempotencyKey: input.idempotencyKey,
       requestFingerprint: fingerprint({ ...input, startsOn, endsOn }), resultCodec: objectCodec<{ id: string; cycleYear: number }>(),
     }, async (transaction) => {

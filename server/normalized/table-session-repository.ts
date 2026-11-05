@@ -1,3 +1,4 @@
+import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -310,7 +311,9 @@ export class TableSessionCommandService {
   constructor(private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>) {}
 
   open(input: Readonly<OpenTableSessionCommand>): Promise<CommandExecution<TableSession>> {
-    return this.commands.execute({
+    const commands = input.actor.type === 'employee'
+      ? staffAuthorizedCommands(this.commands, input.actor.employeeId, 'table.open', true) : this.commands
+    return commands.execute({
       scope: input.scope,
       operationScope: 'table-session.open',
       idempotencyKey: input.idempotencyKey,

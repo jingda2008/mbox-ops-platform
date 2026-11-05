@@ -1,9 +1,10 @@
+import {withRecoveryJournalBoundary} from './RecoveryJournalBoundary'
 import {useMemo,useRef,useState} from 'react'
 import type {StockReturnCapability} from '../shared/operating-history'
 import type {NormalizedApiClient} from '../normalized-api'
 import {OrderStockReturnRecovery} from './order-stock-return-recovery'
 type Props={api:NormalizedApiClient;itemId:string;quantity:number;employeeId:string;capability?:StockReturnCapability;label?:string;onChanged():Promise<void>}
-export function OrderStockReturnForm(props:Props){return <StockReturnForm key={`${props.employeeId}:${props.itemId}`} {...props}/>}
+function OrderStockReturnFormContent(props:Props){return <StockReturnForm key={`${props.employeeId}:${props.itemId}`} {...props}/>}
 function StockReturnForm({api,itemId,quantity,employeeId,capability,label,onChanged}:Props){
  const recovery=useMemo(()=>new OrderStockReturnRecovery(api,employeeId,itemId,undefined,label),[api,employeeId,itemId,label])
  const original=recovery.pending()
@@ -42,3 +43,5 @@ function StockReturnForm({api,itemId,quantity,employeeId,capability,label,onChan
  {pending?.recordId?<div><details><summary>退库记录详情</summary><p>{pending.recordId}</p></details><p>本次退库已登记。<button type="button" disabled={busy} onClick={()=>void refresh()}>刷新剩余数量</button></p></div>:pending&&<p>上次登记结果待确认。<button type="button" disabled={busy} onClick={()=>void run(true)}>恢复原退库结果</button></p>}
  {notice&&<p role="status">{notice}</p>}</details>
 }
+
+export const OrderStockReturnForm=withRecoveryJournalBoundary(OrderStockReturnFormContent)

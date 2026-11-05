@@ -1,3 +1,5 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
+import type { ScopedTransaction } from './transaction-runner.js'
 import type {FastifyPluginAsync,FastifyRequest} from 'fastify'
 import type {CustomerBenefitApiOptions} from './customer-benefit-api.js'
 import {IdempotencyConflictError,IdempotencyInProgressError,type NormalizedCommandExecutor,type JsonObject,type JsonCodec} from './command-executor.js'
@@ -20,9 +22,9 @@ export const marketingContactApiPlugin:FastifyPluginAsync<Options>=async(app,opt
     if(error instanceof IdempotencyConflictError||error instanceof IdempotencyInProgressError)return reply.code(409).send({error:{code:'MARKETING_COMMAND_CONFLICT',message:'操作正在处理或内容已变化，请先刷新核对'}})
     throw error
   })
-  async function write(request:FastifyRequest,scope:Parameters<Options['transactions']['run']>[0],operation:string,data:unknown,action:(repo:MarketingContactRepository,key:string,delivery:MarketingDeliveryRepository)=>Promise<unknown>){
+  async function write(request:FastifyRequest,scope:Parameters<Options['transactions']['run']>[0],operation:string,data:unknown,action:(repo:MarketingContactRepository,key:string,delivery:MarketingDeliveryRepository)=>Promise<unknown>, authorize?:(tx:ScopedTransaction)=>Promise<void>){
     const key=text(request.headers['idempotency-key']);if(!/^[A-Za-z0-9:_-]{8,128}$/.test(key))throw new MarketingContactError('操作编号格式无效')
-    const result=await options.commands.execute({scope,operationScope:`marketing.${operation}`,idempotencyKey:key,requestFingerprint:JSON.stringify(data),resultCodec:codec},async tx=>({result:JSON.parse(JSON.stringify(await action(new MarketingContactRepository(tx),key,new MarketingDeliveryRepository(tx)))) as JsonObject,auditEvents:[],outboxMessages:[]}))
+    const result=await reauthorizingCommands(options.commands).execute({scope,operationScope:`marketing.${operation}`,idempotencyKey:key,requestFingerprint:JSON.stringify(data),resultCodec:codec},async tx=>({result:JSON.parse(JSON.stringify(await action(new MarketingContactRepository(tx),key,new MarketingDeliveryRepository(tx)))) as JsonObject,auditEvents:[],outboxMessages:[]}),authorize)
     return{data:result.value,meta:{replayed:result.replayed}}
   }
   async function staff(request:FastifyRequest,permission:string){const context=await options.resolveStaffContext(request);await options.transactions.run(context.scope,tx=>new StaffAccessRepository(tx).assertPermission(context.employeeId,permission),{readOnly:true});return context}
@@ -60,17 +62,29 @@ export const marketingContactApiPlugin:FastifyPluginAsync<Options>=async(app,opt
     const context=await staff(request,'marketing.notice.edit'),input=body(request,['code','rule','reason','expectedVersion'])
     if(!Number.isSafeInteger(input.expectedVersion))throw new MarketingContactError('告知版本无效')
     const data={code:text(input.code),rule:input.rule,reason:text(input.reason),expectedVersion:input.expectedVersion as number,employeeId:context.employeeId,businessDate:context.businessDate}
-    return write(request,context.scope,'notice_save',data,(repo,key)=>repo.save({...data,requestKey:key}))
+    return write(request,context.scope,'notice_save',data,(repo,key)=>repo.save({...data,requestKey:key}), async tx => {
+      const current = await options.resolveStaffContext(request)
+      if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'marketing.notice.edit')
+    })
   })
   app.post<{Params:{id:string}}>('/staff/marketing/notices/:id/decision',{bodyLimit:4096},async request=>{
     const input=body(request,['action','reason']);if(input.action!=='approve'&&input.action!=='publish'&&input.action!=='stop')throw new MarketingContactError('告知操作无效')
     const context=await staff(request,input.action==='approve'?'marketing.notice.approve':'marketing.notice.publish')
     const data={noticeId:request.params.id,action:input.action,reason:text(input.reason),employeeId:context.employeeId,businessDate:context.businessDate} as const
-    return write(request,context.scope,'notice_decision',data,repo=>repo.decide(data))
+    return write(request,context.scope,'notice_decision',data,repo=>repo.decide(data), async tx => {
+      const current = await options.resolveStaffContext(request)
+      if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, input.action === 'approve' ? 'marketing.notice.approve' : 'marketing.notice.publish')
+    })
   })
   app.post('/staff/marketing/refusals',{bodyLimit:4096},async request=>{
     const context=await staff(request,'marketing.refusal.record'),input=body(request,['customerId','reason'])
-    const data={customerId:text(input.customerId),reason:text(input.reason),employeeId:context.employeeId,businessDate:context.businessDate};return write(request,context.scope,'refusal',data,repo=>repo.stopAll(data))
+    const data={customerId:text(input.customerId),reason:text(input.reason),employeeId:context.employeeId,businessDate:context.businessDate};return write(request,context.scope,'refusal',data,repo=>repo.stopAll(data), async tx => {
+      const current = await options.resolveStaffContext(request)
+      if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'marketing.refusal.record')
+    })
   })
   app.post('/staff/marketing/consent-history/query',{bodyLimit:4096},async request=>{
     const context=await staff(request,'marketing.consent.audit'),input=body(request,['customerId','reason','cursor'])
@@ -81,10 +95,18 @@ export const marketingContactApiPlugin:FastifyPluginAsync<Options>=async(app,opt
     const context=await staff(request,'marketing.send'),input=body(request,['customerId','noticeId','channel','purpose','campaignKey','content','expiresAt'])
     if(!marketingChannels.includes(input.channel as MarketingChannel)||!marketingPurposes.includes(input.purpose as MarketingPurpose))throw new MarketingContactError('任务渠道或用途无效')
     const data={customerId:text(input.customerId),noticeId:text(input.noticeId),channel:input.channel as MarketingChannel,purpose:input.purpose as MarketingPurpose,campaignKey:text(input.campaignKey),content:text(input.content),expiresAt:text(input.expiresAt),employeeId:context.employeeId,businessDate:context.businessDate}
-    return write(request,context.scope,'task_queue',data,(_repo,_key,delivery)=>delivery.queue(data))
+    return write(request,context.scope,'task_queue',data,(_repo,_key,delivery)=>delivery.queue(data), async tx => {
+      const current = await options.resolveStaffContext(request)
+      if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'marketing.send')
+    })
   })
   app.post<{Params:{id:string}}>('/staff/marketing/jobs/:id/cancel',{bodyLimit:4096},async request=>{
     const context=await staff(request,'marketing.send'),input=body(request,['reason']),data={jobId:request.params.id,reason:text(input.reason),employeeId:context.employeeId,businessDate:context.businessDate}
-    return write(request,context.scope,'task_cancel',data,(_repo,_key,delivery)=>delivery.cancel(data.jobId,data.employeeId,data.businessDate,data.reason))
+    return write(request,context.scope,'task_cancel',data,(_repo,_key,delivery)=>delivery.cancel(data.jobId,data.employeeId,data.businessDate,data.reason), async tx => {
+      const current = await options.resolveStaffContext(request)
+      if (current.employeeId !== context.employeeId || current.scope.tenantId !== context.scope.tenantId || current.scope.storeId !== context.scope.storeId) throw new StaffAccessDeniedError('身份变化')
+      await new StaffAccessRepository(tx).assertPermission(context.employeeId, 'marketing.send')
+    })
   })
 }

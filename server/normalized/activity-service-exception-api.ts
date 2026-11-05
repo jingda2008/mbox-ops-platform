@@ -1,3 +1,4 @@
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import {createHash} from 'node:crypto'
 import type {FastifyInstance} from 'fastify'
 import {parseActivityServiceException,type ActivityServiceExceptionResult} from '../../src/shared/activity-service-exception.js'
@@ -21,12 +22,12 @@ export async function registerActivityServiceExceptionRoutes(app:FastifyInstance
       }
       await options.staffAccessTransactions.run(context.scope,authorize)
       const key=createHash('sha256').update(`${context.employeeId}:${raw}`).digest('hex')
-      const result=await options.commandExecutor.execute({scope:context.scope,operationScope:'activity.service.exception',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,command}),retainReceipt:true,
+      const result=await reauthorizingCommands(options.commandExecutor).execute({scope:context.scope,operationScope:'activity.service.exception',idempotencyKey:key,requestFingerprint:JSON.stringify({employeeId:context.employeeId,command}),retainReceipt:true,
         resultCodec:{encode:value=>value as unknown as JsonValue,decode:value=>value as ActivityServiceExceptionResult}},async tx=>{
         await authorize(tx)
         const result=await new ActivityServiceExceptionRepository(tx).execute(command,key,context.employeeId)
         return {result,auditEvents:[{actor:{type:'employee' as const,employeeId:context.employeeId},action:`activity.service.exception.${command.action}`,objectType:'activity_service_receipt',objectId:result.receiptId,businessDate:context.businessDate,afterData:{lineId:command.lineId,quantity:command.quantity??0,reason:command.reason},requestId:request.id}],outboxMessages:[]}
-      })
+      }, authorize)
       return reply.send({data:result.value,replayed:result.replayed})
     } catch(caught) {
       const error=caught instanceof NativeCommandNotCommittedError?caught.original:caught

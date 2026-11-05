@@ -392,7 +392,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
       scope:context.scope,actor:employeeActor(context.employeeId),businessDate:context.businessDate,
       idempotencyKey:key,requestFingerprint:fingerprint(request,context,{...input,source,initialStatus}),
       nativeReceipt:true,
-      authorizeNative:async tx=>{await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
+      authorizeNative:async tx=>{context.access=await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
       prepareNative:async tx=>{
         // Timing and current capacity apply only to a new command, never to receipt replay.
         const timing=serverReservationTiming(input.arrivalAt,now(),holdTtlMinutes,maxAdvanceDays,cancellationCutoffMinutes)
@@ -542,7 +542,7 @@ export const reservationPerformanceApiPlugin: FastifyPluginAsync<ReservationPerf
     const initialStatus = readInitialReservationStatus(body.initialStatus)
     const execution = await options.reservations.create({
       retireTableBoundCreate:true,
-      authorizeNative:async tx=>{await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
+      authorizeNative:async tx=>{context.access=await createAccess(tx).assertPermission(context.employeeId,'reservation.manage')},
       scope: context.scope,
       actor: employeeActor(context.employeeId),
       businessDate: context.businessDate,
@@ -1170,6 +1170,8 @@ function nativeReservationAuthorization(context: AuthorizedStaffContext, reserva
             AND venue_table.area_id=ANY($6::uuid[])))
       FOR UPDATE OF reservation`,[context.scope.tenantId,context.scope.storeId,reservationId,visibility.all,visibility.ownerEmployeeIds,visibility.areaIds])
     if(visible.rowCount!==1) throw new GuestResourceNotFoundError()
+    // Redact the response using the same current authority, not the route preflight snapshot.
+    context.access=access
   }
 }
 

@@ -1,3 +1,4 @@
+import {holdFixtureReceipts} from './staff-permission.test-helper.js'
 import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import Fastify from 'fastify'
@@ -12,7 +13,7 @@ import {NormalizedCommandExecutor} from './command-executor.js'
 import {commerceKdsApiPlugin} from './commerce-kds-api.js'
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
 const integration=databaseUrl&&runtimeUrl?describe:describe.skip
-integration('native legacy failed KDS termination under actual runtime login',()=>{
+integration.each([{native:false,expired:false},{native:true,expired:false},{native:true,expired:true}])('failed KDS termination under actual runtime login (native=$native expired=$expired)',({native,expired})=>{
   const tenantId = randomUUID()
   const storeId = randomUUID()
   const areaId = randomUUID()
@@ -98,18 +99,26 @@ integration('native legacy failed KDS termination under actual runtime login',()
     const day=await runner.run(scope,async tx=>(await tx.query<{day:string}>('SELECT mbox.current_operating_business_date($1,$2)::text AS day',[tenantId,storeId])).rows[0]!.day)
     const query=new FulfillmentQueryService(runner),context={scope,employeeId,staffSessionId,deviceAccessLeaseId:leaseId,businessDate:day},app=Fastify()
     await app.register(commerceKdsApiPlugin,{commerce:{submitOrder:async()=>{throw new Error('not used')}},fulfillmentQuery:query,commandExecutor:new NormalizedCommandExecutor(runner),staffAccessTransactions:runner,resolveContext:()=>context,createKdsRepository:tx=>new KdsRepository(tx),createOrderRepository:tx=>new OrderRepository(tx)})
-    const key='native-fulfillment-'+randomUUID(),request={method:'POST' as const,url:`/commerce/native-kds/${taskId}/manager-cancel`,headers:{'idempotency-key':key},payload:{actorId:employeeId,reasonCode:'production_exception',reason:'主管核对不再重做，原账与库存另行复核'}}
+    const key=(native?'native-fulfillment-':'web-kds-')+randomUUID(),request={method:'POST' as const,url:`/commerce/${native?'native-kds':'kds'}/${taskId}/manager-cancel`,headers:{'idempotency-key':key},payload:{actorId:employeeId,reasonCode:'production_exception',reason:'主管核对不再重做，原账与库存另行复核'}}
     try{
       const before=await query.getStaffWorkQueue(scope,employeeId,day,{staffSessionId,deviceAccessLeaseId:leaseId});expect(before.workItems.find(r=>r.taskId===taskId)).toMatchObject({canManagerCancel:true,canRemake:false,kdsStatus:'failed'})
       await expect(runner.run(scope,tx=>tx.query("UPDATE mbox.kds_tasks SET status='cancelled',cancelled_at=clock_timestamp() WHERE id=$1",[taskId]))).rejects.toMatchObject({code:'55000'})
       await expect(runner.run(scope,async tx=>{await tx.query("SELECT set_config('app.kds_manager_cancel_task_id',$1,true)",[taskId]);await tx.query("UPDATE mbox.kds_tasks SET status='ready',ready_at=clock_timestamp() WHERE id=$1",[taskId])})).rejects.toMatchObject({code:'55000'})
       const first=await app.inject(request);expect(first.statusCode,first.body).toBe(200);expect(first.json()).toMatchObject({id:taskId,normalizedStatus:'cancelled',orderId,orderItemId})
-      await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,key]);const retry=await app.inject(request);expect(retry.statusCode,retry.body).toBe(200);expect(retry.json().meta.replayed).toBe(true)
+      if(native)await pool.query('DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND idempotency_key=$3',[tenantId,storeId,key]);const retry=await app.inject(request);expect(retry.statusCode,retry.body).toBe(200);expect(retry.json().meta.replayed).toBe(true)
       expect((await pool.query("SELECT count(*)::int n FROM mbox.kds_task_events WHERE kds_task_id=$1 AND from_status='failed' AND to_status='cancelled'",[taskId])).rows[0].n).toBe(1)
       expect((await pool.query('SELECT status,payment_status,total_amount_minor FROM mbox.orders WHERE id=$1',[orderId])).rows[0]).toMatchObject({status:'submitted',payment_status:'unpaid',total_amount_minor:'100'})
       expect((await pool.query("SELECT status,financial_truth_status,inventory_truth_status FROM mbox.kds_exceptions WHERE kds_task_id=$1 AND exception_type='production_failed'",[taskId])).rows[0]).toMatchObject({status:'remediating',financial_truth_status:'unchanged_pending_review',inventory_truth_status:'unchanged_pending_review'})
       expect((await query.getStaffWorkQueue(scope,employeeId,day,{staffSessionId,deviceAccessLeaseId:leaseId})).workItems.some(r=>r.taskId===taskId)).toBe(false)
-      await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId]);expect((await app.inject(request)).statusCode).toBe(403)
+      // Expired native cache falls back to the immutable audit receipt after the lock.
+      // Revocation while waiting must also deny this recovery, without another cancellation.
+      if(expired)await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND idempotency_key=$2",[tenantId,key])
+      const held=await holdFixtureReceipts(pool,tenantId)
+      const pending=app.inject(request).then(response=>response)
+      try{await held.waitUntilBlocked();await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])}finally{await held.release()}
+      expect((await pending).statusCode).toBe(403)
+      expect((await app.inject(request)).statusCode).toBe(403)
+      expect((await pool.query("SELECT count(*)::int n FROM mbox.kds_task_events WHERE kds_task_id=$1 AND from_status='failed' AND to_status='cancelled'",[taskId])).rows[0].n).toBe(1)
     }finally{await app.close();await runtimePool.end()}
   })
 })

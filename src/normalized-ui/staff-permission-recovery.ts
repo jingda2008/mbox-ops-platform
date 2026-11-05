@@ -39,9 +39,10 @@ export class StaffPermissionRecovery {
 
   async execute(
     body: PermissionDeploymentIntent['body'] | null,
-    send: (intent: PermissionDeploymentIntent) => Promise<StaffPermissionDeploymentResult>,
+    send: (intent: PermissionDeploymentIntent, receiptOnly: boolean) => Promise<StaffPermissionDeploymentResult>,
   ): Promise<StaffPermissionDeploymentResult> {
     let intent = this.pending()
+    const recovering = intent !== null
     if (!intent) {
       if (!body) throw new Error('没有待恢复的权限发布，请重新读取配置')
       intent = JSON.parse(JSON.stringify({ version: 1, scopeKey: this.scopeKey, employeeId: this.employeeId,
@@ -54,15 +55,15 @@ export class StaffPermissionRecovery {
     const storageKey = this.prefix + intent.key
     const running = flights.get(storageKey)
     if (running) return running
-    const execution = send(intent).then((result) => {
-      if (result.status !== 'verified' || result.changes.some((change) => !change.applied)) throw new Error('发布回执尚未完成复核，请恢复原操作')
+    const execution = send(intent, recovering).then((result) => {
+      if (!matchesPermissionReceipt(result, intent!.body.changes)) throw new Error('发布回执尚未完成复核，请恢复原操作')
       this.storage.removeItem(storageKey)
       return result
     }).catch((error: unknown) => {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : null
-      // These responses prove this exact command did not change configuration.
+      // Only a fresh request can be cleared by its definitive validation refusal.
       // Authentication loss and ambiguous failures retain the original intent.
-      if (code === 'STAFF_ACCESS_VERSION_CONFLICT' || code === 'PERMISSION_DEPLOYMENT_INVALID') this.storage.removeItem(storageKey)
+      if (!recovering && (code === 'STAFF_ACCESS_VERSION_CONFLICT' || code === 'PERMISSION_DEPLOYMENT_INVALID')) this.storage.removeItem(storageKey)
       throw error
     }).finally(() => { flights.delete(storageKey) })
     flights.set(storageKey, execution)
@@ -96,4 +97,25 @@ export function permissionReceiptIntents(employeeId: string, storage: StoragePor
     } catch { /* Keep unreadable evidence untouched; never send it as a new write. */ }
   }
   return found.sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
+}
+
+function matchesPermissionReceipt(result: StaffPermissionDeploymentResult, changes: StaffPermissionDeploymentChange[]): boolean {
+  if (!result || result.status !== 'verified' || typeof result.replayed !== 'boolean'
+    || typeof result.verifiedAt !== 'string' || !Number.isFinite(Date.parse(result.verifiedAt))
+    || !Array.isArray(result.changes) || result.changes.length !== changes.length) return false
+  const key = (kind: string, target: string, code: string) => JSON.stringify([kind, target, code])
+  const expected = changes.map(change => key(change.kind,
+    change.kind === 'employee_override' ? change.employeeId : change.roleId,
+    change.kind === 'employee_override' || change.kind === 'role_permission' ? change.permissionCode
+      : change.kind === 'role_data_scope' ? `${change.scopeKey}:${change.effect}`
+        : change.kind === 'role_approval_limit' ? `${change.approvalCode}:${change.currency}` : change.navigationCode))
+  for (const change of result.changes) {
+    if (!change || change.applied !== true || !Number.isSafeInteger(change.effectiveEmployeeCount)
+      || change.effectiveEmployeeCount < 0 || !Number.isSafeInteger(change.affectedEmployeeCount)
+      || change.affectedEmployeeCount < 0 || change.effectiveEmployeeCount > change.affectedEmployeeCount) return false
+    const index = expected.indexOf(key(change.kind, change.targetId, change.configurationCode))
+    if (index < 0) return false
+    expected.splice(index, 1)
+  }
+  return expected.length === 0
 }

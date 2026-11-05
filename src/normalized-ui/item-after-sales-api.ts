@@ -1,3 +1,4 @@
+import {readRecoveryJournal} from './recovery-journal.js'
 import type {ItemAfterSalesWorkspace,ItemAfterSalesPending,RemakePhysicalHandover} from '../shared/item-after-sales'
 import {StaffActionsApiError} from './staff-actions/staff-actions-api'
 import {STAFF_EMPLOYEE_BINDING_HEADER} from '../shared/staff-session-binding'
@@ -24,11 +25,11 @@ export class ItemAfterSalesApi {
   }
   private storageKey(itemId:string){return `mbox-item-after-sales-v1:${this.employeeId}:${itemId}`}
   pending(itemId:string):Pending|null{
-    try{
-      const raw=this.storage?.getItem(this.storageKey(itemId)),stored=raw?JSON.parse(raw):null
-      if(stored&&typeof stored.key==='string'&&typeof stored.url==='string'&&validCommandUrl(stored.url)&&stored.body&&typeof stored.body==='object'&&!Array.isArray(stored.body))return stored as Pending
-    }catch{/* Current session memory remains available. */}
-    return this.memory.get(itemId)??null
+    return readRecoveryJournal(this.storage,this.storageKey(itemId),(value):value is Pending=>{
+      if(!value||typeof value!=='object'||Array.isArray(value))return false
+      const stored=value as Partial<Pending>
+      return typeof stored.key==='string'&&stored.key.trim().length>0&&typeof stored.url==='string'&&validCommandUrl(stored.url)&&!!stored.body&&typeof stored.body==='object'&&!Array.isArray(stored.body)
+    },this.memory.get(itemId)??null)
   }
   async act(itemId:string,url:string,body:Record<string,unknown>){
     if(!validCommandUrl(url))throw new Error('商品处理接口无效')
@@ -44,11 +45,11 @@ export class ItemAfterSalesApi {
         if(attempt.body.succeeded!==true)throw new Error('必须确认现金已实际退付')
         await this.request(attempt.url.replace('/manual-result','/execute'),{method:'POST',body:'{}',headers:{'content-type':'application/json','idempotency-key':`${attempt.key}-begin`}})
       }
-      const result=await this.request<unknown>(attempt.url,{method:'POST',body:JSON.stringify(attempt.body),headers:{'content-type':'application/json','idempotency-key':attempt.key}})
+      const result=await this.request<unknown>(attempt.url,{method:'POST',body:JSON.stringify(attempt.body),headers:{'content-type':'application/json','idempotency-key':attempt.key,...(pending?{'x-mbox-replay-only':'true'}:{})}})
       this.clear(itemId);return result
     }catch(error){
-      if(error instanceof StaffActionsApiError&&[400,403,404].includes(error.status??0))this.clear(itemId)
-      else if(error instanceof StaffActionsApiError&&error.status===409&&[
+      if(!pending&&error instanceof StaffActionsApiError&&[400,403,404].includes(error.status??0))this.clear(itemId)
+      else if(!pending&&error instanceof StaffActionsApiError&&error.status===409&&[
         'QUANTITY_INVALID','QUANTITY_UNAVAILABLE','QUANTITY_FACTS_CONFLICT','PRICE_REVIEW_REQUIRED','PRODUCTION_REVIEW_REQUIRED','QUANTITY_BATCH_NOT_ENABLED',
       ].includes(error.code??''))this.clear(itemId)
       throw error

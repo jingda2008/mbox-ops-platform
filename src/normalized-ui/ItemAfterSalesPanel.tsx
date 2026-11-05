@@ -1,3 +1,4 @@
+import {withRecoveryJournalBoundary} from './RecoveryJournalBoundary'
 import './item-after-sales.css'
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import type {ItemAfterSalesWorkspace} from '../shared/item-after-sales'
@@ -8,7 +9,7 @@ import {StaffActionsApi,StaffActionsApiError} from './staff-actions/staff-action
 const money=(value:number)=>(value/100).toFixed(2)
 const noticePhase=(phase?:string|null)=>({request:'申请阶段',payment_resolved:'付款核对后',approved:'审批通过',rejected:'审批拒绝',withdrawn:'申请撤回',resume:'恢复原商品',physical:'实物处理'}[phase??'']??'历史通知')
 const statusName=(value:string,held:number,stopped:number)=>({requested:'待审核 / 核对',approved:'已批准，处理中',rejected:held?'已拒绝，仍暂停':stopped?'已拒绝，商品已停止':'已拒绝，已恢复原商品',withdrawn:held?'已撤回，仍暂停':stopped?'已撤回，商品已停止':'已撤回，已恢复原商品',completed:'已完成'}[value]??value)
-export function ItemAfterSalesPanel({itemId,employeeId,onClose,onChanged,initialCaseId}:{initialCaseId?:string;itemId:string;employeeId:string;onClose():void;onChanged():void}){
+function ItemAfterSalesPanelContent({itemId,employeeId,onClose,onChanged,initialCaseId}:{initialCaseId?:string;itemId:string;employeeId:string;onClose():void;onChanged():void}){
   const dialog=useRef<HTMLDialogElement>(null)
   useEffect(()=>{const element=dialog.current,previous=document.activeElement;element?.showModal();return()=>{element?.close();if(previous instanceof HTMLElement&&previous.isConnected)previous.focus({preventScroll:true})}},[])
   useEffect(()=>{
@@ -72,7 +73,7 @@ export function ItemAfterSalesPanel({itemId,employeeId,onClose,onChanged,initial
     <div className="staff-item-after-sales-body" data-dialog-scroll>
     {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
     {refreshDelayed&&<p role="status" data-action-reveal="off">状态更新暂时延迟，可刷新查看；原处理结果保留。</p>}
-    {!pending&&<button disabled={busy} onClick={()=>{setBusy(true);setError('');void read().then(()=>setNotice('商品状态已更新')).catch(()=>setError('最新商品状态暂未读回，请稍后再刷新')).finally(()=>setBusy(false))}}>刷新商品状态</button>}
+    <button disabled={busy} onClick={()=>{setBusy(true);setError('');void read().then(()=>setNotice('商品状态已更新')).catch(()=>setError('最新商品状态暂未读回，请稍后再刷新')).finally(()=>setBusy(false))}}>刷新商品状态</button>
     {pending&&<p>上次处理结果待确认。<button disabled={busy} onClick={()=>void run(()=>api.recover(itemId))}>恢复上次商品处理</button></p>}
     {!data?<p>正在读取原订单…</p>:<>
       <p>原订单 {data.item.quantity} 份 · {data.item.includedInBundle?'计费包含在原套餐内，不另收费':<>单价 ¥{money(data.item.unitPriceMinor)} · 原成交 ¥{money(data.item.originalAmountMinor)}</>}</p>
@@ -197,3 +198,5 @@ export function ItemAfterSalesPanel({itemId,employeeId,onClose,onChanged,initial
 
 function cents(value:string):number|null{if(!value.trim())return 0;if(!/^\d+(?:\.\d{1,2})?$/.test(value.trim()))return null;const [whole,fraction='']=value.trim().split('.');const result=Number(whole)*100+Number(fraction.padEnd(2,'0'));return Number.isSafeInteger(result)?result:null}
 function providerName(provider:string){return ({cash:'现金',postar:'线上原路',wechat:'微信',physical_pos:'POS',external_manual:'线下原工具'}[provider]??'原付款')}
+
+export const ItemAfterSalesPanel=withRecoveryJournalBoundary(ItemAfterSalesPanelContent)

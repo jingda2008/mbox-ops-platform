@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import Fastify from 'fastify'
 import {reservationPerformanceApiPlugin} from './reservation-performance-api.js'
 import { randomUUID } from 'node:crypto'
@@ -70,6 +71,7 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
     runner = new ScopedPostgresTransactionRunner(asPool(pool))
     service = new PerformanceCommandService(new NormalizedCommandExecutor(runner))
     await seed(pool)
+    await grantFixtureStaffPermissions(pool, { tenantId, storeId }, [employeeId], ['song.manage'])
   })
 
   afterAll(async () => {
@@ -306,6 +308,8 @@ integration('PerformanceCommandService PostgreSQL integration', () => {
     expect(stored.rows[0]).toEqual({ evidence_count: '1', paid_events: '1' })
   })
   it('publishes a monthly batch atomically, reuses identical slots and rejects conflicts without partial creation',async()=>{
+    // This test owns and revokes its explicit monthly-schedule grant.
+    await pool.query("DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3", [tenantId,storeId,employeeId])
     const role=randomUUID()
     await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'MONTHLY','排班')",[role,tenantId,storeId])
     await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employeeId,role])

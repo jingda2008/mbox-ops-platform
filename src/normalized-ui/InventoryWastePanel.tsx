@@ -1,3 +1,4 @@
+import {withRecoveryJournalBoundary} from './RecoveryJournalBoundary'
 import {executeRecoverableCommand} from './recoverable-command'
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react'
 import type {NormalizedApiClient,StaffAuthView} from '../normalized-api'
@@ -7,7 +8,7 @@ import {formatInventoryQuantityWithUnit,inventoryEmployeeUnit,inventoryQuantityF
 
 type Item={id:string;name:string;baseUnit:string;categoryCode:string;packageVolumeMl:string|null;reasonableWasteQuantity:string}
 type Intent={itemId:string;itemName:string;quantity:string;reason:string;wasteType:WasteType}
-export function InventoryWastePanel({api,auth,items,onChanged}:{api:NormalizedApiClient;auth:StaffAuthView;items:Item[];onChanged():Promise<void>}){
+function InventoryWastePanelContent({api,auth,items,onChanged}:{api:NormalizedApiClient;auth:StaffAuthView;items:Item[];onChanged():Promise<void>}){
   const command=useMemo(()=>new DurableStaffCommand<Intent,WasteResult>(`${auth.employee.id}:inventory-waste`,(body,key)=>api.postEndpoint(`/api/inventory/items/${body.itemId}/waste`,{quantity:body.quantity,reason:body.reason,wasteType:body.wasteType,requestApproval:true},{idempotencyKey:key})),[api,auth.employee.id])
   const [pending,setPending]=useState(()=>command.pending())
   const [itemId,setItemId]=useState(''),[quantity,setQuantity]=useState(''),[reason,setReason]=useState(''),[wasteType,setWasteType]=useState<WasteType>('other')
@@ -41,7 +42,7 @@ export function InventoryWastePanel({api,auth,items,onChanged}:{api:NormalizedAp
   </section>
 }
 
-export function InventoryWasteReviewPanel({api,auth,items,onChanged}:{api:NormalizedApiClient;auth:StaffAuthView;items:Item[];onChanged():Promise<void>}){
+function InventoryWasteReviewPanelContent({api,auth,items,onChanged}:{api:NormalizedApiClient;auth:StaffAuthView;items:Item[];onChanged():Promise<void>}){
   const [allowanceItem,setAllowanceItem]=useState(''),[allowance,setAllowance]=useState(''),[allowanceReason,setAllowanceReason]=useState('')
   const [page,setPage]=useState(1),[rows,setRows]=useState<WasteRequest[]>([]),[hasMore,setHasMore]=useState(false),[notice,setNotice]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false)
   const readGeneration=useRef(0)
@@ -69,3 +70,7 @@ function WasteReview({row,api,employeeId,busy,setBusy,setNotice,refresh}:{row:Wa
     {pending?<button type="button" disabled={busy} onClick={()=>void decide(pending.body.decision)}>{pending.result?'刷新原审批记录':'恢复原审批结果'}</button>:row.canReview&&<><label>审批说明<input maxLength={500} value={reason} onChange={event=>setReason(event.target.value)}/></label><button type="button" disabled={busy} onClick={()=>void decide('approve')}>通过并扣库存</button><button type="button" disabled={busy} onClick={()=>void decide('reject')}>驳回申请</button></>}
   </article>
 }
+
+export const InventoryWastePanel=withRecoveryJournalBoundary(InventoryWastePanelContent)
+
+export const InventoryWasteReviewPanel=withRecoveryJournalBoundary(InventoryWasteReviewPanelContent)

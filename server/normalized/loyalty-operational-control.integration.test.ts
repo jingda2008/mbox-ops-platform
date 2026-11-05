@@ -1,3 +1,4 @@
+import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll,beforeAll,describe,expect,it } from 'vitest'
 import { Pool } from 'pg'
@@ -36,6 +37,7 @@ integration('loyalty operational emergency controls PostgreSQL integration',()=>
       {updateProfile:async()=>{throw new Error('not used')}},
     )
     await seed(pool)
+    await grantFixtureStaffPermissions(pool, scope, [id.ops], ['loyalty.accrual.approve'])
   })
   afterAll(async()=>pool?.end())
 

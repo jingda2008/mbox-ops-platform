@@ -1,3 +1,4 @@
+import {holdFixtureReceipts} from './staff-permission.test-helper.js'
 import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import Fastify from 'fastify'
@@ -12,7 +13,7 @@ import {NormalizedCommandExecutor} from './command-executor.js'
 import {commerceKdsApiPlugin} from './commerce-kds-api.js'
 const databaseUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
 const integration=databaseUrl&&runtimeUrl?describe:describe.skip
-integration.each([false,true])('failed KDS termination under actual runtime login (native=%s)',native=>{
+integration.each([{native:false,expired:false},{native:true,expired:false},{native:true,expired:true}])('failed KDS termination under actual runtime login (native=$native expired=$expired)',({native,expired})=>{
   const tenantId = randomUUID()
   const storeId = randomUUID()
   const areaId = randomUUID()
@@ -109,7 +110,15 @@ integration.each([false,true])('failed KDS termination under actual runtime logi
       expect((await pool.query('SELECT status,payment_status,total_amount_minor FROM mbox.orders WHERE id=$1',[orderId])).rows[0]).toMatchObject({status:'submitted',payment_status:'unpaid',total_amount_minor:'100'})
       expect((await pool.query("SELECT status,financial_truth_status,inventory_truth_status FROM mbox.kds_exceptions WHERE kds_task_id=$1 AND exception_type='production_failed'",[taskId])).rows[0]).toMatchObject({status:'remediating',financial_truth_status:'unchanged_pending_review',inventory_truth_status:'unchanged_pending_review'})
       expect((await query.getStaffWorkQueue(scope,employeeId,day,{staffSessionId,deviceAccessLeaseId:leaseId})).workItems.some(r=>r.taskId===taskId)).toBe(false)
-      await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId]);expect((await app.inject(request)).statusCode).toBe(403)
+      // Expired native cache falls back to the immutable audit receipt after the lock.
+      // Revocation while waiting must also deny this recovery, without another cancellation.
+      if(expired)await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND idempotency_key=$2",[tenantId,key])
+      const held=await holdFixtureReceipts(pool,tenantId)
+      const pending=app.inject(request).then(response=>response)
+      try{await held.waitUntilBlocked();await pool.query('UPDATE mbox.staff_sessions SET revoked_at=clock_timestamp() WHERE id=$1',[staffSessionId])}finally{await held.release()}
+      expect((await pending).statusCode).toBe(403)
+      expect((await app.inject(request)).statusCode).toBe(403)
+      expect((await pool.query("SELECT count(*)::int n FROM mbox.kds_task_events WHERE kds_task_id=$1 AND from_status='failed' AND to_status='cancelled'",[taskId])).rows[0].n).toBe(1)
     }finally{await app.close();await runtimePool.end()}
   })
 })

@@ -1,3 +1,4 @@
+const { beginMemberAction, invalidateMemberActions } = require('../../utils/member-page-action')
 const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const {
   getMiniBootstrap,
@@ -321,9 +322,9 @@ Page({
 
 
 
-  onHide() { this._pageHidden = true; this.invalidateMemberLoad() },
+  onHide() { this._pageHidden = true; this.invalidateMemberLoad(); invalidateMemberActions(this); this.pendingMembershipAction = ''; this.setData({ busy: false, recoveryBusy: false, logoutBusy: false, preferenceBusyId: '', restrictionBusyId: '', benefitBusyId: '', redemptionBusyId: '' }) },
 
-  onUnload() { this._pageHidden = true; this.invalidateMemberLoad() },
+  onUnload() { this._pageHidden = true; this.invalidateMemberLoad(); invalidateMemberActions(this); this.pendingMembershipAction = ''; this.setData({ busy: false, recoveryBusy: false, logoutBusy: false, preferenceBusyId: '', restrictionBusyId: '', benefitBusyId: '', redemptionBusyId: '' }) },
 
   invalidateMemberLoad() { this._memberLoadGeneration = (this._memberLoadGeneration || 0) + 1 },
 
@@ -589,109 +590,123 @@ Page({
   },
 
   async logoutMember() {
-    if (this.data.logoutBusy || !this.data.membership) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: '退出登录',
-      content: '退出后需重新授权手机号登录；同一手机号会回到已有的 6 位会员号',
-      confirmText: '退出',
-      cancelText: '取消',
-      success: (result) => resolve(Boolean(result.confirm)),
-      fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    this.invalidateMemberLoad()
-    this.setData({ logoutBusy: true })
+    const action = beginMemberAction(this, 'identity')
+    if (!action) return
     try {
-      try {
-        await logoutWechatIdentity()
-      } catch (_error) {
-        // 服务端注销失败时仍清除本地会话，避免卡在半登录态。
-      }
+      if (this.data.logoutBusy || !this.data.membership) return
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: '退出登录',
+        content: '退出后需重新授权手机号登录；同一手机号会回到已有的 6 位会员号',
+        confirmText: '退出',
+        cancelText: '取消',
+        success: (result) => resolve(Boolean(result.confirm)),
+        fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
       this.invalidateMemberLoad()
-      clearMemberLocalCache()
-      this.pendingMembershipAction = ''
-      // 进入显式退出态（匿名浏览），在再次授权手机号前不要用微信身份自动拉回会员。
-      await restartAnonymousCustomerSession()
-      this.setData({
-        agreedToPolicies: false,
-        loginSheetVisible: false,
-        membership: null,
-        displayName: '',
-        avatarUrl: '',
-        recoveryMessage: '',
-        error: '',
-        benefitError: '',
-        registrationError: '',
-        redemptionError: '',
-        preferenceError: '',
-        benefits: [],
-        benefitCount: 0,
-        points: [],
-        reservations: [],
-        registrations: [],
-        redemptionItems: [],
-        redemptions: [],
-        showRedemptions: false,
-        productRestrictions: [],
-        contentCards: [],
-      })
-      wx.showToast({ title: '已退出登录', icon: 'success', duration: 1200 })
-      await this.load()
-    } finally {
-      this.setData({ logoutBusy: false })
-    }
+      this.setData({ logoutBusy: true })
+      try {
+        try {
+          await logoutWechatIdentity()
+        } catch (_error) {
+          // 服务端注销失败时仍清除本地会话，避免卡在半登录态。
+        }
+        if (!action.current()) return
+        this.invalidateMemberLoad()
+        clearMemberLocalCache()
+        this.pendingMembershipAction = ''
+        // 进入显式退出态（匿名浏览），在再次授权手机号前不要用微信身份自动拉回会员。
+        await restartAnonymousCustomerSession()
+        if (!action.owned() || this._pageHidden) return
+        this.setData({
+          agreedToPolicies: false,
+          loginSheetVisible: false,
+          membership: null,
+          displayName: '',
+          avatarUrl: '',
+          recoveryMessage: '',
+          error: '',
+          benefitError: '',
+          registrationError: '',
+          redemptionError: '',
+          preferenceError: '',
+          benefits: [],
+          benefitCount: 0,
+          points: [],
+          reservations: [],
+          registrations: [],
+          redemptionItems: [],
+          redemptions: [],
+          showRedemptions: false,
+          productRestrictions: [],
+          contentCards: [],
+        })
+        wx.showToast({ title: '已退出登录', icon: 'success', duration: 1200 })
+        await this.load()
+      } finally {
+        if (action.owned()) this.setData({ logoutBusy: false })
+      }
+    } finally { action.finish() }
   },
 
   async quickLoginAndEnroll(event) {
-    if (this.data.busy) return
-    if (!this.data.agreedToPolicies) {
-      this.remindAgreement()
-      return
-    }
-    if (this.data.membership) {
-      wx.showToast({ title: '您已经是会员', icon: 'none' })
-      return
-    }
-    const terms = this.data.membershipTerms
-    if (!terms) {
-      wx.showModal({
-        title: '暂时无法登录',
-        content: '当前会员协议尚未发布，暂不能新加入会员。点单和找回原会员不受影响。',
-        showCancel: false,
-        confirmText: '知道了',
-      })
-      return
-    }
-    const authorization = readWechatPhoneAuthorization(event)
-    if (!authorization.code) {
-      this.setData({ error: authorization.message })
-      wx.showToast({ title: authorization.message, icon: 'none' })
-      return
-    }
-    this.invalidateMemberLoad()
-    this.setData({ busy: true, error: '' })
+    const action = beginMemberAction(this, 'identity', { authentication: true })
+    if (!action) return
     try {
-      const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
-      this.invalidateMemberLoad()
-      const membership = result && result.membership ? membershipView(result.membership) : null
-      if (!membership) throw new Error('会员状态暂时未刷新，请再试一次')
-      this.setData({ loginSheetVisible: false, error: '', membership })
-      wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
-      try {
-        await this.load()
-      } catch (_error) {
-        // 入会已成功；刷新失败不能把登录打回失败态。
+      if (this.data.busy) return
+      if (!this.data.agreedToPolicies) {
+        this.remindAgreement()
+        return
       }
-      if (!this.data.membership) this.setData({ membership })
-      this.continuePendingMembershipAction()
-    } catch (error) {
-      this.pendingMembershipAction = ''
-      const friendly = customerErrorMessage(error, '登录暂时没有完成')
-      this.setData({ error: friendly, loginSheetVisible: true })
-      wx.showToast({ title: friendly, icon: 'none', duration: 2800 })
-    } finally {
-      this.setData({ busy: false })
-    }
+      if (this.data.membership) {
+        wx.showToast({ title: '您已经是会员', icon: 'none' })
+        return
+      }
+      const terms = this.data.membershipTerms
+      if (!terms) {
+        wx.showModal({
+          title: '暂时无法登录',
+          content: '当前会员协议尚未发布，暂不能新加入会员。点单和找回原会员不受影响。',
+          showCancel: false,
+          confirmText: '知道了',
+        })
+        return
+      }
+      const authorization = readWechatPhoneAuthorization(event)
+      if (!authorization.code) {
+        this.setData({ error: authorization.message })
+        wx.showToast({ title: authorization.message, icon: 'none' })
+        return
+      }
+      this.invalidateMemberLoad()
+      this.setData({ busy: true, error: '' })
+      try {
+        const result = await enrollMembership(terms.version, 'mini_profile', authorization.code)
+        if (!action.current()) return
+        action.bindIdentity()
+        this.invalidateMemberLoad()
+        const membership = result && result.membership ? membershipView(result.membership) : null
+        if (!membership) throw new Error('会员状态暂时未刷新，请再试一次')
+        this.setData({ loginSheetVisible: false, error: '', membership })
+        wx.showToast({ title: '登录成功', icon: 'success', duration: 1200 })
+        try {
+          await this.load()
+        } catch (_error) {
+          // 入会已成功；刷新失败不能把登录打回失败态。
+        }
+        if (!action.current()) return
+        if (!this.data.membership) this.setData({ membership })
+        this.continuePendingMembershipAction()
+      } catch (error) {
+        if (!action.current()) return
+        this.pendingMembershipAction = ''
+        const friendly = customerErrorMessage(error, '登录暂时没有完成')
+        this.setData({ error: friendly, loginSheetVisible: true })
+        wx.showToast({ title: friendly, icon: 'none', duration: 2800 })
+      } finally {
+        if (action.owned()) this.setData({ busy: false })
+      }
+    } finally { action.finish() }
   },
 
   onAgreePrivacyAuthorization() {},
@@ -706,90 +721,107 @@ Page({
   },
 
   async enableExpiryReminder() {
-    let option = this.data.expiryNotificationOption
-    if (!option || typeof wx.requestSubscribeMessage !== 'function') return
+    const action = beginMemberAction(this, 'reminder')
+    if (!action) return
     try {
+      let option = this.data.expiryNotificationOption
+      if (!option || typeof wx.requestSubscribeMessage !== 'function') return
       try {
-        const fresh = await getWechatNotificationAuthorizations()
-        const match = ((fresh && fresh.authorizations) || []).find((item) => (
-          item.notificationType === 'loyalty_points_expiring'
-          && Number(item.usesRemaining || 0) <= 0
-          && item.platformResult !== 'ban'
-        ))
-        if (match) option = match
-      } catch (_freshError) {}
-      const options = mergeWechatNotificationPromptOptions(
-        [Object.assign({}, option, { apiKind: 'loyalty' })],
-        this.data.wechatMemberCardPresentationOptions,
-        this.data.wechatSubscriptionPresentationOptions,
-      )
-      const result = await requestWechatSubscription(options)
-      const outcomeIndex = (result.outcomes || []).findIndex((item) => item.option.templateId === option.templateId)
-      const outcome = (result.outcomes || [])[outcomeIndex]
-      const platformResult = outcome && outcome.platformResult
-      if (!['accept', 'reject', 'ban'].includes(platformResult)) return
-      const recording = (result.recordingResults || [])[outcomeIndex]
-      if (recording && recording.writebackError) {
-        wx.showToast({ title: '提醒设置保存失败，请重试', icon: 'none' })
-        return
+        try {
+          const fresh = await getWechatNotificationAuthorizations()
+          if (!action.current()) return
+          const match = ((fresh && fresh.authorizations) || []).find((item) => (
+            item.notificationType === 'loyalty_points_expiring'
+            && Number(item.usesRemaining || 0) <= 0
+            && item.platformResult !== 'ban'
+          ))
+          if (match) option = match
+        } catch (_freshError) {}
+        if (!action.current()) return
+        const options = mergeWechatNotificationPromptOptions(
+          [Object.assign({}, option, { apiKind: 'loyalty' })],
+          this.data.wechatMemberCardPresentationOptions,
+          this.data.wechatSubscriptionPresentationOptions,
+        )
+        const result = await requestWechatSubscription(options)
+        if (!action.current()) return
+        const outcomeIndex = (result.outcomes || []).findIndex((item) => item.option.templateId === option.templateId)
+        const outcome = (result.outcomes || [])[outcomeIndex]
+        const platformResult = outcome && outcome.platformResult
+        if (!['accept', 'reject', 'ban'].includes(platformResult)) return
+        const recording = (result.recordingResults || [])[outcomeIndex]
+        if (recording && recording.writebackError) {
+          wx.showToast({ title: '提醒设置保存失败，请重试', icon: 'none' })
+          return
+        }
+        this.setData({ expiryNotificationOption: null })
+        wx.showToast({
+          title: platformResult === 'accept' ? '到期提醒已申请' : '未开启到期提醒',
+          icon: 'none',
+        })
+      } catch (_error) {
+        // Reminder permission is optional and never blocks membership use.
       }
-      this.setData({ expiryNotificationOption: null })
-      wx.showToast({
-        title: platformResult === 'accept' ? '到期提醒已申请' : '未开启到期提醒',
-        icon: 'none',
-      })
-    } catch (_error) {
-      // Reminder permission is optional and never blocks membership use.
-    }
+    } finally { action.finish() }
   },
 
   async recoverMembership(event) {
-    if (this.data.recoveryBusy) return
-    if (!this.data.agreedToPolicies) {
-      this.remindAgreement()
-      return
-    }
-    const authorization = readWechatPhoneAuthorization(event)
-    if (!authorization.code) {
-      this.setData({ recoveryMessage: authorization.message })
-      wx.showToast({ title: authorization.message, icon: 'none' })
-      return
-    }
-    this.invalidateMemberLoad()
-    this.setData({ recoveryBusy: true, recoveryMessage: '', error: '' })
+    const action = beginMemberAction(this, 'identity', { authentication: true })
+    if (!action) return
     try {
-      const challenge = await startMembershipRecovery()
-      const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
-      this.invalidateMemberLoad()
-      this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
-      if (result.status === 'completed') {
-        const membership = result.membership ? membershipView(result.membership) : null
-        this.setData({
-          loginSheetVisible: false,
-          error: '',
-          ...(membership ? { membership } : {}),
-        })
-        wx.showToast({ title: '会员已找回', icon: 'success' })
-        try {
-          await this.load()
-        } catch (_error) {
-          // 找回已成功；刷新失败不能把登录打回失败态。
-        }
-        if (membership && !this.data.membership) this.setData({ membership })
-        this.continuePendingMembershipAction()
+      if (this.data.recoveryBusy) return
+      if (!this.data.agreedToPolicies) {
+        this.remindAgreement()
+        return
       }
-    } catch (error) {
-      const code = String((error && error.code) || '')
-      const friendly = code === 'MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED'
-        ? '会员手机号校验暂时不可用，请稍后重试或联系门店协助找回'
-        : customerErrorCode(error) === 'ROUTE_NOT_FOUND'
-          ? '会员找回服务暂时不可用。请稍后重试；若仍失败，请联系门店协助找回。'
-          : customerErrorMessage(error, '历史会员找回暂时没有完成')
-      this.setData({ recoveryMessage: friendly, loginSheetVisible: true })
-      wx.showToast({ title: friendly, icon: 'none', duration: 3500 })
-    } finally {
-      this.setData({ recoveryBusy: false })
-    }
+      const authorization = readWechatPhoneAuthorization(event)
+      if (!authorization.code) {
+        this.setData({ recoveryMessage: authorization.message })
+        wx.showToast({ title: authorization.message, icon: 'none' })
+        return
+      }
+      this.invalidateMemberLoad()
+      this.setData({ recoveryBusy: true, recoveryMessage: '', error: '' })
+      try {
+        const challenge = await startMembershipRecovery()
+        if (!action.current()) return
+        if (!action.sameIdentity()) return
+        const result = await verifyMembershipRecovery(challenge.challengePublicId, authorization.code)
+        if (!action.current()) return
+        action.bindIdentity()
+        this.invalidateMemberLoad()
+        this.setData({ recoveryMessage: result.message || '找回申请已经提交' })
+        if (result.status === 'completed') {
+          const membership = result.membership ? membershipView(result.membership) : null
+          this.setData({
+            loginSheetVisible: false,
+            error: '',
+            ...(membership ? { membership } : {}),
+          })
+          wx.showToast({ title: '会员已找回', icon: 'success' })
+          try {
+            await this.load()
+          } catch (_error) {
+            // 找回已成功；刷新失败不能把登录打回失败态。
+          }
+          if (!action.current()) return
+          if (membership && !this.data.membership) this.setData({ membership })
+          this.continuePendingMembershipAction()
+        }
+      } catch (error) {
+        if (!action.current()) return
+        const code = String((error && error.code) || '')
+        const friendly = code === 'MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED'
+          ? '会员手机号校验暂时不可用，请稍后重试或联系门店协助找回'
+          : customerErrorCode(error) === 'ROUTE_NOT_FOUND'
+            ? '会员找回服务暂时不可用。请稍后重试；若仍失败，请联系门店协助找回。'
+            : customerErrorMessage(error, '历史会员找回暂时没有完成')
+        this.setData({ recoveryMessage: friendly, loginSheetVisible: true })
+        wx.showToast({ title: friendly, icon: 'none', duration: 3500 })
+      } finally {
+        if (action.owned()) this.setData({ recoveryBusy: false })
+      }
+    } finally { action.finish() }
   },
 
   togglePreferenceEditor() {
@@ -817,71 +849,89 @@ Page({
   },
 
   async submitCustomerPreference() {
-    if (this.data.preferenceBusyId) return
-    const type = this.data.preferenceTypeOptions[this.data.preferenceTypeIndex]
-    const selected = this.data.preferenceValueOptions[this.data.preferenceValueIndex]
-    const value = this.data.preferenceUsesPicker
-      ? selected && selected.code
-      : String(this.data.preferenceTextValue || '').trim()
-    if (!type || !value) return this.setData({ preferenceError: '请先填写偏好内容' })
-    this.setData({ preferenceBusyId: 'create', preferenceError: '' })
+    const action = beginMemberAction(this, 'preference')
+    if (!action) return
     try {
-      const snapshot = await declareCustomerPreference({ key: type.key, value, polarity: 'supports' })
-      this.applyCustomerPreferenceSnapshot(snapshot)
-      this.setData({ showPreferenceEditor: false, preferenceTextValue: '' })
-      wx.showToast({ title: '偏好已记录', icon: 'success' })
-    } catch (error) {
-      this.setData({ preferenceError: customerErrorMessage(error, '偏好暂时无法记录') })
-    } finally {
-      this.setData({ preferenceBusyId: '' })
-    }
+      if (this.data.preferenceBusyId) return
+      const type = this.data.preferenceTypeOptions[this.data.preferenceTypeIndex]
+      const selected = this.data.preferenceValueOptions[this.data.preferenceValueIndex]
+      const value = this.data.preferenceUsesPicker
+        ? selected && selected.code
+        : String(this.data.preferenceTextValue || '').trim()
+      if (!type || !value) return this.setData({ preferenceError: '请先填写偏好内容' })
+      this.setData({ preferenceBusyId: 'create', preferenceError: '' })
+      try {
+        const snapshot = await declareCustomerPreference({ key: type.key, value, polarity: 'supports' })
+        if (!action.current()) return
+        this.applyCustomerPreferenceSnapshot(snapshot)
+        this.setData({ showPreferenceEditor: false, preferenceTextValue: '' })
+        wx.showToast({ title: '偏好已记录', icon: 'success' })
+      } catch (error) {
+        if (!action.current()) return
+        this.setData({ preferenceError: customerErrorMessage(error, '偏好暂时无法记录') })
+      } finally {
+        if (action.owned()) this.setData({ preferenceBusyId: '' })
+      }
+    } finally { action.finish() }
   },
 
   async correctCustomerPreference(event) {
-    const key = event.currentTarget.dataset.key
-    const value = event.currentTarget.dataset.value
-    if (!key || !value || this.data.preferenceBusyId) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: '纠正这项偏好？',
-      content: `“${preferenceValueName(key, value)}”将标记为不符合；原记录保留为历史依据。`,
-      confirmText: '确认纠正',
-      success: (result) => resolve(result.confirm), fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    const busyId = `correct:${key}:${value}`
-    this.setData({ preferenceBusyId: busyId, preferenceError: '' })
+    const action = beginMemberAction(this, 'preference')
+    if (!action) return
     try {
-      const snapshot = await declareCustomerPreference({ key, value, polarity: 'contradicts' })
-      this.applyCustomerPreferenceSnapshot(snapshot)
-      wx.showToast({ title: '已记录纠正', icon: 'success' })
-    } catch (error) {
-      this.setData({ preferenceError: customerErrorMessage(error, '这项纠正暂时没有保存') })
-    } finally {
-      this.setData({ preferenceBusyId: '' })
-    }
+      const key = event.currentTarget.dataset.key
+      const value = event.currentTarget.dataset.value
+      if (!key || !value || this.data.preferenceBusyId) return
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: '纠正这项偏好？',
+        content: `“${preferenceValueName(key, value)}”将标记为不符合；原记录保留为历史依据。`,
+        confirmText: '确认纠正',
+        success: (result) => resolve(result.confirm), fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
+      const busyId = `correct:${key}:${value}`
+      this.setData({ preferenceBusyId: busyId, preferenceError: '' })
+      try {
+        const snapshot = await declareCustomerPreference({ key, value, polarity: 'contradicts' })
+        if (!action.current()) return
+        this.applyCustomerPreferenceSnapshot(snapshot)
+        wx.showToast({ title: '已记录纠正', icon: 'success' })
+      } catch (error) {
+        if (!action.current()) return
+        this.setData({ preferenceError: customerErrorMessage(error, '这项纠正暂时没有保存') })
+      } finally {
+        if (action.owned()) this.setData({ preferenceBusyId: '' })
+      }
+    } finally { action.finish() }
   },
 
   async withdrawCustomerPreference(event) {
-    const publicId = event.currentTarget.dataset.id
-    const source = this.data.preferenceSources.find((item) => item.publicId === publicId)
-    if (!source || source.withdrawn || this.data.preferenceBusyId) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: '撤回这条依据？',
-      content: '撤回后它不再影响推荐，历史记录仍会保留。',
-      confirmText: '确认撤回',
-      success: (result) => resolve(result.confirm), fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    this.setData({ preferenceBusyId: publicId, preferenceError: '' })
+    const action = beginMemberAction(this, 'preference')
+    if (!action) return
     try {
-      const snapshot = await withdrawCustomerPreferenceSource(publicId, '顾客本人在我的页面撤回偏好依据')
-      this.applyCustomerPreferenceSnapshot(snapshot)
-      wx.showToast({ title: '已撤回', icon: 'success' })
-    } catch (error) {
-      this.setData({ preferenceError: customerErrorMessage(error, '这条依据暂时无法撤回') })
-    } finally {
-      this.setData({ preferenceBusyId: '' })
-    }
+      const publicId = event.currentTarget.dataset.id
+      const source = this.data.preferenceSources.find((item) => item.publicId === publicId)
+      if (!source || source.withdrawn || this.data.preferenceBusyId) return
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: '撤回这条依据？',
+        content: '撤回后它不再影响推荐，历史记录仍会保留。',
+        confirmText: '确认撤回',
+        success: (result) => resolve(result.confirm), fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
+      this.setData({ preferenceBusyId: publicId, preferenceError: '' })
+      try {
+        const snapshot = await withdrawCustomerPreferenceSource(publicId, '顾客本人在我的页面撤回偏好依据')
+        if (!action.current()) return
+        this.applyCustomerPreferenceSnapshot(snapshot)
+        wx.showToast({ title: '已撤回', icon: 'success' })
+      } catch (error) {
+        if (!action.current()) return
+        this.setData({ preferenceError: customerErrorMessage(error, '这条依据暂时无法撤回') })
+      } finally {
+        if (action.owned()) this.setData({ preferenceBusyId: '' })
+      }
+    } finally { action.finish() }
   },
 
   openMemberContentCard(event) {
@@ -899,109 +949,138 @@ Page({
   },
 
   async withdrawRestriction(event) {
-    const publicId = event.currentTarget.dataset.id
-    const restriction = this.data.productRestrictions.find((item) => item.publicId === publicId)
-    if (!restriction || this.data.restrictionBusyId) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: '恢复这项推荐？',
-      content: `撤回后，“${restriction.productName}”可以再次进入您的推荐结果。`,
-      confirmText: '确认撤回',
-      success: (result) => resolve(result.confirm), fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    this.setData({ restrictionBusyId: publicId, error: '' })
+    const action = beginMemberAction(this, 'restriction')
+    if (!action) return
     try {
-      await withdrawProductRestriction(publicId, '顾客本人在我的页面撤回')
-      this.setData({
-        productRestrictions: this.data.productRestrictions.filter((item) => item.publicId !== publicId),
-      })
-      wx.showToast({ title: '已恢复推荐', icon: 'success' })
-    } catch (error) {
-      this.setData({ error: customerErrorMessage(error, '暂时无法撤回，请稍后再试') })
-    } finally {
-      this.setData({ restrictionBusyId: '' })
-    }
+      const publicId = event.currentTarget.dataset.id
+      const restriction = this.data.productRestrictions.find((item) => item.publicId === publicId)
+      if (!restriction || this.data.restrictionBusyId) return
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: '恢复这项推荐？',
+        content: `撤回后，“${restriction.productName}”可以再次进入您的推荐结果。`,
+        confirmText: '确认撤回',
+        success: (result) => resolve(result.confirm), fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
+      this.setData({ restrictionBusyId: publicId, error: '' })
+      try {
+        await withdrawProductRestriction(publicId, '顾客本人在我的页面撤回')
+        if (!action.current()) return
+        this.setData({
+          productRestrictions: this.data.productRestrictions.filter((item) => item.publicId !== publicId),
+        })
+        wx.showToast({ title: '已恢复推荐', icon: 'success' })
+      } catch (error) {
+        if (!action.current()) return
+        this.setData({ error: customerErrorMessage(error, '暂时无法撤回，请稍后再试') })
+      } finally {
+        if (action.owned()) this.setData({ restrictionBusyId: '' })
+      }
+    } finally { action.finish() }
   },
 
   async requestBenefitUse(event) {
-    if (this.data.benefitBusyId) return
-    if (!this.requireMembership()) return
-    const id = event.currentTarget.dataset.id
-    if (!this.data.hasTableContext) return wx.showModal({ title: '到店后使用', content: '请入座并扫描桌码后申请使用，现场人员确认后才会核销。', showCancel: false })
-    this.setData({ benefitBusyId: id, benefitError: '' })
+    const action = beginMemberAction(this, 'benefit', { table: true })
+    if (!action) return
     try {
-      await reserveCustomerBenefit(id, 1)
-      wx.showModal({ title: '已经申请使用', content: '权益已经为本桌暂留，需由服务人员完成实际交付和核销。', showCancel: false })
-      await this.load()
-    } catch (error) { this.setData({ benefitError: customerErrorMessage(error, '权益暂时无法申请使用') }) }
-    finally { this.setData({ benefitBusyId: '' }) }
+      if (this.data.benefitBusyId) return
+      if (!this.requireMembership()) return
+      const id = event.currentTarget.dataset.id
+      if (!this.data.hasTableContext) return wx.showModal({ title: '到店后使用', content: '请入座并扫描桌码后申请使用，现场人员确认后才会核销。', showCancel: false })
+      this.setData({ benefitBusyId: id, benefitError: '' })
+      try {
+        await reserveCustomerBenefit(id, 1)
+        if (!action.current()) return
+        wx.showModal({ title: '已经申请使用', content: '权益已经为本桌暂留，需由服务人员完成实际交付和核销。', showCancel: false })
+        await this.load()
+      } catch (error) { if (!action.current()) return; this.setData({ benefitError: customerErrorMessage(error, '权益暂时无法申请使用') }) }
+      finally { if (action.owned()) this.setData({ benefitBusyId: '' }) }
+    } finally { action.finish() }
   },
 
   async redeemItem(event) {
-    if (!this.requireMembership()) return
-    const id = event.currentTarget.dataset.id
-    const item = this.data.redemptionItems.find((candidate) => candidate.publicId === id)
-    if (!item || !item.eligible || this.data.redemptionBusyId) return
-    if (item.requiresTableSession && !this.data.hasTableContext) {
-      return wx.showModal({ title: '请先扫码入座', content: '该兑换需要有效桌次，入座扫描桌码后才能确认。', showCancel: false })
-    }
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: `确认使用 ${item.pointsRequired} 积分`,
-      content: `${item.name}\n${item.description}\n此处兑换完整商品或权益；结账抵扣请在确认订单时选择积分。`,
-      confirmText: '确认兑换',
-      success: (result) => resolve(result.confirm), fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    this.setData({ redemptionBusyId: id, redemptionError: '' })
+    const action = beginMemberAction(this, 'redemption', { table: true })
+    if (!action) return
     try {
-      await createRedemption(id)
-      wx.showModal({ title: '兑换已确认', content: '积分已扣减并生成交付记录；需要制作的商品现已进入对应出品工位。', showCancel: false })
-      await this.load()
-    } catch (error) { this.setData({ redemptionError: customerErrorMessage(error, '兑换没有完成') }) }
-    finally { this.setData({ redemptionBusyId: '' }) }
+      if (!this.requireMembership()) return
+      const id = event.currentTarget.dataset.id
+      const item = this.data.redemptionItems.find((candidate) => candidate.publicId === id)
+      if (!item || !item.eligible || this.data.redemptionBusyId) return
+      if (item.requiresTableSession && !this.data.hasTableContext) {
+        return wx.showModal({ title: '请先扫码入座', content: '该兑换需要有效桌次，入座扫描桌码后才能确认。', showCancel: false })
+      }
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: `确认使用 ${item.pointsRequired} 积分`,
+        content: `${item.name}\n${item.description}\n此处兑换完整商品或权益；结账抵扣请在确认订单时选择积分。`,
+        confirmText: '确认兑换',
+        success: (result) => resolve(result.confirm), fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
+      this.setData({ redemptionBusyId: id, redemptionError: '' })
+      try {
+        await createRedemption(id)
+        if (!action.current()) return
+        wx.showModal({ title: '兑换已确认', content: '积分已扣减并生成交付记录；需要制作的商品现已进入对应出品工位。', showCancel: false })
+        await this.load()
+      } catch (error) { if (!action.current()) return; this.setData({ redemptionError: customerErrorMessage(error, '兑换没有完成') }) }
+      finally { if (action.owned()) this.setData({ redemptionBusyId: '' }) }
+    } finally { action.finish() }
   },
 
   async cancelRedemption(event) {
-    if (!this.requireMembership('member-center')) return
-    const id = event.currentTarget.dataset.id
-    if (!id || this.data.redemptionBusyId) return
-    const confirmed = await new Promise((resolve) => wx.showModal({
-      title: '取消这次兑换？',
-      content: '只有商品尚未开始制作时才能取消；成功取消后按原积分批次返还。',
-      confirmText: '确认取消', confirmColor: '#8b3d2f',
-      success: (result) => resolve(result.confirm), fail: () => resolve(false),
-    }))
-    if (!confirmed) return
-    this.setData({ redemptionBusyId: id, redemptionError: '' })
-    try { await cancelRedemptionRequest(id, '顾客在交付前取消兑换'); await this.load() }
-    catch (error) { this.setData({ redemptionError: customerErrorMessage(error, '兑换暂时不能取消') }) }
-    finally { this.setData({ redemptionBusyId: '' }) }
+    const action = beginMemberAction(this, 'redemption', { table: true })
+    if (!action) return
+    try {
+      if (!this.requireMembership('member-center')) return
+      const id = event.currentTarget.dataset.id
+      if (!id || this.data.redemptionBusyId) return
+      const confirmed = await new Promise((resolve) => wx.showModal({
+        title: '取消这次兑换？',
+        content: '只有商品尚未开始制作时才能取消；成功取消后按原积分批次返还。',
+        confirmText: '确认取消', confirmColor: '#8b3d2f',
+        success: (result) => resolve(result.confirm), fail: () => resolve(false),
+      }))
+      if (!confirmed || !action.current()) return
+      this.setData({ redemptionBusyId: id, redemptionError: '' })
+      try { await cancelRedemptionRequest(id, '顾客在交付前取消兑换'); if (!action.current()) return; await this.load() }
+      catch (error) { if (!action.current()) return; this.setData({ redemptionError: customerErrorMessage(error, '兑换暂时不能取消') }) }
+      finally { if (action.owned()) this.setData({ redemptionBusyId: '' }) }
+    } finally { action.finish() }
   },
 
   openReservations() {
     wx.switchTab({ url: '/pages/reservations/index' })
   },
   async openSuperhighService() {
-    if (!this.requireMembership('superhigh')) return
+    const action = beginMemberAction(this, 'navigation')
+    if (!action) return
     try {
-      const registrations = await activityRegistrationViews(await getActivityRegistrations())
-      this.setData({ registrations, registrationError: '' }, () => {
+      if (!this.requireMembership('superhigh')) return
+      try {
+        const registrations = await activityRegistrationViews(await getActivityRegistrations())
+        if (!action.current()) return
+        this.setData({ registrations, registrationError: '' })
         if (!registrations.length) return this.openSuperhighTab()
-        wx.pageScrollTo({
-          selector: '#registered-activities',
-          duration: 320,
-          fail: () => wx.showToast({ title: '已报名活动正在显示，请稍后重试', icon: 'none' }),
+        // Wait for the view update without treating a completed action as stale.
+        await new Promise((resolve) => this.setData({}, () => {
+          if (action.current()) wx.pageScrollTo({
+            selector: '#registered-activities',
+            duration: 320,
+            fail: () => { if (action.current()) wx.showToast({ title: '已报名活动正在显示，请稍后重试', icon: 'none' }) },
+          })
+          resolve()
+        }))
+      } catch (error) {
+        if (!action.current()) return
+        this.setData({ registrationError: customerErrorMessage(error, '报名记录暂时无法读取') })
+        wx.showModal({
+          title: '暂时无法读取报名记录',
+          content: '为避免重复报名，当前不会跳转到活动列表。请稍后重试。',
+          showCancel: false,
+          confirmText: '知道了',
         })
-      })
-    } catch (error) {
-      this.setData({ registrationError: customerErrorMessage(error, '报名记录暂时无法读取') })
-      wx.showModal({
-        title: '暂时无法读取报名记录',
-        content: '为避免重复报名，当前不会跳转到活动列表。请稍后重试。',
-        showCancel: false,
-        confirmText: '知道了',
-      })
-    }
+      }
+    } finally { action.finish() }
   },
   openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
   openPoints() {
@@ -1032,24 +1111,31 @@ Page({
     wx.navigateTo({ url: '/pages/member-center/index?view=next-tier-benefits' })
   },
   async openCoupons() {
-    if (!this.requireMembership('coupons')) return
-    let options = this.data.wechatSubscriptionPresentationOptions || []
+    const action = beginMemberAction(this, 'navigation')
+    if (!action) return
     try {
-      const prompt = await getWechatNotificationPrompt('coupon_open')
-      options = extractPromptPresentation(prompt) || options
-      this.setData({
-        wechatSubscriptionPresentationOptions: options,
-        wechatNotificationPromptOptions: mergeWechatNotificationPromptOptions(
-          prompt && prompt.authorizations,
-          this.data.wechatMemberCardPresentationOptions,
-        ),
-      })
-      rememberPresentationOptions('coupon_open', options)
-    } catch (_error) {
-      // Fall back to the options already loaded with the profile page.
-    }
-    await requestWechatSubscription(options)
-    wx.navigateTo({ url: '/pages/profile-coupons/index' })
+      if (!this.requireMembership('coupons')) return
+      let options = this.data.wechatSubscriptionPresentationOptions || []
+      try {
+        const prompt = await getWechatNotificationPrompt('coupon_open')
+        if (!action.current()) return
+        options = extractPromptPresentation(prompt) || options
+        this.setData({
+          wechatSubscriptionPresentationOptions: options,
+          wechatNotificationPromptOptions: mergeWechatNotificationPromptOptions(
+            prompt && prompt.authorizations,
+            this.data.wechatMemberCardPresentationOptions,
+          ),
+        })
+        rememberPresentationOptions('coupon_open', options)
+      } catch (_error) {
+        // Fall back to the options already loaded with the profile page.
+      }
+      if (!action.current()) return
+      await requestWechatSubscription(options)
+      if (!action.current()) return
+      wx.navigateTo({ url: '/pages/profile-coupons/index' })
+    } finally { action.finish() }
   },
   openNotificationSettings() {
     if (!this.requireMembership('notifications')) return

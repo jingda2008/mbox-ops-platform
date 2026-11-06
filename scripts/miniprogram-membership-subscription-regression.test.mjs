@@ -1,3 +1,4 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -81,7 +82,7 @@ test('subscription rejection is recorded, but banned templates are not prompted'
 })
 function expiryPage(recordingResult, platformResult='accept') {
   const source=read('miniprogram/pages/profile/index.js'); const start=source.indexOf('  async enableExpiryReminder() {');const end=source.indexOf('  async recoverMembership(',start)
-  const toast=[];const page=vm.runInNewContext('({' + source.slice(start,end) + '})',{wx:{requestSubscribeMessage:()=>{},showToast:x=>toast.push(x.title)},getWechatNotificationAuthorizations:async()=>({authorizations:[option]}),mergeWechatNotificationPromptOptions:x=>x,requestWechatSubscription:async()=>({outcomes:[{option,platformResult}],recordingResults:[recordingResult]})})
+  const toast=[];const page=vm.runInNewContext('({' + source.slice(start,end) + '})',{...memberGuardFixture()['member-page-action'],wx:{requestSubscribeMessage:()=>{},showToast:x=>toast.push(x.title)},getWechatNotificationAuthorizations:async()=>({authorizations:[option]}),mergeWechatNotificationPromptOptions:x=>x,requestWechatSubscription:async()=>({outcomes:[{option,platformResult}],recordingResults:[recordingResult]})})
   page.data={expiryNotificationOption:option};page.setData=patch=>Object.assign(page.data,patch);return {page,toast}
 }
 test('expiry reminder save failure stays retryable and never displays success', async()=>{

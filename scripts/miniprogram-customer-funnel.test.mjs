@@ -1201,7 +1201,8 @@ test('subscription messages are requested from customer actions, not a settings-
   const paymentActionSource = orderLogic.slice(paymentActionStart, paymentActionEnd)
   assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', activeRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
-  assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,900}?requestWechatSubscription/)
+  const couponAction = profileLogic.slice(profileLogic.indexOf('  async openCoupons()'), profileLogic.indexOf('  openNotificationSettings()'))
+  assert.match(couponAction, /await requestWechatSubscription\(options\)/)
 })
 
 test('WeChat community loads actual activities without Intl or a performance dependency', async () => {

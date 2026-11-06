@@ -1,3 +1,5 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
+const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
@@ -13,7 +15,7 @@ const detail = () => ({order:{...order,declared_value_minor:0,extra_field_snapsh
 function harness(kind,api,runtime={}) {
   let page;const files=new Set();let preview
   const wx={env:{USER_DATA_PATH:'/test'},getFileSystemManager:()=>({writeFile(o){files.add(o.filePath);o.success()},unlink(o){files.delete(o.filePath)}}),previewImage(o){preview=o},stopPullDownRefresh(){},...runtime}
-  vm.runInNewContext(readFileSync(new URL('pages/'+kind+'/index.js',root),'utf8'),{wx,Page(p){page=p;p.setData=d=>Object.assign(p.data,d)},require(name){return name.endsWith('/api')?api:name.endsWith('/custody')?utility('custody'):{customerErrorMessage:(_e,f)=>f}}})
+  vm.runInNewContext(readFileSync(new URL('pages/'+kind+'/index.js',root),'utf8'),{wx,Page(p){page=p;p.setData=d=>Object.assign(p.data,d)},require(name){if(memberGuards[name.split('/').pop()])return memberGuards[name.split('/').pop()];return name.endsWith('/api')?api:name.endsWith('/custody')?utility('custody'):{customerErrorMessage:(_e,f)=>f}}})
   return {page,files,preview:()=>preview}
 }
 test('quantities, Beijing time, expiry and historical extra fields preserve business meaning',()=>{

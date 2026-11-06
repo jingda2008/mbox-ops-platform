@@ -1,6 +1,7 @@
+const { beginMemberAction, invalidateMemberActions } = require('../../utils/member-page-action')
 const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const { getMiniBootstrap, claimAnnualDailySnack } = require('../../utils/api')
-const { money, dateTime } = require('../../utils/format')
+const { money, dateTime, dateInput } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const { getRuntimeConfig } = require('../../config/index')
 
@@ -197,7 +198,7 @@ Page({
 
   onShow() {
     this._pageHidden = false; this.load() },
-  onHide() { this._pageHidden = true; this.invalidateMemberLoad(); this.closeMemberCodePreview() },
+  onHide() { this._pageHidden = true; this.invalidateMemberLoad(); invalidateMemberActions(this); this.clearPrivateState(); this.closeMemberCodePreview() },
 
   openMemberCodePreview() {
     if (this.data.loading || this.data.error || !this.data.membership || !this.data.membership.memberCodeQrDataUrl) return
@@ -207,12 +208,15 @@ Page({
   closeMemberCodePreview() { this.setData({ memberCodePreviewVisible: false }) },
   keepMemberCodePreviewOpen() {},
 
-  onUnload() { this._pageHidden = true; this.invalidateMemberLoad() },
+  onUnload() { this._pageHidden = true; this.invalidateMemberLoad(); invalidateMemberActions(this); this.clearPrivateState() },
+
+  clearPrivateState() { this.setData({ membership: null, benefits: [], points: [], growth: [], processing: [], annualCalendar: [], calendarItems: [], tierBenefits: [], tierBenefitsTitle: '', dailySnackClaim: null, dailySnackBusy: false, memberCodePreviewVisible: false }) },
 
   invalidateMemberLoad() { this._memberLoadGeneration = (this._memberLoadGeneration || 0) + 1 },
 
   async load() {
     if (this._pageHidden) return
+    this.clearPrivateState()
     this.invalidateMemberLoad()
     const generation = this._memberLoadGeneration
     const isCurrent = () => !this._pageHidden && generation === this._memberLoadGeneration
@@ -250,10 +254,15 @@ Page({
 
   async claimDailySnack() {
     if (this.data.dailySnackBusy) return
+    const action = beginMemberAction(this, 'daily-snack', { table: true })
+    if (!action) return
     this.setData({ dailySnackBusy: true, error: '' })
     try {
       const claim = await claimAnnualDailySnack()
-      const expires = claim && claim.expiresAt ? String(claim.expiresAt).slice(11, 16) : '暂留期内'
+      if (!action.current()) return
+      const expiresAt = Date.parse(dateInput(claim && claim.expiresAt))
+      if (!claim || typeof claim.claimCode !== 'string' || !claim.claimCode.trim() || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('核销码尚未确认，请刷新核对后重试')
+      const expires = dateTime(claim.expiresAt)
       this.setData({ dailySnackClaim: {
         claimCode: claim.claimCode,
         claimCodeQrDataUrl: claim.claimCodeQrDataUrl || '',
@@ -261,8 +270,9 @@ Page({
       } })
       wx.showToast({ title: '已生成核销码', icon: 'success' })
     } catch (error) {
+      if (!action.current()) return
       this.setData({ error: customerErrorMessage(error, '每日点心暂时无法申请') })
-    } finally { this.setData({ dailySnackBusy: false }) }
+    } finally { if (action.owned()) this.setData({ dailySnackBusy: false }); action.finish() }
   },
 
   closeDailySnackClaim() { this.setData({ dailySnackClaim: null }) },

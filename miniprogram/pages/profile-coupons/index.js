@@ -1,3 +1,4 @@
+const { beginMemberPage } = require('../../utils/member-pagination')
 const { getCustomerBenefitWallet } = require('../../utils/api')
 const { money, dateInput } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
@@ -45,8 +46,10 @@ Page({
     const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
     this.setData({ loading: true, loadingMore: false, error: '', moreError: '', coupons: [], nextCursor: null })
     try {
+      const acceptPage = beginMemberPage(this, 'coupons', null)
       const result = await getCustomerBenefitWallet()
       if (generation !== this.loadGeneration) return
+      acceptPage(result.nextCursor)
       this.setData({ loading: false, coupons: result.items.map(present), nextCursor: result.nextCursor })
     } catch (error) {
       if (generation !== this.loadGeneration) return
@@ -59,8 +62,10 @@ Page({
     const cursor = this.data.nextCursor
     this.setData({ loadingMore: true, moreError: '' })
     try {
+      const acceptPage = beginMemberPage(this, 'coupons', cursor)
       const result = await getCustomerBenefitWallet(cursor)
       if (generation !== this.loadGeneration) return
+      acceptPage(result.nextCursor)
       const existing = new Set(this.data.coupons.map((item) => item.id))
       const additions = result.items.filter((item) => {
         if (existing.has(item.id)) return false
@@ -70,6 +75,7 @@ Page({
       this.setData({ loadingMore: false, coupons: this.data.coupons.concat(additions), nextCursor: result.nextCursor })
     } catch (error) {
       if (generation !== this.loadGeneration) return
+      if (error.memberPageOwnerChanged) this.setData({ coupons: [], nextCursor: null })
       this.setData({ loadingMore: false, moreError: customerErrorMessage(error, '更多优惠券暂时无法读取，请重试') })
     }
   },

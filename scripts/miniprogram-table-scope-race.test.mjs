@@ -1,3 +1,5 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
+const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -388,6 +390,7 @@ async function loadAccountPage(state, platform = 'miniprogram') {
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     require(specifier) {
+      if (memberGuards[specifier.split('/').pop()]) return memberGuards[specifier.split('/').pop()]
       if (specifier === '../../utils/platform') return context.wx
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))

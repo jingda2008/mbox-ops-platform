@@ -1,3 +1,4 @@
+const { beginMemberPage } = require('../../utils/member-pagination')
 const {isPresentableWechatJsapiAction}=require('../../utils/wechat-payment')
 const { getTableOrders, getCustomerOrderHistory, payTableOrders, abandonGuestCheckout } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
@@ -180,10 +181,12 @@ Page({
     }, scopeChanged ? {
       orders: [], outstandingText: '¥0.00', settlementReviewCount: 0, busyOrderId: '',
       payingBatch: false, selectedPublicIds: [], selectedTotalText: '¥0.00',
-    } : {}, preserveMessage ? {} : { success: '' }))
+    } : {}, this.historyMode && !before ? { orders: [], hasMoreHistory: false } : {}, preserveMessage ? {} : { success: '' }))
     try {
+      const acceptPage = this.historyMode ? beginMemberPage(this, 'history', before) : null
       const rawOrders = await (this.historyMode ? getCustomerOrderHistory(before) : getTableOrders())
       if (!this.isCurrentTableRequest(request)) return
+      if (acceptPage) acceptPage(rawOrders.length === 30 ? rawOrders[rawOrders.length - 1].publicId : null)
       // Confirm every original receivable from this guarded server read before
       // releasing an unknown batch, so a paid batch cannot block later orders.
       if (batchAtRead && Array.isArray(batchAtRead.ids) && batchAtRead.ids.length > 0
@@ -251,6 +254,7 @@ Page({
       }
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
+        if (error.memberPageOwnerChanged) this.setData({ orders: [], hasMoreHistory: false })
         this.setData({ loading: false, error: customerErrorMessage(error, '桌账载入失败') })
       }
     }

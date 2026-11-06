@@ -1,3 +1,5 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
+const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -13,6 +15,7 @@ async function harness(platform, api) {
   vm.runInNewContext(await readFile(new URL('../' + platform + '/pages/profile-coupons/index.js', import.meta.url), 'utf8'), {
     Page(value) { page = value; page.setData = next => Object.assign(page.data, next) },
     require(name) {
+      if (memberGuards[name.split('/').pop()]) return memberGuards[name.split('/').pop()]
       if (name.endsWith('/api')) return { getCustomerBenefitWallet: api }
       if (name.endsWith('/format')) return { money: n => '¥' + n / 100, dateInput: value => value }
       return { customerErrorMessage: (_, fallback) => fallback }

@@ -7,7 +7,7 @@
 - [PR #423](https://github.com/jingda2008/mbox-ops-platform/pull/423)已于北京时间2026-11-06 20:14:51合并；主线提交`14803ff03ecc4536595d1fc84a8f7a10754f4f6d`。合并前再次核实最新HEAD`66db403189c54b5d3cf49adc7186ee17339b7b43`、必需verify成功、完整CI成功、无未解决审查线程；已有作者COMMENT复核，非独立外部批准。
 - 合并提交完整文件树`8e330597c584a3cab94ee87b96912078acab4029`与已审查、测试的PR HEAD完全相同；本轮没有重复修改应用代码。
 - [PR完整CI #42192428777](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42192428777/attempts/2)成功：小程序1096项、数据库4360项无跳过；浏览器基础160通过/45条件跳过全部补测通过，HTTP、性能和汇总门禁通过。首轮25分钟超时、同提交补跑成功的历史保留。
-- 合并后独立[主线CI #42216199526](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42216199526)正在执行，最终状态见GitHub运行记录；不把PR提交CI说成新主线提交CI。
+- 合并后独立[主线CI #42216199526](https://github.com/jingda2008/mbox-ops-platform/actions/runs/42216199526)已于北京时间20:43成功，attempt 1，无需重跑：小程序1096通过、数据库4360通过无跳过、浏览器基础160通过及45条件跳过全部由18+11+4+12专项补齐，额外5+1+1用例通过，HTTP/性能/架构及verify汇总门禁成功。镜像作业按分类跳过（release_artifact_required=false），未触发后台部署。
 - 官方微信开发者工具CLI于20:17:31返回`✔ upload`，开发版版本 **1.0.0-rc.281-ui.1**，正式AppID `wxdb9f2dc413484f2d`，生产API `https://mbox.shmbox.com`。平台包大小 **1,164,884字节**，`upload-info.json`与命令退出0共同留证。
 - 候选绑定上述合并SHA；172个候选文件中170个与源码逐字节一致，工程配置和release-config为标准构建生成。启用真实微信身份、合法域名校验，关闭默认桌码、开发身份与开发数据兜底。候选清单SHA256：`8606d061dd967eca215148161cb2d8c99dbb97b86ae51da641680238ddf39a8b`。
 - 上传后和生成预览码后，172个文件的candidate完整性均为`ready`。该状态仅证明本地输入包完整性，不冒充独立签署的平台商业upload/release准入或远端反编译回读。
@@ -23,4 +23,4 @@
 
 ## 证据
 
-私有证据根目录：`/Users/jingda/mbox/outputs/wechat-pr423-dev-20261106/`。包含合并前门禁、PR合并记录、源码文件回读、候选摘要、官方上传和预览回执、上传/预览后完整性、二维码及`delivery-evidence.json`；主线最终CI状态与交付记录PR另补准确证据。没有访问或改写生产业务数据。
+私有证据根目录：`/Users/jingda/mbox/outputs/wechat-pr423-dev-20261106/`。包含合并前门禁、PR合并记录、源码文件回读、候选摘要、官方上传和预览回执、上传/预览后完整性、二维码及`delivery-evidence.json`；另已归档准确合并提交的主线最终CI JSON及quality/database/browser/performance/verify日志。交付文档与清单由[PR #424](https://github.com/jingda2008/mbox-ops-platform/pull/424)维护。没有访问或改写生产业务数据。

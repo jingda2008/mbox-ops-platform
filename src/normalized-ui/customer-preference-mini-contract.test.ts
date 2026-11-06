@@ -8,11 +8,11 @@ describe('customer preference mini-program contract', () => {
   it('uses the authenticated preference fact API with retry-safe declaration and withdrawal', () => {
     const api = read('miniprogram/utils/api.js')
     expect(api).toContain("publicRequest('/api/public/mini/preferences')")
-    expect(api).toContain("method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }")
+    expect(api).toContain("recoverableMemberWrite('preference-declare', '/api/public/mini/preferences', 'POST'")
     expect(api).toContain('/api/public/mini/preferences/${encodeURIComponent(publicId)}/withdraw')
     expect(api).toContain("mbox.customer.preference.declare.v1")
     expect(api).toContain('mbox.customer.preference.withdraw.${publicId}')
-    expect(api).toContain("error.code !== 'NETWORK_ERROR'")
+    expect(api).toContain("recoverableMemberWrite('preference-withdraw:' + publicId")
   })
 
   it('projects the public response without canonical identity or internal scoring fields', () => {

@@ -12,6 +12,7 @@ function fixture(storage=new Map()){
  const request=async(path,options)=>{requests.push({path,...options});if(hold)await hold;if(fail)throw fail;return {data:{saved:true}}}
  const modules=new Map()
  function load(file){if(modules.has(file))return modules.get(file);const module={exports:{}};vm.runInNewContext(read(file),{module,wx,require:name=>{
+  if(name==='../config/index')return{getRuntimeConfig:()=>({apiBaseUrl:'https://audit.example.test',storeId:'audit'})}
   if(name==='./id')return{randomId:prefix=>prefix+'-'+(++serial)}
   if(name==='./session')return{getTableSession:()=>({cartScope:table})}
   if(name==='./request')return{request}

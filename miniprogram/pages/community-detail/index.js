@@ -19,6 +19,7 @@ const {
 } = require('../../utils/api')
 const { ensureCustomerSession } = require('../../utils/auth')
 const { randomId } = require('../../utils/id')
+const { getRuntimeConfig } = require('../../config/index')
 const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
@@ -77,6 +78,15 @@ function activityShareQuery(publicId) {
 function activitySharePath(publicId) {
   const query = activityShareQuery(publicId)
   return query ? `/pages/community-detail/index?${query}` : '/pages/community/index'
+}
+
+function activityIdentityScope() {
+  const config = getRuntimeConfig(), principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
+  const identity = principal.principalId || principal.memberId || wx.getStorageSync('mbox.http.cookie.reservation.v2') || 'unconfirmed'
+  const input = JSON.stringify([config.apiBaseUrl, config.storeId, identity, wx.getStorageSync('mbox.membership.loggedOut.v1') || ''])
+  let a = 2166136261, b = 5381
+  for (let i = 0; i < input.length; i++) { a = Math.imul(a ^ input.charCodeAt(i), 16777619); b = Math.imul(b, 33) ^ input.charCodeAt(i) }
+  return (a >>> 0).toString(36) + '-' + (b >>> 0).toString(36)
 }
 
 function storageObject(key) {
@@ -141,7 +151,7 @@ function registrationAttemptPayload(value) {
 
 function registrationAttemptExpired(attempt) {
   const createdAt = attempt && typeof attempt.createdAt === 'string' ? Date.parse(attempt.createdAt) : Number.NaN
-  return !Number.isFinite(createdAt) || Date.now() - createdAt > REGISTRATION_ATTEMPT_MAX_AGE_MS
+  return !Number.isFinite(createdAt) || Date.now() < createdAt || Date.now() - createdAt > REGISTRATION_ATTEMPT_MAX_AGE_MS
 }
 
 function registrationFailureMessage(error) {
@@ -635,13 +645,12 @@ Page({
       let registrationReadError = ''
       try { registrations = await getActivityRegistrations() } catch (error) { registrationReadError = customerErrorMessage(error, '报名记录暂时无法读取') }
       if (generation !== this.readGeneration) return
-      const local = storageObject(LOCAL_REGISTRATIONS_KEY)
       const activityRegistrations = (registrations || []).filter((item) => item.activityPublicId === raw.publicId)
       const pending = storageObject(REGISTRATION_ATTEMPTS_KEY)[raw.publicId]
       const recovered = pending && activityRegistrations.find((item) => item.registrationRequestIdempotencyKey === pending.idempotencyKey)
       const pendingParent = pending && pending.payload && pending.payload.parentRegistrationPublicId
       const authoritative = recovered || activityRegistrations.find((item) => item.publicId === pendingParent) || activityRegistrations.find((item) => item.publicId === this.data.selectedRegistrationPublicId) || activityRegistrations[0]
-      let registrationRaw = authoritative || (registrationReadError ? local[raw.publicId] : null) || null
+      let registrationRaw = authoritative || null
       let paymentReadError = ''
       if (registrationRaw && registrationRaw.publicId) {
         try {
@@ -870,6 +879,10 @@ Page({
   },
 
   async restorePurchaseAttempt(attempt) {
+    if (attempt.ownerScope !== activityIdentityScope()) {
+      this.setData({ error: '有其他身份或旧版的待核对记录，请联系门店确认；不会读取或提交该记录。' })
+      return
+    }
     const payload = attempt.payload || {}
     if (!payload.purchaseKind) return
     const selection = activitySelection(this.data.activity, payload.activityPackagePublicId || '', payload.partySize)
@@ -1185,18 +1198,15 @@ Page({
       await this.showRegistrationOutcome(this.data.registration)
       return
     }
-    const attempts = storageObject(REGISTRATION_ATTEMPTS_KEY)
-    const previous = attempts[activity.publicId]
-    if (typeof previous === 'string') {
-      const recovered = await this.recoverRegistration(activity.publicId, null)
-      if (!current() || recovered) return
-      this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '上一次报名记录已失效，请重新填写手机号后报名。' })
+    const rawAttempts = wx.getStorageSync(REGISTRATION_ATTEMPTS_KEY)
+    if (rawAttempts && (typeof rawAttempts !== 'object' || Array.isArray(rawAttempts))) {
+      this.setData({ error: '本机原报名记录无法核对，请联系门店确认；不会覆盖旧记录。' })
       return
     }
-    if (previous && typeof previous === 'object' && previous.payload && !validCommandKey(previous.idempotencyKey)) {
-      this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '本次报名记录已过期，请重新填写后报名。' })
+    const attempts = storageObject(REGISTRATION_ATTEMPTS_KEY)
+    const previous = attempts[activity.publicId]
+    if (Object.prototype.hasOwnProperty.call(attempts, activity.publicId) && (!previous || typeof previous !== 'object' || !previous.payload || !validCommandKey(previous.idempotencyKey) || previous.ownerScope !== activityIdentityScope())) {
+      this.setData({ error: '有其他身份或旧版的待核对记录，请联系门店确认；不会读取或提交该记录。' })
       return
     }
     let attempt = previous && previous.payload ? previous : null
@@ -1209,14 +1219,13 @@ Page({
       return this.setData({ error: '请先恢复上一次提交内容并核对结果，当前不能切换为新购买。' })
     }
     if (attempt && !attempt.payload.purchaseKind && (attempt.payload.activityPackagePublicId || '') !== (chosenPackage?.publicId || '')) {
-      this.clearRegistrationAttempt(activity.publicId)
-      attempt = null
+      this.setData({ error: '原报名结果尚未确认，请先核对原套餐，不能用新套餐覆盖原请求。' })
+      return
     }
     if (attempt && !attempt.payload.purchaseKind && registrationAttemptExpired(attempt)) {
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (!current() || recovered) return
-      this.clearRegistrationAttempt(activity.publicId)
-      this.setData({ error: '上次未完成报名已超过 15 分钟，请重新填写手机号后报名。' })
+      this.setData({ error: '原报名超过安全重试时间且尚未查到，请联系门店核对；原请求保留，不新建报名。' })
       return
     }
     if (attempt && attempt.payload.contactSnapshot) {
@@ -1270,6 +1279,7 @@ Page({
         ...(payment.method ? { paymentMethod: payment.method } : {}),
       }
       attempt = {
+        ownerScope: activityIdentityScope(),
         idempotencyKey: commandKey('activity-register', `${activity.publicId}-${chosenPackage?.publicId || 'ticket'}`),
         payload: registrationAttemptPayload(payload),
         previousRegistrationPublicId: this.data.registration && this.data.registration.publicId,
@@ -1328,7 +1338,7 @@ Page({
       if (!current()) return
       const recovered = await this.recoverRegistration(activity.publicId, attempt)
       if (!current() || recovered) return
-      if (error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
+      if (!previous && error && error.code === 'WECHAT_IDENTITY_REQUIRED') {
         // Paid-activity identity is checked before any registration, capacity,
         // inventory, or payment write. Do not leave a misleading retry record.
         this.clearRegistrationAttempt(activity.publicId)
@@ -1339,7 +1349,7 @@ Page({
         return
       }
       const detail = registrationFailureMessage(error)
-      if (shouldClearRegistrationAttempt(error)) {
+      if (!previous && shouldClearRegistrationAttempt(error)) {
         this.clearRegistrationAttempt(activity.publicId)
         this.setData({ error: `${detail} 请按提示调整后重新报名。` })
         return
@@ -1445,9 +1455,9 @@ Page({
       const registrations = await getActivityRegistrations()
       if (generation !== (this.pageGeneration || 0)) return false
       const candidates = (registrations || []).filter((item) => item.activityPublicId === activityPublicId)
-      const found = attempt && attempt.payload && attempt.payload.purchaseKind
+      const found = attempt && validCommandKey(attempt.idempotencyKey)
         ? candidates.find((item) => item.registrationRequestIdempotencyKey === attempt.idempotencyKey)
-        : candidates.find((item) => !attempt || item.publicId !== attempt.previousRegistrationPublicId)
+        : null
       if (!found) return false
       if (attempt && attempt.previousRegistrationPublicId === found.publicId && found.status === 'cancelled') return false
       const registration = await this.readPaymentState(found)

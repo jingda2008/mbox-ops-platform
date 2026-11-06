@@ -9,6 +9,10 @@ const RESERVATION_COOKIE_KEY = 'mbox.http.cookie.reservation.v2'
 const GUEST_COOKIE_KEY = 'mbox.http.cookie.guest.v2'
 const DEVICE_KEY = 'mbox.device.key.v1'
 const WECHAT_TOKEN_KEY = 'mbox.wechat.identity.accessToken.v1'
+let credentialGeneration = 0
+function identityScope() {
+  return JSON.stringify([wx.getStorageSync('mbox.wechat.identity.principal.v1') || null, wx.getStorageSync('mbox.membership.loggedOut.v1') || null])
+}
 
 const COOKIE_STORAGE_KEYS = Object.freeze({
   [RESERVATION_COOKIE_NAME]: RESERVATION_COOKIE_KEY,
@@ -212,6 +216,7 @@ function request(path, options) {
   const config = getRuntimeConfig()
   const session = getTableSession()
   const settings = options || {}
+  const generation = credentialGeneration, identity = identityScope()
   // Every credentialed request captures the current table identity.  A guest
   // Set-Cookie can be returned by any authenticated route, not just the scan
   // endpoint, so protecting only callers that remembered to opt in leaves a
@@ -230,32 +235,39 @@ function request(path, options) {
       header: buildHeaders(path, settings.headers, settings),
       timeout: config.requestTimeoutMs,
       success(response) {
-        // An anonymous public preview must not turn a server misconfiguration
-        // into a newly persisted member or guest session on the device.
-        if (settings.credentialDomain !== 'none') {
-          const guestCookieScopeMatches = expectedTableScope === null
-            || tableRequestScope(getTableSession()) === expectedTableScope
-          rememberCookies(response.header, response.cookies, { allowGuest: guestCookieScopeMatches })
-        }
-        if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.data)
-        const body = response.data || {}
-        const detail = body.error || (response.statusCode === 429 && body.data && body.data.status === 'rate_limited' ? body.data : body)
-        const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
-        error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
-        error.statusCode = response.statusCode
-        attachErrorDetails(error, detail)
-        if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
-        // A rejected guest call is the first reliable evidence that this
-        // device's table credential has ended. Do not leave a stale local
-        // table binding to keep polling carts and service tasks as 5xx/401.
-        // Scope-check first so an old A response can never clear a newer B.
-        if (requestCredentialDomain(path) === 'guest'
-          && ['GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error.code)
-          && expectedTableScope !== null
-          && tableRequestScope(getTableSession()) === expectedTableScope) {
-          clearTableConnection()
-        }
-        reject(error)
+        try {
+          if (settings.credentialDomain !== 'none' && (generation !== credentialGeneration || identity !== identityScope()
+            || (settings.isCurrentIdentity && !settings.isCurrentIdentity()))) {
+            reject(Object.assign(new Error('登录身份已变化，已忽略旧请求结果，请核对当前状态。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' }))
+            return
+          }
+          // An anonymous public preview must not turn a server misconfiguration
+          // into a newly persisted member or guest session on the device.
+          if (settings.credentialDomain !== 'none') {
+            const guestCookieScopeMatches = expectedTableScope === null
+              || tableRequestScope(getTableSession()) === expectedTableScope
+            rememberCookies(response.header, response.cookies, { allowGuest: guestCookieScopeMatches })
+          }
+          if (response.statusCode >= 200 && response.statusCode < 300) return resolve(response.data)
+          const body = response.data || {}
+          const detail = body.error || (response.statusCode === 429 && body.data && body.data.status === 'rate_limited' ? body.data : body)
+          const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
+          error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
+          error.statusCode = response.statusCode
+          attachErrorDetails(error, detail)
+          if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
+          // A rejected guest call is the first reliable evidence that this
+          // device's table credential has ended. Do not leave a stale local
+          // table binding to keep polling carts and service tasks as 5xx/401.
+          // Scope-check first so an old A response can never clear a newer B.
+          if (requestCredentialDomain(path) === 'guest'
+            && ['GUEST_SESSION_INVALID', 'TABLE_SESSION_ENDED'].includes(error.code)
+            && expectedTableScope !== null
+            && tableRequestScope(getTableSession()) === expectedTableScope) {
+            clearTableConnection()
+          }
+          reject(error)
+        } catch (error) { reject(error) }
       },
       fail(error) {
         const requestError = new Error(error.errMsg || '网络连接失败')
@@ -274,11 +286,13 @@ function storeWechatIdentityToken(token) {
 }
 
 function clearWechatIdentityToken() {
+  credentialGeneration += 1
   wx.removeStorageSync(WECHAT_TOKEN_KEY)
   wx.removeStorageSync(RESERVATION_COOKIE_KEY)
 }
 
 function clearReservationCookie() {
+  credentialGeneration += 1
   wx.removeStorageSync(RESERVATION_COOKIE_KEY)
   wx.removeStorageSync(LEGACY_COOKIE_KEY)
 }

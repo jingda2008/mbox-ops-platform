@@ -35,7 +35,11 @@ test('unavailable identity remains optional and does not fabricate a binding', a
 })
 function apiFixture(identity = token) {
   const module={exports:{}}, storage=new Map(), requests=[]; let fail=true, clears=0
-  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx: {getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)}, require:name=> {
+  const wx={getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)}
+  const recovery={exports:{}}
+  vm.runInNewContext(read('miniprogram/utils/recoverable-command.js'),{module:recovery,wx,require:name=>name==='./id'?{randomId:()=> 'stable-attempt-id'}:name==='../config/index'?{getRuntimeConfig:()=>({apiBaseUrl:'https://audit.example.test',storeId:'audit'})}:{getTableSession:()=>({})}})
+  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx, require:name=> {
+    if(name==='./recoverable-command')return recovery.exports
     if(name==='./auth') return { obtainWechatIdentityForMembership:async()=>identity, ensureCustomerSession:async()=>{}, isCustomerSessionInvalid:()=>false, clearMembershipLoggedOut:()=>{clears++} }
     if(name==='./request') return { request:async(path,options)=> { requests.push({path,...options}); if(fail) throw Object.assign(Error('offline'),{code:'NETWORK_ERROR'}); return {data:{memberNo:'100001'}} } }
     if(name==='./id') return { randomId:()=> 'stable-attempt-id' }

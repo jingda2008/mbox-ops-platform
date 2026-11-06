@@ -91,17 +91,35 @@ async function getGuestSession() {
   return pending.promise
 }
 
+function publicIdentityScope() {
+  const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
+  return JSON.stringify([principal.principalId || principal.memberId || null,
+    wx.getStorageSync('mbox.public.identity.assertion') || null, wx.getStorageSync('mbox.membership.loggedOut.v1') || null])
+}
 async function publicRequest(path, options) {
+  const before = publicIdentityScope()
+  const bound = wx.getStorageSync('mbox.wechat.identity.principal.v1') || wx.getStorageSync('mbox.public.identity.assertion') || wx.getStorageSync('mbox.membership.loggedOut.v1')
   await ensureCustomerSession(false)
+  if (bound && before !== publicIdentityScope()) throw Object.assign(new Error('登录身份已变化，请重新核对当前状态。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
+  const identity = publicIdentityScope()
+  const assertIdentity = () => {
+    if (identity !== publicIdentityScope()) throw Object.assign(new Error('会员身份已变化，请重新读取当前状态；原请求结果仍需核对。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
+  }
   try {
-    return await request(path, Object.assign({ requireTableSession: false }, options || {}))
+    const response = await request(path, Object.assign({ requireTableSession: false }, options || {}))
+    assertIdentity()
+    return response
   } catch (error) {
+    assertIdentity()
     if (!isCustomerSessionInvalid(error)) throw error
     // 只续预约会话 cookie，不清除微信身份，避免现网微信身份接口缺失时把会员冲成访客。
     renewReservationSessionOnly()
     await ensureCustomerSession(true)
+    assertIdentity()
     try {
-      return await request(path, Object.assign({ requireTableSession: false }, options || {}))
+      const response = await request(path, Object.assign({ requireTableSession: false }, options || {}))
+      assertIdentity()
+      return response
     } catch (retryError) {
       if (isWechatIdentityUnavailable(retryError) || /请求的页面或接口不存在/.test(String(retryError && retryError.message || ''))) {
         const friendly = new Error('会员服务暂时连不上，请稍后重试；若刚授权手机号，可再试一次找回会员')
@@ -112,6 +130,13 @@ async function publicRequest(path, options) {
       throw retryError
     }
   }
+}
+
+async function recoverableMemberWrite(operation, path, method, data, legacyKeys, extra) {
+  await ensureCustomerSession(false)
+  return (await recoverableGuestCommand(operation, data, key => publicRequest(path, {
+    ...(extra || {}), method, headers: { ...((extra || {}).headers || {}), 'idempotency-key': key }, data,
+  }), { customerOnly: true, legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey })).data
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
@@ -159,10 +184,10 @@ async function recoverNotificationAuthorization(kind, path, input, legacyKey) {
   if (legacy && typeof legacy === 'object') {
     throw Object.assign(new Error('有旧版授权请求结果待核对，请先查看授权状态并联系工作人员核实，暂不重复提交'), { code: 'NOTIFICATION_LEGACY_ATTEMPT_REVIEW_REQUIRED', statusCode: 409 })
   }
-  return (await recoverableGuestCommand('wechat-authorization:' + kind, input, key => publicRequest(path, {
+  return (await recoverableGuestCommand('wechat-authorization:' + kind + ':' + (input.notificationType || input.reservationPublicId) + ':' + input.policyId, input, key => publicRequest(path, {
     method: 'POST', headers: { 'idempotency-key': key },
     data: Object.assign({}, input, { platformEventReference: input.platformEventReference || key }),
-  }), { customerOnly: true })).data
+  }), { customerOnly: true, legacyKeys: [legacyKey], legacyOperation: 'wechat-authorization:' + kind })).data
 }
 async function recordWechatNotificationAuthorization(input) {
   return recoverNotificationAuthorization('loyalty', '/api/public/mini/wechat-notification-authorizations', {
@@ -191,95 +216,30 @@ async function getProductRestrictions() {
   return (await publicRequest('/api/public/mini/product-restrictions')).data
 }
 async function withdrawProductRestriction(publicId, reason) {
-  return (await publicRequest(`/api/public/mini/product-restrictions/${encodeURIComponent(publicId)}/withdraw`, {
-    method: 'POST', headers: { 'idempotency-key': randomId(`product-restriction-withdraw-${publicId}`) },
-    data: { reason: reason || '顾客本人撤回长期商品限制' },
-  })).data
+  return recoverableMemberWrite('restriction-withdraw:' + publicId, `/api/public/mini/product-restrictions/${encodeURIComponent(publicId)}/withdraw`, 'POST', { reason: reason || '顾客本人撤回长期商品限制' })
 }
 async function getCustomerPreferenceFacts() {
   return (await publicRequest('/api/public/mini/preferences')).data
 }
 async function declareCustomerPreference(input) {
-  const payload = {
-    key: input.key,
-    value: String(input.value || '').trim(),
-    polarity: input.polarity,
-    ...(input.validUntil ? { validUntil: input.validUntil } : {}),
-  }
-  const storageKey = 'mbox.customer.preference.declare.v1'
-  const stored = wx.getStorageSync(storageKey)
-  const samePayload = stored && typeof stored === 'object'
-    && JSON.stringify(stored.payload) === JSON.stringify(payload)
-    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
-  const attempt = samePayload ? stored : {
-    payload, idempotencyKey: randomId('customer-preference-declare'),
-  }
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest('/api/public/mini/preferences', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  const data = { key: input.key, value: String(input.value || '').trim(), polarity: input.polarity,
+    ...(input.validUntil ? { validUntil: input.validUntil } : {}) }
+  return recoverableMemberWrite('preference-declare', '/api/public/mini/preferences', 'POST', data, ['mbox.customer.preference.declare.v1'])
 }
 async function withdrawCustomerPreferenceSource(publicId, reason) {
-  const payload = { reason: reason || '顾客本人在我的页面撤回偏好依据' }
-  const storageKey = `mbox.customer.preference.withdraw.${publicId}`
-  const stored = wx.getStorageSync(storageKey)
-  const samePayload = stored && typeof stored === 'object'
-    && stored.reason === payload.reason
-    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
-  const attempt = samePayload ? stored : {
-    reason: payload.reason, idempotencyKey: randomId(`customer-preference-withdraw-${publicId}`),
-  }
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest(`/api/public/mini/preferences/${encodeURIComponent(publicId)}/withdraw`, {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverableMemberWrite('preference-withdraw:' + publicId, `/api/public/mini/preferences/${encodeURIComponent(publicId)}/withdraw`, 'POST',
+    { reason: reason || '顾客本人在我的页面撤回偏好依据' }, [`mbox.customer.preference.withdraw.${publicId}`])
 }
 async function getRedemptionCatalog() { return (await publicRequest('/api/public/mini/redemptions/catalog')).data }
 async function getRedemptions() { return (await publicRequest('/api/public/mini/redemptions')).data }
 async function createRedemption(catalogItemPublicId) {
-  const storageKey = `mbox.redemption.attempt.${catalogItemPublicId}`
-  const idempotencyKey = wx.getStorageSync(storageKey) || randomId(`redemption-${catalogItemPublicId}`)
-  wx.setStorageSync(storageKey, idempotencyKey)
-  try {
-    const result = (await publicRequest('/api/public/mini/redemptions', {
-      method: 'POST', credentialDomain: 'reservation+guest',
-      headers: { 'idempotency-key': idempotencyKey }, data: { catalogItemPublicId },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  await ensureCustomerSession(false)
+  return (await recoverableGuestCommand('redemption-create', { catalogItemPublicId }, key => publicRequest('/api/public/mini/redemptions', {
+    method: 'POST', credentialDomain: 'reservation+guest', headers: { 'idempotency-key': key }, data: { catalogItemPublicId },
+  }), { legacyKeys: [`mbox.redemption.attempt.${catalogItemPublicId}`] })).data
 }
 async function cancelRedemption(redemptionPublicId, reason) {
-  const storageKey = `mbox.redemption.cancel.${redemptionPublicId}`
-  const idempotencyKey = wx.getStorageSync(storageKey) || randomId(`redemption-cancel-${redemptionPublicId}`)
-  wx.setStorageSync(storageKey, idempotencyKey)
-  try {
-    const result = (await publicRequest(`/api/public/mini/redemptions/${encodeURIComponent(redemptionPublicId)}/cancel`, {
-      method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { reason },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverableMemberWrite('redemption-cancel:' + redemptionPublicId, `/api/public/mini/redemptions/${encodeURIComponent(redemptionPublicId)}/cancel`, 'POST', { reason }, [`mbox.redemption.cancel.${redemptionPublicId}`])
 }
 async function getActivities() { return (await publicRequest('/api/public/mini/activities')).data }
 async function getActivity(activityPublicId) {
@@ -302,23 +262,8 @@ async function getActivityRegistrations() {
   return (await publicRequest('/api/public/mini/activity-registrations')).data
 }
 async function updateActivityRegistrationContact(registrationPublicId, contactValue) {
-  const payload = { contactType: 'phone', contactValue: String(contactValue || '').trim() }
-  const storageKey = `mbox.activity.contact.update.${registrationPublicId}`
-  const stored = wx.getStorageSync(storageKey)
-  const attempt = stored && typeof stored === 'object' && stored.contactValue === payload.contactValue
-    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
-    ? stored : { contactValue: payload.contactValue, idempotencyKey: randomId(`activity-contact-${registrationPublicId}`) }
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/contact`, {
-      method: 'PUT', headers: { 'idempotency-key': attempt.idempotencyKey }, data: payload,
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverableMemberWrite('activity-contact:' + registrationPublicId, `/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/contact`, 'PUT',
+    { contactType: 'phone', contactValue: String(contactValue || '').trim() }, [`mbox.activity.contact.update.${registrationPublicId}`])
 }
 async function getVerifiedPhones() {
   const data = (await publicRequest('/api/public/mini/membership/verified-phones')).data
@@ -342,134 +287,33 @@ async function getVerifiedPhones() {
   })
 }
 async function replaceVerifiedPhone(phoneAuthorizationCode) {
-  const storageKey = 'mbox.verified.phone.replace.v1'
-  const stored = wx.getStorageSync(storageKey)
-  const attempt = stored && typeof stored === 'object' && stored.phoneAuthorizationCode === phoneAuthorizationCode
-    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
-    ? stored : { phoneAuthorizationCode, idempotencyKey: randomId('verified-phone-replace') }
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const result = (await publicRequest('/api/public/mini/membership/verified-phones/replace', {
-      method: 'POST', headers: { 'idempotency-key': attempt.idempotencyKey },
-      data: { phoneAuthorizationCode: attempt.phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverableMemberWrite('phone-replace', '/api/public/mini/membership/verified-phones/replace', 'POST',
+    { phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' }, ['mbox.verified.phone.replace.v1'])
 }
 async function revokeVerifiedPhone(contactPublicId) {
-  const storageKey = `mbox.verified.phone.revoke.${contactPublicId}`
-  const idempotencyKey = wx.getStorageSync(storageKey) || randomId(`verified-phone-revoke-${contactPublicId}`)
-  wx.setStorageSync(storageKey, idempotencyKey)
-  try {
-    const result = (await publicRequest(`/api/public/mini/membership/verified-phones/${encodeURIComponent(contactPublicId)}/revoke`, {
-      method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: {},
-    })).data
-    wx.removeStorageSync(storageKey)
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    throw error
-  }
+  return recoverableMemberWrite('phone-revoke:' + contactPublicId, `/api/public/mini/membership/verified-phones/${encodeURIComponent(contactPublicId)}/revoke`, 'POST', {}, [`mbox.verified.phone.revoke.${contactPublicId}`])
 }
 async function enrollMembership(termsVersion, acknowledgementSource, phoneAuthorizationCode) {
-  const storageKey = 'mbox.membership.enroll.attempt.v1'
-  const payload = {
-    termsVersion: Number(termsVersion),
-    acknowledgementSource,
-    phoneAuthorizationCode,
-    phoneAuthorizationProvider: 'wechat',
-  }
-  const stored = wx.getStorageSync(storageKey)
-  const attempt = stored && typeof stored === 'object'
-    && stored.termsVersion === payload.termsVersion
-    && stored.acknowledgementSource === payload.acknowledgementSource
-    && stored.phoneAuthorizationCode === payload.phoneAuthorizationCode
-    && stored.phoneAuthorizationProvider === payload.phoneAuthorizationProvider
-    && typeof stored.idempotencyKey === 'string' && stored.idempotencyKey.length >= 8
-    ? stored : Object.assign({}, payload, { idempotencyKey: randomId('membership-enroll') })
-  wx.setStorageSync(storageKey, attempt)
-  try {
-    const wechatIdentityToken = await obtainWechatIdentityForMembership()
-    const headers = { 'idempotency-key': attempt.idempotencyKey }
-    if (wechatIdentityToken) headers['x-mbox-wechat-identity'] = wechatIdentityToken
-    const result = (await publicRequest('/api/public/mini/membership/enroll-with-phone', {
-      method: 'POST', headers, data: payload,
-    })).data
-    wx.removeStorageSync(storageKey)
-    // 入会已落在当前预约会话顾客上。只清登出态，不要强制切微信身份：
-    // 清会话再升级失败会抛成「登录暂时没有完成」；升级成功也可能落到未绑手机号的微信顾客，会员状态丢失。
-    clearMembershipLoggedOut()
-    return result
-  } catch (error) {
-    if (error && error.code !== 'NETWORK_ERROR') wx.removeStorageSync(storageKey)
-    if (error && /WECHAT_PHONE_|ALIPAY_PHONE_/.test(String(error.code || ''))) {
-      wx.removeStorageSync(storageKey)
-    }
-    throw error
-  }
+  const token = await obtainWechatIdentityForMembership()
+  const result = await recoverableMemberWrite('membership-enroll', '/api/public/mini/membership/enroll-with-phone', 'POST',
+    { termsVersion: Number(termsVersion), acknowledgementSource, phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
+    ['mbox.membership.enroll.attempt.v1'], { headers: token ? { 'x-mbox-wechat-identity': token } : {} })
+  clearMembershipLoggedOut()
+  return result
 }
-
-const MEMBERSHIP_RECOVERY_ATTEMPT_KEY = 'mbox.membership.recovery.attempt.v1'
-
-function membershipRecoveryAttempt() {
-  const stored = wx.getStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
-  if (stored && typeof stored === 'object'
-    && typeof stored.startKey === 'string' && stored.startKey.length >= 8
-    && typeof stored.verifyKey === 'string' && stored.verifyKey.length >= 8) return stored
-  const created = {
-    startKey: randomId('membership-recovery-start'),
-    verifyKey: randomId('membership-recovery-verify'),
-  }
-  wx.setStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY, created)
-  return created
-}
-
 async function startMembershipRecovery(idempotencyKey) {
-  const attempt = membershipRecoveryAttempt()
-  const requestKey = idempotencyKey || attempt.startKey
-  try {
-    const result = (await publicRequest('/api/public/mini/membership/recovery/start', {
-      method: 'POST', headers: { 'idempotency-key': requestKey }, data: {},
-    })).data
-    if (!idempotencyKey) wx.setStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY, Object.assign({}, attempt, {
-      startKey: requestKey, challengePublicId: result.challengePublicId,
-    }))
-    return result
-  } catch (error) {
-    if (!idempotencyKey && error && error.code !== 'NETWORK_ERROR') {
-      wx.removeStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
-    }
-    throw error
-  }
+  return recoverableMemberWrite('membership-recovery-start', '/api/public/mini/membership/recovery/start', 'POST', {},
+    ['mbox.membership.recovery.attempt.v1'], { initialKey: idempotencyKey })
 }
 async function verifyMembershipRecovery(challengePublicId, phoneAuthorizationCode, idempotencyKey) {
-  const attempt = membershipRecoveryAttempt()
-  const requestKey = idempotencyKey || attempt.verifyKey
-  try {
-    const result = (await publicRequest('/api/public/mini/membership/recovery/verify', {
-      method: 'POST', headers: { 'idempotency-key': requestKey },
-      data: { challengePublicId, phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
-    })).data
-    if (!idempotencyKey) wx.removeStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
-    // 找回已落在当前预约会话顾客上；同样不要强制切微信身份，避免成功被后续会话升级冲掉。
-    clearMembershipLoggedOut()
-    return result
-  } catch (error) {
-    if (!idempotencyKey && error && error.code !== 'NETWORK_ERROR') {
-      wx.removeStorageSync(MEMBERSHIP_RECOVERY_ATTEMPT_KEY)
-    }
-    throw error
-  }
+  const result = await recoverableMemberWrite('membership-recovery-verify', '/api/public/mini/membership/recovery/verify', 'POST',
+    { challengePublicId, phoneAuthorizationCode, phoneAuthorizationProvider: 'wechat' },
+    ['mbox.membership.recovery.attempt.v1'], { initialKey: idempotencyKey })
+  clearMembershipLoggedOut()
+  return result
 }
 async function updatePreferences(preferences, displayName, dietaryConsent) {
-  return (await publicRequest('/api/public/mini/wechat-preferences', {
-    method: 'PATCH', headers: { 'idempotency-key': randomId('member-preferences') },
-    data: { preferences, displayName: displayName || null, dietaryConsent },
-  })).data
+  return recoverableMemberWrite('profile-preferences', '/api/public/mini/wechat-preferences', 'PATCH', { preferences, displayName: displayName || null, dietaryConsent })
 }
 async function registerActivity(
   activityPublicId,
@@ -484,9 +328,7 @@ async function registerActivity(
   idempotencyKey,
   purchase,
 ) {
-  return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}/registrations`, {
-    method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('activity-register') },
-    data: Object.assign(
+  const data = Object.assign(
       {
         activityPackagePublicId: activityPackagePublicId || null,
         partySize,
@@ -505,8 +347,8 @@ async function registerActivity(
         ...(Array.isArray(purchase.selections) ? { selections: purchase.selections } : {}),
         ...(purchase.note ? { note: purchase.note } : {}),
       } : {},
-    ),
-  })).data
+    )
+  return recoverableMemberWrite('activity-register:' + activityPublicId, `/api/public/mini/activities/${encodeURIComponent(activityPublicId)}/registrations`, 'POST', data, [], { initialKey: idempotencyKey })
 }
 async function updateActivityRegistrationPartySize(registrationPublicId, partySize, idempotencyKey) {
   return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/party-size`, {
@@ -575,28 +417,17 @@ async function recoverCustomerReservation() {
 }
 
 async function cancelCustomerReservation(publicId, idempotencyKey) {
-  return (await publicRequest(`/api/public/reservations/${encodeURIComponent(publicId)}`, {
-    method: 'DELETE',
-    data: {},
-    headers: { 'idempotency-key': idempotencyKey || randomId(`reservation-cancel-${publicId}`) },
-  })).data
+  return recoverableMemberWrite('reservation-cancel:' + publicId, `/api/public/reservations/${encodeURIComponent(publicId)}`, 'DELETE', {}, [], { initialKey: idempotencyKey })
 }
-
 async function getReservationPerformanceImpacts() {
   return (await publicRequest('/api/public/reservation/performance-impacts')).data
 }
 
 async function acknowledgeReservationPerformanceImpact(impactPublicId, decision, selectedScheduleId, idempotencyKey) {
-  return (await publicRequest(
-    `/api/public/reservation/performance-impacts/${encodeURIComponent(impactPublicId)}/acknowledgements`,
-    {
-      method: 'POST',
-      headers: { 'idempotency-key': idempotencyKey || randomId(`reservation-performance-${decision}`) },
-      data: { decision, selectedScheduleId: selectedScheduleId || null },
-    },
-  )).data
+  return recoverableMemberWrite('performance-acknowledge:' + impactPublicId,
+    `/api/public/reservation/performance-impacts/${encodeURIComponent(impactPublicId)}/acknowledgements`, 'POST',
+    { decision, selectedScheduleId: selectedScheduleId || null }, [], { initialKey: idempotencyKey })
 }
-
 async function getReservationPerformanceNotificationAuthorizations() {
   return (await publicRequest('/api/public/reservation/performance-notification-authorizations')).data
 }
@@ -968,8 +799,7 @@ async function getMarketingPreferences() {
   return (await publicRequest('/api/public/mini/marketing-preferences')).data
 }
 async function updateMarketingPreferences(action, data) {
-  if (!['choices', 'stop-all', 'withdraw-channel'].includes(action)) throw new Error('不支持的联系偏好操作')
-  return (await recoverableGuestCommand('marketing-preferences:' + action, data, key => publicRequest('/api/public/mini/marketing-preferences/' + action, { method: 'POST', headers: { 'idempotency-key': key }, data }))).data
+  return recoverableMemberWrite('marketing-preferences:' + action, '/api/public/mini/marketing-preferences/' + action, 'POST', data)
 }
 async function getMemberGiftJobs(cursor) {
   return (await publicRequest('/api/public/mini/member-gift-jobs' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))).data
@@ -982,9 +812,7 @@ async function submitMemberCardAction(action, id, input) {
   const suffix = action === 'apply' ? '/applications' : action === 'withdraw-application' ? '/applications/' + encodeURIComponent(id) + '/withdraw' : action === 'withdraw-card' ? '/' + encodeURIComponent(id) + '/withdraw' : null
   if (!suffix) throw new Error('不支持的卡片操作')
   const data = input || {}
-  return (await recoverableGuestCommand('member-card:' + action + ':' + (id || ''), data, key => publicRequest('/api/public/mini/member-cards' + suffix, {
-    method: 'POST', headers: { 'idempotency-key': key }, data,
-  }))).data
+  return recoverableMemberWrite('member-card:' + action + ':' + (id || ''), '/api/public/mini/member-cards' + suffix, 'POST', data)
 }
 async function reserveCustomerBenefit(benefitId, quantity) {
   return (await recoverableGuestCommand(`benefit:${benefitId}`, { quantity: quantity || 1 }, (idempotencyKey) => request(`/api/guest/customer/benefits/${encodeURIComponent(benefitId)}/reservations`, {
@@ -992,9 +820,9 @@ async function reserveCustomerBenefit(benefitId, quantity) {
   }))).data
 }
 async function claimAnnualDailySnack() {
-  return (await request('/api/guest/customer/annual-daily-snacks/claim', {
-    method: 'POST', headers: { 'idempotency-key': randomId('annual-daily-snack') }, data: {},
-  })).data
+  return (await recoverableGuestCommand('annual-daily-snack', {}, key => request('/api/guest/customer/annual-daily-snacks/claim', {
+    method: 'POST', headers: { 'idempotency-key': key }, data: {},
+  }))).data
 }
 async function cancelActivityRegistration(registrationPublicId, reason, idempotencyKey) {
   return (await publicRequest(`/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/cancel`, {

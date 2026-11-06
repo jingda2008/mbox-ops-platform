@@ -409,6 +409,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     enrollMembership: async () => ({}),
   }
   const require = (path) => {
+    if (path === '../../config/index') return { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) }
     if (path === '../../utils/api') return api
     if (path === '../../utils/auth') return { ensureCustomerSession: async () => ({}) }
     if (path === '../../utils/id') return { randomId: (prefix) => `${prefix}-unit-test-key-0001` }

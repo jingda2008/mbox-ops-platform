@@ -2414,9 +2414,11 @@ Page({
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (this.data.busy && !allowBusy) return
     if (!previousAttempt && (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked)) return
+    const recovering = Boolean(previousAttempt && !previousAttempt.freshlyConfirmed)
     const attempt = previousAttempt || Object.assign({}, reviewedDraft || this.checkoutDraft(offerPublicId), {
       idempotencyKey: randomId('guest-order'), createdAt: new Date().toISOString(),
     })
+    delete attempt.freshlyConfirmed
     if (attempt.tableScope !== tableSessionCacheScope()) return
     const operation = this.checkoutOperation = {}
     this.setData({ busy: true })
@@ -2495,6 +2497,11 @@ Page({
       } catch (error) {
         if (!submitMeasured) this.recordOrderTiming('submit', submitStartedAt, false)
         if (!this.isCurrentTableRequest(tableRequest)) return
+        if (recovering) {
+          this.setData({ checkoutLocked: true,
+            error: '原订单结果尚未确认，原请求已保留。请查看桌账或联系服务人员核对，不要重新提交订单。' })
+          return
+        }
         if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
           wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
           // A definite conflict did not submit this attempt. Release its lock
@@ -2573,7 +2580,7 @@ Page({
       return
     }
     const confirmedAttempt = Object.assign({}, attempt, {
-      idempotencyKey: randomId('guest-order'), confirmedDuplicateOrderId: conflictingOrderId,
+      idempotencyKey: randomId('guest-order'), confirmedDuplicateOrderId: conflictingOrderId, freshlyConfirmed: true,
     })
     await this.submitOrder(attempt.offerPublicId || null, true, confirmedAttempt, reviewedRequest)
   },

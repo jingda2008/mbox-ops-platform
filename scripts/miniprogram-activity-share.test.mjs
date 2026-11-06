@@ -62,6 +62,7 @@ async function loadDetailPage(state) {
   const context = {
     module: { exports: {} }, exports: {},
     require(specifier) {
+      if (specifier === '../../config/index') return { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) }
       if (specifier === '../../utils/api') return api
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-contract` }
       if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }

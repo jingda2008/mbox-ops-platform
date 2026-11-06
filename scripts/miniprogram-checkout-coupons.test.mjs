@@ -205,7 +205,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     const runtime = { getStorageSync: key => storage.get(key), setStorageSync: (key, value) => storage.set(key, value), removeStorageSync: key => storage.delete(key) }
     async function load() {
       const module = { exports: {} }, recovery = (await readFile(new URL(`../${platform}/utils/recoverable-command.js`, import.meta.url), 'utf8')).replace(/^export \{ recoverableGuestCommand \}/m, 'module.exports = { recoverableGuestCommand }')
-      vm.runInNewContext(recovery, { module, wx: runtime, require: path => path.endsWith('/platform') ? runtime : path === './id' ? { randomId: () => `key-${++counter}` } : { getTableSession: () => ({ cartScope: 'opaque-table' }) } })
+      vm.runInNewContext(recovery, { module, wx: runtime, require: path => path === '../config/index' ? { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) } : path.endsWith('/platform') ? runtime : path === './id' ? { randomId: () => `audit-command-key-${++counter}` } : { getTableSession: () => ({ cartScope: 'opaque-table' }) } })
       return vm.runInNewContext(`(${body})`, { recoverableGuestCommand: module.exports.recoverableGuestCommand,
         request: async (_url, request) => { calls.push(request); if (fail) throw new Error('lost'); return { data: { issuedCouponPortionId: 'same-original' } } } })
     }

@@ -3,11 +3,12 @@ import { resolve, dirname } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 
+let harnessSequence = 0
 export function liveMiniHarness(platform, respond, options = {}) {
   const root = resolve(new URL('..', import.meta.url).pathname, platform)
   const storage = options.storage || new Map()
   if (!storage.has('mbox.http.cookie.reservation.v2')) storage.set('mbox.http.cookie.reservation.v2', 'mbox_reservation_session=customer-a')
-  let sequence = 0
+  let sequence = ++harnessSequence * 100000
   const calls = [], modals = [], nativePayments = []
   const config = { apiBaseUrl: 'https://audit.example.test', storeId: 'audit-store', requestTimeoutMs: 1000, isDevelopment: true }
   const table = { tableCode: 'A1', tableToken: 'table-a', cartScope: 'cart-a' }
@@ -25,6 +26,7 @@ export function liveMiniHarness(platform, respond, options = {}) {
   }
   const runtime = {
     getStorageSync: key => storage.get(key),
+    getStorageInfoSync: () => ({ keys: [...storage.keys()] }),
     setStorageSync: (key, value) => { if (state.storageFailure) throw Error('disk full'); storage.set(key, structuredClone(value)) },
     removeStorageSync: key => storage.delete(key), request: nativeRequest,
     showModal: input => { modals.push(input); input.success({ confirm: state.modalConfirm }) },
@@ -44,7 +46,7 @@ export function liveMiniHarness(platform, respond, options = {}) {
     if (file === root + '/config/index.js') return { getRuntimeConfig: () => config }
     if (file === root + '/utils/auth.js') return { ensureCustomerSession: async () => true, ensureWechatIdentity: async () => true,
       isCustomerSessionInvalid: e => e?.statusCode === 401, isWechatIdentityUnavailable: () => false, isAlipayIdentityUnavailable: () => false,
-      renewReservationSessionOnly() {}, isMembershipLoggedOut: () => false }
+      renewReservationSessionOnly() {}, isMembershipLoggedOut: () => false, obtainWechatIdentityForMembership: async () => null, clearMembershipLoggedOut() {} }
     if (file === root + '/utils/id.js') return { randomId: prefix => `${prefix}-audit-${++sequence}-0123456789` }
     if (file === root + '/utils/session.js') return { getTableSession: () => table, tableSessionCacheScope: () => 'table-one', rememberTableConnection() {}, clearTableConnection() {} }
     const module = { exports: {} }; modules.set(file, module)

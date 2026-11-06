@@ -610,8 +610,6 @@ Page({
       this.invalidateMemberLoad()
       clearMemberLocalCache()
       this.pendingMembershipAction = ''
-      wx.removeStorageSync('mbox.membership.enroll.attempt.v1')
-      wx.removeStorageSync('mbox.membership.recovery.attempt.v1')
       // 进入显式退出态（匿名浏览），在再次授权手机号前不要用微信身份自动拉回会员。
       await restartAnonymousCustomerSession()
       this.setData({

@@ -261,7 +261,8 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
       assert.equal(calls.length, 2)
       assert.deepEqual(calls[1], calls[0])
       assert.equal(page.data.busy, false)
-      assert.equal(page.data.checkoutLocked, false)
+      assert.equal(page.data.checkoutLocked, platform === 'miniprogram')
+      if (platform === 'miniprogram') assert.equal(state.storage.get(checkoutKey).idempotencyKey, original.idempotencyKey)
     })
   }
 
@@ -409,6 +410,16 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     await page.loadData()
     page.setData({ selectedPublicIds: ['new-order'] })
     const current = page.paySelectedOrders()
+    if (platform === 'miniprogram') {
+      await current
+      assert.equal(calls, 1)
+      const key = 'mbox.table-batch-attempt:' + session.tableSessionCacheScope()
+      const original = state.storage.get(key)
+      old.resolve({ status: 'resolved' }); await pending
+      assert.equal(state.storage.get(key), original)
+      assert.equal(page.data.payingBatch, false)
+      return
+    }
     assert.equal(calls, 2)
     const key = 'mbox.table-batch-attempt:' + session.tableSessionCacheScope()
     const attempt = state.storage.get(key)

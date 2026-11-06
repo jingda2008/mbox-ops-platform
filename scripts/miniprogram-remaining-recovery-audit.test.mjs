@@ -156,3 +156,11 @@ test('late prepayment terminal receipt cannot delete a newer pending intent',asy
  const run=p.onPrepayTable();await tick();const key='mbox.table-prepayment.v1:table-one',newer={...f.storage.get(key),key:'newer-confirmed-intent'};f.storage.set(key,newer)
  gate.resolve();await run;assert.deepEqual(f.storage.get(key),newer);assert.equal(p.data.success,'')
 })
+for(const boundary of ['hidden','identity','unchanged'])test(`activity forced identity refresh ${boundary} cannot restart a stale payment`,async()=>{
+ const gate=deferred(),f=live();let payments=0
+ const p=f.page('community-detail',['refreshWechatIdentityAndRetry'],{ensureCustomerSession:()=>gate.promise,activityIdentityScope:()=>JSON.stringify(f.storage.get(principal))})
+ p.data={busy:false,wechatIdentityRefreshRequired:true,registration:{publicId:'registration-a',canStartPayment:true}};p.pageVisible=true;p.startPayment=async()=>{payments++}
+ const run=p.refreshWechatIdentityAndRetry();await tick()
+ if(boundary==='hidden'){p.pageVisible=false;p.pageGeneration=1}if(boundary==='identity')f.storage.set(principal,{principalId:'member-b'})
+ gate.resolve();await run;assert.equal(payments,boundary==='unchanged'?1:0);assert.equal(p.data.busy,false)
+})

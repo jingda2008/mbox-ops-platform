@@ -1538,6 +1538,7 @@ Page({
     if (!registration || !registration.canStartPayment || this.data.busy) return
     const operation = this.registrationOperation(registration)
     const currentScope = operation.current
+    if (!currentScope()) return
     this.setData({ busy: true, error: '', success: '' })
     try {
       const stored = commandStorage(PAYMENT_ACTION_ATTEMPTS_KEY)
@@ -1598,14 +1599,20 @@ Page({
 
   async refreshWechatIdentityAndRetry() {
     if (this.data.busy || !this.data.wechatIdentityRefreshRequired) return
+    const generation = this.pageGeneration || 0, identity = activityIdentityScope()
+    const registrationId = this.data.registration && this.data.registration.publicId
+    const current = () => !this.pageUnloaded && this.pageVisible !== false && generation === (this.pageGeneration || 0)
+      && identity === activityIdentityScope() && registrationId === (this.data.registration && this.data.registration.publicId)
+    if (!current()) return
     const resumePayment = Boolean(this.data.registration && this.data.registration.canStartPayment)
     this.setData({ busy: true, error: '', success: '' })
     try {
       // `true` deliberately bypasses the locally cached identity expiry, which
       // makes this a real wx.login recovery step instead of a cosmetic retry.
       await ensureCustomerSession(true)
+      if (!current()) return
     } catch (error) {
-      this.setData({ error: customerErrorMessage(error, '微信身份暂时无法刷新，请稍后再试。') })
+      if (current()) this.setData({ error: customerErrorMessage(error, '微信身份暂时无法刷新，请稍后再试。') })
       return
     } finally {
       this.setData({ busy: false })

@@ -149,3 +149,10 @@ for(const resolution of ['confirmed','unknown','different-payment'])test(`activi
  const key='mbox.community.payment.actions.v1';f.state.storage.set(key,{'registration-a':{idempotencyKey:'original-payment-key',paymentPublicId:'payment-a',createdAt:new Date().toISOString()}})
  await p.refreshPaymentState();assert.equal(Boolean(f.state.storage.get(key)['registration-a']),resolution!=='confirmed')
 })
+
+test('late prepayment terminal receipt cannot delete a newer pending intent',async()=>{
+ const gate=deferred(),f=live(async()=>{await gate.promise;return {data:{data:{status:'resolved',terminalPaymentStatus:'closed'}}}}),p=f.page('order',['onPrepayTable'],{commandIdentityScope:()=>f.load(f.root+'/utils/recoverable-command.js').commandIdentityScope(),isPresentableWechatJsapiAction:()=>false,isWechatCancellation:()=>false})
+ p.data={prepayment:{},prepaymentConsent:true,prepaymentAmount:'10'};p.currentTableRequest=()=>({});p.isCurrentTableRequest=()=>true;p.refreshSharedCart=async()=>{}
+ const run=p.onPrepayTable();await tick();const key='mbox.table-prepayment.v1:table-one',newer={...f.storage.get(key),key:'newer-confirmed-intent'};f.storage.set(key,newer)
+ gate.resolve();await run;assert.deepEqual(f.storage.get(key),newer);assert.equal(p.data.success,'')
+})

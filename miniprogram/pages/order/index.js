@@ -2623,14 +2623,18 @@ Page({
       const saved = wx.getStorageSync(storageKey)
       if (!saved || saved.key !== attempt.key || saved.amount !== attempt.amount || saved.ownerScope !== ownerScope || saved.createdAt !== attempt.createdAt) throw new Error('原预付款记录无法可靠保存，本次没有提交，请重试')
       const current = () => this.isCurrentTableRequest(guard) && commandIdentityScope() === ownerScope
+      const ownsAttempt = () => {
+        const latest = wx.getStorageSync(storageKey)
+        return latest && latest.key === attempt.key && latest.amount === attempt.amount && latest.ownerScope === ownerScope
+      }
       const action = await prepayTable(attempt.amount, attempt.key)
-      if (!current()) return
+      if (!current() || !ownsAttempt()) return
       if (action && action.status === 'resolved' && ['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed', 'cancelled'].includes(action.terminalPaymentStatus)) {
         wx.removeStorageSync(storageKey)
         this.setData({ success: ['succeeded','partially_refunded','refunded'].includes(action.terminalPaymentStatus) ? '原预付款已确认，请查看最新余额' : '原付款已结束，本次未新增收款，请重新填写金额' })
       } else if (isPresentableWechatJsapiAction(action)) {
         await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
-        if (!current()) return
+        if (!current() || !ownsAttempt()) return
         try { await queryPrepayment(action.paymentId) } catch (_) { /* Callback and original payment query remain authoritative. */ }
         if (current()) this.setData({ success: '已提交付款，请查看最新余额；未确认时继续核对原付款，请勿重复付款' })
       } else {

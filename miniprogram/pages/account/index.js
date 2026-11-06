@@ -1,3 +1,4 @@
+const { beginMemberPage } = require('../../utils/member-pagination')
 const {isPresentableWechatJsapiAction}=require('../../utils/wechat-payment')
 const { getTableOrders, getCustomerOrderHistory, payTableOrders, abandonGuestCheckout } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
@@ -169,6 +170,8 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     const paymentScope = tableSessionCacheScope(session)
+    const batchKey = 'mbox.table-batch-attempt:' + paymentScope
+    const batchAtRead = this.historyMode ? null : wx.getStorageSync(batchKey)
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
     if (scopeChanged) this.batchPaymentOperation = null
@@ -178,10 +181,20 @@ Page({
     }, scopeChanged ? {
       orders: [], outstandingText: '¥0.00', settlementReviewCount: 0, busyOrderId: '',
       payingBatch: false, selectedPublicIds: [], selectedTotalText: '¥0.00',
-    } : {}, preserveMessage ? {} : { success: '' }))
+    } : {}, this.historyMode && !before ? { orders: [], hasMoreHistory: false } : {}, preserveMessage ? {} : { success: '' }))
     try {
+      const acceptPage = this.historyMode ? beginMemberPage(this, 'history', before) : null
       const rawOrders = await (this.historyMode ? getCustomerOrderHistory(before) : getTableOrders())
       if (!this.isCurrentTableRequest(request)) return
+      if (acceptPage) acceptPage(rawOrders.length === 30 ? rawOrders[rawOrders.length - 1].publicId : null)
+      // Confirm every original receivable from this guarded server read before
+      // releasing an unknown batch, so a paid batch cannot block later orders.
+      if (batchAtRead && Array.isArray(batchAtRead.ids) && batchAtRead.ids.length > 0
+        && batchAtRead.ids.every(id => (rawOrders || []).some(order => order.publicId === id
+          && order.payableAmountMinor === 0 && order.paymentAccess === 'not_required'))) {
+        const currentBatch = wx.getStorageSync(batchKey)
+        if (currentBatch && currentBatch.key === batchAtRead.key) wx.removeStorageSync(batchKey)
+      }
       const storedAbandonment = this.historyMode ? null : wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
       const storedPending = this.historyMode ? null : this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
@@ -241,6 +254,7 @@ Page({
       }
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
+        if (error.memberPageOwnerChanged) this.setData({ orders: [], hasMoreHistory: false })
         this.setData({ loading: false, error: customerErrorMessage(error, '桌账载入失败') })
       }
     }
@@ -258,7 +272,11 @@ Page({
     const scope=tableSessionCacheScope(),ids=this.data.selectedPublicIds.slice().sort()
     const storageKey='mbox.table-batch-attempt:'+scope
     let attempt=wx.getStorageSync(storageKey)
-    if(!attempt||JSON.stringify(attempt.ids)!==JSON.stringify(ids))attempt={ids,key:randomId('table-batch')}
+    if(attempt && (!Array.isArray(attempt.ids) || typeof attempt.key !== 'string' || attempt.key.length < 8 || JSON.stringify(attempt.ids)!==JSON.stringify(ids))){
+      this.setData({error:'原付款结果尚未确认，请先选择原订单核对或联系服务人员；不能覆盖原付款请求。'})
+      return
+    }
+    if(!attempt)attempt={ids,key:randomId('table-batch')}
     wx.setStorageSync(storageKey,attempt)
     const operation = this.batchPaymentOperation = {}
     const ownsOperation = () => this.batchPaymentOperation === operation && scope === tableSessionCacheScope()
@@ -266,9 +284,9 @@ Page({
     try{
       const action=await payTableOrders(ids,attempt.key)
       if(!ownsOperation())return
-      // A received action completes this request. A later deliberate payment uses a new attempt.
-      wx.removeStorageSync(storageKey)
+      // Only an authoritative resolved payment ends the recovery journal.
       if(action && action.status==='resolved'){
+        wx.removeStorageSync(storageKey)
         this.setData({selectedPublicIds:[],selectedTotalText:money(0),success:'已恢复原付款结果，请核对最新桌账。'})
         try { await this.loadData(true) } catch (_error) {
           if(ownsOperation())this.setData({error:'原付款结果已找到，最新桌账暂未读到，请刷新核对。'})

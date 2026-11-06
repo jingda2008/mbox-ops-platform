@@ -11,12 +11,19 @@ const WECHAT_PRINCIPAL_KEY = 'mbox.wechat.identity.principal.v1'
 const MEMBER_LOGGED_OUT_KEY = 'mbox.membership.loggedOut.v1'
 let inFlightSession = null
 let inFlightIdentity = null
+let identityGeneration = 0
+function assertIdentityGeneration(generation) {
+  if (identityGeneration !== generation) throw Object.assign(new Error('登录身份已变化，请重新确认本人身份。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
+}
 
 function isMembershipLoggedOut() {
   return wx.getStorageSync(MEMBER_LOGGED_OUT_KEY) === '1'
 }
 
 function markMembershipLoggedOut() {
+  identityGeneration += 1
+  inFlightIdentity = null
+  inFlightSession = null
   wx.setStorageSync(MEMBER_LOGGED_OUT_KEY, '1')
 }
 
@@ -73,6 +80,7 @@ function isWechatIdentityUnavailable(error) {
 }
 
 async function authenticateWechat(config) {
+  const generation = identityGeneration
   assertWechatIdentityConfig(config)
   try {
     const challengeAttemptId = randomId('wechat-challenge')
@@ -86,6 +94,7 @@ async function authenticateWechat(config) {
         idempotencyKey: challengeAttemptId,
       },
     }), wxLogin()])
+    assertIdentityGeneration(generation)
     const authenticated = await request('/api/wechat/code-authentication', {
       method: 'POST',
       requireTableSession: false,
@@ -99,6 +108,7 @@ async function authenticateWechat(config) {
         idempotencyKey: randomId('wechat-authentication'),
       },
     })
+    assertIdentityGeneration(generation)
     storeWechatIdentityToken(authenticated.accessToken)
     wx.setStorageSync(WECHAT_EXPIRY_KEY, authenticated.expiresAt || '')
     wx.setStorageSync(WECHAT_PRINCIPAL_KEY, authenticated.principal || null)
@@ -142,12 +152,15 @@ async function obtainWechatIdentityForMembership() {
     }
     return await authenticateWechat(config)
   } catch (_error) {
+    if (_error && _error.code === 'COMMAND_RECOVERY_SCOPE_CHANGED') throw _error
     return null
   }
 }
 
 async function issueReservationSession(provider, providerAssertion) {
+  const generation = identityGeneration
   const response = await request('/api/public/reservation/session', {
+    isCurrentIdentity: () => identityGeneration === generation,
     method: 'POST',
     requireTableSession: false,
     headers: { 'idempotency-key': randomId('public-session') },
@@ -157,12 +170,14 @@ async function issueReservationSession(provider, providerAssertion) {
       deviceFingerprint: deviceKey(),
     },
   })
+  assertIdentityGeneration(generation)
   const data = response.data || response
   wx.setStorageSync(EXPIRY_KEY, data.expiresAt || '')
   return true
 }
 
 async function openReservationSession(force) {
+  const generation = identityGeneration
   const config = getRuntimeConfig()
   const expiry = Date.parse(wx.getStorageSync(EXPIRY_KEY) || '')
   if (!force && expiry > Date.now() + 60_000) return true
@@ -178,6 +193,7 @@ async function openReservationSession(force) {
     throw new Error('正式小程序尚未启用微信身份，已停止匿名访问')
   }
 
+  assertIdentityGeneration(generation)
   return issueReservationSession(provider, providerAssertion)
 }
 
@@ -192,6 +208,9 @@ function ensureCustomerSession(force) {
 }
 
 function clearCustomerSession() {
+  identityGeneration += 1
+  inFlightIdentity = null
+  inFlightSession = null
   wx.removeStorageSync(EXPIRY_KEY)
   clearReservationCookie()
   wx.removeStorageSync(WECHAT_EXPIRY_KEY)

@@ -1,3 +1,4 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -35,7 +36,11 @@ test('unavailable identity remains optional and does not fabricate a binding', a
 })
 function apiFixture(identity = token) {
   const module={exports:{}}, storage=new Map(), requests=[]; let fail=true, clears=0
-  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx: {getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)}, require:name=> {
+  const wx={getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)}
+  const recovery={exports:{}}
+  vm.runInNewContext(read('miniprogram/utils/recoverable-command.js'),{module:recovery,wx,require:name=>name==='./id'?{randomId:()=> 'stable-attempt-id'}:name==='../config/index'?{getRuntimeConfig:()=>({apiBaseUrl:'https://audit.example.test',storeId:'audit'})}:{getTableSession:()=>({})}})
+  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx, require:name=> {
+    if(name==='./recoverable-command')return recovery.exports
     if(name==='./auth') return { obtainWechatIdentityForMembership:async()=>identity, ensureCustomerSession:async()=>{}, isCustomerSessionInvalid:()=>false, clearMembershipLoggedOut:()=>{clears++} }
     if(name==='./request') return { request:async(path,options)=> { requests.push({path,...options}); if(fail) throw Object.assign(Error('offline'),{code:'NETWORK_ERROR'}); return {data:{memberNo:'100001'}} } }
     if(name==='./id') return { randomId:()=> 'stable-attempt-id' }
@@ -56,7 +61,7 @@ test('optional identity failure sends no invented identity header', async()=>{
 const option = {apiKind:'loyalty',notificationType:'loyalty_points_expiring',policyId:'policy',policyVersion:2,templateId:'expiry',authorizationVersion:3,usesRemaining:0}
 function subscriptionFixture(record, result='accept') {
   const module={exports:{}}, calls=[]
-  vm.runInNewContext(read('miniprogram/utils/wechat-subscription.js'), {module, console:{error:()=>{}}, require:()=>({recordWechatNotificationAuthorization:record}), wx:{requestSubscribeMessage:args=>{calls.push(args.tmplIds);args.success({expiry:result});args.complete();}}})
+  vm.runInNewContext(read('miniprogram/utils/wechat-subscription.js'), {module, console:{error:()=>{}}, require:name=>name==='./recoverable-command'?{commandIdentityScope:()=> 'fixture-owner'}:{recordWechatNotificationAuthorization:record}, wx:{requestSubscribeMessage:args=>{calls.push(args.tmplIds);args.success({expiry:result});args.complete();}}})
   return {helper:module.exports,calls}
 }
 test('subscription completion waits for durable writeback, even after the platform complete callback', async()=>{
@@ -77,7 +82,7 @@ test('subscription rejection is recorded, but banned templates are not prompted'
 })
 function expiryPage(recordingResult, platformResult='accept') {
   const source=read('miniprogram/pages/profile/index.js'); const start=source.indexOf('  async enableExpiryReminder() {');const end=source.indexOf('  async recoverMembership(',start)
-  const toast=[];const page=vm.runInNewContext('({' + source.slice(start,end) + '})',{wx:{requestSubscribeMessage:()=>{},showToast:x=>toast.push(x.title)},getWechatNotificationAuthorizations:async()=>({authorizations:[option]}),mergeWechatNotificationPromptOptions:x=>x,requestWechatSubscription:async()=>({outcomes:[{option,platformResult}],recordingResults:[recordingResult]})})
+  const toast=[];const page=vm.runInNewContext('({' + source.slice(start,end) + '})',{...memberGuardFixture()['member-page-action'],wx:{requestSubscribeMessage:()=>{},showToast:x=>toast.push(x.title)},getWechatNotificationAuthorizations:async()=>({authorizations:[option]}),mergeWechatNotificationPromptOptions:x=>x,requestWechatSubscription:async()=>({outcomes:[{option,platformResult}],recordingResults:[recordingResult]})})
   page.data={expiryNotificationOption:option};page.setData=patch=>Object.assign(page.data,patch);return {page,toast}
 }
 test('expiry reminder save failure stays retryable and never displays success', async()=>{

@@ -1,3 +1,4 @@
+const { commandIdentityScope } = require('../../utils/recoverable-command')
 const {
   getCustomerProfile, updatePreferences, recordBirthdayBenefitConsent, withdrawBirthdayBenefitConsent,
 } = require('../../utils/api')
@@ -147,12 +148,14 @@ Page({
       dietaryNotes,
     }
     const generation = this.readGeneration
+    const owner = commandIdentityScope()
+    const isCurrent = () => generation === this.readGeneration && owner === commandIdentityScope()
     this.setData({ saving: true, error: '' })
     try {
       await updatePreferences(preferences, displayName || null, {
         version: 'wechat-dietary-v1', granted: Boolean(dietaryNotes && this.data.dietaryConsent),
       })
-      if (generation !== this.readGeneration) return
+      if (!isCurrent()) return
       const priorBirthday = this.data.profile && this.data.profile.preferences
         ? this.data.profile.preferences.birthdayMonthDay : ''
       if (birthdayMonthDay) {
@@ -161,12 +164,12 @@ Page({
         try { await withdrawBirthdayBenefitConsent('顾客本人移除生日月日并撤回生日礼遇授权') }
         catch (error) { if (!error || error.code !== 'BIRTHDAY_CONSENT_NOT_GRANTED') throw error }
       }
-      if (generation !== this.readGeneration) return
+      if (!isCurrent()) return
       wx.setStorageSync('mbox.member.displayName', displayName || '')
       wx.showToast({ title: '已保存', icon: 'success' })
-      this.savedNavigationTimer = setTimeout(() => { if (generation === this.readGeneration) wx.navigateBack() }, 550)
+      this.savedNavigationTimer = setTimeout(() => { if (isCurrent()) wx.navigateBack() }, 550)
     } catch (error) {
-      if (generation !== this.readGeneration) return
+      if (!isCurrent()) return
       this.setData({ error: customerErrorMessage(error, '暂时没有保存成功') })
     } finally { if (generation === this.readGeneration) this.setData({ saving: false }) }
   },

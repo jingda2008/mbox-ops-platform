@@ -9,7 +9,7 @@ test('song API replays the original command after a lost response/reload, isolat
   const wx = { getStorageSync: key => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), removeStorageSync: key => storage.delete(key) }
   const load = () => {
     const recovery = { exports: {} }, api = { exports: {} }
-    vm.runInNewContext(readFileSync('miniprogram/utils/recoverable-command.js', 'utf8'), { module: recovery, wx, require: name => name === './id' ? { randomId: () => `song-command-${++sequence}` } : { getTableSession: () => ({ cartScope: table }) } })
+    vm.runInNewContext(readFileSync('miniprogram/utils/recoverable-command.js', 'utf8'), { module: recovery, wx, require: name => name === '../config/index' ? { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) } : name === './id' ? { randomId: () => `song-command-${++sequence}` } : { getTableSession: () => ({ cartScope: table }) } })
     vm.runInNewContext(readFileSync('miniprogram/utils/api.js', 'utf8'), { module: api, wx, require: name => {
       if (name === './recoverable-command') return recovery.exports
       if (name === './request') return { request: async (path, options) => { calls.push({ path, options }); if (fail) throw Error('lost response after commit'); return { data: { id: 'song-request' } } } }

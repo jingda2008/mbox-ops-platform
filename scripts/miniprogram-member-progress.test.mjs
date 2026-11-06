@@ -1,3 +1,5 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
+const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -38,8 +40,8 @@ async function harness(name, bootstrap = async () => ({}), platform = 'miniprogr
   }, { get: (o, k) => o[k] || (() => undefined) })
   const view = vm.runInNewContext(source + '\n;membershipView', {
     Page: definition => { page = definition }, wx: runtime,
-    require: path => path.endsWith('/member-card-progress') ? platformHelper.exports
-      : path.endsWith('/api') ? api : path.endsWith('/platform') ? runtime : fallback,
+    require: path => memberGuards[path.split('/').pop()] || (path.endsWith('/member-card-progress') ? platformHelper.exports
+      : path.endsWith('/api') ? api : path.endsWith('/platform') ? runtime : fallback),
   })
   page.setData = patch => Object.assign(page.data, patch)
   return { view, page, navigation }

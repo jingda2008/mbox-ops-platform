@@ -384,7 +384,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
       }
     },
     getActivityRegistrationPayment: async () => ({
-      registrationStatus: 'payment_pending', allowedActions: ['start_payment', 'query_payment', 'cancel_registration'],
+      registrationStatus: 'payment_pending', resolutionState: 'pending', paymentPublicId: 'activity-payment-direct-001', allowedActions: ['start_payment', 'query_payment', 'cancel_registration'],
       payment: { publicId: 'activity-payment-direct-001', amountMinor: 2000, method: 'jsapi' },
     }),
     startActivityRegistrationPayment: async () => {
@@ -409,6 +409,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     enrollMembership: async () => ({}),
   }
   const require = (path) => {
+    if (path === '../../config/index') return { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) }
     if (path === '../../utils/api') return api
     if (path === '../../utils/auth') return { ensureCustomerSession: async () => ({}) }
     if (path === '../../utils/id') return { randomId: (prefix) => `${prefix}-unit-test-key-0001` }
@@ -1097,7 +1098,7 @@ test('subscription messages are requested from customer actions, not a settings-
   const helperModule = { exports: {} }
   vm.runInNewContext(subscriptionSource, {
     module: helperModule,
-    require: () => ({
+    require: name => name === './recoverable-command' ? { commandIdentityScope: () => 'fixture-owner' } : ({
       recordWechatNotificationAuthorization: async (input) => recorded.push({ kind: 'loyalty', ...input }),
       recordWechatMemberServiceNotificationAuthorization: async (input) => recorded.push({ kind: 'member_service', ...input }),
       recordReservationPerformanceNotificationAuthorization: async (input) => recorded.push({ kind: 'reservation_performance', ...input }),
@@ -1200,7 +1201,8 @@ test('subscription messages are requested from customer actions, not a settings-
   const paymentActionSource = orderLogic.slice(paymentActionStart, paymentActionEnd)
   assert.match(paymentActionSource, /wx\.requestPayment[\s\S]*?offerOrderNotifications\('order_checkout', activeRequest\)[\s\S]*?confirmPaymentOutcome/)
   assert.match(profileLogic, /getWechatNotificationPrompt\('coupon_open'\)/)
-  assert.match(profileLogic, /async openCoupons\(\)[\s\S]{0,900}?requestWechatSubscription/)
+  const couponAction = profileLogic.slice(profileLogic.indexOf('  async openCoupons()'), profileLogic.indexOf('  openNotificationSettings()'))
+  assert.match(couponAction, /await requestWechatSubscription\(options\)/)
 })
 
 test('WeChat community loads actual activities without Intl or a performance dependency', async () => {

@@ -1,3 +1,5 @@
+import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
+const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -14,6 +16,7 @@ async function harness(platform, read, write = async () => ({}), readGifts = asy
     wx: runtime,
     Page(value) { page = value; page.setData = value => Object.assign(page.data, value) },
     require(name) {
+      if (memberGuards[name.split('/').pop()]) return memberGuards[name.split('/').pop()]
       if (name.endsWith('/platform')) return runtime
       if (name.endsWith('/api')) return { getMemberCards: read, submitMemberCardAction: write, getMemberGiftJobs:readGifts }
       if (name.endsWith('/membership-gate')) return { redirectToMembershipLogin: destination => redirects.push(destination) }

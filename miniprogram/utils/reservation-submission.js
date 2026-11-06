@@ -55,7 +55,7 @@ async function currentContext() {
 function readAttempt(context) {
   assertCurrent(context)
   const attempt = wx.getStorageSync(context.storageKey)
-  if (!attempt) return null
+  if (attempt === undefined || attempt === null || (attempt === '' && typeof wx.getStorageInfoSync === 'function' && !(wx.getStorageInfoSync().keys || []).includes(context.storageKey))) return null
   if (attempt.version !== 1 || attempt.scope !== context.scope || !attempt.payload
     || typeof attempt.payload.publicId !== 'string' || !attempt.payload.publicId.startsWith('reservation-')
     || typeof attempt.key !== 'string' || attempt.key.length < 8
@@ -110,7 +110,7 @@ async function execute(context, attempt, recovery) {
     return finish(context, attempt, response.data)
   } catch (error) {
     assertCurrent(context)
-    if (DEFINITE_REJECTIONS.has(error && error.code)) {
+    if (!recovery && DEFINITE_REJECTIONS.has(error && error.code)) {
       const current = readAttempt(context)
       if (current && current.key === attempt.key) wx.removeStorageSync(context.storageKey)
     } else {

@@ -1,6 +1,13 @@
 // Customer pages must never render a backend/WeChat error string directly.
 // Error codes are stable contracts; the fallback remains local Chinese copy.
 const CODE_MESSAGES = Object.freeze({
+  COMMAND_RECOVERY_PENDING: '上次操作结果尚未确认，请先恢复原请求或联系门店核对，再修改内容',
+  COMMAND_RECOVERY_RECORD_INVALID: '本机原请求记录无法核对，请联系门店确认，避免重复操作',
+  COMMAND_RECOVERY_REVIEW_REQUIRED: '旧版请求结果待核对，请查看当前状态或联系门店，暂不重复提交',
+  COMMAND_RECOVERY_EXPIRED: '原请求已超过安全重试时间，请查看当前状态或联系门店，本次不会重新执行',
+  COMMAND_RECOVERY_SCOPE_CHANGED: '身份或桌台已变化，原请求已保留，请重新核对当前状态',
+  COMMAND_RECOVERY_UNCONFIRMED: '操作回执暂时无法确认，请核对原请求，不要重复提交',
+
   CUSTOMER_AUTHENTICATION_REQUIRED: '请先返回会员中心登录，再查看我的存酒',
   CUSTODY_NOT_FOUND: '这张存酒单不存在或不属于当前会员，请返回存酒列表核对',
   CUSTODY_PHOTO_NOT_FOUND: '本次存酒照片暂不可用，请联系门店核对',

@@ -29,7 +29,7 @@ async function fixture(platform,overrides={}){
   if(name.endsWith('/wechat-subscription')||name.endsWith('/alipay-subscription'))return new Proxy({},{get:()=>()=>[]})
   return {}
  }}
- vm.runInNewContext(await readFile(new URL('../'+platform+'/pages/community-detail/index.js',import.meta.url),'utf8')+'\nglobalThis.helpers={viewRegistration,viewActivity,packageView,pricingFor};',context)
+ vm.runInNewContext(await readFile(new URL('../'+platform+'/pages/community-detail/index.js',import.meta.url),'utf8')+'\nglobalThis.helpers={viewRegistration,viewActivity,packageView,pricingFor,activityIdentityScope:typeof activityIdentityScope==="function"?activityIdentityScope:()=>undefined};',context)
  page.data=structuredClone(page.data);page.setData=p=>Object.assign(page.data,p)
  page.preloadWechatSubscriptionPresentationOptions=async()=>[];page.preloadAlipaySubscriptionPresentationOptions=async()=>[]
  page.offerActivityRegistrationNotifications=async()=>{};page.showRegistrationOutcome=async()=>{};page.refreshActivityAvailability=async()=>{}
@@ -186,8 +186,8 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   assert.equal(writes.length,2);assert.equal(writes[0][2],writes[1][2]);assert.equal(page.data.registration.refundStatus,'requested')
  })
  test(platform+': restoring an unknown add-on reselects its real parent instead of the newest other order',async()=>{
-  const {page,storage}=await fixture(platform,{getActivityRegistrations:async()=>[{...confirmed,publicId:'other'},confirmed]})
-  storage.set(attemptsKey,{activity:{idempotencyKey:'unknown-addon-key',payload:{purchaseKind:'meal_package',activityPackagePublicId:'pkg-five',parentRegistrationPublicId:'old',partySize:2}}})
+  const {page,storage,helpers}=await fixture(platform,{getActivityRegistrations:async()=>[{...confirmed,publicId:'other'},confirmed]})
+  storage.set(attemptsKey,{activity:{ownerScope:helpers.activityIdentityScope(),idempotencyKey:'unknown-addon-key',payload:{purchaseKind:'meal_package',activityPackagePublicId:'pkg-five',parentRegistrationPublicId:'old',partySize:2}}})
   await page.load();assert.equal(page.data.registration.publicId,'old');assert.equal(page.data.parentRegistrationPublicId,'old');assert.equal(page.data.creatingPurchase,true)
  })
  test(platform+': fixed choices are required before payment and exact choices plus note survive an unknown submit',async()=>{
@@ -212,7 +212,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
  })
  test(platform+': business API sends exact selections and note with the original purchase key',async()=>{
   const source=await readFile(new URL('../'+platform+'/utils/api.js',import.meta.url),'utf8'),start=source.indexOf('async function registerActivity('),end=source.indexOf('async function updateActivityRegistrationPartySize',start),requests=[]
-  const submit=vm.runInNewContext('('+source.slice(start,end).trim()+')',{publicRequest:async(path,options)=>{requests.push({path,options});return {data:{publicId:'exact'}}},randomId:()=>{throw Error('must retain key')}})
+  const submit=vm.runInNewContext('('+source.slice(start,end).trim()+')',{recoverableMemberWrite:async(_operation,path,method,data,_legacy,extra)=>{requests.push({path,options:{method,data,headers:{'idempotency-key':extra.initialKey}}});return {publicId:'exact'}},publicRequest:async(path,options)=>{requests.push({path,options});return {data:{publicId:'exact'}}},randomId:()=>{throw Error('must retain key')}})
   const purchase={purchaseKind:'meal_package',parentRegistrationPublicId:'original',parentCredential:'transient-authority',selections:[{groupId:'drink',productId:'juice'}],note:'少冰'}
   await submit('activity','pkg-five',2,{contact:'13800000000'},true,'s1','r1','full','jsapi','stable-key',purchase)
   assert.equal(requests[0].path,'/api/public/mini/activities/activity/registrations');assert.equal(requests[0].options.headers['idempotency-key'],'stable-key')
@@ -426,8 +426,8 @@ for(const platform of ['miniprogram','alipay-miniprogram'])test(platform+': add-
 for(const platform of ['miniprogram','alipay-miniprogram']) {
  test(platform+': a stopped add-on retains an explicit read-only original-result query and finds only its exact request',async()=>{
   let records=[{...confirmed,publicId:'different',registrationRequestIdempotencyKey:'other-key'}],writes=0,outcomes=0
-  const {page,storage}=await fixture(platform,{getActivityAddonProducts:async()=>[{id:'dish',name:'已关窗菜',sellable:false,priceAmountMinor:null}],getActivityRegistrations:async()=>records,registerActivity:async()=>{writes++},startActivityRegistrationPayment:async()=>{writes++}})
-  const original={idempotencyKey:'original-closed-dish-key',payload:{purchaseKind:'single_dish',productId:'dish',quantity:2,parentRegistrationPublicId:'old',partySize:1}}
+  const {page,storage,helpers}=await fixture(platform,{getActivityAddonProducts:async()=>[{id:'dish',name:'已关窗菜',sellable:false,priceAmountMinor:null}],getActivityRegistrations:async()=>records,registerActivity:async()=>{writes++},startActivityRegistrationPayment:async()=>{writes++}})
+  const original={ownerScope:helpers.activityIdentityScope(),idempotencyKey:'original-closed-dish-key',payload:{purchaseKind:'single_dish',productId:'dish',quantity:2,parentRegistrationPublicId:'old',partySize:1}}
   storage.set(attemptsKey,{activity:original});await page.restorePurchaseAttempt(original);page.showRegistrationOutcome=async()=>{outcomes++}
   assert.equal(page.data.pendingPurchaseRecovery,true);assert.equal(page.data.selectedAddonProduct.sellable,false)
   const template=await readFile(new URL('../'+platform+'/pages/community-detail/index.'+(platform==='miniprogram'?'wxml':'axml'),import.meta.url),'utf8')
@@ -447,3 +447,25 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
   assert.equal(storage.get(attemptsKey).activity,original);assert.notEqual(page.data.registration?.publicId,'old-late');assert.equal(page.data.busy,false)
  })
 }
+
+// WeChat-only audit: cached/local facts are never a substitute for current identity or exact receipt.
+test('wechat activity read failure cannot expose another identity local registration',async()=>{
+ const {page,storage}=await fixture('miniprogram',{getActivityRegistrations:async()=>{throw Error('revoked')}})
+ storage.set('mbox.community.registrations.v1',{activity:{...confirmed,publicId:'private-old-user'}})
+ await page.load();assert.equal(page.data.registration,null)
+})
+test('wechat normal admission recovery ignores unrelated existing registration',async()=>{
+ const {page,storage}=await fixture('miniprogram',{getActivityRegistrations:async()=>[{...confirmed,registrationRequestIdempotencyKey:'different-request'}]})
+ const original={idempotencyKey:'exact-original-request',payload:{},previousRegistrationPublicId:'older'};storage.set(attemptsKey,{activity:original})
+ assert.equal(await page.recoverRegistration('activity',original,true),false);assert.equal(storage.get(attemptsKey).activity,original)
+})
+test('wechat cannot restore another identity pending purchase note',async()=>{
+ const {page}=await fixture('miniprogram');await page.restorePurchaseAttempt({ownerScope:'someone-else',payload:{purchaseKind:'meal_package',note:'private previous member note'}})
+ assert.notEqual(page.data.packageNote,'private previous member note');assert.match(page.data.error,/身份|旧版/)
+})
+test('wechat unknown activity followed by denied recovery keeps exact journal',async()=>{
+ let count=0;const {page,storage}=await fixture('miniprogram',{getActivityRegistrations:async()=>[],registerActivity:async()=>{count++;throw Object.assign(Error('denied'),count===1?{code:'NETWORK_ERROR'}:{code:'ACTIVITY_UNAVAILABLE',statusCode:403})}})
+ await page.beginPurchase(event({kind:'admission_package'}));page.data.contact='13800000000';page.data.ruleAcknowledged=true;page.choosePayment=async()=>({choice:'full',method:'jsapi'})
+ await page.register();const original=storage.get(attemptsKey).activity;assert.ok(original)
+ await page.register();assert.equal(count,2);assert.equal(storage.get(attemptsKey).activity.idempotencyKey,original.idempotencyKey)
+})

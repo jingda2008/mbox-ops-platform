@@ -1,17 +1,17 @@
-const STORAGE_KEY = 'mbox.wechat.subscription.presentation.v1'
+const { commandIdentityScope } = require('./recoverable-command')
+const STORAGE_KEY = 'mbox.wechat.subscription.presentation.v2'
 
 function readPresentationCache() {
   const cached = wx.getStorageSync(STORAGE_KEY)
-  return cached && typeof cached === 'object' ? cached : {}
+  return cached && cached.ownerScope === commandIdentityScope() && cached.options && typeof cached.options === 'object' ? cached.options : {}
 }
 
 function rememberPresentationOptions(context, options) {
   const normalized = Array.isArray(options) ? options.filter((item) => item && item.templateId) : []
-  if (!normalized.length) return normalized
   const cached = readPresentationCache()
   cached[String(context || 'latest')] = normalized
   cached.latest = normalized
-  wx.setStorageSync(STORAGE_KEY, cached)
+  wx.setStorageSync(STORAGE_KEY, { ownerScope: commandIdentityScope(), options: cached })
   return normalized
 }
 

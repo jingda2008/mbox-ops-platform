@@ -13,7 +13,7 @@ test('guest writes retain the same attempt after lost responses and reload, isol
       getStorageSync: key => storage.get(key),
       setStorageSync: (key, value) => storage.set(key, value),
       removeStorageSync: key => storage.delete(key),
-    }, require: name => name === './id' ? { randomId: () => `attempt-${++sequence}` } : { getTableSession: () => ({ cartScope: table }) } }
+    }, require: name => name === '../config/index' ? { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) } : name === './id' ? { randomId: () => `attempt-${++sequence}` } : { getTableSession: () => ({ cartScope: table }) } }
     vm.runInNewContext(source, context)
     return context.module.exports.recoverableGuestCommand
   }

@@ -354,7 +354,7 @@ test('the mini-program API opts into the combined credential only for redemption
   assert.equal(fixture.calls[2].path, '/api/public/mini/redemptions')
   assert.equal(fixture.calls[2].options.method, 'POST')
   assert.equal(fixture.calls[2].options.credentialDomain, 'reservation+guest')
-  assert.match(fixture.calls[2].options.headers['idempotency-key'], /^redemption-catalog-item-a-/)
+  assert.equal(fixture.calls[2].options.headers['idempotency-key'], 'credential-command-test')
   assert.equal(fixture.calls[3].path, '/api/public/mini/redemptions/redemption-a/cancel')
   assert.equal(fixture.calls[3].options.credentialDomain, undefined)
 })

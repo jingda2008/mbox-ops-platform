@@ -38,6 +38,7 @@ function pageHarness(name, overrides = {}) {
     wx, console, setTimeout: noop, clearTimeout: noop, setInterval: noop, clearInterval: noop,
     require(name) {
       if (name in overrides) return overrides[name]
+      if (name.endsWith('/recoverable-command')) return { commandIdentityScope: () => 'fixture-member' }
       if (name.includes('/api')) return overrides.api || {}
       if (name.includes('/config')) return { getRuntimeConfig: () => ({ isDevelopment: true }) }
       if (name.includes('/session')) return { getTableSession: () => ({ tableCode: 'AUDIT', tableToken: 'isolated-token', cartScope: 'same-table-session' }), tableSessionCacheScope: () => 'audit-scope' }

@@ -1,3 +1,5 @@
+const { beginMemberAction, invalidateMemberActions } = require('../../utils/member-page-action')
+const { beginMemberPage } = require('../../utils/member-pagination')
 const runtime = wx
 const { getMemberCards, submitMemberCardAction, getMemberGiftJobs } = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
@@ -8,21 +10,23 @@ function time(value) { if (value === null) return '长期有效'; const date = n
 Page({
   data: { loading: true, loaded: false, busy: false, error: '', message: '', projects: [], cards: [], applications: [], nextCursors: {}, selectedProject: null, acknowledged: false, activeMember: false, giftJobs: [], giftLoaded: false, giftLoading: false, giftError: '', giftCursor: null },
   onLoad(options) { this.resumeProjectId = options && typeof options.projectId === 'string' && /^[0-9a-f-]{36}$/i.test(options.projectId) ? options.projectId : null },
-  onShow() { this.setData({ message: '' }); this.load(); this.loadGifts() },
-  onHide() { this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
-  onUnload() { this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
+  onShow() { this._pageHidden = false; this.setData({ message: '' }); this.load(); this.loadGifts() },
+  onHide() { this._pageHidden = true; invalidateMemberActions(this); this.setData({ busy: false }); this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
+  onUnload() { this._pageHidden = true; invalidateMemberActions(this); this.generation = (this.generation || 0) + 1; this.giftGeneration = (this.giftGeneration || 0) + 1 },
   async loadGifts(event) {
     const more = !!(event && event.currentTarget && event.currentTarget.dataset.more)
     if (more && (this.data.giftLoading || !this.data.giftCursor)) return
     const generation = this.giftGeneration = (this.giftGeneration || 0) + 1
     this.setData(Object.assign({ giftLoading: true, giftError: '' }, more ? {} : { giftJobs: [], giftLoaded: false, giftCursor: null }))
     try {
+      const acceptPage = beginMemberPage(this, 'gifts', more ? this.data.giftCursor : null)
       const data = await getMemberGiftJobs(more ? this.data.giftCursor : null)
       if (generation !== this.giftGeneration) return
+      acceptPage(data.nextCursor)
       const states = { pending: '等待发放', blocked: '待员工核对补发', issued: '已发到优惠券包', cancelled: '已取消发放', duplicate: '已通过同一身份领取' }
       const items = data.items.map(item => Object.assign({}, item, { stateText: states[item.status] || '待核实' }))
       this.setData({ giftJobs: more ? Array.from(new Map((this.data.giftJobs || []).concat(items).map(item => [item.id, item])).values()) : items, giftCursor: data.nextCursor || null, giftLoaded: true, giftLoading: false })
-    } catch (error) { if (generation === this.giftGeneration) this.setData({ giftLoading: false, giftError: customerErrorMessage(error, '赠券进度暂未读取，可重试；不影响卡片申请') }) }
+    } catch (error) { if (generation === this.giftGeneration && error.memberPageOwnerChanged) this.setData({ giftJobs: [], giftCursor: null, giftLoaded: false }); if (generation === this.giftGeneration) this.setData({ giftLoading: false, giftError: customerErrorMessage(error, '赠券进度暂未读取，可重试；不影响卡片申请') }) }
   },
   openGiftWallet() { runtime.navigateTo({ url: '/pages/profile-coupons/index' }) },
   loadMore(event) {
@@ -35,8 +39,11 @@ Page({
     if (more) this.setData({ busy: true, error: '' })
     else this.setData({ loading: true, loaded: false, busy: false, error: '', selectedProject: null, acknowledged: false, projects: [], cards: [], applications: [], nextCursors: {}, activeMember: false })
     try {
+      const acceptPages = more ? { [kind]: beginMemberPage(this, kind, this.data.nextCursors[kind]) }
+        : Object.fromEntries(['projects', 'cards', 'applications'].map(key => [key, beginMemberPage(this, key, null)]))
       const data = await getMemberCards(more ? { [kind]: this.data.nextCursors[kind] } : undefined)
       if (generation !== this.generation) return
+      for (const key of Object.keys(acceptPages)) acceptPages[key]((data.nextCursors || {})[key])
       if (more) {
         const nextCursor = (data.nextCursors || {})[kind] || null
         for (const key of ['projects', 'cards', 'applications']) data[key] = key === kind ? Array.from(new Map(this.data[key].concat(data[key]).map(item => [item.id, item])).values()) : this.data[key]
@@ -56,7 +63,7 @@ Page({
         this.resumeProjectId = null
         if (project && project.flow_mode === 'simple' && project.canApply) await this.applySimple(project)
       }
-    } catch (error) { if (generation === this.generation) this.setData({ loading: false, busy: false, error: customerErrorMessage(error, more ? '更多记录未能读取，可再次点击加载更多；已读记录保留' : '卡片暂时无法读取，请重试') }) }
+    } catch (error) { if (generation === this.generation && error.memberPageOwnerChanged) this.setData({ projects: [], cards: [], applications: [], nextCursors: {}, selectedProject: null, acknowledged: false, activeMember: false }); if (generation === this.generation) this.setData({ loading: false, busy: false, error: customerErrorMessage(error, more ? '更多记录未能读取，可再次点击加载更多；已读记录保留' : '卡片暂时无法读取，请重试') }) }
   },
   async openProject(event) {
     if (this.data.busy) return
@@ -78,12 +85,16 @@ Page({
     await this.execute('apply', project.id, { projectId: project.id, acceptedProjectVersion: project.version }, '申请已提交，等待员工审核；未变更营销授权。')
   },
   async withdraw(event) {
-    if (this.data.busy) return
-    const generation = this.generation
-    const id = event.currentTarget.dataset.id, action = event.currentTarget.dataset.action
-    if (!['withdraw-card', 'withdraw-application'].includes(action)) return
-    const confirmed = await new Promise(resolve => runtime.showModal({ title: action === 'withdraw-card' ? '退出这张卡？' : '撤回申请？', content: '不会改变会员等级或删除已合法发放的优惠券。', confirmText: '确认', success: result => resolve(!!result.confirm), fail: () => resolve(false) }))
-    if (confirmed && generation === this.generation) await this.execute(action, id, {}, action === 'withdraw-card' ? '已退出此卡。' : '申请已撤回。')
+    const intent = beginMemberAction(this, 'confirmation')
+    if (!intent) return
+    try {
+      if (this.data.busy) return
+      const generation = this.generation
+      const id = event.currentTarget.dataset.id, action = event.currentTarget.dataset.action
+      if (!['withdraw-card', 'withdraw-application'].includes(action)) return
+      const confirmed = await new Promise(resolve => runtime.showModal({ title: action === 'withdraw-card' ? '退出这张卡？' : '撤回申请？', content: '不会改变会员等级或删除已合法发放的优惠券。', confirmText: '确认', success: result => resolve(!!result.confirm), fail: () => resolve(false) }))
+      if (confirmed && intent.current() && generation === this.generation) await this.execute(action, id, {}, action === 'withdraw-card' ? '已退出此卡。' : '申请已撤回。')
+    } finally { intent.finish() }
   },
   async execute(action, id, input, message) {
     if (this.data.busy) return

@@ -94,6 +94,48 @@ function storageObject(key) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
+function commandStorage(key) {
+  const value = wx.getStorageSync(key)
+  const present = value !== undefined && value !== null && value !== ''
+    || (typeof wx.getStorageInfoSync === 'function' && wx.getStorageInfoSync().keys.includes(key))
+  if (present && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error('原操作记录无法读取，请先联系门店核对，不会另建请求。')
+  return Object.assign({}, value || {})
+}
+function checkedActivityAttempt(stored, id, expected, timed) {
+  if (!Object.prototype.hasOwnProperty.call(stored, id)) return null
+  const attempt = stored[id]
+  if (!attempt || !validCommandKey(attempt.idempotencyKey)
+    || Object.keys(expected).some(key => attempt[key] !== expected[key])) throw new Error('原操作记录或内容无法核对，请先恢复原请求，不会另建请求。')
+  if (timed) {
+    const time = Date.parse(attempt.createdAt)
+    if (!Number.isFinite(time) || Date.now() < time || Date.now() - time > 23 * 3600000) throw new Error('原操作已超过安全重试时间，请先查单或联系门店核对。')
+  }
+  return attempt
+}
+function persistActivityAttempt(key, id, attempt) {
+  const latest = commandStorage(key)
+  latest[id] = attempt
+  wx.setStorageSync(key, latest)
+  if (JSON.stringify(commandStorage(key)[id]) !== JSON.stringify(attempt)) throw new Error('原操作记录无法可靠保存，本次没有提交，请重试。')
+}
+function clearActivityAttempt(key, id, attempt) {
+  const latest = commandStorage(key)
+  if (latest[id] && latest[id].idempotencyKey === attempt.idempotencyKey) {
+    delete latest[id]
+    wx.setStorageSync(key, latest)
+  }
+}
+function validatePaymentState(state, registration) {
+  if (!state || !Object.prototype.hasOwnProperty.call(RESOLUTION_STATE_NAMES, state.resolutionState)
+    || !Object.prototype.hasOwnProperty.call(REGISTRATION_STATUS_NAMES, state.registrationStatus)
+    || (state.registrationPublicId && state.registrationPublicId !== registration.publicId)) throw new Error('原付款状态尚未确认，请继续核对原请求。')
+  if (state.paymentPublicId && ['confirmed', 'failed', 'expired', 'refunded'].includes(state.resolutionState)) {
+    const attempts = commandStorage(PAYMENT_ACTION_ATTEMPTS_KEY), prior = attempts[registration.publicId]
+    if (prior && validCommandKey(prior.idempotencyKey) && prior.paymentPublicId === state.paymentPublicId) clearActivityAttempt(PAYMENT_ACTION_ATTEMPTS_KEY, registration.publicId, prior)
+  }
+  return state
+}
+
 function commandKey(kind, publicId) {
   const suffix = String(publicId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || 'activity'
   return randomId(`${kind}-${suffix}`).slice(0, 128)
@@ -535,7 +577,7 @@ Page({
     this.setData({ id: shareActivityId(options && options.id), shareSource: source, memberAccessRequested: false, selectedRegistrationPublicId: shareActivityId(options && options.registrationId) })
   },
   onHide() { this.pageVisible = false; this.invalidateReads() },
-  onUnload() { this.parentScanIntent = null; this.pageVisible = false; this.invalidateReads() },
+  onUnload() { this.pageUnloaded = true; this.parentScanIntent = null; this.pageVisible = false; this.invalidateReads() },
   invalidateReads() {
     this.stopAddonMenuRefresh()
     this.parentPurchaseCredential = null
@@ -798,48 +840,51 @@ Page({
     const registration = this.data.registration
     const service = this.data.serviceCode && this.data.serviceCode.service
     if (this.data.busy || !registration || !service || !service.includesAdmission || service.meal) return
+    const currentScope = this.registrationOperation(registration).current
     const partySize = Number(this.data.registeredPartySizeDraft)
     const minimum = Math.max(1, Number(service.admittedCount || 0))
     if (!Number.isInteger(partySize) || partySize < minimum || partySize > service.maxParticipants) return this.setData({ error: `本份实际人数应在 ${minimum} 至 ${service.maxParticipants} 人之间，不能少于已入场人数。` })
-    const stored = storageObject(PARTY_SIZE_ATTEMPTS_KEY)
-    const previous = stored[registration.publicId]
-    if (previous && previous.partySize !== partySize) return this.setData({ error: `上次修改为 ${previous.partySize} 人的结果尚未核对，请先恢复该人数再保存。` })
-    const attempt = previous || { partySize, idempotencyKey: commandKey('activity-party-size', registration.publicId) }
-    stored[registration.publicId] = attempt
-    wx.setStorageSync(PARTY_SIZE_ATTEMPTS_KEY, stored)
     this.setData({ busy: true, error: '', success: '' })
     try {
+      const stored = commandStorage(PARTY_SIZE_ATTEMPTS_KEY)
+      const previous = checkedActivityAttempt(stored, registration.publicId, {}, false)
+      if (previous && previous.partySize !== partySize) return this.setData({ error: `上次修改为 ${previous.partySize} 人的结果尚未核对，请先恢复该人数再保存。` })
+      const attempt = previous || { partySize, idempotencyKey: commandKey('activity-party-size', registration.publicId) }
+      persistActivityAttempt(PARTY_SIZE_ATTEMPTS_KEY, registration.publicId, attempt)
       const result = await updateActivityRegistrationPartySize(registration.publicId, attempt.partySize, attempt.idempotencyKey)
+      if (!currentScope()) return
       if (!result || result.partySize !== attempt.partySize) throw new Error('人数修改结果尚未确认，请按原人数重试核对。')
-      delete stored[registration.publicId]; wx.setStorageSync(PARTY_SIZE_ATTEMPTS_KEY, stored)
+      clearActivityAttempt(PARTY_SIZE_ATTEMPTS_KEY, registration.publicId, attempt)
       const next = viewRegistration(Object.assign({}, registration, { partySize: result.partySize }))
       this.rememberRegistration(next)
       if (this.data.registration && this.data.registration.publicId === registration.publicId) {
         this.setData({ registration: next, success: '本份实际参加人数已更新，套餐价格及可入场上限不变。' })
         await this.loadServiceCode()
       }
-    } catch (error) { this.setData({ error: customerErrorMessage(error, '人数修改结果尚未确认，请按原人数重试核对。') }) }
+    } catch (error) { if (currentScope()) this.setData({ error: customerErrorMessage(error, '人数修改结果尚未确认，请按原人数重试核对。') }) }
     finally { this.setData({ busy: false }) }
   },
 
   async requestRegistrationRefund() {
     const registration = this.data.registration
     if (this.data.busy || this._refundConfirmPending || !registration || !registration.hasServiceFlow || (!registration.canAttemptFullRefund && !registration.hasUnconfirmedRefundAttempt) || Number(registration.paidAmountMinor || 0) <= 0) return
+    const currentScope = this.registrationOperation(registration).current
     this._refundConfirmPending = true
     const generation = this.pageGeneration || 0
     const confirmed = await new Promise(resolve => wx.showModal({ title: registration.hasUnconfirmedRefundAttempt ? '核对原退订申请' : '申请整份退订', content: registration.hasUnconfirmedRefundAttempt ? '将使用原请求核对退订申请，不会新建重复申请。' : '将申请退订当前这一份订单。提交后由门店审核并原路退款；已使用权益或有关联加购时，请先联系门店处理。提交申请不代表退款已到账。', confirmText: registration.hasUnconfirmedRefundAttempt ? '核对原申请' : '提交申请', success: result => resolve(result.confirm), fail: () => resolve(false) }))
     this._refundConfirmPending = false
-    if (!confirmed || generation !== (this.pageGeneration || 0) || this.data.busy || !this.data.registration || this.data.registration.publicId !== registration.publicId) return
+    if (!confirmed || !currentScope() || generation !== (this.pageGeneration || 0) || this.data.busy || !this.data.registration || this.data.registration.publicId !== registration.publicId) return
     this.setData({ busy: true, error: '', success: '' })
-    const current = () => generation === (this.pageGeneration || 0) && this.data.registration && this.data.registration.publicId === registration.publicId
+    const current = () => currentScope() && generation === (this.pageGeneration || 0) && this.data.registration && this.data.registration.publicId === registration.publicId
     try {
       const state = await getActivityRegistrationPayment(registration.publicId)
       if (!current()) return
       const authoritative = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
       this.rememberRegistration(authoritative)
       this.setData({ registration: authoritative })
-      const stored = storageObject(REFUND_ATTEMPTS_KEY)
-      let attempt = stored[registration.publicId]
+      const stored = commandStorage(REFUND_ATTEMPTS_KEY)
+      let attempt = checkedActivityAttempt(stored, registration.publicId, {}, false)
+      if (attempt && typeof attempt.reason !== 'string') throw new Error('原退订原因无法核对，请联系门店恢复原请求。')
       // A previous terminal refund must never clear an unknown newer request.
       // Only the exact acknowledged refund can establish a new user intent.
       if (attempt && attempt.refundPublicId && attempt.refundPublicId === state.refundPublicId && ['rejected', 'cancelled'].includes(state.refundStatus)) attempt = null
@@ -848,7 +893,7 @@ Page({
         return
       }
       if (!attempt) attempt = { idempotencyKey: commandKey('activity-refund-request', registration.publicId), reason: '顾客在小程序申请整份活动订单退订' }
-      stored[registration.publicId] = attempt; wx.setStorageSync(REFUND_ATTEMPTS_KEY, stored)
+      persistActivityAttempt(REFUND_ATTEMPTS_KEY, registration.publicId, attempt)
       const result = await requestActivityRegistrationRefund(registration.publicId, attempt.reason, attempt.idempotencyKey)
       if (!result || !result.refundPublicId || result.status !== 'requested') throw new Error('退款申请结果尚未确认，请使用原申请重试核对。')
       attempt.refundPublicId = result.refundPublicId
@@ -863,7 +908,7 @@ Page({
         next = viewRegistration(Object.assign({}, authoritative, latest, { canRequestFullRefund: latest.canRequestFullRefund, refundRequestBlockReason: latest.refundRequestBlockReason, refundRejectionReason: latest.refundRejectionReason, status: latest.registrationStatus || authoritative.status }))
         if (latest.refundPublicId === result.refundPublicId && ['rejected', 'cancelled'].includes(latest.refundStatus)) message = next.showFullRefundRequest ? '已核对原申请，原申请已被拒绝或撤销；如仍需退订，可再次点击申请。' : '已核对原申请，原申请已被拒绝或撤销；请按页面提示核对本份退订资格。'
         else if (latest.refundStatus && latest.refundStatus !== 'requested') message = '已更新退款申请进展，请查看当前状态。'
-      } catch (_error) { message = '申请已提交，当前审核进度暂时无法读取；请刷新核对，尚未确认退款到账。' }
+      } catch (_error) { if (!current()) return; message = '申请已提交，当前审核进度暂时无法读取；请刷新核对，尚未确认退款到账。' }
       this.rememberRegistration(next)
       this.setData({ registration: next, serviceCode: null, success: message })
     } catch (error) {
@@ -1417,11 +1462,14 @@ Page({
 
   async readPaymentState(registrationRaw) {
     if (!registrationRaw || !registrationRaw.publicId) return viewRegistration(registrationRaw)
+    const generation = this.pageGeneration || 0, owner = activityIdentityScope()
     try {
       const paymentState = await getActivityRegistrationPayment(registrationRaw.publicId)
+      if (generation !== (this.pageGeneration || 0) || owner !== activityIdentityScope()) return viewRegistration(registrationRaw)
+      validatePaymentState(paymentState, registrationRaw)
       return viewRegistration(Object.assign({}, registrationRaw, paymentState, { canRequestFullRefund: paymentState.canRequestFullRefund, refundRequestBlockReason: paymentState.refundRequestBlockReason, refundRejectionReason: paymentState.refundRejectionReason, status: paymentState.registrationStatus || registrationRaw.status }))
     } catch (error) {
-      this.setData({ error: `报名已记录，但付款状态暂时无法核对：${customerErrorMessage(error, '请稍后刷新')}` })
+      if (generation === (this.pageGeneration || 0) && owner === activityIdentityScope()) this.setData({ error: `报名已记录，但付款状态暂时无法核对：${customerErrorMessage(error, '请稍后刷新')}` })
       return viewRegistration(Object.assign({}, registrationRaw, { canRequestFullRefund: undefined, refundRequestBlockReason: undefined, refundRejectionReason: undefined }))
     }
   },
@@ -1473,23 +1521,38 @@ Page({
     } catch (_error) { return false }
   },
 
+  registrationOperation(registration) {
+    const generation = this.pageGeneration || 0, identity = activityIdentityScope()
+    const owns = () => !this.pageUnloaded && activityIdentityScope() === identity
+      && this.data.registration && this.data.registration.publicId === registration.publicId
+    return {
+      current: () => owns() && this.pageVisible !== false && generation === (this.pageGeneration || 0),
+      // The native payment sheet may hide/show this page. Only an already-opened
+      // sheet can return across that transition; never open a late sheet.
+      returnedFromPayment: () => owns() && this.pageVisible !== false,
+    }
+  },
+
   async startPayment() {
     const registration = this.data.registration
     if (!registration || !registration.canStartPayment || this.data.busy) return
-    const stored = storageObject(PAYMENT_ACTION_ATTEMPTS_KEY)
-    const current = stored[registration.publicId]
-    const paymentPublicId = registration.payment && (registration.payment.publicId || registration.payment.paymentPublicId)
-    const attempt = current && validCommandKey(current.idempotencyKey) && (!paymentPublicId || current.paymentPublicId === paymentPublicId)
-      ? current
-      : { idempotencyKey: commandKey('activity-payment', registration.publicId), paymentPublicId: paymentPublicId || '', createdAt: new Date().toISOString() }
-    stored[registration.publicId] = attempt
-    wx.setStorageSync(PAYMENT_ACTION_ATTEMPTS_KEY, stored)
-    this.setData({ busy: true, error: '', success: '', wechatIdentityRefreshRequired: false })
+    const operation = this.registrationOperation(registration)
+    const currentScope = operation.current
+    this.setData({ busy: true, error: '', success: '' })
     try {
+      const stored = commandStorage(PAYMENT_ACTION_ATTEMPTS_KEY)
+      const paymentPublicId = registration.paymentPublicId || registration.payment && (registration.payment.publicId || registration.payment.paymentPublicId)
+      const current = checkedActivityAttempt(stored, registration.publicId, paymentPublicId ? { paymentPublicId } : {}, true)
+      const attempt = current && validCommandKey(current.idempotencyKey) && (!paymentPublicId || current.paymentPublicId === paymentPublicId)
+        ? current
+        : { idempotencyKey: commandKey('activity-payment', registration.publicId), paymentPublicId: paymentPublicId || '', createdAt: new Date().toISOString() }
+      persistActivityAttempt(PAYMENT_ACTION_ATTEMPTS_KEY, registration.publicId, attempt)
       const result = await startActivityRegistrationPayment(registration.publicId, attempt.idempotencyKey)
+      if (!currentScope()) return
       const action = result && (result.providerAction || result)
       if (!action || action.status !== 'pending') {
         await this.refreshPaymentState()
+        if (!currentScope()) return
         this.setData({ error: action && action.status === 'unknown' ? '付款结果暂时未知，请先查单。' : '支付通道没有建立可执行动作，本页不会显示付款成功。' })
         return
       }
@@ -1504,16 +1567,20 @@ Page({
       }
       try {
         await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, payload, { success: resolve, fail: reject })))
+        if (!operation.returnedFromPayment()) return
         this.setData({ success: '支付请求已提交，正在向支付通道核对最终结果。' })
         await this.performPaymentQuery()
       } catch (error) {
+        if (!operation.returnedFromPayment()) return
         const cancelled = isWechatCancellation(error)
         if (cancelled) this.setData({ success: '已取消支付，报名仍保留为待付款；可稍后查询或继续处理。', error: '' })
         else this.setData({ error: '支付窗口返回异常，结果尚未确认。请先查单，不要重复报名或重复付款。' })
         await this.refreshPaymentState(false)
       }
     } catch (error) {
+      if (!currentScope()) return
       await this.refreshPaymentState(false)
+      if (!currentScope()) return
       const preflightIdentityRequired = Boolean(error && error.code === 'WECHAT_IDENTITY_REQUIRED')
       const rejectedIdentity = Boolean(error && error.code === 'ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED')
       const identityRefreshRequired = preflightIdentityRequired || rejectedIdentity
@@ -1557,66 +1624,78 @@ Page({
   async performPaymentQuery() {
     const registration = this.data.registration
     if (!registration) return
-    const stored = storageObject(PAYMENT_QUERY_ATTEMPTS_KEY)
-    const current = stored[registration.publicId]
-    const attempt = current && validCommandKey(current.idempotencyKey)
-      ? current
-      : { idempotencyKey: commandKey('activity-payment-query', registration.publicId), createdAt: new Date().toISOString() }
-    stored[registration.publicId] = attempt
-    wx.setStorageSync(PAYMENT_QUERY_ATTEMPTS_KEY, stored)
+    const currentScope = this.registrationOperation(registration).current
     try {
+      const stored = commandStorage(PAYMENT_QUERY_ATTEMPTS_KEY)
+      const current = checkedActivityAttempt(stored, registration.publicId, {}, false)
+      const attempt = current && validCommandKey(current.idempotencyKey)
+        ? current
+        : { idempotencyKey: commandKey('activity-payment-query', registration.publicId), createdAt: new Date().toISOString() }
+      persistActivityAttempt(PAYMENT_QUERY_ATTEMPTS_KEY, registration.publicId, attempt)
       const state = await queryActivityRegistrationPayment(registration.publicId, attempt.idempotencyKey)
-      delete stored[registration.publicId]
-      wx.setStorageSync(PAYMENT_QUERY_ATTEMPTS_KEY, stored)
+      if (!currentScope()) return
+      validatePaymentState(state, registration)
+      clearActivityAttempt(PAYMENT_QUERY_ATTEMPTS_KEY, registration.publicId, attempt)
+      if (!currentScope()) return
       const next = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
       this.rememberRegistration(next)
       this.setData({ registration: next })
       await this.loadServiceCode()
+      if (!currentScope()) return
       if (next.resolutionState === 'confirmed') this.setData({ success: '付款已经由支付通道确认，报名正式生效。', error: '' })
       else if (next.resolutionState === 'unknown') this.setData({ error: '支付通道暂未给出确定结果，名额继续保留；稍后只能继续查单。' })
       else if (next.resolutionState === 'failed') this.setData({ error: '支付通道已明确返回失败，可按页面允许的动作取消报名。' })
       else if (next.resolutionState === 'refunded') this.setData({ success: '退款状态已确认。', error: '' })
       else this.setData({ success: '付款状态已更新。', error: '' })
-    } catch (error) { this.setData({ error: customerErrorMessage(error, '查单结果暂时无法确认；本页不会重建报名或重复付款。') }) }
+    } catch (error) { if (currentScope()) this.setData({ error: customerErrorMessage(error, '查单结果暂时无法确认；本页不会重建报名或重复付款。') }) }
   },
 
   async refreshPaymentState(showError = true) {
     const registration = this.data.registration
     if (!registration || !registration.publicId) return
+    const currentScope = this.registrationOperation(registration).current
     try {
       const state = await getActivityRegistrationPayment(registration.publicId)
+      if (!currentScope()) return
+      validatePaymentState(state, registration)
       const next = viewRegistration(Object.assign({}, registration, state, { canRequestFullRefund: state.canRequestFullRefund, refundRequestBlockReason: state.refundRequestBlockReason, refundRejectionReason: state.refundRejectionReason, status: state.registrationStatus || registration.status }))
       this.rememberRegistration(next)
       this.setData({ registration: next })
       await this.loadServiceCode()
-    } catch (error) { if (showError) this.setData({ error: customerErrorMessage(error, '付款状态暂时无法读取') }) }
+      if (!currentScope()) return
+    } catch (error) { if (showError && currentScope()) this.setData({ error: customerErrorMessage(error, '付款状态暂时无法读取') }) }
   },
 
   async cancelRegistration() {
     const registration = this.data.registration
-    if (!registration || this.data.busy) return
+    if (!registration || this.data.busy || this._cancelConfirmPending) return
     if (!registration.canCancelDirectly) return this.showCancellationHelp()
+    const currentScope = this.registrationOperation(registration).current
+    this._cancelConfirmPending = true
     const confirmed = await new Promise((resolve) => wx.showModal({ title: '取消报名', content: '仅未付款且仍可取消的报名会释放名额。确认取消吗？', confirmColor: '#873e30', success: (result) => resolve(result.confirm), fail: () => resolve(false) }))
-    if (!confirmed) return
+    this._cancelConfirmPending = false
+    if (!confirmed || !currentScope() || this.data.busy) return
     const reason = '顾客在小程序主动取消未付款报名'
-    const stored = storageObject(CANCELLATION_ATTEMPTS_KEY)
-    const current = stored[registration.publicId]
-    const attempt = current && validCommandKey(current.idempotencyKey)
-      ? current
-      : { idempotencyKey: commandKey('activity-cancel', registration.publicId), reason, createdAt: new Date().toISOString() }
-    stored[registration.publicId] = attempt
-    wx.setStorageSync(CANCELLATION_ATTEMPTS_KEY, stored)
     this.setData({ busy: true, error: '', success: '' })
     try {
-      await cancelActivityRegistration(registration.publicId, attempt.reason, attempt.idempotencyKey)
-      delete stored[registration.publicId]
-      wx.setStorageSync(CANCELLATION_ATTEMPTS_KEY, stored)
+      const stored = commandStorage(CANCELLATION_ATTEMPTS_KEY)
+      const current = checkedActivityAttempt(stored, registration.publicId, { reason }, true)
+      const attempt = current && validCommandKey(current.idempotencyKey)
+        ? current
+        : { idempotencyKey: commandKey('activity-cancel', registration.publicId), reason, createdAt: new Date().toISOString() }
+      persistActivityAttempt(CANCELLATION_ATTEMPTS_KEY, registration.publicId, attempt)
+      const result = await cancelActivityRegistration(registration.publicId, attempt.reason, attempt.idempotencyKey)
+      if (!result || result.publicId !== registration.publicId || result.status !== 'cancelled') throw new Error('取消结果尚未确认，请继续核对原请求。')
+      if (!currentScope()) return
+      clearActivityAttempt(CANCELLATION_ATTEMPTS_KEY, registration.publicId, attempt)
       const next = viewRegistration(Object.assign({}, registration, { status: 'cancelled', registrationStatus: 'cancelled', allowedActions: [] }))
       this.rememberRegistration(next)
       this.setData({ registration: next, success: '报名已经取消，是否重新报名将以当前活动名额和规则重新判断。' })
       await this.refreshActivityAvailability()
     } catch (error) {
+      if (!currentScope()) return
       if (['PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND_WORKFLOW'].includes(error.code)) await this.refreshPaymentState(false)
+      if (!currentScope()) return
       this.setData({ error: ['PAYMENT_RESULT_UNKNOWN', 'ACTIVITY_PAYMENT_RESULT_UNKNOWN'].includes(error.code)
         ? '付款结果未知，当前不能取消；请先查单。'
         : error.code === 'ACTIVITY_PAID_CANCELLATION_REQUIRES_REFUND_WORKFLOW'

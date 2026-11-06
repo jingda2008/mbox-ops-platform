@@ -96,11 +96,14 @@ function publicIdentityScope() {
   return JSON.stringify([principal.principalId || principal.memberId || null,
     wx.getStorageSync('mbox.public.identity.assertion') || null, wx.getStorageSync('mbox.membership.loggedOut.v1') || null])
 }
-async function publicRequest(path, options) {
+async function ensureBoundCustomerSession() {
   const before = publicIdentityScope()
   const bound = wx.getStorageSync('mbox.wechat.identity.principal.v1') || wx.getStorageSync('mbox.public.identity.assertion') || wx.getStorageSync('mbox.membership.loggedOut.v1')
   await ensureCustomerSession(false)
   if (bound && before !== publicIdentityScope()) throw Object.assign(new Error('登录身份已变化，请重新核对当前状态。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
+}
+async function publicRequest(path, options) {
+  await ensureBoundCustomerSession()
   const identity = publicIdentityScope()
   const assertIdentity = () => {
     if (identity !== publicIdentityScope()) throw Object.assign(new Error('会员身份已变化，请重新读取当前状态；原请求结果仍需核对。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
@@ -133,7 +136,7 @@ async function publicRequest(path, options) {
 }
 
 async function recoverableMemberWrite(operation, path, method, data, legacyKeys, extra) {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   return (await recoverableGuestCommand(operation, data, key => publicRequest(path, {
     ...(extra || {}), method, headers: { ...((extra || {}).headers || {}), 'idempotency-key': key }, data,
   }), { customerOnly: true, legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey })).data
@@ -150,21 +153,21 @@ async function getMembershipTerms() {
 async function getMiniLoyalty() { return (await publicRequest('/api/public/mini/loyalty')).data }
 async function getMiniLoyaltyLedger() { return (await publicRequest('/api/public/mini/loyalty/ledger')).data }
 async function recordBirthdayBenefitConsent(birthdayMonthDay) {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   return (await recoverableGuestCommand('birthday-benefit-consent', { birthdayMonthDay }, key => publicRequest('/api/public/mini/annual-benefits/birthday-consent', {
     method: 'PUT', headers: { 'idempotency-key': key }, data: { birthdayMonthDay },
   }), { customerOnly: true })).data
 }
 async function withdrawBirthdayBenefitConsent(reason) {
   const data = { reason: reason || '顾客本人撤回生日礼遇授权' }
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   return (await recoverableGuestCommand('birthday-benefit-consent-withdraw', data, key => publicRequest('/api/public/mini/annual-benefits/birthday-consent/withdraw', {
     method: 'POST', headers: { 'idempotency-key': key }, data,
   }), { customerOnly: true })).data
 }
 async function getNotificationConsent() { return (await publicRequest('/api/public/mini/notification-consent')).data }
 async function recordNotificationConsent(input) {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   return (await recoverableGuestCommand('notification-consent', input, key => publicRequest('/api/public/mini/notification-consent', {
     method: 'POST', headers: { 'idempotency-key': key }, data: input,
   }), { customerOnly: true })).data
@@ -175,7 +178,7 @@ async function getWechatNotificationAuthorizations() {
   return (await publicRequest('/api/public/mini/wechat-notification-authorizations')).data
 }
 async function recoverNotificationAuthorization(kind, path, input, legacyKey) {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
   if (!principal.principalId && !principal.memberId) {
     throw Object.assign(new Error('请先确认本人微信身份再操作通知授权'), { code: 'NOTIFICATION_IDENTITY_REQUIRED', statusCode: 401 })
@@ -233,7 +236,7 @@ async function withdrawCustomerPreferenceSource(publicId, reason) {
 async function getRedemptionCatalog() { return (await publicRequest('/api/public/mini/redemptions/catalog')).data }
 async function getRedemptions() { return (await publicRequest('/api/public/mini/redemptions')).data }
 async function createRedemption(catalogItemPublicId) {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   return (await recoverableGuestCommand('redemption-create', { catalogItemPublicId }, key => publicRequest('/api/public/mini/redemptions', {
     method: 'POST', credentialDomain: 'reservation+guest', headers: { 'idempotency-key': key }, data: { catalogItemPublicId },
   }), { legacyKeys: [`mbox.redemption.attempt.${catalogItemPublicId}`] })).data
@@ -384,7 +387,7 @@ async function queryActivityRegistrationPayment(registrationPublicId, idempotenc
 }
 
 async function getReservations() {
-  await ensureCustomerSession(false)
+  await ensureBoundCustomerSession()
   try {
     const response = await publicRequest('/api/public/reservations/mine')
     return response.data || response
@@ -393,7 +396,11 @@ async function getReservations() {
   }
   const ids = wx.getStorageSync('mbox.reservation.public.ids') || []
   const records = await Promise.all(ids.slice(0, 20).map(async (id) => {
-    try { return (await publicRequest(`/api/public/reservations/${encodeURIComponent(id)}`)).data } catch (_error) { return null }
+    try { return (await publicRequest(`/api/public/reservations/${encodeURIComponent(id)}`)).data }
+    catch (error) {
+      if (error && error.statusCode === 404 && error.code === 'RESERVATION_NOT_FOUND') return null
+      throw error
+    }
   }))
   return { reservations: records.filter(Boolean) }
 }

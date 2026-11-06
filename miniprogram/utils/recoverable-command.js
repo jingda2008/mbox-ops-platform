@@ -82,4 +82,6 @@ function recoverableGuestCommand(operation, body, send, options) {
     return pending.promise
   } catch (error) { return Promise.reject(error) }
 }
-module.exports = { recoverableGuestCommand }
+// Digest is only a local ownership boundary; never an authorization credential.
+function commandIdentityScope() { return checksum(recoveryScope({ customerOnly: true })) }
+module.exports = { recoverableGuestCommand, commandIdentityScope }

@@ -337,6 +337,7 @@ async function loadOrderPage(state) {
             typeof action.payload[key] === 'string' && action.payload[key].trim().length > 0
           ))),
       }
+      if (specifier === '../../utils/recoverable-command') return { commandIdentityScope: () => 'fixture-owner' }
       if (specifier === '../../utils/wechat-subscription') return {
         requestWechatSubscription: async () => ({ presented: false, outcomes: [] }),
         mergeWechatNotificationPromptOptions: (...groups) => [].concat(...groups.filter(Boolean)),

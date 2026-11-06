@@ -1,3 +1,4 @@
+const { commandIdentityScope } = require('./recoverable-command')
 const {
   recordWechatNotificationAuthorization,
   recordWechatMemberServiceNotificationAuthorization,
@@ -122,7 +123,7 @@ function extractPromptPresentation(prompt) {
   return mergeWechatNotificationPromptOptions(presentation, prompt && prompt.authorizations)
 }
 
-async function finalizeWechatSubscription(candidates, platform) {
+async function finalizeWechatSubscription(candidates, platform, ownerScope) {
   const outcomes = candidates.map((option) => ({ option, platformResult: platform && platform[option.templateId] }))
     .filter((item) => PLATFORM_RESULTS.has(item.platformResult))
   // Fully await authorization writeback. A short Promise.race previously resolved
@@ -135,6 +136,7 @@ async function finalizeWechatSubscription(candidates, platform) {
       continue
     }
     try {
+      if (commandIdentityScope() !== ownerScope) throw Object.assign(new Error('身份已变化，请重新读取提醒设置后确认授权。'), { code: 'COMMAND_RECOVERY_SCOPE_CHANGED' })
       recordingResults.push(await recordAuthorizationOutcome(option, platformResult))
     } catch (error) {
       try {
@@ -154,16 +156,21 @@ async function finalizeWechatSubscription(candidates, platform) {
 }
 
 function requestWechatSubscriptionFromTap(options, notificationTypes) {
-  const candidates = subscriptionCandidates(options, notificationTypes)
+  const candidates = subscriptionCandidates(options, notificationTypes).map(option => Object.assign({}, option))
   if (!candidates.length || typeof wx.requestSubscribeMessage !== 'function') {
     return Promise.resolve({ presented: false, outcomes: [] })
   }
+  // Capture before the native sheet; its delayed callback must not authorize
+  // whichever account happens to be active afterwards.
+  let ownerScope
+  try { ownerScope = commandIdentityScope() }
+  catch (error) { return Promise.resolve({ presented: false, outcomes: [], recordingResults: [{ writebackError: { code: error.code, message: '无法确认当前身份，请重新读取后重试' } }] }) }
   return new Promise((resolve) => {
     let settled = false
     const finish = (platform) => {
       if (settled) return
       settled = true
-      finalizeWechatSubscription(candidates, platform).then(resolve)
+      finalizeWechatSubscription(candidates, platform, ownerScope).then(resolve)
     }
     wx.requestSubscribeMessage({
       tmplIds: candidates.map((item) => item.templateId),

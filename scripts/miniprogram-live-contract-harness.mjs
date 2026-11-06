@@ -44,7 +44,7 @@ export function liveMiniHarness(platform, respond, options = {}) {
     const file = path.endsWith('.js') ? path : path + '.js'
     if (modules.has(file)) return modules.get(file).exports
     if (file === root + '/config/index.js') return { getRuntimeConfig: () => config }
-    if (file === root + '/utils/auth.js') return { ensureCustomerSession: async () => true, ensureWechatIdentity: async () => true,
+    if (file === root + '/utils/auth.js') return { ensureCustomerSession: options.ensureCustomerSession || (async () => true), ensureWechatIdentity: async () => true,
       isCustomerSessionInvalid: e => e?.statusCode === 401, isWechatIdentityUnavailable: () => false, isAlipayIdentityUnavailable: () => false,
       renewReservationSessionOnly() {}, isMembershipLoggedOut: () => false, obtainWechatIdentityForMembership: async () => null, clearMembershipLoggedOut() {} }
     if (file === root + '/utils/id.js') return { randomId: prefix => `${prefix}-audit-${++sequence}-0123456789` }

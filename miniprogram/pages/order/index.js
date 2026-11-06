@@ -1,3 +1,4 @@
+const { commandIdentityScope } = require('../../utils/recoverable-command')
 const {
   getGuestSession,
   getMenu,
@@ -2601,31 +2602,41 @@ Page({
     if (!guard) return
     if (!this.data.prepaymentConsent) { this.setData({ error: '请先确认本桌共享预收款规则' }); return }
     const storageKey = 'mbox.table-prepayment.v1:' + tableSessionCacheScope()
-    let attempt = wx.getStorageSync(storageKey)
-    if (!attempt || !attempt.key) {
-      const pending = this.data.prepayment.myPendingReceipts && this.data.prepayment.myPendingReceipts[0]
-      const text = pending ? (pending.amountMinor / 100).toFixed(2) : String(this.data.prepaymentAmount || '')
-      const amount = Math.round(Number(text) * 100)
-      if (!/^\d+(\.\d{1,2})?$/.test(text) || !Number.isSafeInteger(amount) || amount <= 0) { this.setData({ error: '请输入有效的预收款金额，最多两位小数' }); return }
-      attempt = { key: randomId('table-prepay'), amount }
-      wx.setStorageSync(storageKey, attempt)
-    }
     this.setData({ prepaymentBusy: true, error: '', success: '' })
     try {
+      const ownerScope = commandIdentityScope()
+      let attempt = wx.getStorageSync(storageKey)
+      const exists = attempt !== undefined && attempt !== null && (attempt !== '' || (typeof wx.getStorageInfoSync === 'function' && wx.getStorageInfoSync().keys.includes(storageKey)))
+      if (exists && (!attempt || typeof attempt.key !== 'string' || attempt.key.length < 8
+        || !Number.isSafeInteger(attempt.amount) || attempt.amount <= 0 || attempt.ownerScope !== ownerScope
+        || !Number.isFinite(attempt.createdAt) || Date.now() < attempt.createdAt || Date.now() - attempt.createdAt > 23 * 3600000)) {
+        throw new Error('原预付款记录无法安全恢复，请先核对原付款或联系员工，本次不会另建付款')
+      }
+      if (!exists) {
+        const pending = this.data.prepayment.myPendingReceipts && this.data.prepayment.myPendingReceipts[0]
+        const text = pending ? (pending.amountMinor / 100).toFixed(2) : String(this.data.prepaymentAmount || '')
+        const amount = Math.round(Number(text) * 100)
+        if (!/^\d+(\.\d{1,2})?$/.test(text) || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('请输入有效的预收款金额，最多两位小数')
+        attempt = { key: randomId('table-prepay'), amount, ownerScope, createdAt: Date.now() }
+        wx.setStorageSync(storageKey, attempt)
+      }
+      const saved = wx.getStorageSync(storageKey)
+      if (!saved || saved.key !== attempt.key || saved.amount !== attempt.amount || saved.ownerScope !== ownerScope || saved.createdAt !== attempt.createdAt) throw new Error('原预付款记录无法可靠保存，本次没有提交，请重试')
+      const current = () => this.isCurrentTableRequest(guard) && commandIdentityScope() === ownerScope
       const action = await prepayTable(attempt.amount, attempt.key)
-      if (!this.isCurrentTableRequest(guard)) return
-      if (action.status === 'resolved') {
+      if (!current()) return
+      if (action && action.status === 'resolved' && ['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed', 'cancelled'].includes(action.terminalPaymentStatus)) {
         wx.removeStorageSync(storageKey)
         this.setData({ success: ['succeeded','partially_refunded','refunded'].includes(action.terminalPaymentStatus) ? '原预付款已确认，请查看最新余额' : '原付款已结束，本次未新增收款，请重新填写金额' })
       } else if (isPresentableWechatJsapiAction(action)) {
         await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
+        if (!current()) return
         try { await queryPrepayment(action.paymentId) } catch (_) { /* Callback and original payment query remain authoritative. */ }
-        if (this.isCurrentTableRequest(guard)) this.setData({ success: '已提交付款，请查看最新余额；未确认时继续核对原付款，请勿重复付款' })
+        if (current()) this.setData({ success: '已提交付款，请查看最新余额；未确认时继续核对原付款，请勿重复付款' })
       } else {
-        if (action.status === 'failed') wx.removeStorageSync(storageKey)
         this.setData({ error: '预付款尚未确认，请核对原付款或联系员工处理' })
       }
-      if (this.isCurrentTableRequest(guard)) await this.refreshSharedCart()
+      if (current()) await this.refreshSharedCart()
     } catch (error) {
       if (this.isCurrentTableRequest(guard)) this.setData({ error: isWechatCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })
     } finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }

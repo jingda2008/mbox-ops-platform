@@ -146,9 +146,10 @@ Page({
       }
       if (pendingResult.status === 'rejected') throw pendingResult.reason
       const pendingReservation = pendingResult.value
-      this.setData({ reservationRecoveryReady: true, pendingReservation })
+      this.setData({ pendingReservation })
       if (reservationResult.status === 'rejected') throw reservationResult.reason
       const data = reservationResult.value
+      if (!data || !Array.isArray(data.reservations)) throw new Error('预约列表尚未完整读取，请重试核对')
       const performanceImpacts = impactResult.status === 'fulfilled'
         ? (impactResult.value.impacts || []).map(impactView) : []
       const pendingByReservation = new Map()
@@ -190,7 +191,7 @@ Page({
         performanceNotificationOption: notificationByReservation.get(item.publicId) || null,
       })).sort((left, right) => String(right.arrivalAt).localeCompare(String(left.arrivalAt)))
       this.setData({
-        loading: false, reservations, performanceImpacts,
+        loading: false, reservationRecoveryReady: true, reservations, performanceImpacts,
         impactsError: impactResult.status === 'rejected' ? '演出调整状态暂时无法读取，请重试' : '',
         showForm: !pendingReservation && reservations.length === 0,
       })

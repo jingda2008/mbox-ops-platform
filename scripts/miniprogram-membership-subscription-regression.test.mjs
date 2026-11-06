@@ -60,7 +60,7 @@ test('optional identity failure sends no invented identity header', async()=>{
 const option = {apiKind:'loyalty',notificationType:'loyalty_points_expiring',policyId:'policy',policyVersion:2,templateId:'expiry',authorizationVersion:3,usesRemaining:0}
 function subscriptionFixture(record, result='accept') {
   const module={exports:{}}, calls=[]
-  vm.runInNewContext(read('miniprogram/utils/wechat-subscription.js'), {module, console:{error:()=>{}}, require:()=>({recordWechatNotificationAuthorization:record}), wx:{requestSubscribeMessage:args=>{calls.push(args.tmplIds);args.success({expiry:result});args.complete();}}})
+  vm.runInNewContext(read('miniprogram/utils/wechat-subscription.js'), {module, console:{error:()=>{}}, require:name=>name==='./recoverable-command'?{commandIdentityScope:()=> 'fixture-owner'}:{recordWechatNotificationAuthorization:record}, wx:{requestSubscribeMessage:args=>{calls.push(args.tmplIds);args.success({expiry:result});args.complete();}}})
   return {helper:module.exports,calls}
 }
 test('subscription completion waits for durable writeback, even after the platform complete callback', async()=>{

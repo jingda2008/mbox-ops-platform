@@ -384,7 +384,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
       }
     },
     getActivityRegistrationPayment: async () => ({
-      registrationStatus: 'payment_pending', allowedActions: ['start_payment', 'query_payment', 'cancel_registration'],
+      registrationStatus: 'payment_pending', resolutionState: 'pending', paymentPublicId: 'activity-payment-direct-001', allowedActions: ['start_payment', 'query_payment', 'cancel_registration'],
       payment: { publicId: 'activity-payment-direct-001', amountMinor: 2000, method: 'jsapi' },
     }),
     startActivityRegistrationPayment: async () => {
@@ -1098,7 +1098,7 @@ test('subscription messages are requested from customer actions, not a settings-
   const helperModule = { exports: {} }
   vm.runInNewContext(subscriptionSource, {
     module: helperModule,
-    require: () => ({
+    require: name => name === './recoverable-command' ? { commandIdentityScope: () => 'fixture-owner' } : ({
       recordWechatNotificationAuthorization: async (input) => recorded.push({ kind: 'loyalty', ...input }),
       recordWechatMemberServiceNotificationAuthorization: async (input) => recorded.push({ kind: 'member_service', ...input }),
       recordReservationPerformanceNotificationAuthorization: async (input) => recorded.push({ kind: 'reservation_performance', ...input }),

@@ -69,10 +69,15 @@ const identifier=(name:string)=>`"${name.replaceAll('"','""')}"`
       const files=['closed-manual-debt-projection','closed-debt-recovery','closed-order-financial-projection',
         'batch-closed-debt-recovery','loyalty-recollection','recommendation-recollection','order-financial-recovery']
       const result=spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run',...files.map(name=>`server/normalized/${name}.integration.test.ts`),'--maxWorkers=1','--pool=forks','--reporter=dot'],{
-        encoding:'utf8',timeout:120000,maxBuffer:4*1024*1024,
+        // Seven complete financial suites share this subprocess budget; CI measured
+        // 102 seconds inside Vitest on a passing run, leaving little startup margin.
+        // This is a harness limit, not a payment or performance acceptance threshold.
+        encoding:'utf8',timeout:240000,maxBuffer:4*1024*1024,
         env:{...process.env,TEST_NORMALIZED_ADMIN_URL:clusterUrl.toString(),TEST_NORMALIZED_DATABASE_URL:target.toString(),TEST_NORMALIZED_RUNTIME_DATABASE_URL:actual.toString()},
       })
       const output=(result.stdout+result.stderr).replaceAll(password,'[synthetic-password]')
+      expect(result.error,output).toBeUndefined()
+      expect(result.signal,output).toBeNull()
       expect(result.status,output).toBe(0)
       const plain=stripVTControlCharacters(output)
       expect(plain).toMatch(/Test Files\s+7 passed \(7\)/)
@@ -88,5 +93,5 @@ const identifier=(name:string)=>`"${name.replaceAll('"','""')}"`
       await admin.query(`DROP ROLE IF EXISTS ${identifier(old)}`)
       await admin.end()
     }
-  },180000)
+  },360000)
 })

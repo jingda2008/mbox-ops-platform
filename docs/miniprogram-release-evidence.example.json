@@ -23,6 +23,11 @@
     "contact": "待隐私联系人确认",
     "dataRetentionPolicyVersion": "待确认",
     "thirdPartyRegisterVersion": "待确认",
+    "policyVersion": "待填写正式隐私政策版本",
+    "contentSha256": "待填写正式隐私政策内容64位SHA256",
+    "approvedBy": "待填写隐私政策批准人",
+    "approvedAt": "待填写UTC时间",
+    "effectiveAt": "待填写UTC时间",
     "reviewedAt": "待填写UTC时间",
     "evidenceRef": {
       "path": "evidence/privacy-review.pdf",

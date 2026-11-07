@@ -96,7 +96,30 @@ test('rejects tampered candidate, unapproved domain and duplicate official table
   assert.match(report.failures.join('\n'), /未绑定当前证据内容/)
 })
 
-async function readyFixture(stage) {
+test('accepts business-valid short official table display names', async () => {
+  for (const tableDisplayName of ['B1', 'A8', '吧', 'A'.repeat(120)]) {
+    const fixture = await readyFixture('release', tableDisplayName)
+    const report = await verifyMiniProgramRelease({
+      stage: 'release', evidencePath: fixture.evidencePath,
+      trustedKeyId: fixture.trustedKeyId, trustedPublicKey: fixture.trustedPublicKey,
+    })
+    assert.equal(report.status, 'ready', `${tableDisplayName}: ${report.failures.join('; ')}`)
+  }
+})
+
+test('rejects blank oversized and placeholder official table display names', async () => {
+  for (const tableDisplayName of ['', '  ', 'A'.repeat(121), '待确认', 'placeholder']) {
+    const fixture = await readyFixture('release', tableDisplayName)
+    const report = await verifyMiniProgramRelease({
+      stage: 'release', evidencePath: fixture.evidencePath,
+      trustedKeyId: fixture.trustedKeyId, trustedPublicKey: fixture.trustedPublicKey,
+    })
+    assert.equal(report.status, 'blocked')
+    assert.match(report.failures.join('\n'), /条目无效或重复/)
+  }
+})
+
+async function readyFixture(stage, tableDisplayName = '互动01') {
   const root = await mkdtemp(resolve(tmpdir(), 'mbox-mini-release-ready-'))
   const candidateRoot = resolve(root, 'candidate')
   const candidate = await buildMiniProgramReleaseCandidate({
@@ -123,7 +146,7 @@ async function readyFixture(stage) {
     sourceManifest: 'table-qrs.private.json', page: 'pages/order/index', environment: 'release',
     entries: [{
       tableId: '33333333-3333-4333-8333-333333333333', tableCode: 'L01',
-      tableDisplayName: '互动01', qrVersion: 2, tokenSha256: 'b'.repeat(64),
+      tableDisplayName, qrVersion: 2, tokenSha256: 'b'.repeat(64),
       filename: 'L01.wechat-mini-code.png', imageSha256: await fileDigest(imagePath),
     }],
   }), { mode: 0o600 })

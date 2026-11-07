@@ -327,7 +327,10 @@ async function verifyOfficialCodes(root, pathValue, digestValue, failures) {
       const entry = objectOrEmpty(raw)
       const filename = safeRelativePath(entry.filename)
       if (!validUuid(entry.tableId) || !/^[A-Z0-9][A-Z0-9_-]{0,31}$/.test(string(entry.tableCode))
-        || !meaningful(entry.tableDisplayName) || !Number.isSafeInteger(entry.qrVersion) || entry.qrVersion < 1
+        // Match the table configuration's 1–120 character display-name contract.
+        // Short real labels such as B1/A8 are not missing approval evidence.
+        || !meaningful(entry.tableDisplayName, 1) || string(entry.tableDisplayName).length > 120
+        || !Number.isSafeInteger(entry.qrVersion) || entry.qrVersion < 1
         || !/^[0-9a-f]{64}$/.test(string(entry.tokenSha256)) || !/^[0-9a-f]{64}$/.test(string(entry.imageSha256))
         || !filename || filename.includes('/') || !filename.endsWith('.wechat-mini-code.png')
         || ids.has(entry.tableId) || codes.has(entry.tableCode) || files.has(filename)) {
@@ -408,9 +411,9 @@ function digest(value, label, failures) {
 function sha256(value) { return createHash('sha256').update(value).digest('hex') }
 function validAppId(value) { return /^wx[0-9a-f]{16}$/.test(string(value)) }
 function validUuid(value) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(string(value)) }
-function meaningful(value) {
+function meaningful(value, minLength = 3) {
   const result = string(value)
-  return result.length >= 3 && !/(example|placeholder|pending|unknown|todo|tbd|n\/a|your-|待|未确认|未提供|占位|示例|测试)/i.test(result)
+  return result.length >= minLength && !/(example|placeholder|pending|unknown|todo|tbd|n\/a|your-|待|未确认|未提供|占位|示例|测试)/i.test(result)
 }
 function object(value, label) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${label}无效`)

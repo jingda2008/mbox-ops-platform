@@ -7,6 +7,7 @@ const root = resolve('artifacts/normalized-browser-extended')
 const active = resolve('artifacts/normalized-browser')
 const specs = names => names.map(name => `tests/normalized-e2e/normalized-${name}.spec.ts`)
 const groups = [
+  { name: 'cross-day-debt', count: 1, flags: { CROSS_DAY_DEBT: 'true' }, files: specs(['cross-day-debt']) },
   { name: 'member-remaining', count: 12, flags: { MEMBER_CARDS: 'true', REQUIREMENTS_V9: 'true' }, files: specs(['member-cards', 'member-card-benefits', 'coupon-refund-review', 'marketing', 'requirements-v9', 'upgrade-qualification']) },
   // Legacy kitchen batches and the three-screen dispatch policy need different fixtures.
   { name: 'kitchen-batches', count: 5, flags: { KITCHEN: 'true' }, files: specs(['kitchen-batch']) },
@@ -17,7 +18,7 @@ mkdirSync(root, { recursive: true })
 const reports = []
 for (const group of groups) {
   const env = { ...process.env }
-  for (const flag of ['MEMBER_CARDS', 'MEMBER_VISIT_REWARDS', 'REQUIREMENTS_V9', 'KITCHEN', 'THREE_SCREEN', 'REMAKE_HANDOVER', 'SERVICE_HISTORY']) delete env[`NORMALIZED_E2E_${flag}`]
+  for (const flag of ['MEMBER_CARDS', 'MEMBER_VISIT_REWARDS', 'REQUIREMENTS_V9', 'KITCHEN', 'THREE_SCREEN', 'REMAKE_HANDOVER', 'SERVICE_HISTORY', 'CROSS_DAY_DEBT']) delete env[`NORMALIZED_E2E_${flag}`]
   for (const [key, value] of Object.entries(group.flags)) env[`NORMALIZED_E2E_${key}`] = value
   rmSync(active, { recursive: true, force: true })
   const destination = resolve(root, group.name)

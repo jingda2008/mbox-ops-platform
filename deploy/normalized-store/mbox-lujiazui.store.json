@@ -1,5 +1,5 @@
 {
-  "version": "2026.10.31-v29",
+  "version": "2026.11.07-v30",
   "tenant": {
     "id": "10000000-0000-4000-8000-000000000001",
     "code": "superhigh",
@@ -1001,7 +1001,8 @@
         "refund.request",
         "reservation.contact.view",
         "order.minimum_spend.release",
-        "table.minimum_spend.adjust"
+        "table.minimum_spend.adjust",
+        "payment.history.collect"
       ],
       "navigation": [
         {
@@ -1289,7 +1290,8 @@
         "order.history.view",
         "order.history.all",
         "refund.request",
-        "reservation.contact.view"
+        "reservation.contact.view",
+        "payment.history.collect"
       ],
       "navigation": [
         {
@@ -1416,7 +1418,8 @@
         "order.bill.print",
         "reservation.contact.view",
         "order.minimum_spend.release",
-        "table.minimum_spend.adjust"
+        "table.minimum_spend.adjust",
+        "payment.history.collect"
       ],
       "navigation": [
         {
@@ -1826,7 +1829,8 @@
         "order.history.view",
         "order.bill.print",
         "refund.request",
-        "order.minimum_spend.release"
+        "order.minimum_spend.release",
+        "payment.history.collect"
       ],
       "navigation": [
         {

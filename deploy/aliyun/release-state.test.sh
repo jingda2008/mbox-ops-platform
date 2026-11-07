@@ -35,3 +35,9 @@ release_state_transition "${contract_state_file}" post_drain_backup_verified mig
 release_state_transition "${contract_state_file}" migrated database_restored
 release_state_transition "${contract_state_file}" database_restored rolled_back
 release_state_require "${contract_state_file}" rolled_back
+
+# Cross-day debt changes closed-invoice payment semantics, including rollback.
+test "$(release_contract_boundary_between 299 300)" = 300
+test "$(release_contract_boundary_between 299 301)" = 300
+test "$(release_contract_boundary_between 300 301)" = 0
+test "$(release_contract_boundary_between 298 299)" = 0

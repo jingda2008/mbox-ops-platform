@@ -865,7 +865,7 @@ export class PaymentProviderActionRepository {
         RETURNING payment.order_id, payment.activity_registration_id, payment.payable_kind
       )
       UPDATE mbox.orders ordering
-      SET payment_status = 'unpaid', updated_at = clock_timestamp()
+      SET payment_status = COALESCE(mbox.carryover_payment_status(ordering.tenant_id,ordering.store_id,ordering.id),'unpaid'), updated_at = clock_timestamp()
       FROM payment_updated
       WHERE ordering.tenant_id = $1::uuid AND ordering.store_id = $2::uuid
         AND ordering.id = payment_updated.order_id

@@ -95,11 +95,13 @@ release_state_transition_allowed() {
 # run after cutover has resumed writes. 96 is the original table contract.
 # 282 is additive: reports use the existing frozen daily_settlement print
 # snapshot and cost capture runs in DB triggers, so it adds no contract boundary.
+# 300 preserves closed consumption debt: old writers use original totals and
+# cannot safely project partial carried-over receipts or refunds.
 release_contract_boundary_between() {
   local from_schema=$1 to_schema=$2 boundary result=0
   [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
-  for boundary in 96 275; do
+  for boundary in 96 275 300; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

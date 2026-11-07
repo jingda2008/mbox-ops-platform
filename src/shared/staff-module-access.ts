@@ -37,7 +37,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     permissionCodes: [
       'payment.manual.cash.record', 'payment.manual.pos.record', 'payment.manual.external.record',
       'payment.settlement.view', 'refund.request', 'refund.approve',
-      'refund.execute', 'payment.recollect.authorize', 'community.activity.cashier',
+      'refund.execute', 'payment.recollect.authorize', 'payment.history.collect', 'community.activity.cashier',
       'reconciliation.view', 'reconciliation.manage', 'business_day.close',
       'commercial.voucher.view', 'commercial.voucher.redeem',
     ],
@@ -213,6 +213,7 @@ export function staffPermissionImpactLabel(permissionCode: string): string | nul
     'refund.request': '发起退款',
     'refund.approve': '复核退款',
     'refund.execute': '执行退款',
+    'payment.history.collect': '收取历史欠款',
     'payment.recollect.authorize': '授权退款后重新收款',
     'community.activity.cashier': '处理活动收款、退款和退款后重收',
     'commercial.voucher.view': '查看团购核销记录',

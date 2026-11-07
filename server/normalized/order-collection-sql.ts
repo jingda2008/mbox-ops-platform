@@ -1,7 +1,8 @@
+import {carryoverDebtSql} from './carryover-debt.js'
 /** Shared consumption queue. Pending attempts are never receipts or customer debt. */
 export function orderNeedsCollectionSql(order: string): string {
   if (!/^[a-z_]+$/.test(order)) throw new TypeError('Invalid order SQL alias')
-  return `(${order}.status NOT IN ('draft','cancelled') AND ${orderCollectionDueSql(order)}>0)`
+  return `((${order}.status NOT IN ('draft','cancelled') OR ${carryoverDebtSql(order)}) AND ${orderCollectionDueSql(order)}>0)`
 }
 
 /** One authoritative projection for collection, table closure, printing and reports. */

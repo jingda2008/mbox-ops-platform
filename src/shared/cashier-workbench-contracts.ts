@@ -180,6 +180,8 @@ export interface CashierWorkbenchOrder {
   points?:{used:number;restored:number;credited:number;state:'held'|'consumed'|'released'}
   /** Closed sessions retain their original table/day; only proven old debt may be collected. */
   closedDebtRecovery?: {
+    kind?:'consumption'
+    reviewReason?:string|null
     status:'available'|'authorization_required'|'pending_payment'|'permission_required'|'ineligible'|'settled'
     originalBusinessDate:string
     pendingPaymentIds:string[]
@@ -212,7 +214,7 @@ export interface CashierWorkbenchOrder {
   businessDate?: string
   carryover?: boolean
   settlementException?: {
-    reasonCode: 'manager_comp' | 'uncollectible' | 'test_cleanup'
+    reasonCode: 'manager_comp' | 'uncollectible' | 'test_cleanup' | 'automatic_cutoff' | 'customer_left'
     settledAmountMinor: number
     occurredAt: string
   } | null
@@ -228,6 +230,7 @@ export interface CashierWorkbenchOrder {
 }
 
 export interface CashierWorkbenchView {
+  pagination?:{page:number;pageSize:number;totalCount:number;totalOutstandingMinor:number}
   businessDate: string
   query: string
   actions: {

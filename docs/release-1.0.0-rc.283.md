@@ -1,4 +1,4 @@
-# M-BOX 1.0.0-rc.283 跨营业日补收发布候选
+# M-BOX 1.0.0-rc.283 跨营业日补收发布候选（未部署，由rc284替代）
 
 用户已授权代码审查、PR、完整CI、合并和部署，允许必要schema及权限变更；禁止改写既有订单、付款、退款、日结或历史欠款。
 
@@ -29,3 +29,9 @@ rc283 最终本地完整 check 串行复验退出0，保留此前短时 mock 吞
 主线 CI42371223494 首轮完整成功。标签 CI42371240631 首轮数据库4393项全部通过，但整项任务耗时达到25分钟，后续HTTP验收尚未完成即被平台取消；最终verify失败、镜像构建跳过，不能视为标签通过。GitHub annotation明确为 `The job has exceeded the maximum execution time of 25m0s`。同一套数据库测试在PR、主线、标签轮分别耗时783.78、1032.23、1237.45秒，变换/导入及专项耗时也同比增长；这是执行速度差异的证据，不能据此确定基础设施根因。
 
 保留首轮日志、annotations和CI快照，对原标签同SHA的受影响数据库任务及依赖门禁发起一次重验；不改测试、阈值或timeout，不以主线成功代替标签HTTP结果。发布仍等待完整标签成功。证据：`/Users/jingda/mbox/outputs/release-rc283-20261107/tag-ci-attempt1.json`、`tag-database-attempt1-annotations.json`、`tag-database.log`。
+
+## 最终候选结局
+
+标签第二次数据库4393项仍全部通过（套件1223.14秒），后续HTTP再次被25分钟总上限取消，GitHub annotations与首轮相同。没有第三次盲重跑；已停止rc283 Release等待，保留标签及两轮失败证据。rc283未部署，生产仍rc282/schema299。
+
+时间预算修正进入[PR432](https://github.com/jingda2008/mbox-ops-platform/pull/432)，准确head cbf0ac0126fe9f5aeb5daa01d5a3a860d4a46189完整CI42375149160成功，于北京时间21:34:02合并25e4d94a83d7edde5a1886ce7a01f83e7942a7ae。后续发布使用[rc284](release-1.0.0-rc.284.md)，不覆盖rc283标签。用户已明确部署时间为2026-11-08 00:30 Asia/Shanghai，此前仅准备。

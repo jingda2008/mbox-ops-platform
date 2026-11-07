@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { basename, extname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { miniProgramProjectFailures } from './miniprogram-project-policy.mjs'
 
 export async function buildMiniProgramReleaseCandidate(input) {
   const sourceRoot = resolve(input.sourceRoot)
@@ -11,6 +12,9 @@ export async function buildMiniProgramReleaseCandidate(input) {
   const runtime = releaseRuntime(input.runtime)
   const sourceCommitSha = commitSha(input.sourceCommitSha)
   const createdAt = isoTime(input.createdAt ?? new Date().toISOString(), 'candidate createdAt')
+  const sourceProject = object(JSON.parse(await readFile(resolve(sourceRoot, 'project.config.json'), 'utf8')), 'project config')
+  const projectFailures = miniProgramProjectFailures(sourceProject)
+  if (projectFailures.length > 0) throw new Error(projectFailures.join('; '))
   const packageRoot = resolve(outputRoot, 'miniprogram')
   await mkdir(outputRoot, { recursive: false, mode: 0o700 })
   const uploadExtensions = new Set(['.js', '.json', '.wxml', '.wxss', '.png', '.jpg', '.jpeg', '.svg', '.webp'])
@@ -22,7 +26,6 @@ export async function buildMiniProgramReleaseCandidate(input) {
     ),
   })
 
-  const sourceProject = object(JSON.parse(await readFile(resolve(sourceRoot, 'project.config.json'), 'utf8')), 'project config')
   const project = {
     ...sourceProject,
     appid: runtime.wechatAppId,

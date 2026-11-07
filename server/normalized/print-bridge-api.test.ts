@@ -67,6 +67,67 @@ describe('print bridge API', () => {
   })
 })
 
+
+const bridgeCases = [
+  { name: 'heartbeat', url: '/print-bridge/heartbeat', method: 'heartbeat',
+    payload: { hostname: 'isolated-host', softwareVersion: '1.0.0', queues: ['TEST_QUEUE'] }, result: { accepted: true } },
+  { name: 'work claim', url: '/print-bridge/work/claim', method: 'claim',
+    payload: { limit: 5 }, result: { jobs: [], commands: [] } },
+  { name: 'print result', url: '/print-bridge/jobs/44444444-4444-4444-8444-444444444444/result', method: 'recordPrintResult',
+    payload: { outcome: 'printed' }, result: { accepted: true } },
+  { name: 'command result', url: '/print-bridge/commands/44444444-4444-4444-8444-444444444444/result', method: 'recordCommandResult',
+    payload: { outcome: 'succeeded' }, result: { accepted: true } },
+]
+
+describe.each(bridgeCases)('print bridge transaction completion: $name', (fixture) => {
+  it.each([false, true])('sends a response only after transaction completion (commit failure: %s)', async (failCommit) => {
+    const operationFinished = Promise.withResolvers<void>()
+    const releaseCommit = Promise.withResolvers<void>()
+    let committed = false
+    let sentBeforeCommit = false
+    const repository = {
+      authenticate: vi.fn(async () => ({ id: employeeId, publicId: 'print-bridge-test' })),
+      [fixture.method]: vi.fn(async () => fixture.result),
+    }
+    const app = Fastify()
+    app.addHook('onSend', async (_request, reply, payload) => {
+      if (reply.statusCode === 200 && !committed) sentBeforeCommit = true
+      return payload
+    })
+    await app.register(printBridgeApiPlugin, {
+      ...options(repository, []),
+      transactions: {
+        run: async <Result>(_scope: typeof scope, operation: (tx: ScopedTransaction) => Promise<Result>) => {
+          const result = await operation({ scope } as ScopedTransaction)
+          operationFinished.resolve()
+          await releaseCommit.promise
+          if (failCommit) throw new Error('isolated commit failure')
+          committed = true
+          return result
+        },
+      },
+    })
+    const responsePromise = app.inject({ method: 'POST', url: fixture.url,
+      headers: { 'x-mbox-print-bridge-id': 'print-bridge-test', authorization: `Bearer ${'a'.repeat(43)}` },
+      payload: fixture.payload }).then(response => response)
+    try {
+      await operationFinished.promise
+      const prematureSuccess = sentBeforeCommit
+      releaseCommit.resolve()
+      const response = await responsePromise
+      expect(prematureSuccess, 'success must not precede COMMIT').toBe(false)
+      expect(response.statusCode).toBe(failCommit ? 500 : 200)
+      if (!failCommit) expect(response.json()).toEqual({ data: fixture.result })
+      else expect(response.json()).not.toHaveProperty('data')
+      expect(repository[fixture.method]).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseCommit.resolve()
+      await responsePromise
+      await app.close()
+    }
+  })
+})
+
 function options(repository: Record<string, unknown>, capabilities: string[]) {
   const transaction = { scope } as ScopedTransaction
   return {

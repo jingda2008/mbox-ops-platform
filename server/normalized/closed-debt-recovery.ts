@@ -1,3 +1,4 @@
+import {readCarryoverDebt} from './carryover-debt.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {RecollectionAuthorizationConflictError} from './recollection-authorization-repository.js'
 
@@ -60,7 +61,7 @@ export function closedDebtEligibilitySql(order='orders',session='session'):strin
 
 export interface ClosedDebtRecovery {
   orderId:string;tableSessionId:string;originalBusinessDate:string;closedAt:string
-  outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
+  carryover?:boolean;reviewReason?:string|null;outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
 }
 
 export interface ClosedDebtPaymentTargets {
@@ -133,11 +134,12 @@ export async function lockClosedDebtRecovery(tx:ScopedTransaction,orderId:string
     WHERE orders.tenant_id=$1 AND orders.store_id=$2 AND orders.id=$3 AND session.id=$4`,[...args,sessionId])
   const row=result.rows[0]
   if(!row)throw new RecollectionAuthorizationConflictError('原订单归属已变化，请刷新后核对')
-  return {orderId,tableSessionId:sessionId,originalBusinessDate:row.original_business_date,closedAt:row.closed_at,
-    outstandingAmountMinor:Number(row.due),eligible:row.eligible,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:row.authorization_id}
+  const debt=await readCarryoverDebt(tx,orderId)
+  return {orderId,tableSessionId:sessionId,carryover:debt!==null,reviewReason:debt?.reviewReason,originalBusinessDate:row.original_business_date,closedAt:row.closed_at,
+    outstandingAmountMinor:Number(row.due),eligible:debt?debt.eligibility==='confirmed':row.eligible,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:row.authorization_id}
 }
 
 export function assertClosedDebtWritable(recovery:ClosedDebtRecovery):void{
   if(!recovery.eligible||recovery.outstandingAmountMinor<=0)throw new RecollectionAuthorizationConflictError('已关桌订单仅可补收关桌前已确认的历史欠款，请交财务核对')
-  if(recovery.pendingPaymentIds.length)throw new RecollectionAuthorizationConflictError('原付款结果尚未明确，请先查询原付款；已关桌历史欠款不能并行收款或释放重试')
+  if(!recovery.carryover&&recovery.pendingPaymentIds.length)throw new RecollectionAuthorizationConflictError('原付款结果尚未明确，请先查询原付款；已关桌历史欠款不能并行收款或释放重试')
 }

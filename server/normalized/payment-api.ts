@@ -318,6 +318,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       readOptionalJsonObject(body.providerSnapshot, 'providerSnapshot'),
     )
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
+    const expectedOutstandingMinor=body.expectedOutstandingMinor===undefined?undefined:readInteger(body.expectedOutstandingMinor,'确认剩余欠款',1,Number.MAX_SAFE_INTEGER)
     assertActorPaymentMethod(context.actor, method)
     const customerAuthCode = method === 'auth_code'
       ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
@@ -329,6 +330,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const execution = await options.commands.initiate({
         ...metadata(request, context, idempotencyKey, {
           orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
+          ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
           publicId,
           provider,
           method,
@@ -337,6 +339,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
           principal: principalToJson(principal),
         }),
         orderId, orderIds, amountMinor,
+        ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
         publicId,
         provider,
         method,
@@ -400,6 +403,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       ?? (options.createPublicId ? createPublicId('payment')
         : `P${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`)
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
+    const expectedOutstandingMinor=body.expectedOutstandingMinor===undefined?undefined:readInteger(body.expectedOutstandingMinor,'确认剩余欠款',1,Number.MAX_SAFE_INTEGER)
     if (path === '/payments/manual/closed-debt' && body.closedDebtGuard === undefined) throw new TypeError('历史补收必须确认原欠款金额和授权')
     const closedDebtGuard = body.closedDebtGuard === undefined ? undefined : (() => {
       if (orderIds !== undefined || amountMinor !== undefined) throw new TypeError('历史欠款只支持原单全额补收')
@@ -409,6 +413,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     const execution = await options.commands.recordManual({
       ...metadata(request, context, idempotencyKey, {
         orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
+          ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
         ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
         publicId,
         provider,
@@ -416,6 +421,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         evidence,
       }),
       orderId, orderIds, amountMinor,
+        ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
       ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
       publicId,
       provider,
@@ -828,7 +834,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
 
   app.get('/payments/workbench/todo-summary', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveStaffContext(options, request)
-    requireAnyStaffCapability(context, ['reconciliation.view', 'reconciliation.manage', 'payment.settlement.view',
+    requireAnyStaffCapability(context, ['reconciliation.view', 'reconciliation.manage', 'payment.settlement.view', 'payment.history.collect',
       'payment.manual.cash.record', 'payment.manual.pos.record', 'payment.manual.external.record',
       'refund.request', 'refund.approve', 'refund.execute', 'community.activity.cashier', 'business_day.close'])
     if (!options.transactions) throw new Error('待办汇总读取暂不可用')
@@ -843,6 +849,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       'reconciliation.view',
       'reconciliation.manage',
       'payment.settlement.view',
+      'payment.history.collect',
       'payment.manual.cash.record',
       'payment.manual.pos.record',
       'payment.manual.external.record',
@@ -861,6 +868,10 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       businessDate: context.businessDate,
       capabilities: context.capabilities,
       query: readOptionalString(query.query, 'query', 64) ?? undefined,
+      page:query.page===undefined?0:readInteger(query.page,'page',0,100000),
+      collectionScope:query.collectionScope===undefined?'workbench':readCollectionScope(query.collectionScope),
+      fromDate:query.fromDate===undefined?undefined:readBusinessDate(query.fromDate),
+      toDate:query.toDate===undefined?undefined:readBusinessDate(query.toDate),
       areaId: query.areaId === undefined ? undefined : readUuid(query.areaId, 'areaId'),
       paymentState: readOptionalPaymentState(query.paymentState),
       activityFilter: readOptionalActivityFilter(query.activityFilter),
@@ -1745,7 +1756,7 @@ function readOrderCollection(body:Record<string,unknown>):{orderId:string;orderI
  const orderId=body.orderId===undefined&&orderIds?orderIds[0]!:readUuid(body.orderId,'orderId')
  if(orderIds&&!orderIds.includes(orderId))throw new TypeError('当前订单必须包含在所选订单中')
  const amountMinor=body.amountMinor===undefined?undefined:readInteger(body.amountMinor,'收款金额（分）',1,Number.MAX_SAFE_INTEGER)
- return {orderId,orderIds:orderIds??(amountMinor===undefined?undefined:[orderId]),amountMinor}
+ return {orderId,orderIds:orderIds??(amountMinor===undefined||body.expectedOutstandingMinor!==undefined?undefined:[orderId]),amountMinor}
 }
 
 function safePaymentConstraint(error:unknown):string|undefined{
@@ -1892,4 +1903,9 @@ function readOptionalActivityFilter(value: unknown): CashierWorkbenchQueryInput[
   if (value === undefined || value === '') return undefined
   if (value === 'unpaid' || value === 'requested' || value === 'processing') return value
   throw new PaymentApiRequestError('请选择有效活动待办类型')
+}
+
+function readCollectionScope(value:unknown):'workbench'|'unsettled'|'history'{
+  if(value==='workbench'||value==='unsettled'||value==='history')return value
+  throw new PaymentApiRequestError('账款查询范围无效')
 }

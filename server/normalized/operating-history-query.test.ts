@@ -21,7 +21,7 @@ describe('operating history',()=>{
       return {rows:sql.includes('reconciliation_entries')?[{provider:'cash',received:'1000',refunded:'1800',net:'-800'}]:[]}
     }} as unknown as ScopedTransaction
     const result=await readOperatingHistory(tx,{businessDate:'2026-09-09',table:'L01',employee:'张三',page:2})
-    expect(result.receipts).toEqual([{provider:'cash',receivedMinor:1000,refundedMinor:1800,netMinor:-800}])
+    expect(result.receipts).toEqual([{provider:'cash',receivedMinor:1000,refundedMinor:1800,netMinor:-800,historicalCollectionMinor:0}])
     expect(result.orders).toEqual([])
     expect(calls[0]?.values).toEqual(['tenant','store','2026-09-09','L01','张三',100,'2026-09-09',null,'','','',null,null,null,'L01',''])
     expect(calls[1]?.values).toEqual(['tenant','store','2026-09-09','2026-09-09'])

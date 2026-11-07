@@ -1,3 +1,4 @@
+import {readCarryoverDebt} from './carryover-debt.js'
 import type { JsonObject } from './command-executor.js'
 import {CheckoutCouponLifecycleRepository} from './checkout-coupon-lifecycle-repository.js'
 import {
@@ -119,6 +120,7 @@ export class PaymentFulfillmentRepository {
     }> = {},
   ): Promise<PaymentFulfillmentActivation> {
     const state = await this.lockOrder(orderId)
+    if(await readCarryoverDebt(this.transaction,orderId))return {activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan()}
     const settled=await new PaymentRepository(this.transaction).hasSettledConsumption(orderId)
     if(state.status==='cancelled'||state.fulfillment_state==='cancelled'||!settled)return {
       activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan(),
@@ -241,6 +243,7 @@ export class PaymentFulfillmentRepository {
 
   async releaseAfterDefinitiveFailure(orderId: string, reason: string): Promise<PaymentFulfillmentRelease> {
     const order = await this.lockOrder(orderId)
+    if(await readCarryoverDebt(this.transaction,orderId))return {released:false,orderId,reservationCount:0}
     if (order.settlement_mode !== 'immediate_payment' || order.fulfillment_state !== 'awaiting_payment') {
       return { released: false, orderId, reservationCount: 0 }
     }

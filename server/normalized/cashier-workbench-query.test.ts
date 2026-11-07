@@ -114,7 +114,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       null,
       null,
       null,
-      'VIP1',
+      'VIP1',false,'workbench',0,null,null,
     ])
     expect(runner.calls[0]?.sql).toContain("workbench_assignment.assignment_type IN ('primary','backup')")
     expect(runner.readOnly).toBe(true)
@@ -132,7 +132,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       capabilities: ['reconciliation.view'], query: '136', areaId, paymentState: 'processing', limit: 20,
     })
     expect(runner.calls[0]?.values).toEqual([
-      tenantId, storeId, '2026-08-13', '136', 20, employeeId, true, areaId, 'processing', 13_600, '136',
+      tenantId, storeId, '2026-08-13', '136', 20, employeeId, true, areaId, 'processing', 13_600, '136',false,'workbench',0,null,null,
     ])
     expect(runner.calls[0]?.sql).toContain('orders.total_amount_minor=$10::bigint')
     expect(runner.calls[0]?.sql).toContain('area.id=$8::uuid')
@@ -292,7 +292,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
     expect(runner.calls[0]?.sql).toContain("OR (($4::text <> '' OR $9::text IS NOT NULL) AND orders.business_date < $3::date)")
     expect(runner.calls[0]?.sql).toContain("recent_captured.status IN ('succeeded','partially_refunded','refunded')")
     expect(runner.calls[0]?.sql).toContain("recent_captured.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'")
-    expect(runner.calls[0]?.sql).toContain("ORDER BY (orders.status NOT IN ('draft','cancelled')")
+    expect(runner.calls[0]?.sql).toContain("ORDER BY ((orders.status NOT IN ('draft','cancelled')")
     expect(runner.calls[0]?.sql).toContain('recent_captured_ordering.succeeded_at>=clock_timestamp()')
     expect(runner.calls[1]?.sql).toContain("OR $4::text <> ''")
     expect(runner.calls[1]?.sql).not.toContain("registration.payment_status IN ('pending','refunded')")

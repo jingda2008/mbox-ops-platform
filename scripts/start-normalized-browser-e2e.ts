@@ -3,6 +3,7 @@ import {seedManualPointsBrowserFixture} from './fixtures/manual-points-browser-f
 import { seedMemberVisitRewardBrowserFixture } from './fixtures/member-visit-reward-browser-fixture.js'
 import {seedThreeScreenBrowserFixture} from './fixtures/three-screen-browser-fixture.js'
 import {seedKitchenBrowserFixture} from './fixtures/kitchen-browser-fixture.js'
+import {seedCrossDayDebtBrowserFixture} from './fixtures/cross-day-debt-browser-fixture.js'
 import {QuantityRemakeRepository} from '../server/normalized/quantity-remake-repository.js'
 import {QuantityRemakeFulfillmentRepository} from '../server/normalized/quantity-remake-fulfillment-repository.js'
 import {PostgresTableCustomerLeftTurnoverRepository} from '../server/normalized/table-customer-left-turnover-repository.js'
@@ -244,10 +245,12 @@ try {
 
   const threeScreenFixture=process.env.NORMALIZED_E2E_THREE_SCREEN==='true'?await seedThreeScreenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   const kitchenBatchFixture=process.env.NORMALIZED_E2E_KITCHEN==='true'?await seedKitchenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
+  const crossDayDebtFixture=process.env.NORMALIZED_E2E_CROSS_DAY_DEBT==='true'?await seedCrossDayDebtBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   await mkdir(dirname(fixturePath), { recursive: true })
   await writeFile(fixturePath, `${JSON.stringify({
     schemaVersion: 1,
     kitchenBatchFixture,
+    crossDayDebtFixture,
     threeScreenFixture,
     guestUrl: `/guest?table=W1#token=${tableQrToken}`,
     reservationUrl: '/reserve',

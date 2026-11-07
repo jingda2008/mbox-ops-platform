@@ -178,6 +178,7 @@ function runner(saved?: Record<string, unknown>) {
     scope,
     query: async <Row extends Record<string, unknown>>(text: string) => {
       const sql = text.replace(/\s+/g, ' ').trim()
+      if(sql.includes('JOIN mbox.order_carryover_debts'))return {rows:[],rowCount:0}
       if (sql.startsWith('SELECT payment.id')) {
         return { rows: [paymentContext as Row], rowCount: 1 }
       }

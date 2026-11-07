@@ -22,7 +22,7 @@ export function unreservedOrderExcessSql(orderReferenceAlias:string):string {
   return `GREATEST(0,COALESCE((SELECT sum(receipt.amount_minor) FROM mbox.order_payment_facts receipt
     WHERE receipt.tenant_id=${reference}.tenant_id AND receipt.store_id=${reference}.store_id AND receipt.order_id=${reference}.order_id
       AND receipt.status IN ('succeeded','partially_refunded','refunded')),0)
-    -mbox.order_receivable_amount(${reference}.tenant_id,${reference}.store_id,${reference}.order_id)
+    -mbox.order_financial_receivable_amount(${reference}.tenant_id,${reference}.store_id,${reference}.order_id)
     -COALESCE((SELECT sum(reserved_refund.amount_minor) FROM mbox.order_refund_facts reserved_refund
       WHERE reserved_refund.tenant_id=${reference}.tenant_id AND reserved_refund.store_id=${reference}.store_id
         AND reserved_refund.order_id=${reference}.order_id AND ${refundReservesAmountSql('reserved_refund')}),0))`

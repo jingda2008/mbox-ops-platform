@@ -29,12 +29,13 @@ describe('new payment window cutoff and original action recovery',()=>{
   vi.setSystemTime(new Date('2030-01-01T00:01:00Z'));await expect(validateProductPaymentWindow(f.tx,paymentId,'2030-01-01T00:05:00Z')).rejects.toThrow('已过截止')
  })
  it('does not revalidate a restored ready action after the menu/card was changed',async()=>{
-  const query=vi.fn().mockRejectedValue(new Error('Current qualification must not be reread'))
+  const query=vi.fn(async(sql:string)=>{if(sql.includes('JOIN mbox.order_carryover_debts'))return {rows:[],rowCount:0};throw new Error('Current qualification must not be reread')})
   vi.spyOn(PaymentProviderActionRepository.prototype,'resolvePaymentContext').mockResolvedValue({id:paymentId,status:'pending',publicId:'PAY-WINDOW',provider:'simulation',method:'native_qr',payableKind:'order',orderPublicId:'ORDER-WINDOW'} as never)
   vi.spyOn(PaymentProviderActionRepository.prototype,'claim').mockResolvedValue({claimed:false,payload:{presentation:'simulation'},expiresAt:'2030-01-01T00:02:00Z'} as never)
   const transactions={run:async(_scope:unknown,fn:(tx:ScopedTransaction)=>unknown)=>fn({scope,query})}
   const service=new OnlinePaymentService(transactions as never,'window-secret-at-least-thirty-two-bytes',null,null)
   expect(await service.create({scope,paymentId,principal:{type:'employee',employeeId:'employee'},operatorId:'MBOX'})).toMatchObject({expiresAt:'2030-01-01T00:02:00Z'})
-  expect(query).not.toHaveBeenCalled()
+  expect(query).toHaveBeenCalledTimes(1)
+  expect(query.mock.calls[0]![0]).toContain('JOIN mbox.order_carryover_debts')
  })
 })

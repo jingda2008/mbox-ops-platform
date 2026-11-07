@@ -1,3 +1,4 @@
+import {readCarryoverDebt} from './carryover-debt.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
 import { hashRequestFingerprint, IdempotencyConflictError, NativeCommandNotCommittedError } from './command-executor.js'
@@ -67,6 +68,7 @@ interface CommandMetadata {
 }
 
 export interface InitiatePaymentCommand extends CommandMetadata {
+  expectedOutstandingMinor?:number
   orderIds?:readonly string[]
   amountMinor?:number
   orderId: string
@@ -83,6 +85,7 @@ export interface InitiatePaymentCommand extends CommandMetadata {
 export class HistoricalCollectionChangedError extends Error {}
 
 export interface RecordManualPaymentCommand extends CommandMetadata {
+  expectedOutstandingMinor?:number
   closedDebtGuard?: Readonly<{ amountMinor: number; authorizationId: string }>
   orderIds?:readonly string[]
   amountMinor?:number
@@ -209,7 +212,13 @@ export class PaymentCommandService {
   initiate(input: Readonly<InitiatePaymentCommand>): Promise<CommandExecution<Payment>> {
     return this.commands.execute(command(input, 'payment.initiate', paymentCodec), (transaction) => (
       this.initiateInTransaction(transaction, input)
-    ))
+    ),async transaction=>{
+      if(input.expectedOutstandingMinor===undefined)return
+      const employeeId=requireEmployee(input.actor,'Historical payment initiation')
+      if(input.principal.type!=='employee'||input.principal.employeeId!==employeeId)throw new TypeError('Historical collector must match actor')
+      for(const capability of ['payment.initiate.staff','payment.history.collect'] as const)
+        await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+    })
   }
 
   async initiateInTransaction(
@@ -232,11 +241,18 @@ export class PaymentCommandService {
           transaction,
           employeeId,
           orderId,
+          allowClosedDebtRecovery:input.orderIds===undefined,
         })
       } else if (input.actor.type !== 'guest') {
         throw new TypeError('Guest payment initiation requires a guest actor')
       }
-      for(const orderId of orderIds)await new PaymentFulfillmentRepository(transaction).ensureReservationBeforePayment(orderId)
+      const recovery=input.principal.type==='employee'&&input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
+      if(recovery){
+        if(!recovery.carryover)throw new HistoricalCollectionChangedError('原退款重收历史单仍须使用受控线下补收')
+        assertClosedDebtWritable(recovery)
+        assertExpectedCarryoverBalance(input,recovery)
+      }
+      if(!recovery)for(const orderId of orderIds)await new PaymentFulfillmentRepository(transaction).ensureReservationBeforePayment(orderId)
       const payments = new PaymentRepository(transaction)
       const payment = await (input.orderIds?payments.createForOrders.bind(payments):payments.createForOrder.bind(payments))({
         orderIds,amountMinor:input.amountMinor,
@@ -244,7 +260,7 @@ export class PaymentCommandService {
         publicId: input.publicId,
         provider: input.provider,
         method: input.method,
-        evidence: providerHints,
+        evidence: recovery&&input.actor.type==='employee'?{...providerHints,collectedByEmployeeId:input.actor.employeeId}:providerHints,
         initialStatus: 'pending',
         principal: input.principal,
       })
@@ -265,7 +281,7 @@ export class PaymentCommandService {
       })
       const payments = new PaymentRepository(transaction)
       const orderId = await payments.findOrderIdForRetry(input.paymentId)
-      await this.authorization.assertEmployeeOrderAccess({ transaction, employeeId, orderId })
+      await this.authorization.assertEmployeeOrderAccess({ transaction, employeeId, orderId, allowClosedDebtRecovery:true })
       const payment = await payments.releaseUnresolvedForRetry({
         paymentId: input.paymentId,
         employeeId,
@@ -326,7 +342,7 @@ export class PaymentCommandService {
           SELECT order_id AS id FROM mbox.order_payment_allocations WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 ORDER BY order_id`,
           [input.scope.tenantId,input.scope.storeId,payment.orderBatchId])).rows
         if(!targets.length) throw new TypeError('原合并付款缺少订单关联')
-        for(const target of targets) await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId:target.id})
+        for(const target of targets) await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId:target.id,allowClosedDebtRecovery:payment.payableKind==='order'})
       }
       return {
         result: payment,
@@ -377,6 +393,7 @@ export class PaymentCommandService {
       const recovery=input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
       if(recovery){
         assertClosedDebtWritable(recovery)
+        if(recovery.carryover)assertExpectedCarryoverBalance(input,recovery)
       }
       // Mutation-only: a successful original receipt remains replayable after settlement.
       if(input.closedDebtGuard){
@@ -420,7 +437,7 @@ export class PaymentCommandService {
       if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,'payment.manual_recorded',1,undefined,occurredAt)
       if (payment.orderId === null) throw new Error('Manual payment lost its order target')
       await payments.syncOrderPaymentStatus(payment.orderId)
-      if (await payments.hasSettledConsumption(payment.orderId)) {
+      if (!recovery?.carryover && await payments.hasSettledConsumption(payment.orderId)) {
         await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
           paymentId: payment.id,
           orderId: payment.orderId,
@@ -473,7 +490,8 @@ export class PaymentCommandService {
           WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3 AND payment.public_id=$4
             AND original.provider_snapshot->>'collectedByEmployeeId'=$5`,[input.scope.tenantId,input.scope.storeId,orderId,input.publicId,employeeId])
         if(ownReceipt.rowCount){
-          if(ownReceipt.rows[0]?.historical)for(const capability of ['payment.collect.all_tables','payment.recollect.authorize'] as const)await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+          if(await readCarryoverDebt(transaction,orderId))await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.history.collect'})
+          else if(ownReceipt.rows[0]?.historical)for(const capability of ['payment.collect.all_tables','payment.recollect.authorize'] as const)await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
           continue
         }
         await this.authorization.assertEmployeeOrderAccess({
@@ -1401,4 +1419,9 @@ function requiredEvidenceString(evidence: JsonObject, key: string): string {
 
 function validateBusinessDate(value: string): void {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new TypeError('businessDate must use YYYY-MM-DD')
+}
+
+function assertExpectedCarryoverBalance(input:{expectedOutstandingMinor?:number},recovery:{outstandingAmountMinor:number}):void {
+  if(!Number.isSafeInteger(input.expectedOutstandingMinor)||input.expectedOutstandingMinor!==recovery.outstandingAmountMinor)
+    throw new HistoricalCollectionChangedError('历史欠款金额已变化或未确认，请刷新原账单；本次尚未收款')
 }

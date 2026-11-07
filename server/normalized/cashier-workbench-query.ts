@@ -1,3 +1,4 @@
+import {carryoverDebtSql} from './carryover-debt.js'
 import { bulkOrderNeedsCollectionSql, bulkOrderFinancialAttentionSql, orderCollectionBalancesCtesSql } from './order-collection-balances-sql.js'
 import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import {closedDebtEligibilitySql,localUnpresentedPaymentSql} from './closed-debt-recovery.js'
@@ -34,10 +35,17 @@ export interface CashierWorkbenchQueryInput {
   paymentState?: 'unpaid' | 'processing' | 'completed' | 'refunded'
   activityFilter?: 'unpaid' | 'requested' | 'processing'
   limit: number
+  page?:number
+  collectionScope?:'workbench'|'unsettled'|'history'
+  fromDate?:string
+  toDate?:string
 }
 
 interface OrderRow extends Record<string, unknown> {
+  matched_count?:string
+  matched_due_minor?:string
   points?:CheckoutPointsView
+  carryover_debt?:{eligibility:string;receivableMinor:number;reviewReason:string|null}|null
   closed_debt_eligible?:boolean
   closed_debt_pending_payment_ids?:string[]
   closable_unpresented_payments?:CashierClosableUnpresentedPayment[]
@@ -136,7 +144,7 @@ interface KdsTaskRow extends Record<string, unknown> {
 
 interface SettlementExceptionRow extends Record<string, unknown> {
   order_id: string
-  reason_code: 'manager_comp' | 'uncollectible' | 'test_cleanup'
+  reason_code: 'manager_comp' | 'uncollectible' | 'test_cleanup' | 'automatic_cutoff' | 'customer_left'
   settled_amount_minor: string | number
   occurred_at: string
 }
@@ -213,6 +221,7 @@ const RESERVING_REFUND_STATUSES: readonly RefundStatus[] = [
   'succeeded',
 ]
 const WORKBENCH_CAPABILITIES = [
+  'payment.history.collect',
   'reconciliation.view',
   'reconciliation.manage',
   'payment.settlement.view',
@@ -247,9 +256,9 @@ export class PostgresCashierWorkbenchQuery {
     const canViewStoreWide = STORE_WIDE_WORKBENCH_CAPABILITIES.some((capability) =>
       input.capabilities.includes(capability),
     )
-    const canUseActivityCashier = input.capabilities.includes('community.activity.cashier')
+    const canUseActivityCashier = (input.collectionScope??'workbench')==='workbench'&&input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
-      const orderResult = await transaction.query<OrderRow>(`
+      const orderQuery = `
         WITH ${orderCollectionBalancesCtesSql}, cashier_recent_captured_orders AS MATERIALIZED (
           -- Read the shared payment facts once. Repeating this union for every
           -- settled historical order makes queue reads grow with old receipts.
@@ -271,6 +280,8 @@ export class PostgresCashierWorkbenchQuery {
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
+          count(*) OVER()::text AS matched_count,sum(orders.amount) OVER()::text AS matched_due_minor,
+          (SELECT jsonb_build_object('eligibility',mbox.carryover_collection_eligibility(d.tenant_id,d.store_id,d.order_id),'receivableMinor',d.receivable_minor,'reviewReason',COALESCE(d.review_reason,'存在退款或关桌后金额调整，请核对原单及实收后处理')) FROM mbox.order_carryover_debts d WHERE (d.tenant_id,d.store_id,d.order_id)=(orders.tenant_id,orders.store_id,orders.id)) AS carryover_debt,
           CASE WHEN session.status='closed' THEN ${closedDebtEligibilitySql()} ELSE false END AS closed_debt_eligible,
           ARRAY(SELECT payment.id FROM mbox.order_payment_facts payment WHERE (payment.tenant_id,payment.store_id,payment.order_id)=(orders.tenant_id,orders.store_id,orders.id)
             AND (payment.status IN ('created','pending') OR EXISTS(SELECT 1 FROM mbox.verified_provider_observations observation WHERE (observation.tenant_id,observation.store_id,observation.payment_id)=(payment.tenant_id,payment.store_id,payment.id)
@@ -300,7 +311,8 @@ export class PostgresCashierWorkbenchQuery {
           ),'[]'::jsonb) AS closable_unpresented_payments,
           orders.amount AS persistent_due_minor,
           orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
-          mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) AS collection_due_minor,
+          CASE WHEN ${carryoverDebtSql('orders')} THEN orders.amount
+            ELSE mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) END AS collection_due_minor,
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM collection_balances AS orders CROSS JOIN table_filter
@@ -318,7 +330,7 @@ export class PostgresCashierWorkbenchQuery {
         WHERE orders.tenant_id = $1::uuid
           AND orders.store_id = $2::uuid
           AND (
-            orders.business_date = $3::date
+            $13::text IN('unsettled','history') OR orders.business_date = $3::date
             -- Explicit lookup/status filtering is global across earlier
             -- business days, while the routine queue below contains
             -- unresolved work only.
@@ -344,6 +356,7 @@ export class PostgresCashierWorkbenchQuery {
           -- late capture is intentionally retained here for refund handling.
           AND (
             orders.status <> 'cancelled'
+            OR $13::text='history' OR ${carryoverDebtSql('orders')}
             OR EXISTS (
               SELECT 1 FROM mbox.order_payment_facts abandoned_payment
               WHERE abandoned_payment.tenant_id=orders.tenant_id
@@ -360,6 +373,7 @@ export class PostgresCashierWorkbenchQuery {
               AND workbench_employee.status='active'
               AND (
                 $7::boolean
+                OR ($12::boolean AND ${carryoverDebtSql('orders')})
                 OR EXISTS (
                   SELECT 1 FROM mbox.table_assignments AS workbench_assignment
                   WHERE workbench_assignment.tenant_id=session.tenant_id
@@ -419,6 +433,9 @@ export class PostgresCashierWorkbenchQuery {
               OR (orders.total_amount_minor=0 AND orders.status NOT IN ('draft','cancelled'))))
             OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
           )
+          AND ($13::text<>'unsettled' OR ${bulkOrderNeedsCollectionSql('orders')})
+          AND ($15::date IS NULL OR orders.business_date >= $15::date)
+          AND ($16::date IS NULL OR orders.business_date <= $16::date)
         ORDER BY ${bulkOrderNeedsCollectionSql('orders')} DESC,
           EXISTS (
             SELECT 1 FROM mbox.order_payment_facts recent_captured_ordering
@@ -430,8 +447,9 @@ export class PostgresCashierWorkbenchQuery {
           ) DESC,
           (orders.business_date = $3::date) DESC,
           COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
-        LIMIT $5
-      `, [
+        LIMIT $5 OFFSET $14
+      `
+      const orderParams = [
         input.scope.tenantId,
         input.scope.storeId,
         input.businessDate,
@@ -443,7 +461,11 @@ export class PostgresCashierWorkbenchQuery {
         input.paymentState ?? null,
         searchedAmountMinor,
         canonicalTableCode(normalizedQuery),
-      ])
+        input.capabilities.includes('payment.history.collect'),
+        input.collectionScope??'workbench',(input.page??0)*input.limit,input.fromDate??null,input.toDate??null,
+      ]
+      const orderResult=await transaction.query<OrderRow>(orderQuery,orderParams)
+      const totals=orderResult.rows[0]??((input.page??0)>0?(await transaction.query<OrderRow>(orderQuery,orderParams.map((value,index)=>index===4?1:index===13?0:value))).rows[0]:undefined)
       const activityResult = canUseActivityCashier
         ? await transaction.query<ActivityRegistrationRow>(`
             SELECT registration.id,registration.public_id,registration.service_version,registration.service_refund_disposition,
@@ -635,7 +657,7 @@ export class PostgresCashierWorkbenchQuery {
         const points=await readCheckoutPoints(transaction,orderIds)
       for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
       return assembleView(
-          input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,
+          input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,totals,
         )
       }
 
@@ -777,7 +799,7 @@ export class PostgresCashierWorkbenchQuery {
         kdsResult.rows,
         settlementExceptionResult.rows,
         recollectionResult.rows,
-        activityResult.rows,
+        activityResult.rows,totals,
       )
     }, { readOnly: true })
   }
@@ -795,6 +817,7 @@ function assembleView(
   settlementExceptionRows: readonly SettlementExceptionRow[],
   recollectionRows: readonly RecollectionAuthorizationRow[],
   activityRows: readonly ActivityRegistrationRow[],
+  totals:OrderRow|undefined,
 ): CashierWorkbenchView {
   const itemsByOrder = group(itemRows, (row) => row.order_id)
   const paymentsByOrder = group(paymentRows, (row) => row.order_id)
@@ -877,7 +900,7 @@ function assembleView(
       .filter((refund) => refund.status === 'succeeded')
       .reduce((refundSum, refund) => refundSum + refund.amountMinor, 0), 0)
     const originalAmountMinor = asSafeMinor(order.total_amount_minor, 'original order total')
-    const totalAmountMinor = asSafeMinor(order.effective_amount_minor ?? order.total_amount_minor, 'effective order total')
+    const totalAmountMinor = asSafeMinor(order.carryover_debt?.receivableMinor ?? order.effective_amount_minor ?? order.total_amount_minor, 'effective order total')
     const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
@@ -889,7 +912,8 @@ function assembleView(
       tableSessionId: order.table_session_id,
       tableSessionStatus: order.table_session_status,
       ...(order.table_session_status==='closed'?{closedDebtRecovery:{
-        status:!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
+        ...(order.carryover_debt?{kind:'consumption' as const,reviewReason:order.carryover_debt.reviewReason}:{}),
+        status:order.carryover_debt?(Number(order.persistent_due_minor)<=0?'settled':order.carryover_debt.eligibility!=='confirmed'?'ineligible':!input.capabilities.includes('payment.history.collect')?'permission_required':'available'):!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
           (order.closed_debt_pending_payment_ids?.length??0)>0?'pending_payment':
           !['payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?'permission_required':
           recollectionByOrder.has(order.id)?'available':'authorization_required',
@@ -901,19 +925,19 @@ function assembleView(
       ...(order.points?{points:order.points}:{}),
       channel: order.channel,
       status: order.status,
-      paymentStatus: netCollectedMinor >= totalAmountMinor && order.status !== 'cancelled' ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,
+      paymentStatus: netCollectedMinor >= totalAmountMinor && (order.status !== 'cancelled'||!!order.carryover_debt) ? 'paid' : order.payment_status === 'pending' ? (refundedMinor > 0 ? (netCollectedMinor > 0 ? 'partially_refunded' : 'refunded') : grossPaidMinor > 0 ? 'partially_paid' : 'unpaid') : order.payment_status,
       totalAmountMinor,
       originalAmountMinor,
       stoppedAmountMinor: Math.max(0,originalAmountMinor - totalAmountMinor),
       ...(totalAmountMinor>originalAmountMinor?{receivableIncreaseMinor:totalAmountMinor-originalAmountMinor}:{}),
       outstandingAmountMinor: asSafeMinor(order.collection_due_minor, 'collectible balance'),
-      overCollectedAmountMinor: Math.max(0, netCollectedMinor - totalAmountMinor),
+      overCollectedAmountMinor: order.carryover_debt?.eligibility==='review_required'?0:Math.max(0, netCollectedMinor - totalAmountMinor),
       currency: order.currency,
       submittedAt: order.submitted_at,
       createdAt: order.created_at,
       businessDate: order.business_date,
       carryover: order.business_date < input.businessDate,
-      settlementException: settlementExceptionByOrder.has(order.id)
+      settlementException: !order.carryover_debt && settlementExceptionByOrder.has(order.id)
         ? {
             reasonCode: settlementExceptionByOrder.get(order.id)!.reason_code,
             settledAmountMinor: asSafeMinor(
@@ -947,6 +971,7 @@ function assembleView(
   const activityRegistrations = activityRows.map(mapActivityRegistration)
   return {
     businessDate: input.businessDate,
+    pagination:{page:input.page??0,pageSize:input.limit,totalCount:asSafeMinor(totals?.matched_count??orderRows.length,'matched order count'),totalOutstandingMinor:asSafeMinor(totals?.matched_due_minor??0,'matched outstanding')},
     query,
     actions: actions(input.capabilities),
     summary: {
@@ -1194,6 +1219,8 @@ function group<Row>(rows: readonly Row[], key: (row: Row) => string): Map<string
 }
 
 function validateInput(input: Readonly<CashierWorkbenchQueryInput>): void {
+  if(input.page!==undefined&&(!Number.isSafeInteger(input.page)||input.page<0||input.page>100000))throw new TypeError('账款页码无效')
+  if(input.fromDate&&input.toDate&&input.fromDate>input.toDate)throw new TypeError('起始营业日不能晚于结束营业日')
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
   if (!uuid.test(input.scope.tenantId) || !uuid.test(input.scope.storeId) || !uuid.test(input.employeeId)) {
     throw new TypeError('cashier workbench scope or employee is invalid')

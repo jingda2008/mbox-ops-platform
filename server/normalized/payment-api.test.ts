@@ -1024,6 +1024,20 @@ describe('paymentApiPlugin', () => {
     expect(value.commands.recordManual).toHaveBeenCalledTimes(1)
   })
 
+  it('binds historical partial collection and the confirmed balance to the authenticated command fingerprint',async()=>{
+    const value=fixture()
+    const base={orderId,provider:'cash',method:'cash',amountMinor:400,expectedOutstandingMinor:1000}
+    const post=(body:unknown,key='history-partial-one')=>value.app.inject({method:'POST',url:'/api/payments/manual',headers:{'idempotency-key':key},payload:body})
+    expect((await post(base)).statusCode).toBe(201)
+    expect(value.commands.recordManual).toHaveBeenCalledWith(expect.objectContaining({orderId,orderIds:undefined,amountMinor:400,expectedOutstandingMinor:1000,actor:{type:'employee',employeeId}}))
+    const first=value.commands.recordManual.mock.calls[0]![0].requestFingerprint
+    expect((await post({...base,expectedOutstandingMinor:900},'history-partial-two')).statusCode).toBe(201)
+    expect(value.commands.recordManual.mock.calls[1]![0].requestFingerprint).not.toBe(first)
+    for(const expectedOutstandingMinor of [0,-1,1.5,'one-thousand',Number.MAX_SAFE_INTEGER+1])expect((await post({...base,expectedOutstandingMinor})).statusCode).toBe(400)
+    expect(value.commands.recordManual).toHaveBeenCalledTimes(2)
+    await value.app.close()
+  })
+
   it('records activity cash only through the activity cashier capability and does not accept attendee data', async () => {
     const value = fixture({
       resolveStaffContext: async () => ({
@@ -1627,7 +1641,7 @@ describe('paymentApiPlugin', () => {
       query: 'VIP1',
       areaId: tableSessionId,
       paymentState: 'processing',
-      limit: 25,
+      limit: 25,page:0,collectionScope:'workbench',fromDate:undefined,toDate:undefined,
     })
     expect(querySystem).not.toHaveBeenCalled()
   })

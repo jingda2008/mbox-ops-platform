@@ -4,6 +4,37 @@ import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-co
 
 type RecoveryStatus = NonNullable<CashierWorkbenchView['orders'][number]['closedDebtRecovery']>['status']
 
+test('confirmed consumption debt sends an exact partial QR amount and hides the old QR when balance changes',async({page})=>{
+  await login(page)
+  const view=workbench('available'),requests:unknown[]=[]
+  view.orders[0]!.closedDebtRecovery!.kind='consumption'
+  view.orders[0]!.recollectionAuthorization=null
+  view.orders[0]!.payments=[]
+  await page.route('**/api/payments/workbench?*',route=>route.fulfill({json:{data:view}}))
+  await page.route('**/api/payments',async route=>{
+    requests.push(route.request().postDataJSON())
+    await route.fulfill({status:201,json:{data:{providerAction:{paymentId:'synthetic-qr',paymentPublicId:'SYNTHETIC-QR',payableKind:'order',orderPublicId:'HISTORICAL-DEBT-ORIGINAL',activityRegistrationPublicId:null,status:'pending',presentation:'qr',expiresAt:new Date(Date.now()+300000).toISOString(),payload:{qrCodeUrl:'weixin://wxpay/bizpayurl?pr=local-synthetic-debt'}}}}})
+  })
+  await page.goto('/staff/payments')
+  const card=page.locator('[data-cashier-order-id="closed-debt-order"]')
+  await card.locator('.cashier-order-toggle').click()
+  const amount=card.getByLabel('本次收款金额（元，留空收取全部剩余欠款）')
+  await amount.fill('10.01')
+  await expect(card.getByRole('button',{name:'出示付款二维码'})).toBeDisabled()
+  await amount.fill('4')
+  await card.getByRole('button',{name:'出示付款二维码'}).click()
+  await expect(card.getByText('请顾客扫码付款',{exact:true})).toBeVisible()
+  expect(requests).toEqual([expect.objectContaining({orderId:'closed-debt-order',expectedOutstandingMinor:1000,amountMinor:400,method:'native_qr'})])
+  view.orders[0]!.outstandingAmountMinor=600
+  await page.getByRole('button',{name:'刷新收银与退款',exact:true}).click()
+  await expect(card.locator('.cashier-manual-collection')).toContainText('剩余应收 ¥6.00')
+  await expect(card.getByText('请顾客扫码付款',{exact:true})).toHaveCount(0)
+  view.orders[0]!.closedDebtRecovery!.status='permission_required'
+  await page.getByRole('button',{name:'刷新收银与退款',exact:true}).click()
+  await expect(card.getByText(/当前账号没有“收取历史欠款”权限/)).toBeVisible()
+  await expect(card.getByRole('button',{name:'登记现金收款',exact:true})).toHaveCount(0)
+})
+
 async function login(page: Page) {
   const fixture = JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json', 'utf8'))
   await page.setViewportSize({ width: 390, height: 844 })

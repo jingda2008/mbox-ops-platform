@@ -1,3 +1,4 @@
+import {lockCarryoverPaymentAdmission} from './carryover-payment-admission.js'
 import { validateProductPaymentWindow } from './product-payment-window.js'
 import { IdempotencyConflictError } from './command-executor.js'
 import {normalizePaymentClientIp} from './payment-client-network.js'
@@ -840,6 +841,7 @@ export class OnlinePaymentService {
   async create(input: Readonly<CreateOnlinePaymentInput>): Promise<OnlinePaymentAction> {
     const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString()
     const prepared = await this.transactions.run(input.scope, async (transaction) => {
+      const carryover=input.principal.type==='employee'&&await lockCarryoverPaymentAdmission(transaction,input.paymentId,input.principal.employeeId)
       const repository = new PaymentProviderActionRepository(transaction, this.secret)
       const context = await repository.resolvePaymentContext(input.paymentId, input.principal)
       if (context.status !== 'pending' && context.status !== 'created') {
@@ -856,7 +858,7 @@ export class OnlinePaymentService {
           input.paymentId,presentation,expiresAt,input.principal,input.idempotencyKey,
         )
         if (!claim.claimed) return { context, payerId: null, cached: claim, expiresAt:claim.expiresAt, simulated: true as const }
-        const actionExpiresAt=await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
+        const actionExpiresAt=carryover?expiresAt:await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
         const payload = { presentation: 'simulation' }
         await repository.complete(context.id, presentation, payload, actionExpiresAt, null)
         return { context, payerId: null, cached: null, expiresAt:actionExpiresAt, simulated: true as const }
@@ -877,7 +879,7 @@ export class OnlinePaymentService {
       if (!claim.claimed) {
         return { context, payerId: null, cached: claim, expiresAt:claim.expiresAt, simulated: false as const }
       }
-      const actionExpiresAt=await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
+      const actionExpiresAt=carryover?expiresAt:await validateProductPaymentWindow(transaction,input.paymentId,expiresAt)
       let payerId: string | null = null
       try {
         payerId = presentation === 'jsapi' ? await this.resolvePayerId(input) : null

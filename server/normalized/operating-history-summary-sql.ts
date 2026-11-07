@@ -13,7 +13,7 @@ export const operatingHistorySummariesSql = `
       sum(original_minor-effective_minor) stopped_minor,sum(effective_minor) effective_minor,
       count(*) FILTER(WHERE amount>0) unsettled_count,sum(amount) outstanding
     FROM collection_balances
-    WHERE status NOT IN('draft','cancelled') AND business_date BETWEEN $3::date AND $4::date
+    WHERE (status NOT IN('draft','cancelled') OR carryover_eligibility='confirmed') AND business_date BETWEEN $3::date AND $4::date
     GROUP BY business_date
   ), pending_refund_days AS (
     SELECT DISTINCT refund.id,ordering.business_date

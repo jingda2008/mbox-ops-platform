@@ -532,6 +532,12 @@ test('submitted reservation keeps its receipt and gives actionable guidance if s
   await page.clock.fastForward(16_000)
   await expect.poll(() => statusLookupAttempts).toBe(1)
   await expect(page.getByRole('alert')).toContainText('自动查询已暂停')
+  // The notice scrolls on the next animation frame after its text is committed.
+  // Wait for the same complete-visibility condition before taking a snapshot.
+  await expect.poll(async () => {
+    const box = await page.getByRole('alert').boundingBox()
+    return box !== null && box.y >= 0 && box.y + box.height <= 568
+  }).toBe(true)
   const noticeBox = await page.getByRole('alert').boundingBox()
   expect(noticeBox).not.toBeNull()
   expect(noticeBox!.y).toBeGreaterThanOrEqual(0)

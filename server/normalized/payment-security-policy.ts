@@ -9,6 +9,7 @@ import {
 
 export type PaymentCapability =
   | 'payment.initiate.staff'
+  | 'payment.history.collect'
   | 'reconciliation.view'
   | 'payment.manual.cash.record'
   | 'payment.manual.pos.record'
@@ -205,6 +206,10 @@ implements PaymentCapabilityAuthorizationPort {
       if (error instanceof EmployeeTableAccessDeniedError) {
         if (input.allowClosedDebtRecovery) {
           const recovery=await lockClosedDebtRecovery(input.transaction,input.orderId)
+          if(recovery?.carryover){
+            await this.assertEmployeeCapability({...input,capability:'payment.history.collect'})
+            return
+          }
           if(recovery?.hasPreCloseObligation){
             await this.assertEmployeeCapability({...input,capability:'payment.collect.all_tables'})
             await this.assertEmployeeCapability({...input,capability:'payment.recollect.authorize'})

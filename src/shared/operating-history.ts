@@ -10,7 +10,7 @@ export interface OperatingHistory {
   financialStartDate?:string
   summary?: OperatingDaySummary
   businessDate: string; endDate?: string; generatedAt: string; page: number; hasMore: boolean
-  receipts: Array<{ provider: string; receivedMinor: number; refundedMinor: number; netMinor: number }>
+  receipts: Array<{ provider: string; receivedMinor: number; refundedMinor: number; netMinor: number; historicalCollectionMinor?:number }>
   sharedDeliveries?:SharedDeliveryHistory[]
   orders: Array<{
     id: string; businessDate?: string; publicId: string; tableCode: string; employeeName: string | null

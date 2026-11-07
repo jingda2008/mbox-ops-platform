@@ -4,7 +4,6 @@ import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
 import {historyTableIdSql} from './history-table-filter.js'
 import {legacyStockReturnCapabilitySql,orderHasLegacyStockReturnSql} from './order-stock-return-capability.js'
-import {orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import type { OperatingHistory,SharedDeliveryHistory } from '../../src/shared/operating-history.js'
 import type { PickupUnit } from '../../src/shared/pickup-workflow.js'
@@ -21,7 +20,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     WITH ${orderCollectionBalancesCtesSql}, table_filters AS (SELECT ${historyTableIdSql('$4','$15')} AS table_id,${historyTableIdSql('$9','$16')} AS search_table_id)
     SELECT ordering.id,ordering.business_date::text,ordering.public_id,venue.code AS table_code,employee.display_name AS employee_name,
       COALESCE(ordering.submitted_at,ordering.created_at)::text AS submitted_at,
-      ordering.status,ordering.payment_status,ordering.total_amount_minor::text,(${orderReceivableSql('ordering')})::text AS effective_amount_minor,ordering.table_session_id,session.public_id AS session_public_id,area.name AS area_name
+      ordering.status,ordering.payment_status,ordering.total_amount_minor::text,ordering.effective_minor::text AS effective_amount_minor,ordering.table_session_id,session.public_id AS session_public_id,area.name AS area_name
     FROM collection_balances ordering CROSS JOIN table_filters
     JOIN mbox.table_sessions session
       ON session.tenant_id=ordering.tenant_id AND session.store_id=ordering.store_id AND session.id=ordering.table_session_id
@@ -141,11 +140,15 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
           AND ($5::uuid IS NULL OR he.actor_employee_id=$5) AND ($6::text[] IS NULL OR ht.station_code=ANY($6))))
     ORDER BY item.created_at,item.id
   `,[tx.scope.tenantId,tx.scope.storeId,page.map(row=>row.id),input.workKind??null,input.workEmployeeId??null,input.workStations??null]):{rows:[]}
-  const receipts=input.allowFinancialSummary===false?{rows:[]}:await tx.query<{provider:string;received:string;refunded:string;net:string}>(`
+  const receipts=input.allowFinancialSummary===false?{rows:[]}:await tx.query<{provider:string;received:string;refunded:string;net:string;historical_received?:string}>(`
     SELECT provider,COALESCE(sum(amount_minor) FILTER(WHERE entry_type='payment'),0)::text AS received,
       (-COALESCE(sum(amount_minor) FILTER(WHERE entry_type='refund'),0))::text AS refunded,
-      COALESCE(sum(amount_minor),0)::text AS net
-    FROM mbox.reconciliation_entries WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND business_date BETWEEN $3::date AND $4::date
+      COALESCE(sum(amount_minor),0)::text AS net,
+      COALESCE(sum(CASE WHEN entry_type='payment' THEN (SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p
+        JOIN mbox.order_carryover_debts d ON (d.tenant_id,d.store_id,d.order_id)=(p.tenant_id,p.store_id,p.order_id)
+        WHERE (p.tenant_id,p.store_id,p.id)=(entry.tenant_id,entry.store_id,entry.payment_id)
+          AND entry.occurred_at>=d.closed_at) ELSE 0 END),0)::text AS historical_received
+    FROM mbox.reconciliation_entries entry WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND business_date BETWEEN $3::date AND $4::date
       AND entry_type IN ('payment','refund') GROUP BY provider ORDER BY provider
   `,[tx.scope.tenantId,tx.scope.storeId,input.earliestBusinessDate&&input.businessDate<input.earliestBusinessDate?input.earliestBusinessDate:input.businessDate,input.endDate??input.businessDate])
   const financialStartDate=input.earliestBusinessDate&&input.businessDate<input.earliestBusinessDate?input.earliestBusinessDate:input.businessDate
@@ -164,7 +167,7 @@ export async function readOperatingHistory(tx: ScopedTransaction, input: Operati
     ...(shared?{sharedDeliveries:shared.records}:{}),
     financialSummaryVisible:input.allowFinancialSummary!==false,
     financialStartDate:input.earliestBusinessDate&&input.businessDate<input.earliestBusinessDate?input.earliestBusinessDate:input.businessDate,
-    receipts:receipts.rows.map(row=>({provider:row.provider,receivedMinor:minor(row.received),refundedMinor:minor(row.refunded),netMinor:minor(row.net)})),
+    receipts:receipts.rows.map(row=>({provider:row.provider,receivedMinor:minor(row.received),refundedMinor:minor(row.refunded),netMinor:minor(row.net),historicalCollectionMinor:minor(row.historical_received??'0')})),
     orders:page.map(row=>({id:row.id,businessDate:row.business_date,publicId:row.public_id,tableCode:row.table_code,employeeName:row.employee_name,
       tableSessionId:row.table_session_id,sessionPublicId:row.session_public_id,areaName:row.area_name,
       submittedAt:row.submitted_at,status:row.status,paymentStatus:row.payment_status,totalMinor:minor(row.total_amount_minor),effectiveAmountMinor:minor(row.effective_amount_minor??row.total_amount_minor),stoppedAmountMinor:Math.max(0,minor(row.total_amount_minor)-minor(row.effective_amount_minor??row.total_amount_minor)),...(minor(row.effective_amount_minor??row.total_amount_minor)>minor(row.total_amount_minor)?{receivableIncreaseMinor:minor(row.effective_amount_minor??row.total_amount_minor)-minor(row.total_amount_minor)}:{}),

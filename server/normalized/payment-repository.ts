@@ -1,3 +1,4 @@
+import {readCarryoverDebt} from './carryover-debt.js'
 import {ActivityServiceRepository} from './activity-service-repository.js'
 import {localUnpresentedPaymentSql} from './closed-debt-recovery.js'
 import {allocateOrderPayment} from '../../src/shared/order-payment-allocation.js'
@@ -69,6 +70,7 @@ export interface RecordManualPaymentForActivityRegistrationInput {
 }
 
 export interface CreatePaymentForOrderInput {
+  amountMinor?:number
   orderId: string
   publicId: string
   provider: PaymentProvider
@@ -446,15 +448,19 @@ export class PaymentRepository {
     validateCreateInput(input)
     const order = await this.lockOrder(input.orderId)
     await this.assertOrderAccess(order, input.principal)
-    if (order.status === 'draft' || order.status === 'cancelled') {
-      throw new OrderNotPayableError(order.id, `status is ${order.status}`)
+    const carryover=input.principal.type==='employee'?await readCarryoverDebt(this.transaction,order.id):null
+    if (order.status === 'draft' || order.status === 'cancelled' && !carryover || carryover?.eligibility==='review_required') {
+      throw new OrderNotPayableError(order.id, carryover?.reviewReason??`status is ${order.status}`)
     }
 
     const settlement = await this.readSettlement(order.id)
     assertUnpaidStopsSettled(order.id, settlement)
     // An unresolved attempt is a financial reconciliation concern, not a lock
     // on collection. The order lock and confirmed settlement still bound new attempts.
-    const outstandingMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
+    const dueMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
+    if(dueMinor<=0)throw new OrderNotPayableError(order.id,'the order has no outstanding balance')
+    const outstandingMinor = input.amountMinor??dueMinor
+    if(!Number.isSafeInteger(outstandingMinor)||outstandingMinor<=0||outstandingMinor>dueMinor||input.amountMinor!==undefined&&!carryover)throw new OrderNotPayableError(order.id,'收款金额超过剩余欠款或不支持单笔分次收款')
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
     }
@@ -1263,7 +1269,7 @@ export class PaymentRepository {
   async syncOrderPaymentStatus(orderId: string): Promise<string> {
     const order = await this.lockOrder(orderId)
     const settlement = await this.readSettlement(order.id)
-    const total = effectiveOrderTotal(order, settlement)
+    const total = (await readCarryoverDebt(this.transaction,order.id))?.receivableMinor??effectiveOrderTotal(order, settlement)
     const grossPaid = toSafeMinor(settlement.gross_paid_minor, 'gross paid')
     const refunded = toSafeMinor(settlement.refunded_minor, 'refunded')
     const netPaid = grossPaid - refunded

@@ -1,3 +1,4 @@
+import {carryoverDebtSql} from './carryover-debt.js'
 import { orderCollectionDueSql } from './order-collection-sql.js'
 
 /**
@@ -22,9 +23,10 @@ export const orderCollectionBalancesCtesSql = `
     WHERE tenant_id=$1 AND store_id=$2 AND status='delivered' GROUP BY order_id
   ), collection_balances AS MATERIALIZED (
     SELECT o.*,o.total_amount_minor AS original_minor,COALESCE(p.amount,0)::bigint AS received_minor,
-      (o.total_amount_minor-COALESCE(a.amount,0))::bigint AS effective_minor,
+      COALESCE(CASE WHEN debt.eligibility='confirmed' THEN debt.receivable_minor END,o.total_amount_minor-COALESCE(a.amount,0))::bigint AS effective_minor,
+      debt.eligibility AS carryover_eligibility,
       COALESCE(a.adjustment_count,0)::bigint AS adjustment_count,
-      CASE WHEN (CASE WHEN o.status='cancelled' THEN COALESCE(d.amount,0)
+      CASE WHEN ${carryoverDebtSql('o')} THEN ${orderCollectionDueSql('o')} WHEN (CASE WHEN o.status='cancelled' THEN COALESCE(d.amount,0)
         ELSE o.total_amount_minor-COALESCE(a.amount,0) END)
         -COALESCE(p.amount,0)+COALESCE(r.amount,0)>0
         THEN ${orderCollectionDueSql('o')} ELSE 0 END AS amount
@@ -33,13 +35,14 @@ export const orderCollectionBalancesCtesSql = `
     LEFT JOIN collection_refunds r ON r.order_id=o.id
     LEFT JOIN collection_adjustments a ON a.order_id=o.id
     LEFT JOIN collection_delivered d ON d.order_id=o.id
+    LEFT JOIN mbox.order_carryover_debts debt ON (debt.tenant_id,debt.store_id,debt.order_id)=(o.tenant_id,o.store_id,o.id)
     WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.status<>'draft'
   )`
 
 /** The order alias must read from collection_balances, preserving its scope. */
 export function bulkOrderNeedsCollectionSql(order: string): string {
   if (!/^[a-z_]+$/.test(order)) throw new TypeError('Invalid order SQL alias')
-  return `(${order}.status NOT IN ('draft','cancelled') AND ${order}.amount>0)`
+  return `((${order}.status NOT IN ('draft','cancelled') OR ${carryoverDebtSql(order)}) AND ${order}.amount>0)`
 }
 
 /** Every adjusted order retains its existing signal authority, including legacy views. */

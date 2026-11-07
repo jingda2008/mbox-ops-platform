@@ -798,6 +798,8 @@ class PaymentFlowTransaction implements ScopedTransaction {
     values: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number }> {
     const sql = normalizeSql(text)
+    if(sql.includes("to_regclass('mbox.order_carryover_debts')"))return result([{present:false}])
+    if (sql.includes("FROM mbox.order_carryover_debts") || sql.startsWith("SELECT table_session_id FROM mbox.orders")) return result([])
     this.calls.push(sql)
     await Promise.resolve()
 
@@ -897,6 +899,8 @@ class RollbackClient implements PostgresPoolClient {
     values: unknown[] = [],
   ): Promise<PostgresQueryResult<Row>> {
     const sql = normalizeSql(text)
+    if(sql.includes("to_regclass('mbox.order_carryover_debts')"))return result([{present:false}])
+    if (sql.includes("FROM mbox.order_carryover_debts") || sql.startsWith("SELECT table_session_id FROM mbox.orders")) return result([])
     if (sql.startsWith('BEGIN')) {
       this.commands.push('BEGIN')
       return result([])

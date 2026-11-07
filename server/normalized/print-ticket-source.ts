@@ -160,7 +160,7 @@ export class PrintTicketSourceRepository {
     // for job idempotency and table tracing; older bridges print ticketReference directly.
     const billNumber=settlementDisplayNumber(source.occurred_at,this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId)
     const statusLabel=totals.state==='paid'?(pointsByOrder.size?'已确认结清':'已确认收款'):totals.state==='partial'?'部分收款 · 尚未结清':'未确认收款 · 不代表已付款'
-    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',checkoutState:totals.state,subtitle:`陆家嘴中心 L+MALL · 本桌次完整消费账单 · ${statusLabel}`,test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:billNumber,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:`合计为整桌应付，实收及退款另列。取消订单不计入应付。付款后请重新生成账单；补打保留原快照。原始桌次追溯码：${sessionId}`,payment:null,lines,totalAmountMinor:totals.receivable,currency:currency(context.currency)})
+    return this.materializeDocument(sourceId,sessionId,{kind:'order_summary',documentRole:'checkout',checkoutState:totals.state,subtitle:`陆家嘴中心 L+MALL · 本桌次完整消费账单 · ${statusLabel}`,test:false,issuedAt:source.occurred_at,businessDate:context.business_date,ticketReference:billNumber,tableCode:context.table_code,guestCount:context.guest_count,operatorLabel,note:`合计为整桌应付，实收及退款另列。未履约取消商品不计入应付；已确认的关桌消费欠款按保留应收计入。付款后请重新生成账单；补打保留原快照。原始桌次追溯码：${sessionId}`,payment:null,lines,totalAmountMinor:totals.receivable,currency:currency(context.currency)})
   }
 
   async materializeManualOrderBill(sourceId:string,orderId:string,operatorLabel:string):Promise<readonly PrintJob[]> {
@@ -195,6 +195,7 @@ export class PrintTicketSourceRepository {
       {name:context.points?'积分抵扣 '+context.points.used+' 分（已扣除）':'其他优惠减免（已扣除）',quantity:1,totalAmountMinor:numeric(context.discount_amount_minor,'discount')},
       ...checkoutPointReturnLines(context.points),
       ...receivableAdjustmentLines(context),
+      ...(amounts.carryover?[{name:'关桌保留已消费应收',quantity:1,totalAmountMinor:total}]:[]),
       {name:'订单应付金额',quantity:1,totalAmountMinor:total},
       {name:'已确认实际收款',quantity:1,totalAmountMinor:received},
       {name:'已确认实际退款',quantity:1,totalAmountMinor:refunded},
@@ -203,7 +204,7 @@ export class PrintTicketSourceRepository {
       {name:'渠道待确认金额（不计入实收）',quantity:1,totalAmountMinor:pending}]
     return this.materializeDocument(sourceId,orderId,{
       kind:unsettled?'cashier_settlement':'order_summary',checkoutState:amounts.state,
-      subtitle:context.order_status==='cancelled'?'订单已取消 · 历史收退款核对':unsettled?(amounts.state==='partial'?'订单预结账 · 部分收款，尚未结清':'订单预结账 · 不代表已付款'):'单笔订单账单 · 非整桌汇总',
+      subtitle:amounts.carryover?'原桌次已结束 · 历史消费账单':context.order_status==='cancelled'?'订单已取消 · 历史收退款核对':unsettled?(amounts.state==='partial'?'订单预结账 · 部分收款，尚未结清':'订单预结账 · 不代表已付款'):'单笔订单账单 · 非整桌汇总',
       test:false,issuedAt:source.occurred_at,businessDate:context.business_date,
       ticketReference:context.order_public_id,tableCode:context.table_code,guestCount:context.guest_count,
       operatorLabel,note:context.order_note,

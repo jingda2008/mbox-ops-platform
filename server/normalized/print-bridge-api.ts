@@ -124,13 +124,13 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
       softwareVersion: readString(body.softwareVersion, 'softwareVersion', 64),
       queues,
     })
-    return reply.send({ data })
+    return data
   }))
 
   app.post('/print-bridge/work/claim', async (request, reply) => bridgeRoute(request, reply, options, repository, async (store, bridge) => {
     const body = readObject(request.body)
     const data = await store.claim(bridge, optionalInteger(body.limit, 1, 25) ?? 10)
-    return reply.send({ data })
+    return data
   }))
 
   app.post<{ Params: { jobId: string } }>('/print-bridge/jobs/:jobId/result', async (request, reply) => bridgeRoute(request, reply, options, repository, async (store, bridge) => {
@@ -140,7 +140,7 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
       jobId: readUuid(request.params.jobId, 'jobId'), outcome,
       failureCode: optionalString(body.failureCode, 'failureCode', 96),
     })
-    return reply.send({ data })
+    return data
   }))
 
   app.post<{ Params: { commandId: string } }>('/print-bridge/commands/:commandId/result', async (request, reply) => bridgeRoute(request, reply, options, repository, async (store, bridge) => {
@@ -151,25 +151,26 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
       failureCode: optionalString(body.failureCode, 'failureCode', 96),
       resultSnapshot: optionalObject(body.resultSnapshot),
     })
-    return reply.send({ data })
+    return data
   }))
 }
 
-async function bridgeRoute(
+async function bridgeRoute<Result>(
   request: FastifyRequest,
   reply: FastifyReply,
   options: PrintBridgeApiOptions,
   createRepository: (transaction: ScopedTransaction) => PrintBridgeRepository,
-  operation: (repository: PrintBridgeRepository, bridge: { id: string; publicId: string }) => Promise<FastifyReply>,
+  operation: (repository: PrintBridgeRepository, bridge: { id: string; publicId: string }) => Promise<Result>,
 ) {
   return handle(reply, async () => {
     assertSecureTransport(request, options.requireHttps)
     const credentials = readBridgeCredentials(request)
-    return options.transactions.run(options.scope, async (transaction) => {
+    const data = await options.transactions.run(options.scope, async (transaction) => {
       const store = createRepository(transaction)
       const bridge = await store.authenticate(credentials.publicId, credentials.credential)
       return operation(store, bridge)
     })
+    return reply.send({ data })
   })
 }
 

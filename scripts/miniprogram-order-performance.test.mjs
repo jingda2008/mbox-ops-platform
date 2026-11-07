@@ -15,9 +15,13 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
    assert.equal(h.state.calls.filter(x=>x==='submit').length,1)
   }finally{h.dispose()}
  })
- test(`${platform}: menu is visible before cart but cannot mutate until cart is confirmed`,async()=>{
-  const cart=deferred();const h=createOrderPage({platform,overrides:{getSharedCart:()=>cart.promise}})
-  try{const load=h.page.preparePage();await sleep(20);assert.equal(h.page.data.loading,false);assert.equal(h.page.data.visibleProducts.length,180);assert.equal(h.page.data.orderReady,false)
+ test(`${platform}: menu is visible before cart but cannot mutate until cart is confirmed`,{timeout:5000},async()=>{
+  const cart=deferred();const h=createOrderPage({platform,delays:{identity:40,menu:40},overrides:{getSharedCart:()=>cart.promise}})
+  const visible=deferred(),setData=h.page.setData
+  h.page.setData=(patch,callback)=>{setData(patch,callback);if(patch.loading===false)visible.resolve()}
+  // This is a response-ordering invariant, not a 20ms host-performance budget.
+  // Keep the cart pending until the actual menu render has been observed.
+  try{const load=h.page.preparePage();await visible.promise;assert.equal(h.page.data.loading,false);assert.equal(h.page.data.visibleProducts.length,180);assert.equal(h.page.data.orderReady,false)
    await h.page.addProduct({currentTarget:{dataset:{id:'p-0'}}});assert.equal(h.state.calls.includes('add'),false)
    cart.resolve(h.state.cart);await load;assert.equal(h.page.data.orderReady,true)
   }finally{h.dispose()}

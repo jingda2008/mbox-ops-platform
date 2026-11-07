@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
@@ -119,6 +119,101 @@ test('rejects blank oversized and placeholder official table display names', asy
   }
 })
 
+test('rejects checking decoy project or runtime files instead of the shipped configuration', async (t) => {
+  for (const stage of ['candidate', 'upload', 'release']) for (const target of ['project', 'runtime']) await t.test(`${stage}: ${target}`, async () => {
+    const fixture = await readyFixture(stage)
+    await mutateCandidate(fixture, async (manifest) => {
+      const field = target === 'project' ? 'projectConfigPath' : 'runtimeConfigPath'
+      const shippedPath = resolve(fixture.candidateRoot, manifest[field])
+      const decoy = `${target}-checked-copy.${target === 'project' ? 'json' : 'js'}`
+      await copyFile(shippedPath, resolve(fixture.candidateRoot, decoy))
+      manifest[field] = decoy
+      if (target === 'project') {
+        const project = JSON.parse(await readFile(shippedPath, 'utf8'))
+        project.setting.urlCheck = false
+        project.appid = 'wx0000000000000000'
+        await writeFile(shippedPath, JSON.stringify(project))
+      } else await writeFile(shippedPath, "module.exports = { mode: 'development', allowDevDataFallback: true }\n")
+    })
+    const report = await verifyMiniProgramRelease({ stage, evidencePath: fixture.evidencePath,
+      trustedKeyId: fixture.trustedKeyId, trustedPublicKey: fixture.trustedPublicKey })
+    assert.equal(report.status, 'blocked')
+    assert.match(report.failures.join('\n'), /配置.*包内|包内.*配置/)
+  })
+})
+
+test('rejects project roots and packing rules that change the verified upload file set', async (t) => {
+  const cases = [
+    { name: 'outside root', patch: { miniprogramRoot: '../other-package' } },
+    { name: 'nested root', patch: { miniprogramRoot: 'other-package/' } },
+    { name: 'plugin build', patch: { compileType: 'plugin' } },
+    { name: 'omit runtime', patch: { packOptions: { ignore: [{ type: 'file', value: 'config/release-config.generated.js' }], include: [] } } },
+    { name: 'extra include', patch: { packOptions: { ignore: [], include: [{ type: 'folder', value: '../other-package' }] } } },
+  ]
+  for (const item of cases) await t.test(item.name, async () => {
+    const fixture = await readyFixture('candidate')
+    await mutateCandidate(fixture, async (manifest) => {
+      const path = resolve(fixture.candidateRoot, manifest.projectConfigPath)
+      const project = JSON.parse(await readFile(path, 'utf8'))
+      await writeFile(path, JSON.stringify({ ...project, ...item.patch }))
+    })
+    const report = await verifyMiniProgramRelease({ stage: 'candidate', evidencePath: fixture.evidencePath })
+    assert.equal(report.status, 'blocked')
+    assert.match(report.failures.join('\n'), /工程根目录|编译类型|打包规则/)
+  })
+})
+
+test('rejects a declared private project override even when its digest matches', async () => {
+  const fixture = await readyFixture('candidate')
+  await mutateCandidate(fixture, async (manifest) => {
+    const path = 'project.private.config.json'
+    await writeFile(resolve(fixture.candidateRoot, manifest.packageRoot, path), JSON.stringify({ setting: { urlCheck: false } }))
+    manifest.files.push({ path, sha256: '' })
+  })
+  const report = await verifyMiniProgramRelease({ stage: 'candidate', evidencePath: fixture.evidencePath })
+  assert.equal(report.status, 'blocked')
+  assert.match(report.failures.join('\n'), /私有工程配置/)
+})
+
+test('accepts the same package root with default packing and ignores unrelated evidence files', async () => {
+  const fixture = await readyFixture('candidate')
+  await mutateCandidate(fixture, async (manifest) => {
+    const path = resolve(fixture.candidateRoot, manifest.projectConfigPath)
+    const project = JSON.parse(await readFile(path, 'utf8'))
+    project.miniprogramRoot = '.'
+    delete project.packOptions
+    await writeFile(path, JSON.stringify(project))
+    await writeFile(resolve(fixture.root, 'operator-notes.txt'), 'Not part of the upload package.\n')
+  })
+  const report = await verifyMiniProgramRelease({ stage: 'candidate', evidencePath: fixture.evidencePath })
+  assert.equal(report.status, 'ready', report.failures.join('\n'))
+})
+
+async function mutateCandidate(fixture, mutate) {
+  const manifestPath = resolve(fixture.candidateRoot, 'candidate-manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  await mutate(manifest)
+  for (const entry of manifest.files) entry.sha256 = await fileDigest(resolve(fixture.candidateRoot, manifest.packageRoot, entry.path))
+  await writeFile(manifestPath, JSON.stringify(manifest))
+  const evidence = JSON.parse(await readFile(fixture.evidencePath, 'utf8'))
+  evidence.candidate.manifestSha256 = await fileDigest(manifestPath)
+  if (evidence.trust) {
+    // Keep the synthetic approval valid: rejection must come from the artifact
+    // contract, not an obsolete signature or digest after this mutation.
+    const attestationPath = resolve(fixture.root, evidence.trust.attestationPath)
+    const signaturePath = resolve(fixture.root, evidence.trust.signaturePath)
+    const attestation = JSON.parse(await readFile(attestationPath, 'utf8'))
+    attestation.candidateManifestSha256 = evidence.candidate.manifestSha256
+    attestation.evidencePayloadSha256 = platformEvidencePayloadSha256(evidence, attestation.stage)
+    const bytes = Buffer.from(JSON.stringify(attestation))
+    await writeFile(attestationPath, bytes)
+    await writeFile(signaturePath, `${sign(null, bytes, fixture.privateKey).toString('base64')}\n`)
+    evidence.trust.attestationSha256 = sha256(bytes)
+    evidence.trust.signatureSha256 = await fileDigest(signaturePath)
+  }
+  await writeFile(fixture.evidencePath, JSON.stringify(evidence))
+}
+
 async function readyFixture(stage, tableDisplayName = '互动01') {
   const root = await mkdtemp(resolve(tmpdir(), 'mbox-mini-release-ready-'))
   const candidateRoot = resolve(root, 'candidate')
@@ -218,7 +313,7 @@ async function readyFixture(stage, tableDisplayName = '互动01') {
   }
   await writeFile(evidencePath, JSON.stringify(evidence))
   return {
-    root, candidateRoot, evidencePath, auditPath, trustedKeyId,
+    root, candidateRoot, evidencePath, auditPath, trustedKeyId, privateKey: keys.privateKey,
     trustedPublicKey: Buffer.from(keys.publicKey.export({ type: 'spki', format: 'pem' })).toString('base64'),
   }
 }

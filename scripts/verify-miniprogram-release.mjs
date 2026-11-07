@@ -3,6 +3,7 @@ import { access, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { miniProgramProjectFailures } from './miniprogram-project-policy.mjs'
 
 const REQUIRED_NOTIFICATION_TYPES = Object.freeze([
   'loyalty_points_credited',
@@ -248,7 +249,13 @@ async function readCandidate(root, pathValue, digestValue, failures) {
     const projectPath = safeReferencePath(dirname(path), manifest.projectConfigPath, '候选工程配置', failures)
     const runtimePath = safeReferencePath(dirname(path), manifest.runtimeConfigPath, '候选运行配置', failures)
     if (!packageRoot || !projectPath || !runtimePath || runtime === null) return null
+    if (projectPath !== resolve(packageRoot, 'project.config.json')
+      || runtimePath !== resolve(packageRoot, 'config/release-config.generated.js')) {
+      failures.push('候选配置必须绑定包内实际工程与运行配置')
+      return null
+    }
     const project = object(JSON.parse(await readFile(projectPath, 'utf8')), 'candidate project config')
+    failures.push(...miniProgramProjectFailures(project))
     if (objectOrEmpty(project.setting).urlCheck !== true) failures.push('候选工程必须启用合法域名校验')
     const expectedRuntimeSource = `// Generated release artifact; contains no secret.\nmodule.exports = Object.freeze(${JSON.stringify(runtime, null, 2)})\n`
     if ((await readFile(runtimePath, 'utf8')) !== expectedRuntimeSource) failures.push('候选运行配置文件与清单不一致')
@@ -287,6 +294,7 @@ async function verifyPackageFiles(packageRoot, value, failures) {
   const actual = await listFiles(packageRoot)
   if (actual.length !== declared.size || actual.some((path) => !declared.has(path))) failures.push('候选包文件清单不完整')
   for (const path of actual) {
+    if (path.split('/').at(-1).toLowerCase() === 'project.private.config.json') failures.push('候选包不得包含私有工程配置')
     const expected = declared.get(path)
     if (expected && sha256(await readFile(resolve(packageRoot, path))) !== expected) failures.push(`候选包文件摘要不匹配：${path}`)
   }

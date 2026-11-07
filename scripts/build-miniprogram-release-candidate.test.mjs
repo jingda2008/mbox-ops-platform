@@ -94,3 +94,21 @@ test('omits developer-private files from the upload package', async () => {
   assert.equal(result.manifest.files.some((entry) => entry.path === 'project.private.config.json'), false)
   await assert.rejects(readFile(resolve(result.packageRoot, 'project.private.config.json')), /ENOENT/)
 })
+
+test('rejects source project settings that would upload a different package', async (t) => {
+  for (const [name, patch] of [
+    ['outside root', { miniprogramRoot: '../unverified' }],
+    ['plugin', { compileType: 'plugin' }],
+    ['ignore runtime', { packOptions: { ignore: [{ type: 'file', value: 'config/release-config.generated.js' }], include: [] } }],
+  ]) await t.test(name, async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'mbox-mini-candidate-project-'))
+    const sourceRoot = resolve(root, 'source'), outputRoot = resolve(root, 'candidate')
+    await cp(resolve('miniprogram'), sourceRoot, { recursive: true })
+    const path = resolve(sourceRoot, 'project.config.json')
+    const project = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(path, JSON.stringify({ ...project, ...patch }))
+    await assert.rejects(buildMiniProgramReleaseCandidate({ sourceRoot, outputRoot, runtime,
+      sourceCommitSha: 'a'.repeat(40) }), /工程根目录|编译类型|打包规则/)
+    await assert.rejects(readFile(resolve(outputRoot, 'candidate-manifest.json')), /ENOENT/)
+  })
+})

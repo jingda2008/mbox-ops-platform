@@ -139,7 +139,9 @@ jobs:
     if: needs.classify.outputs.scope == 'full'
     needs: classify
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The full PostgreSQL suite measured 20m33s, followed by a fixed four-minute
+    # HTTP acceptance run and setup. Keep all tests and workload gates intact.
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:16-alpine

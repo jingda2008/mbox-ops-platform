@@ -1,3 +1,4 @@
+import {registerStaffTableCreditApi} from './staff-table-credit-api.js'
 import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-repository.js'
 import { readCashierTodoSummary } from './cashier-todo-summary.js'
 import {RefundRequiresCaseDecisionError} from './refund-case-decision.js'
@@ -107,6 +108,7 @@ type PaymentCommandPort = Pick<
   | 'beginRefundExecution'
   | 'recordProviderRefundResult'
   | 'recordManualRefundResult'
+  | 'confirmCarryoverReview'
   | 'authorizeRecollection'
   | 'authorizeActivityRecollection'
   | 'releaseUnresolvedForRetry'
@@ -281,6 +283,7 @@ const rawBodySymbol = Symbol('payment-callback-raw-body')
 type RequestWithRawBody = FastifyRequest & { [rawBodySymbol]?: Buffer }
 
 export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (app, options) => {
+  registerStaffTableCreditApi(app,options)
   const createPublicId = options.createPublicId ?? defaultPublicId
   app.addHook('preParsing', (request, _reply, payload, done) => {
     const chunks: Buffer[] = []
@@ -490,6 +493,24 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
     }),
   )
+
+  app.post<{ Params: { orderId: string } }>('/orders/:orderId/carryover-review', async (request, reply) => handleRoute(reply, async () => {
+    const context = await resolveStaffContext(options, request)
+    requireStaffCapability(context, 'payment.history.collect')
+    requireStaffCapability(context, 'reconciliation.view')
+    const body = readObject(request.body, '请求正文')
+    assertActorBinding(body, context.actor)
+    const orderId = readUuid(request.params.orderId, 'orderId')
+    const amountMinor = readInteger(body.amountMinor, '确认欠款金额', 0, Number.MAX_SAFE_INTEGER)
+    const reason = readString(body.reason, '核对依据', 500, 4)
+    const basis = readObject(body.basis, '原单核对依据') as JsonObject
+    if (body.confirmed !== true) throw new TypeError('请确认实际消费、未收金额及原单依据')
+    const execution = await options.commands.confirmCarryoverReview({
+      ...metadata(request, context, readIdempotencyKey(request), {orderId,amountMinor,basis,reason}),
+      orderId,amountMinor,basis,reason,
+    })
+    return reply.code(execution.replayed ? 200 : 201).send(executionResponse(execution))
+  }))
 
   app.post<{ Params: { orderId: string } }>('/orders/:orderId/recollection-authorizations', async (request, reply) => handleRoute(reply, async () => {
     const context = await resolveStaffContext(options, request)

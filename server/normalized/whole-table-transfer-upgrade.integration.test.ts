@@ -82,7 +82,7 @@ integration('whole table identity count upgrade',()=>{
       const snapshot=async()=>{
         const result:Record<string,unknown>={}
         for(const table of ['table_sessions','table_session_customer_participations','orders','table_customer_movement_events']){
-          result[table]=(await client.query(`SELECT to_jsonb(row) fact FROM mbox.${table} row ORDER BY id`)).rows
+          result[table]=(await client.query(`SELECT (to_jsonb(row)-ARRAY['transfer_minimum_minor','transfer_waiver_baseline_minor','credit_collection_enabled','effective_minimum_spend_minor']) fact FROM mbox.${table} row ORDER BY id`)).rows
         }
         return result
       }
@@ -91,6 +91,7 @@ integration('whole table identity count upgrade',()=>{
       expect(await snapshot()).toEqual(before)
       await runNormalizedMigrations(targetUrl.toString())
       expect(await snapshot()).toEqual(before)
+      expect((await client.query('SELECT bool_and(transfer_minimum_minor IS NULL AND transfer_waiver_baseline_minor=0 AND credit_collection_enabled=false AND effective_minimum_spend_minor=GREATEST(0,minimum_spend_minor-minimum_spend_waiver_minor)) valid FROM mbox.table_sessions')).rows[0].valid).toBe(true)
       const first=await move()
       expect(first).toMatchObject({moved_participant_count:3,replayed:false,target_guest_count_after:2})
       const after=await snapshot()

@@ -30,7 +30,7 @@ export interface GuestSessionApiOptions {
   loadTableOverview(
     scope: Readonly<StoreScope>,
     tableSessionId: string,
-  ): Promise<{ guestCount: number; primaryServiceName: string | null; cartProtocolVersion: 1 | 2 }>
+  ): Promise<{ guestCount: number; primaryServiceName: string | null; cartProtocolVersion: 1 | 2;prepayment?:unknown }>
   /** Resolves an optional, trusted WeChat identity only for table scanning. */
   resolveWechatCustomer?(
     request: FastifyRequest,
@@ -90,6 +90,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           guestCount: overview.guestCount,
           primaryServiceName: overview.primaryServiceName,
           cartProtocolVersion: overview.cartProtocolVersion,
+        ...('prepayment' in overview?{prepayment:overview.prepayment}:{}),
           capabilities: result.session.scopes,
         },
       })
@@ -110,6 +111,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
           guestCount: overview.guestCount,
           primaryServiceName: overview.primaryServiceName,
           cartProtocolVersion: overview.cartProtocolVersion,
+        ...('prepayment' in overview?{prepayment:overview.prepayment}:{}),
           capabilities: result.session.scopes,
         },
       })
@@ -162,6 +164,7 @@ export const guestSessionApiPlugin: FastifyPluginAsync<GuestSessionApiOptions> =
         guestCount: overview.guestCount,
         primaryServiceName: overview.primaryServiceName,
         cartProtocolVersion: overview.cartProtocolVersion,
+        ...('prepayment' in overview?{prepayment:overview.prepayment}:{}),
         capabilities: context.capabilities,
       },
     })

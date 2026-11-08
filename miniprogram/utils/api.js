@@ -718,8 +718,8 @@ async function decideSharedCartUpgrade(id, action, variantId) {
 async function revokeTablePrepayment(paymentId) {
   return request('/api/guest/table-prepayment/revoke', { method: 'POST', headers: { 'idempotency-key': 'prepay-revoke-' + paymentId }, data: { paymentId } })
 }
-async function prepayTable(amountMinor, idempotencyKey) {
-  return (await request('/api/guest/table-prepayment', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: { amountMinor, sharedTableConsent: 'v1' } })).data
+async function prepayTable(amountMinor, idempotencyKey, expected) {
+  return (await request('/api/guest/table-prepayment', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: Object.assign({ amountMinor, sharedTableConsent: 'v1' }, expected || {}) })).data
 }
 async function queryPrepayment(paymentId) {
   return request('/api/payments/' + encodeURIComponent(paymentId) + '/provider-query', { method: 'POST', headers: { 'idempotency-key': randomId('prepay-query') }, data: {} })
@@ -736,6 +736,7 @@ async function checkoutSharedCart(input, idempotencyKey) {
       ...(input.lineNotes && input.lineNotes.length ? { lineNotes: input.lineNotes } : {}),
       expectedGeneration: input.expectedGeneration,
       expectedVersion: input.expectedVersion,
+      ...(input.expectedLocationVersion !== undefined ? { expectedLocationVersion: input.expectedLocationVersion, expectedMinimumMinor: input.expectedMinimumMinor } : {}),
       confirmedDuplicateOrderId: input.confirmedDuplicateOrderId || null,
       checkoutUpgradeOfferPublicId: input.checkoutUpgradeOfferPublicId || null,
       ...(input.couponQuoteId ? { couponQuoteId: input.couponQuoteId } : {}),

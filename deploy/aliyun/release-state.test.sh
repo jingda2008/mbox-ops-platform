@@ -38,6 +38,10 @@ release_state_require "${contract_state_file}" rolled_back
 
 # Cross-day debt changes closed-invoice payment semantics, including rollback.
 test "$(release_contract_boundary_between 299 300)" = 300
-test "$(release_contract_boundary_between 299 301)" = 300
-test "$(release_contract_boundary_between 300 301)" = 0
+test "$(release_contract_boundary_between 299 301)" = 301
+test "$(release_contract_boundary_between 300 301)" = 301
 test "$(release_contract_boundary_between 298 299)" = 0
+
+test "$(release_contract_boundary_between 300 304)" = 304
+test "$(release_contract_boundary_between 303 304)" = 304
+test "$(release_contract_boundary_between 304 304)" = 0

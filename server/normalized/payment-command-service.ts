@@ -1,3 +1,5 @@
+import {settleTableCreditOrders} from './table-credit-settlement.js'
+import { confirmCarryoverTabReview } from './carryover-tab-review.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
@@ -595,6 +597,23 @@ export class PaymentCommandService {
     }).catch(rethrowFinancialCommandError)
   }
 
+  confirmCarryoverReview(input: Readonly<CommandMetadata & {orderId:string;amountMinor:number;basis:JsonObject;reason:string}>): Promise<CommandExecution<JsonObject>> {
+    const employeeId = requireEmployee(input.actor, 'Carryover tab review')
+    const codec: JsonCodec<JsonObject> = {encode: value => value, decode: value => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid review receipt')
+      return value as JsonObject
+    }}
+    return this.commands.execute({...command(input, 'payment.carryover_review.confirm', codec), retainReceipt:true, rejectExpiredReceipt:true}, async transaction => {
+      const result = await confirmCarryoverTabReview(transaction, {...input, employeeId})
+      return {result, auditEvents:[{actor:input.actor,action:'payment.carryover_review_confirmed',objectType:'order',objectId:input.orderId,
+        businessDate:input.businessDate,afterData:result,reason:input.reason}],outboxMessages:[]}
+    }, async transaction => {
+      for (const capability of ['payment.history.collect','reconciliation.view'] as const) {
+        await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+      }
+    }).catch(rethrowFinancialCommandError)
+  }
+
   authorizeRecollection(
     input: Readonly<AuthorizeRecollectionCommand>,
   ): Promise<CommandExecution<OrderRecollectionAuthorization>> {
@@ -722,6 +741,11 @@ export class PaymentCommandService {
         evidenceSnapshot: providerSnapshot,
       })
       if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,'payment.succeeded',2,paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId),input.occurredAt)
+      if(payment.payableKind==='table_prepayment'){
+        const messages=await settleTableCreditOrders(transaction,payment.id,input.occurredAt)
+        const outcome=await paymentOutcome(transaction,input,payment,'payment.succeeded',2,paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId))
+        return {...outcome,outboxMessages:[...outcome.outboxMessages,...messages]}
+      }
       let activation: PaymentFulfillmentActivation | undefined
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)
@@ -820,6 +844,11 @@ export class PaymentCommandService {
         })
       }
       if(payment.payableKind==='order_batch')return this.batchPaymentOutcome(transaction,input,payment,input.status==='succeeded'?'payment.succeeded':input.status==='failed'||input.status==='closed'?'payment.provider_failed':'payment.provider_pending',input.status==='succeeded'?2:1,input.status==='succeeded'?paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId):undefined,input.occurredAt)
+      if(payment.payableKind==='table_prepayment'&&input.status==='succeeded'){
+        const messages=await settleTableCreditOrders(transaction,payment.id,input.occurredAt)
+        const outcome=await paymentOutcome(transaction,input,payment,'payment.succeeded',2,paymentBusinessEventKey('succeeded',payment.provider,input.providerTransactionId))
+        return {...outcome,outboxMessages:[...outcome.outboxMessages,...messages]}
+      }
       let fulfillmentResult: PaymentFulfillmentActivation | PaymentFulfillmentRelease | undefined
       if (payment.orderId === null) {
         await payments.syncActivityRegistrationPaymentStatus(payment)

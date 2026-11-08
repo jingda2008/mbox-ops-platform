@@ -1,3 +1,4 @@
+import {TablePrepaymentRepository} from './table-prepayment-repository.js'
 import { memberReportApiPlugin } from './member-report-api.js'
 import { createGiftOrderPort } from './gift-order-fulfillment.js'
 import {officialPointsNotificationApiPlugin} from './official-points-notification-api.js'
@@ -660,6 +661,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
           if (row === undefined) throw new GuestTableSessionEndedError()
           return {
             guestCount: Number(row.guest_count),
+            prepayment:await new TablePrepaymentRepository(transaction).snapshot(tableSessionId),
             primaryServiceName: row.primary_service_name,
             cartProtocolVersion: Number(row.guest_cart_protocol_version) as 1 | 2,
           }

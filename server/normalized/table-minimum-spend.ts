@@ -22,7 +22,7 @@ export class TableMinimumSpendNotMetError extends Error {
 }
 export async function readTableMinimumSpend(tx:ScopedTransaction,sessionId:string,cartMinor:number,knownMinimum?:number):Promise<TableMinimumSpend> {
   const minimum=knownMinimum??Number((await tx.query<{minimum_spend_minor:string}>(`
-    SELECT (minimum_spend_minor-minimum_spend_waiver_minor)::text AS minimum_spend_minor FROM mbox.table_sessions
+    SELECT effective_minimum_spend_minor::text AS minimum_spend_minor FROM mbox.table_sessions
     WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[tx.scope.tenantId,tx.scope.storeId,sessionId])).rows[0]?.minimum_spend_minor??0)
   if(minimum===0)return minimumSpendSummary(0,0,cartMinor)
   // Both modes share the database authority, including approved bundle returns.

@@ -15,7 +15,7 @@ export class TableMinimumExceptionsRepository {
   }
  }
  async snapshot(sessionId:string){
-  const row=(await this.tx.query<{minimum:string;waiver:string;mode:string;status:string;consumed:string}>(`SELECT minimum_spend_minor::text minimum,minimum_spend_waiver_minor::text waiver,minimum_spend_mode mode,status,mbox.table_qualifying_goods(tenant_id,store_id,id)::text consumed FROM mbox.table_sessions WHERE(tenant_id,store_id,id)=($1,$2,$3)`,[...this.scope,sessionId])).rows[0]
+  const row=(await this.tx.query<{minimum:string;waiver:string;mode:string;status:string;consumed:string}>(`SELECT COALESCE(transfer_minimum_minor,minimum_spend_minor)::text minimum,(minimum_spend_waiver_minor-transfer_waiver_baseline_minor)::text waiver,minimum_spend_mode mode,status,mbox.table_qualifying_goods(tenant_id,store_id,id)::text consumed FROM mbox.table_sessions WHERE(tenant_id,store_id,id)=($1,$2,$3)`,[...this.scope,sessionId])).rows[0]
   if(!row)throw new TablePrepaymentError('TABLE_MINIMUM_SESSION_NOT_FOUND','桌次不存在')
   const history=(await this.tx.query(`SELECT w.id,'adjust' AS kind,w.employee_id AS "employeeId",COALESCE(w.employee_name,e.display_name) AS "employeeName",w.reason,w.created_at::text AS "createdAt",w.amount_minor::text AS "amountMinor",w.before_minimum_minor::text AS "beforeMinor",w.after_minimum_minor::text AS "afterMinor",NULL::text AS "orderPublicId",NULL::text AS "shortfallMinor"
     FROM mbox.table_minimum_spend_waivers w JOIN mbox.employees e ON(e.tenant_id,e.store_id,e.id)=(w.tenant_id,w.store_id,w.employee_id) WHERE(w.tenant_id,w.store_id,w.table_session_id)=($1,$2,$3)

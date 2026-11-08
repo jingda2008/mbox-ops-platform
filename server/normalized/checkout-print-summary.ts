@@ -55,3 +55,16 @@ export async function readCheckoutPrintSummary(tx: ScopedTransaction, orderIds: 
       : rows.some(row => row.needs_collection) ? 'partial' as const : 'paid' as const,
   }
 }
+
+/** Native table receipts are cash once; allocations only explain their use. */
+export async function readTableCreditPrintSummary(tx:ScopedTransaction,sessionId:string){
+  const row=(await tx.query<{received:string;allocated:string;unusedRefunded:string;available:string}>(`SELECT
+    COALESCE(sum(p.amount_minor) FILTER(WHERE p.status IN('succeeded','partially_refunded','refunded')),0)::text received,
+    COALESCE(sum((SELECT COALESCE(sum(a.amount_minor),0) FROM mbox.table_prepayment_allocations a WHERE(a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id))),0)::text allocated,
+    COALESCE(sum((SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r WHERE(r.tenant_id,r.store_id,r.payment_id)=(p.tenant_id,p.store_id,p.id) AND r.order_id IS NULL AND r.status='succeeded')),0)::text AS "unusedRefunded",
+    COALESCE(sum(mbox.prepayment_available(p.tenant_id,p.store_id,p.id)) FILTER(WHERE NOT EXISTS(SELECT 1 FROM mbox.table_prepayment_revocations v WHERE(v.tenant_id,v.store_id,v.payment_id)=(p.tenant_id,p.store_id,p.id))),0)::text available
+    FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3`,[tx.scope.tenantId,tx.scope.storeId,sessionId])).rows[0]
+  const result={received:Number(row?.received??0),allocated:Number(row?.allocated??0),unusedRefunded:Number(row?.unusedRefunded??0),available:Number(row?.available??0)}
+  if(Object.values(result).some(n=>!Number.isSafeInteger(n)||n<0))throw new Error('桌次预收款汇总金额无效')
+  return result
+}

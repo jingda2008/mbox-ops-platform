@@ -1,3 +1,4 @@
+import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Banknote, Check, CreditCard, Gift, LoaderCircle, Minus, Plus, QrCode, ReceiptText, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
@@ -16,6 +17,8 @@ import {clearStaffOrderDraft,readStaffOrderDraft,saveStaffOrderDraft,staffOrderD
 
 export interface AssistedOrderSheetProps {
   api: StaffActionsApiPort
+  staffSessionId?:string
+  permissions?:readonly string[]
   mode: 'paid' | 'gift'
   replacementCaseId?:string
   replacementPreviousOrderId?:string
@@ -27,7 +30,7 @@ export interface AssistedOrderSheetProps {
   onSubmitted(message: string): void
 }
 
-export function AssistedOrderSheet({ api, mode, table, replacementCaseId, replacementPreviousOrderId, onClose, onSubmitted }: AssistedOrderSheetProps) {
+export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, table, replacementCaseId, replacementPreviousOrderId, onClose, onSubmitted }: AssistedOrderSheetProps) {
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [products, setProducts] = useState<AssistedOrderCatalogProduct[]>([])
   const [phase, setPhase] = useState<'loading' | 'ready' | 'submitting' | 'error'>('loading')
@@ -371,10 +374,11 @@ export function AssistedOrderSheet({ api, mode, table, replacementCaseId, replac
             onClick={() => setSettlementMode('immediate_payment')}
           >立即结算</button>
         </div>
-        <p className="staff-order-payment-note">挂账可稍后统一结算；立即结算可让客人扫码，或扫描客人的付款码。</p>
+        <p className="staff-order-payment-note">挂桌账可稍后结算；跨日时，已确认消费的欠款保留，未确认消费的挂账须由授权员工核对金额后再收款。立即结算可让客人扫码，或扫描客人的付款码。</p>
         {immediatePaymentMessage !== null && <p className="staff-order-payment-note">{immediatePaymentMessage}{canImmediateSettle ? '；仍可使用下单后显示的已授权现场收款方式。' : ''}</p>}
         {access?.canReleaseMinimumSpend&&paymentOrder===null&&<p className="staff-order-payment-note">员工协助点单自动放行本单低消拦截，并记录员工与订单。整桌低消、应付款及预收款余额校验保持有效。</p>}
         {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
+        {paymentOrder!==null&&<StaffTableCreditPanel sessionId={table.activeSession.id} initialOrderId={paymentOrder.paymentNextStep.orderId} staffSessionId={staffSessionId} permissions={permissions} onUpdated={remaining=>{if(remaining!==undefined){setPaymentOrder(current=>current?{...current,paymentNextStep:{...current.paymentNextStep,amountMinor:remaining}}:null);setPaymentAction(null);setPaymentStatus(remaining===0?'succeeded':'pending')}}}/>}
         {paymentOrder !== null ? <StaffPaymentChoice
           action={paymentAction}
           amountMinor={paymentOrder.paymentNextStep.amountMinor}

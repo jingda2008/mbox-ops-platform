@@ -24,6 +24,7 @@ export interface GuestSharedCartLine {
 }
 
 export interface GuestSharedCart {
+  tableLocation?: {tableCode:string;tableDisplayName:string;locationVersion:number}
   prepayment?: Awaited<ReturnType<TablePrepaymentRepository['snapshot']>>
   minimumSpend?: TableMinimumSpend
   issuedCouponPortionId?: string
@@ -951,10 +952,14 @@ export class GuestSharedCartRepository {
     const allPriced = mappedLines.every((line) => line.available && line.subtotalAmountMinor !== null)
     const minimumSpend=await readTableMinimumSpend(this.transaction,cart.tableSessionId,
       lines.rows.reduce((sum,line)=>sum+Number(line.standard_amount_minor??line.unit_price_minor??0)*Number(line.quantity),0))
+    const tableLocation=(await this.transaction.query<{tableCode:string;tableDisplayName:string;locationVersion:number}>(`SELECT t.code AS "tableCode",t.display_name AS "tableDisplayName",s.location_version::int AS "locationVersion" FROM mbox.table_sessions s JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id) WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.tableSessionId])).rows[0]
+    const prepayment=await new TablePrepaymentRepository(this.transaction).snapshot(cart.tableSessionId,this.customerId??undefined)
+    const reserved=prepayment?Number((await this.transaction.query<{amount:string}>(`SELECT COALESCE(sum(amount_minor),0)::text amount FROM mbox.active_guest_credit_holds WHERE tenant_id=$1 AND store_id=$2 AND cart_id=$3 AND cart_version=$4`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,cart.id,cart.version])).rows[0]?.amount??0):0
     return {
       ...cart,
       minimumSpend,
-      prepayment:await new TablePrepaymentRepository(this.transaction).snapshot(cart.tableSessionId,this.customerId??undefined),
+      tableLocation,
+      prepayment:prepayment?{...prepayment,availableMinor:prepayment.availableMinor+reserved}:null,
       lines: mappedLines.map(line=>({...line,couponReviewAvailable:couponReview.get(line.productId)??false})),
       totalAmountMinor: allPriced && currencies.size <= 1
         ? mappedLines.reduce((sum, line) => sum + line.subtotalAmountMinor!, 0)

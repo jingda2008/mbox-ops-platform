@@ -186,7 +186,8 @@ Page({
     this.ensureTableRequestGuard()
   },
 
-  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/home/index') } enablePublicShareMenu(); this.loadData() },
+  onShow() {
+    this.transferFundingPrompt = null; if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/home/index') } enablePublicShareMenu(); this.loadData() },
   onHide() { this.stopWaitingPoll(); this.invalidateTableRequests() },
   onUnload() { this.stopWaitingPoll(); this.invalidateTableRequests() },
 
@@ -219,6 +220,7 @@ Page({
       if (!this.isCurrentTableRequest(request)) return
       this.loadTableState(true, request)
     }, Math.max(15000, (Date.parse(retryAt) || 0) - Date.now() + 250))
+    if (this.waitingTimer && typeof this.waitingTimer.unref === 'function') this.waitingTimer.unref()
   },
 
   ensureTableRequestGuard() {
@@ -318,7 +320,14 @@ Page({
         guestCountText: Number(session.guestCount) > 0 ? `${Number(session.guestCount)}位` : '人数待确认',
         error: '',
       })
-      if (waiting) this.scheduleWaitingPoll(tableRequest)
+      if (active && session.prepayment && session.prepayment.locationVersion > 0 && session.prepayment.initialFundingRequiredMinor > 0) {
+        const promptKey = String(session.cartScope) + ':' + session.prepayment.locationVersion
+        if (this.transferFundingPrompt !== promptKey) {
+          this.transferFundingPrompt = promptKey
+          wx.showModal({ title: '转台补款提醒', content: '已转至 ' + (session.table && session.table.code || '') + '，还需补足 ¥' + (session.prepayment.initialFundingRequiredMinor / 100).toFixed(2) + '。补款继续作为本桌点单额度。', confirmText: '查看补款', success: result => { if (result.confirm && this.isCurrentTableRequest(tableRequest)) wx.switchTab({ url: '/pages/order/index' }) } })
+        }
+      }
+      if (waiting || active) this.scheduleWaitingPoll(tableRequest)
     } catch (error) {
       if (!this.isCurrentTableRequest(tableRequest)) return
       const waiting = this.data.visitState === 'waiting' || error.statusCode === 429

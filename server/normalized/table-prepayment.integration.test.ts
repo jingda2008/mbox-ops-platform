@@ -1,6 +1,9 @@
+import {registerStaffTableCreditApi} from './staff-table-credit-api.js'
+import {readTableCreditPrintSummary} from './checkout-print-summary.js'
+import {collectStaffCredit,readStaffCredit} from './staff-table-credit.js'
 import {createRequire} from 'node:module'
 import {tableManagementApiPlugin} from './table-management-api.js'
-import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
+import {PaymentFulfillmentRepository,buildFulfillmentPlan} from './payment-fulfillment-repository.js'
 import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
 import {ItemAfterSalesCommandService} from './item-after-sales-command-service.js'
 import {ItemAfterSalesOperatingEffects} from './item-after-sales-operating-effects.js'
@@ -33,7 +36,7 @@ integration('table prepayment PostgreSQL authority',()=>{
  beforeAll(async()=>{await runNormalizedMigrations(databaseUrl!);pool=new Pool({connectionString:databaseUrl});runtimePool=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL?new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL}):pool;transactions=new ScopedPostgresTransactionRunner(runtimePool as unknown as PostgresPool);await seed();actorRef=await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId,customerId})})
  afterAll(async()=>{if(runtimePool&&runtimePool!==pool)await runtimePool.end();await pool?.end()})
  const run=<T>(fn:(tx:Parameters<Parameters<typeof transactions.run>[1]>[0])=>Promise<T>)=>transactions.run({tenantId,storeId},fn)
- const order=()=>run(tx=>new OrderRepository(tx).createSubmitted({tableSessionId,publicId:randomUUID(),channel:'staff_assisted',createdByEmployeeId:managerId,lines:[{productId,quantity:1}]}))
+ const order=()=>run(async tx=>{const order=await new OrderRepository(tx).createSubmitted({tableSessionId,publicId:randomUUID(),channel:'guest_qr',prepaymentSettlement:true,createdByCustomerId:customerId,lines:[{productId,quantity:1}]});await new TablePrepaymentRepository(tx).allocate(tableSessionId,order.id);return order})
  it('does not accept orders before prepayment and keeps rejected inserts atomic',async()=>{
    await expect(order()).rejects.toMatchObject({code:'TABLE_PREPAYMENT_REQUIRED'})
    expect(Number((await pool.query('SELECT count(*) n FROM mbox.orders WHERE tenant_id=$1',[tenantId])).rows[0].n)).toBe(0)
@@ -48,6 +51,10 @@ integration('table prepayment PostgreSQL authority',()=>{
     const first=await app.inject(request);expect(first.statusCode,first.body).toBe(200)
     const repeated=await app.inject(request);expect(repeated.statusCode,repeated.body).toBe(200);expect(repeated.json().data.paymentId).toBe(first.json().data.paymentId)
     const resumed=await app.inject({...request,headers:{'idempotency-key':randomUUID()},payload:{amountMinor:30000,sharedTableConsent:'v1'}});expect(resumed.statusCode,resumed.body).toBe(200);expect(resumed.json().data.paymentId).toBe(first.json().data.paymentId)
+    const receipt=(await pool.query("SELECT expires_at::text expiry FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='guest.table-prepayment' AND idempotency_key=$3",[tenantId,storeId,request.headers['idempotency-key']])).rows[0]
+    expect(receipt.expiry).toBe('infinity')
+    await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='guest.table-prepayment' AND idempotency_key=$3",[tenantId,storeId,request.headers['idempotency-key']])
+    const expired=await app.inject(request);expect(expired.statusCode,expired.body).toBe(409);expect(expired.json().error.code).toBe('IDEMPOTENCY_RECEIPT_UNAVAILABLE')
     const rows=(await pool.query('SELECT public_id,amount_minor::int FROM mbox.payments WHERE prepaid_table_session_id=$1',[tableSessionId])).rows;expect(rows).toHaveLength(1);expect(rows[0].amount_minor).toBe(20000);publicId=rows[0].public_id
    }finally{await app.close()}
    await capture(publicId!,20000)
@@ -130,7 +137,7 @@ integration('table prepayment PostgreSQL authority',()=>{
    const app=Fastify();await app.register(guestCommerceServiceApiPlugin,{prefix:'/api',paymentActionSecret:'isolated-prepayment-action-secret-20261031',transactions,commandExecutor:executor,commerce,payments:paymentService(),onlinePayments:{} as never,paymentMode:'wechat_jsapi',resolveGuestContext:()=>({scope:{tenantId,storeId},sessionKind:'table',customerId,tableSessionId,reservationId:null,tableCode:'COST1',tableDisplayName:'测试桌',businessDate:'2026-10-31',expiresAt:new Date(Date.now()+60000).toISOString(),capabilities:['guest.order.create','guest.session.read','guest.menu.read','guest.service.create'],actorRef})})
    try{
      const cart=await run(async tx=>{const repo=new GuestSharedCartRepository(tx,customerId),current=await repo.readOpen(tableSessionId,`GSC${randomUUID().replace(/-/g,'').toUpperCase()}`);return repo.adjust(tableSessionId,current.publicId,{productId,delta:1,expectedGeneration:current.generation,expectedVersion:current.version,operationId:randomUUID(),actorSessionRef:actorRef})})
-     const request={method:'POST' as const,url:'/api/guest/shared-cart/prepayment-settlement',headers:{'idempotency-key':randomUUID()},payload:{expectedGeneration:cart.generation,expectedVersion:cart.version,note:'少冰'}}
+     const request={method:'POST' as const,url:'/api/guest/shared-cart/prepayment-settlement',headers:{'idempotency-key':randomUUID()},payload:{expectedGeneration:cart.generation,expectedVersion:cart.version,note:'少冰',confirmedDuplicateOrderId:(await pool.query("SELECT public_id FROM mbox.orders WHERE table_session_id=$1 AND channel='guest_qr' ORDER BY created_at DESC LIMIT 1",[tableSessionId])).rows[0].public_id}}
      const first=await app.inject(request);expect(first.statusCode,first.body).toBe(201);expect(first.json().data).toMatchObject({prepaymentSettlement:true,payment:null,order:{paymentStatus:'paid'},settlement:{payableAmountMinor:8800}})
      const second=await app.inject(request);expect(second.statusCode,second.body).toBe(200);expect(second.json().data.order.publicId).toBe(first.json().data.order.publicId)
      expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:1200,qualifyingGoodsMinor:26400})
@@ -168,13 +175,13 @@ integration('table prepayment PostgreSQL authority',()=>{
 
    expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:2400,qualifyingGoodsMinor:26400})
  })
- it('moves the same session to another table while retaining its minimum, original funds and allocations',async()=>{
+ it('moves the same session with the target minimum and retains original funds and allocations',async()=>{
    const target=randomUUID();await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,'新桌',4,99999)",[target,tenantId,storeId,areaId,'T'+target.slice(0,8)])
    const before=await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))
    const input={tableSessionId,targetTableId:target,transferredByEmployeeId:managerId,reason:'顾客整桌移位',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()}
    const moved=await run(tx=>new TableManagementRepository(tx).transfer(input,{capture:async()=>({})}))
    expect(moved.tableSessionId).toBe(tableSessionId)
-   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toEqual(before)
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:before!.availableMinor,receivedMinor:before!.receivedMinor,minimumMinor:99999,waiverMinor:0,locationVersion:1,initialFundingRequiredMinor:99999-before!.netReceivedMinor})
    expect((await pool.query('SELECT table_id,minimum_spend_minor::int,minimum_spend_mode FROM mbox.table_sessions WHERE id=$1',[tableSessionId])).rows[0]).toEqual({table_id:target,minimum_spend_minor:10000,minimum_spend_mode:'prepaid'})
  })
  it('physically turns over a table with unresolved prepayment, preserves late capture on the old session and starts clean',async()=>{
@@ -240,6 +247,7 @@ integration('table prepayment PostgreSQL authority',()=>{
    })
    const h=fixture('order',{checkoutSharedCart:client.api.checkoutSharedCart,prepayTable:client.api.prepayTable,getSharedCart:client.api.getSharedCart,queryPrepayment:async()=>({status:'pending'})})
    h.page.setData({products:[{productId,name:'Strong Cost Product',amountMinor:8800,available:true}]})
+   h.wx.showModal=(options:any)=>options.success({confirm:options.title!=='补足后完成点单'})
    let nativeDeposits=0
    h.wx.requestPayment=(options:any)=>{nativeDeposits++;options.success({})}
    h.page.checkoutUpgradeReady=async()=>true
@@ -257,7 +265,7 @@ integration('table prepayment PostgreSQL authority',()=>{
    }
    try{
     await add();await confirm()
-    expect(replies.at(-1)?.body.error.code).toBe(mode==='prepaid'?'TABLE_PREPAYMENT_REQUIRED':'TABLE_MINIMUM_SPEND_NOT_MET')
+    if(mode==='prepaid')expect(replies).toHaveLength(0);else expect(replies.at(-1)?.body.error.code).toBe('TABLE_MINIMUM_SPEND_NOT_MET')
     expect(h.page.data.cart).toHaveLength(1);expect(h.page.data.checkoutLocked).toBe(false);expect(nativeActions).toHaveLength(0)
     expect((await pool.query('SELECT id FROM mbox.orders WHERE table_session_id=$1',[miniSession])).rowCount).toBe(0)
     if(mode==='prepaid'){
@@ -274,8 +282,9 @@ integration('table prepayment PostgreSQL authority',()=>{
      await add();await confirm()
      expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
      expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(miniSession))).toMatchObject({qualifyingGoodsMinor:17600,availableMinor:2400,shortfallMinor:0,differenceChargingEnabled:false})
+     const submittedRequests=replies.length
      await add();await confirm()
-     expect(replies.at(-1)?.body.error.code).toBe('TABLE_PREPAYMENT_INSUFFICIENT')
+     expect(replies).toHaveLength(submittedRequests)
      expect(h.page.data.cart).toHaveLength(1);expect(h.page.data.checkoutLocked).toBe(false);expect(nativeActions).toHaveLength(0)
      expect((await pool.query('SELECT id FROM mbox.orders WHERE table_session_id=$1',[miniSession])).rowCount).toBe(2)
     }else{
@@ -299,6 +308,140 @@ integration('table prepayment PostgreSQL authority',()=>{
    const app=Fastify();await app.register(tableManagementApiPlugin,{commands:{} as never,nativeCommands:new NormalizedCommandExecutor(transactions),transactions,resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-31',capabilities:[]})});return app
  }
  function paymentService(){return new PaymentCommandService(new NormalizedCommandExecutor(transactions),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())}
+ async function creditSession(minimum=15000){
+   const table=randomUUID(),session=randomUUID()
+   await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,'自填收款桌',4,$6)",[table,tenantId,storeId,areaId,'C'+table.slice(0,8),minimum])
+   await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,minimum_spend_mode,minimum_spend_minor,guest_cart_protocol_version) VALUES($1,$2,$3,$4,$5,'2026-10-31',2,'prepaid',$6,2)",[session,tenantId,storeId,table,randomUUID(),minimum])
+   return session
+ }
+ const staffOrder=(session:string)=>run(async tx=>{
+   const result=await new OrderRepository(tx).createSubmitted({tableSessionId:session,publicId:randomUUID(),channel:'staff_assisted',createdByEmployeeId:managerId,lines:[{productId,quantity:1}]})
+   await new PaymentFulfillmentRepository(tx).prepareSubmittedOrder(result,{...buildFulfillmentPlan(result.items),allowMissingRecipes:true})
+   return result
+ })
+ const credit=(sessionId:string,orderIds:string[],amountMinor:number,provider:'cash'|'postar'='cash')=>run(tx=>collectStaffCredit(tx,{sessionId,orderIds,amountMinor,employeeId:managerId,expectedLocationVersion:0,expectedMinimumMinor:15000,payerReference:'顾客授权本桌共同点单',sharedTableConsent:true,provider,method:provider==='cash'?'cash':'native_qr',receiptReference:randomUUID(),publicId:randomUUID(),businessDate:'2026-10-31'}))
+ it('collects a staff-selected amount below minimum and leaves the exact unpaid part collectible',async()=>{
+   const session=await creditSession(),submitted=await staffOrder(session)
+   expect(submitted.paymentStatus).toBe('unpaid')
+   const first=await credit(session,[submitted.id],5000)
+   expect(first.payment.amountMinor).toBe(5000)
+   expect((await run(tx=>readStaffCredit(tx,session))).orders).toMatchObject([{id:submitted.id,dueMinor:'3800'}])
+   expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[submitted.id])).rows[0].payment_status).toBe('partially_paid')
+   await credit(session,[submitted.id],3800)
+   expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[submitted.id])).rows[0].payment_status).toBe('paid')
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:0,receivedMinor:8800,initialFundingRequiredMinor:6200})
+   expect(Number((await pool.query('SELECT sum(e.amount_minor) n FROM mbox.reconciliation_entries e JOIN mbox.payments p ON p.id=e.payment_id WHERE p.prepaid_table_session_id=$1',[session])).rows[0].n)).toBe(8800)
+ })
+ it('settles a selected staff order from one larger receipt and retains surplus without a second cash entry',async()=>{
+   const session=await creditSession(),submitted=await staffOrder(session)
+   const receipt=await credit(session,[submitted.id],15000)
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:6200,receivedMinor:15000,initialFundingRequiredMinor:0})
+   expect(await run(tx=>readTableCreditPrintSummary(tx,session))).toEqual({received:15000,allocated:8800,unusedRefunded:0,available:6200})
+   expect((await pool.query('SELECT amount_minor::int FROM mbox.table_prepayment_allocations WHERE order_id=$1',[submitted.id])).rows).toEqual([{amount_minor:8800}])
+   expect((await pool.query('SELECT amount_minor::int FROM mbox.reconciliation_entries WHERE payment_id=$1',[receipt.payment.id])).rows).toEqual([{amount_minor:15000}])
+ })
+ it('online staff credit is not spendable until capture; duplicate callbacks settle only once',async()=>{
+   const session=await creditSession(),submitted=await staffOrder(session),receipt=await credit(session,[submitted.id],15000,'postar')
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:0,receivedMinor:0})
+   await expect(credit(session,[submitted.id],15000,'postar')).rejects.toMatchObject({code:'TABLE_CREDIT_PENDING'})
+   await expect(run(tx=>new PaymentRepository(tx).createForOrder({orderId:submitted.id,publicId:randomUUID(),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:managerId}}))).rejects.toThrow('待确认的桌次预付款')
+   await capture(receipt.payment.publicId,15000)
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:6200,receivedMinor:15000})
+   expect(Number((await pool.query('SELECT count(*) n FROM mbox.table_prepayment_allocations WHERE order_id=$1',[submitted.id])).rows[0].n)).toBe(1)
+ })
+ it('rejects a stale table minimum before registering any receipt',async()=>{
+   const session=await creditSession(20000)
+   await expect(credit(session,[],15000)).rejects.toMatchObject({code:'TABLE_CREDIT_CHANGED'})
+   expect(Number((await pool.query('SELECT count(*) n FROM mbox.payments WHERE prepaid_table_session_id=$1',[session])).rows[0].n)).toBe(0)
+ })
+ it('reserves existing credit for a top-up cart and releases it atomically when that cart changes',async()=>{
+   const session=await creditSession();await credit(session,[],15000)
+   await pool.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[tenantId,storeId,session,customerId])
+   const actor=await seedActiveGuestTableAuthority(pool,{tenantId,storeId,tableSessionId:session,customerId})
+   const cart=await run(async tx=>{const repo=new GuestSharedCartRepository(tx,customerId),current=await repo.readOpen(session,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`);return repo.adjust(session,current.publicId,{productId,delta:2,expectedGeneration:current.generation,expectedVersion:current.version,operationId:randomUUID(),actorSessionRef:actor})})
+   const topup=await run(async tx=>{const repo=new TablePrepaymentRepository(tx);const p=await new PaymentRepository(tx).createForTablePrepayment({tableSessionId:session,customerId,amountMinor:2600,provider:'postar',method:'jsapi',publicId:randomUUID()});await repo.holdCartBalance(session,cart,p.id);return p})
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:0,receivedMinor:15000})
+   expect((await run(tx=>new GuestSharedCartRepository(tx,customerId).readOpen(session,cart.publicId))).prepayment?.availableMinor).toBe(15000)
+   const competing=await staffOrder(session);expect(competing.paymentStatus).toBe('unpaid')
+   expect((await pool.query('SELECT 1 FROM mbox.table_prepayment_allocations WHERE order_id=$1',[competing.id])).rowCount).toBe(0)
+   await capture(topup.publicId,2600)
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:2600,receivedMinor:17600})
+   expect((await run(tx=>new GuestSharedCartRepository(tx,customerId).readOpen(session,cart.publicId))).prepayment?.availableMinor).toBe(17600)
+   await run(tx=>new GuestSharedCartRepository(tx,customerId).clear(session,cart.publicId,{expectedGeneration:cart.generation,expectedVersion:cart.version,operationId:randomUUID(),actorSessionRef:actor}))
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:17600})
+   expect(Number((await pool.query('SELECT count(*) n FROM mbox.reconciliation_entries e JOIN mbox.payments p ON p.id=e.payment_id WHERE p.prepaid_table_session_id=$1',[session])).rows[0].n)).toBe(2)
+ })
+ it('recomputes top-up from net receipts on repeated higher and lower table moves',async()=>{
+   const session=await creditSession();await credit(session,[],15000)
+   const targets=[]
+   for(const minimum of [30000,10000,30000]){
+     const target=randomUUID();targets.push(target)
+     await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,'目标桌',4,$6)",[target,tenantId,storeId,areaId,'T'+target.slice(0,8),minimum])
+     await run(tx=>new TableManagementRepository(tx).transfer({tableSessionId:session,targetTableId:target,transferredByEmployeeId:managerId,reason:'整桌移位',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()},{capture:async()=>({})}))
+     expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({minimumMinor:minimum,availableMinor:15000,receivedMinor:15000,initialFundingRequiredMinor:Math.max(0,minimum-15000)})
+   }
+   expect((await pool.query('SELECT 1 FROM mbox.table_transfer_minimum_snapshots WHERE table_session_id=$1',[session])).rowCount).toBe(3)
+   expect((await pool.query('SELECT 1 FROM mbox.payments WHERE prepaid_table_session_id=$1',[session])).rowCount).toBe(1)
+   await expect(run(tx=>new TablePrepaymentRepository(tx).assertCurrent(session,2,10000))).rejects.toMatchObject({code:'TABLE_CREDIT_CHANGED'})
+ })
+ it('publishes current table location for a zero-minimum transfer without requiring prepayment',async()=>{
+   const session=await creditSession(0),target=randomUUID(),code='Z'+target.slice(0,8)
+   await pool.query("UPDATE mbox.table_sessions SET minimum_spend_mode='order_gate' WHERE id=$1",[session])
+   const before=await run(tx=>new GuestSharedCartRepository(tx,customerId).readOpen(session,`GSC${randomUUID().replaceAll('-','').toUpperCase()}`))
+   await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,'零低消新桌',4,0)",[target,tenantId,storeId,areaId,code])
+   await run(tx=>new TableManagementRepository(tx).transfer({tableSessionId:session,targetTableId:target,transferredByEmployeeId:managerId,reason:'整桌移位',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()},{capture:async()=>({})}))
+   const after=await run(tx=>new GuestSharedCartRepository(tx,customerId).readOpen(session,before.publicId))
+   expect(after).toMatchObject({id:before.id,tableSessionId:session,prepayment:null,tableLocation:{tableCode:code,tableDisplayName:'零低消新桌',locationVersion:1}})
+ })
+ it('staff credit HTTP retries reuse one receipt and reject changed amounts and revoked authority',async()=>{
+   const session=await creditSession(),app=Fastify(),actor={type:'employee' as const,employeeId:managerId}
+   registerStaffTableCreditApi(app,{transactions,resolveStaffContext:()=>({scope:{tenantId,storeId},employeeId:managerId,actor,businessDate:'2026-10-31'})} as never)
+   const request={method:'POST' as const,url:'/payments/table-prepayment',headers:{'idempotency-key':randomUUID()},payload:{sessionId:session,orderIds:[],amountMinor:15000,expectedLocationVersion:0,expectedMinimumMinor:15000,payerReference:'隔离收款测试：顾客授权共享',sharedTableConsent:true,provider:'cash',method:'cash',receiptReference:randomUUID()}}
+   try{
+     const first=await app.inject(request);expect(first.statusCode,first.body).toBe(200)
+     const replay=await app.inject(request);expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true);expect(replay.json().data.payment.id).toBe(first.json().data.payment.id)
+     const changed=await app.inject({...request,payload:{...request.payload,amountMinor:15001}});expect(changed.statusCode,changed.body).toBe(409)
+     expect(Number((await pool.query('SELECT count(*) n FROM mbox.payments WHERE prepaid_table_session_id=$1',[session])).rows[0].n)).toBe(1)
+     const receipt=await pool.query("SELECT expires_at::text expiry FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='staff.table-prepayment' AND idempotency_key=$3",[tenantId,storeId,request.headers['idempotency-key']])
+     expect(receipt.rows[0].expiry).toBe('infinity')
+     await pool.query("UPDATE mbox.idempotency_records SET created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='staff.table-prepayment' AND idempotency_key=$3",[tenantId,storeId,request.headers['idempotency-key']])
+     const expired=await app.inject(request);expect(expired.statusCode,expired.body).toBe(409)
+     expect(Number((await pool.query('SELECT count(*) n FROM mbox.payments WHERE prepaid_table_session_id=$1',[session])).rows[0].n)).toBe(1)
+     const assignments=(await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions d,mbox.employee_roles e WHERE a.permission_id=d.id AND a.role_id=e.role_id AND e.employee_id=$1 AND d.code='payment.collect.all_tables' RETURNING a.*",[managerId])).rows
+     try{const denied=await app.inject(request);expect(denied.statusCode,denied.body).toBe(403)}finally{for(const a of assignments)await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[a.tenant_id,a.store_id,a.role_id,a.permission_id])}
+   }finally{await app.close()}
+ })
+ it('keeps linked unknown and late table funds under cross-day review instead of recollecting the original debt',async()=>{
+   const session=await creditSession()
+   await pool.query("UPDATE mbox.table_sessions SET minimum_spend_mode='order_gate' WHERE id=$1",[session])
+   const submitted=await staffOrder(session)
+   await pool.query("UPDATE mbox.order_items SET status='delivered' WHERE order_id=$1",[submitted.id])
+   const receipt=await credit(session,[submitted.id],15000,'postar')
+   const businessDate=(await run(tx=>tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text date',[tenantId,storeId]))).rows[0]!.date
+   await run(tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope:{tenantId,storeId},tableSessionId:session,employeeId:managerId,businessDate,reasonNote:'顾客离场，原款尚待核对',idempotencyKey:randomUUID()}))
+   const eligibility=()=>run(async tx=>(await tx.query<{state:string}>('SELECT mbox.carryover_collection_eligibility($1,$2,$3) state',[tenantId,storeId,submitted.id])).rows[0]!.state)
+   expect(await eligibility()).toBe('review_required')
+   await capture(receipt.payment.publicId,15000)
+   expect(await eligibility()).toBe('review_required')
+   expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(session))).toMatchObject({availableMinor:15000,receivedMinor:15000})
+   expect((await pool.query('SELECT 1 FROM mbox.table_prepayment_allocations WHERE order_id=$1',[submitted.id])).rowCount).toBe(0)
+   expect((await pool.query('SELECT count(*)::int n FROM mbox.reconciliation_entries WHERE payment_id=$1',[receipt.payment.id])).rows[0].n).toBe(1)
+ })
+ it('assigned-table staff may collect without whole-store authority, but another table assignment cannot authorize it',async()=>{
+   const session=await creditSession(),other=await creditSession()
+   const role=(await pool.query('SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1 LIMIT 1',[managerId])).rows[0].role_id
+   const removed=(await pool.query("DELETE FROM mbox.role_permission_assignments a USING mbox.staff_permission_definitions d WHERE a.permission_id=d.id AND a.role_id=$1 AND d.code='payment.collect.all_tables' RETURNING a.*",[role])).rows
+   try{
+     const table=(await pool.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[session])).rows[0].table_id
+     const otherRole=(await pool.query('SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1 LIMIT 1',[salespersonId])).rows[0].role_id
+     await pool.query("INSERT INTO mbox.table_assignments(tenant_id,store_id,table_id,employee_id,role_id,assignment_type,reason) VALUES($1,$2,$3,$4,$5,'primary','隔离验收桌台权限')",[tenantId,storeId,table,salespersonId,otherRole])
+     expect((await run(tx=>tx.query<{allowed:boolean}>('SELECT mbox.staff_can_collect_table_credit($1,$2,$3,$4) allowed',[tenantId,storeId,session,managerId]))).rows[0].allowed).toBe(false)
+     await expect(credit(session,[],15000)).rejects.toThrow('不是该桌负责人')
+     await pool.query("INSERT INTO mbox.table_assignments(tenant_id,store_id,table_id,employee_id,role_id,assignment_type,reason) VALUES($1,$2,$3,$4,$5,'backup','隔离验收桌台权限')",[tenantId,storeId,table,managerId,role])
+     expect((await credit(session,[],15000)).payment.status).toBe('succeeded')
+     await expect(credit(other,[],15000)).rejects.toThrow('不是该桌负责人')
+   }finally{for(const a of removed)await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)',[a.tenant_id,a.store_id,a.role_id,a.permission_id])}
+ })
  async function capture(publicId:string,amount:number){
    const scope={tenantId,storeId},integrationRef='postar-fixture-callback',providerTransactionId=randomUUID(),occurredAt=new Date().toISOString()
    const observation=await new VerifiedProviderObservationService(transactions).recordPayment({scope,provider:'postar',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef,paymentPublicId:publicId,providerTransactionId,reportedAmountMinor:amount,reportedCurrency:'CNY',status:'succeeded',occurredAt})
@@ -328,7 +471,7 @@ integration('table prepayment PostgreSQL authority',()=>{
     for(const employee of [managerId,salespersonId]){
       const role=randomUUID();await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'测试岗位')",[role,tenantId,storeId,'R_'+role.replaceAll('-','').toUpperCase()])
       await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,employee,role])
-      for(const code of ['table.minimum_spend.adjust','reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
+      for(const code of ['order.create','order.minimum_spend.release','payment.initiate.staff','payment.collect.all_tables','payment.manual.cash.record','payment.manual.pos.record','payment.manual.external.record','table.minimum_spend.adjust','reconciliation.view','refund.request','refund.approve','refund.execute','table.view_all','table.close','table.turnover_unsettled','table.open','table.transfer']){
         if(code==='reconciliation.view'&&employee===managerId)continue
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,role,permission])

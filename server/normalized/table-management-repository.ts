@@ -786,7 +786,7 @@ export class TableManagementRepository {
         session.business_date::text, session.guest_count, session.capacity_at_open,
         session.capacity_override_reason, session.capacity_overridden_by_employee_id,
         session.guest_profile_snapshot, session.status, session.opened_by_employee_id,
-        session.opened_at::text,session.minimum_spend_minor,session.minimum_spend_mode
+        session.opened_at::text,session.effective_minimum_spend_minor AS minimum_spend_minor,session.minimum_spend_mode
       FROM mbox.table_sessions AS session
       JOIN mbox.tables AS source ON source.tenant_id = session.tenant_id
         AND source.store_id = session.store_id AND source.id = session.table_id

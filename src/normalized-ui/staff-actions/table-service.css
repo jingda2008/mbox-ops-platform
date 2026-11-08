@@ -7,3 +7,5 @@
 .normalized-topbar-actions:has(.table-service-launcher) .normalized-session-trigger,.normalized-staff-action-shell>header:has(.table-service-launcher) .normalized-session-trigger{min-width:44px;flex-shrink:0}
 .normalized-staff-action-shell>header:has(.table-service-launcher){flex-wrap:wrap;gap:8px}
 @media(max-width:759px){.normalized-topbar:has(.table-service-launcher){flex-wrap:wrap;gap:8px}.normalized-topbar-actions:has(.table-service-launcher){flex:0 0 100%;flex-wrap:wrap;justify-content:flex-end}}
+
+.staff-credit-panel{min-width:0;overflow-wrap:anywhere}.staff-credit-panel fieldset{min-width:0;max-width:100%;box-sizing:border-box}.staff-credit-panel input[type=checkbox]{display:inline-block;width:18px;min-height:18px;height:18px;margin-right:8px;vertical-align:middle}.staff-credit-panel button{max-width:100%;white-space:normal}.staff-credit-panel [role=group]{padding:12px;border:1px solid #bdcdbf;border-radius:10px}

@@ -1,3 +1,4 @@
+import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import {TableMinimumSpendPanel} from './TableMinimumSpendPanel'
 import {TablePrepaymentPanel,TablePrepaymentDirectory} from './TablePrepaymentPanel'
 import { PrimaryServiceSelect, TableServicePanel } from './TableServicePanel'
@@ -1498,6 +1499,8 @@ export function StaffActionsPanel({
         <AssistedOrderSheet
           api={api}
           mode={orderSheetMode}
+          staffSessionId={staffSessionId}
+          permissions={permissions}
           table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
           onClose={() => returnToTableActionDialog(() => setOrderSheetMode(null))}
           onSubmitted={(message) => {
@@ -1911,6 +1914,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
+      {table.activeSession&&<StaffTableCreditPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession&&(props.permissions.includes('table.view_all')||props.permissions.includes('order.create'))&&<TableMinimumSpendPanel key={table.activeSession.id} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession === null ? (
@@ -2044,6 +2048,7 @@ function TableActionSheet(props: TableActionSheetProps) {
                 ))}
               </div>
               {availableTargets.length === 0 && <p>当前没有可转入的空闲桌台。</p>}
+              {transferTarget&&<p>转至 {transferTarget.code} 后采用目标桌配置的低消；原款随桌次保留，不足部分提示顾客补足，余额不自动退款。</p>}
               {transferNeedsReason && (
                 <label>加座说明<input value={props.transferReason} maxLength={1000} placeholder="说明加座及现场安全确认" onChange={(event) => props.onTransferReason(event.target.value)} /></label>
               )}

@@ -19,7 +19,7 @@ export async function readCarryoverDebt(tx: ScopedTransaction, orderId: string):
   if(!await hasCarryoverDebtSchema(tx))return null
   const result = await tx.query<{eligibility: CarryoverDebt['eligibility']; receivable_minor: string; review_reason: string | null}>(`
     SELECT mbox.carryover_collection_eligibility(tenant_id,store_id,order_id) AS eligibility,receivable_minor::text,
-      COALESCE(review_reason,'存在退款或关桌后金额调整，请核对原单及实收后处理') AS review_reason FROM mbox.order_carryover_debts
+      COALESCE(review_reason,'存在原预付款、退款或关桌后金额调整，请先核对原款及订单后处理') AS review_reason FROM mbox.order_carryover_debts
     WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3`, [tx.scope.tenantId,tx.scope.storeId,orderId])
   const row=result.rows[0]
   if (!row) return null

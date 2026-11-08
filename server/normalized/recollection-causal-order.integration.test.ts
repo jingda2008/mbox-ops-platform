@@ -1,3 +1,4 @@
+import {installPreCreditFixtureProjection} from '../../scripts/test-support/pre-credit-upgrade-fixture.js'
 import {randomUUID} from 'node:crypto'
 import {Client,Pool} from 'pg'
 import {dropDisconnectedLocalFixtureDatabase} from '../../scripts/test-support/postgres-fixture-cleanup.js'
@@ -46,6 +47,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     } finally {await migrationClient.end()}
     pool=new Pool({connectionString:targetUrl,max:8});runtimePool=new Pool({connectionString:runtime.toString(),max:8});runner=new ScopedPostgresTransactionRunner(runtimePool)
     expect((await runtimePool.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=session_user')).rows[0]).toEqual({rolsuper:false,rolbypassrls:false})
+    const restoreCurrentProjection=await installPreCreditFixtureProjection(runner,scope)
     const commands=new NormalizedCommandExecutor(runner)
     money=new PaymentCommandService(commands,new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
     afterSales=new ItemAfterSalesCommandService(commands,new ItemAfterSalesOperatingEffects())
@@ -80,6 +82,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     try {await authorize(legacyUnproven)} finally {await pool.query('ALTER TABLE mbox.order_recollection_authorizations ALTER COLUMN created_at SET DEFAULT clock_timestamp()')}
     await collect(legacyUnproven)
     expect((await facts(legacyUnproven)).restored).toHaveLength(0)
+    restoreCurrentProjection()
     await runNormalizedMigrations(targetUrl)
   },60000)
   afterAll(async()=>{

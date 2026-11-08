@@ -286,3 +286,27 @@ test('capture before/after component fixtures with explicit non-native evidence 
     }
   } finally {await browser.close()}
 })
+
+test('scheduled menu cards keep pictures, taste tags, price and selling hours separate on narrow screens',async()=>{
+ const browser=await chromium.launch({headless:true})
+ try{
+  const page=await browser.newPage()
+  for(const [platform,ext] of [['miniprogram','wxss'],['alipay-miniprogram','acss']]){
+   const styles=await css(resolve(root,platform,'app.'+ext))+await css(resolve(root,platform,'pages/order/index.'+ext))
+   for(const width of widths){
+    await page.setViewportSize({width,height:860})
+    const cards=['18:00–次日02:00','2026-11-10至2026-11-20 周五、周六 20:00–次日01:00'].map(time=>`<view class="product-row is-scheduled"><view class="product-media"><view class="product-media__placeholder"><text>M-BOX</text></view></view><view class="product-main"><text class="product-kind">经典鸡尾酒</text><text class="product-name">龙舌兰日出</text><view class="product-tastes"><text>酸度 2/5</text><text>甜度 2/5</text></view><text class="product-copy">龙舌兰 橙汁 红石榴</text></view><view class="product-action"><view class="product-action__meta"><text class="product-price">¥98.00</text><text class="product-availability">可销售时间</text><text class="product-availability-copy">${time}</text></view></view></view>`).join('')
+    await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page order-page"><text>销售时段卡片布局验证 · 非原生小程序截图</text><view class="product-list product-list--browse">${cards}</view></view></page>`)
+    for(const card of await page.locator('.product-row').all()){
+     const main=await card.locator('.product-main').boundingBox(),action=await card.locator('.product-action').boundingBox(),bounds=await card.boundingBox()
+     assert.ok(action.y>=main.y+main.height-1,'price must not overlap taste or description')
+     const time=await card.locator('.product-availability-copy').boundingBox()
+     assert.ok(time.y+time.height<=bounds.y+bounds.height+1,'selling time must remain inside card')
+     assert.equal(await card.locator('.product-media').evaluate(n=>getComputedStyle(n).opacity),'1')
+    }
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))
+    if(platform==='miniprogram'&&width===390){const out=resolve(root,'artifacts/selling-time-20261108');await mkdir(out,{recursive:true});await page.screenshot({path:resolve(out,'scheduled-menu-layout.png'),fullPage:true})}
+   }
+  }
+ }finally{await browser.close()}
+})

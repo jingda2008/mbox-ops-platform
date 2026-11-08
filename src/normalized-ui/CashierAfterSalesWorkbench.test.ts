@@ -1,6 +1,8 @@
 import { createElement } from 'react'
 import { readFileSync } from 'node:fs'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { renderToStaticMarkup as renderMarkup } from 'react-dom/server'
+import {ConfirmationDialogProvider} from './ConfirmationDialog'
+const renderToStaticMarkup=(element:Parameters<typeof renderMarkup>[0])=>renderMarkup(createElement(ConfirmationDialogProvider,null,element))
 import { describe, expect, it, vi } from 'vitest'
 import type { StaffAuthView } from '../normalized-api'
 import type {
@@ -20,6 +22,59 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const otherEmployeeId = '44444444-4444-4444-8444-444444444444'
 
 describe('CashierAfterSalesWorkbenchView', () => {
+  it.each([true,false])('separates a pending staff tab review from collectible debt, with confirmation permission %s',canConfirm=>{
+    const view=closedDebtWorkbench('ineligible')
+    Object.assign(view.orders[0]!,{status:'cancelled',outstandingAmountMinor:0,carryoverReview:{canConfirm,basis:{
+      orderId:'order-1',tableSessionId:'closed-original-session',originalBusinessDate:'2026-08-12',closedAt:'2026-08-13T06:00:00+08:00',
+      cancellationId:'cancel-1',maximumAmountMinor:6800,currency:'CNY',orderNote:'别出',reason:'跨日核对',
+    }}})
+    const html=render(view)
+    expect(html).toContain('挂账待核对')
+    expect(html).toContain('原单备注：别出')
+    expect(html).not.toContain('出示付款二维码')
+    expect(html).not.toContain('补收继续关联原订单')
+    expect(html).not.toContain('当前可收 ¥0.00')
+    if(canConfirm)expect(html).toContain('确认仍欠金额（元；无欠款填0）')
+    else expect(html).toContain('请交给具备“收取历史欠款”和财务查看权限的员工核对')
+  })
+  it('explains an unpaid cancelled closed order with no retained debt without promising collection or a refund', () => {
+    const view = closedDebtWorkbench('ineligible')
+    Object.assign(view.orders[0]!, { status: 'cancelled', outstandingAmountMinor: 0, totalAmountMinor: 131_400 })
+    view.orders[0]!.items[0]!.status = 'cancelled'
+    view.orders[0]!.kdsTasks = [{
+      id: 'cancelled-task', orderItemId: 'item-1', stationCode: 'bar', status: 'cancelled',
+      quantity: 1, succeededRefundAmountMinor: 0,
+    }]
+    const html = render(view)
+    expect(html).toContain('原单 ¥1314.00')
+    expect(html).toContain('已取消 · 未收款')
+    expect(html).toContain('当前可收 ¥0.00')
+    expect(html).toContain('没有保留可补收欠款，因此不能发起支付或退款')
+    expect(html).toContain('关联出品任务均已取消')
+    for (const text of ['补收继续关联原订单', '出示付款二维码', '登记现金收款', '出品任务仍在等待', '请先在上方「收款与退款」完成退款']) expect(html).not.toContain(text)
+  })
+
+  it('retains collection for a closed cancelled order with confirmed consumption debt', () => {
+    const view = closedDebtWorkbench('available')
+    view.orders[0]!.status = 'cancelled'
+    view.orders[0]!.closedDebtRecovery!.kind = 'consumption'
+    const html = render(view)
+    expect(html).toContain('出示付款二维码')
+    expect(html).toContain('扫顾客付款码')
+    expect(html).toContain('补收继续关联原订单')
+    expect(html).not.toContain('已取消 · 未收款')
+    expect(html).not.toContain('当前可收 ¥0.00')
+  })
+
+  it('keeps an unresolved payment visible even when the cancelled order currently has no balance', () => {
+    const pending = { ...payment('postar', []), status: 'pending' as const, succeededAt: null, remainingRefundableMinor: 0 }
+    const view = closedDebtWorkbench('pending_payment', [pending])
+    Object.assign(view.orders[0]!, { status: 'cancelled', outstandingAmountMinor: 0 })
+    const html = render(view)
+    expect(html).toContain('查询渠道结果')
+    expect(html).not.toContain('已取消 · 未收款')
+    expect(html).not.toContain('本单没有支付记录')
+  })
   it.each([1, 3])('explains the actual refund entry for activity service version %s without changing staff review rules', (serviceVersion) => {
     vi.stubGlobal('window', { location: { search: '?registrationId=activity-registration-1' } })
     try {
@@ -135,7 +190,8 @@ describe('CashierAfterSalesWorkbenchView', () => {
     }]
     const html = render(view, ['reconciliation.view', 'kds.exception.manage'])
 
-    expect(html).toContain('请先在上方「收款与退款」完成退款')
+    expect(html).toContain('出品状态：制作中')
+    expect(html).toContain('尚无关联退款成功记录')
     expect(html).not.toContain('核对退款后处理出品')
   })
 

@@ -139,6 +139,7 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  pending_table_credit?:boolean
   id: string
   table_session_id: string
   total_amount_minor: string | number
@@ -431,15 +432,21 @@ export class PaymentRepository {
     return mapPayment(result.rows[0]!)
   }
 
-  async createForTablePrepayment(input:Readonly<{tableSessionId:string;customerId:string;publicId:string;amountMinor:number;provider:'postar'|'simulation';method:PaymentMethod}>):Promise<Payment>{
+  async createForTablePrepayment(input:Readonly<{tableSessionId:string;customerId:string;publicId:string;amountMinor:number;provider:PaymentProvider;method:PaymentMethod;evidence?:JsonObject;manualEmployeeId?:string}>):Promise<Payment>{
     if(!Number.isSafeInteger(input.amountMinor)||input.amountMinor<=0)throw new PaymentEvidenceError('预收款金额无效')
+    const manual=['cash','physical_pos','external_manual'].includes(input.provider)
+    if(manual){
+      validateManualActivityInput({registrationPublicId:input.tableSessionId,publicId:input.publicId,provider:input.provider as 'cash'|'physical_pos'|'external_manual',method:input.method as 'cash'|'card'|'manual',evidence:input.evidence??{},collectedByEmployeeId:input.manualEmployeeId??''})
+      const capability=input.provider==='cash'?'payment.manual.cash.record':input.provider==='physical_pos'?'payment.manual.pos.record':'payment.manual.external.record'
+      if(!(await this.transaction.query<{allowed:boolean}>('SELECT mbox.employee_has_effective_permission($1,$2,$3,$4) allowed',[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.manualEmployeeId,capability])).rows[0]?.allowed)throw new PaymentEvidenceError('无权登记本次线下预收款')
+    }
     const session=(await this.transaction.query<{minimum_spend_mode:string;status:string}>(`SELECT minimum_spend_mode,status FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId])).rows[0]
     if(session?.status!=='open'||session.minimum_spend_mode!=='prepaid')throw new PaymentEvidenceError('本桌未启用预收款或已经结束')
     // A still unresolved receipt must be resumed, not replaced by another charge.
     const unresolved=await this.transaction.query<PaymentRow>(`SELECT ${paymentColumns()} FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND mbox.canonical_customer_id(tenant_id,store_id,prepaid_customer_id)=mbox.canonical_customer_id(tenant_id,store_id,$4) AND status IN ('created','pending') ORDER BY created_at LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId])
     if(unresolved.rows[0])return mapPayment(unresolved.rows[0])
-    const result=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,prepaid_table_session_id,prepaid_customer_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot)
-      SELECT $1,$2,'table_prepayment',$3,$4,$5,$6,$7,$8,'CNY','created','{"sharedTableConsent":"v1","differenceChargingEnabled":false}'::jsonb RETURNING ${paymentColumns()}`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId,input.publicId,input.provider,input.method,input.amountMinor])
+    const result=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,prepaid_table_session_id,prepaid_customer_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot,provider_transaction_id,succeeded_at)
+      SELECT $1,$2,'table_prepayment',$3,$4,$5,$6,$7,$8,'CNY',$9,$10::jsonb,$11,CASE WHEN $9='succeeded' THEN clock_timestamp() ELSE NULL END RETURNING ${paymentColumns()}`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId,input.publicId,input.provider,input.method,input.amountMinor,manual?'succeeded':'created',JSON.stringify({...sanitizeProviderSnapshot(input.evidence),sharedTableConsent:'v1',differenceChargingEnabled:false}),manual?String(input.evidence?.receiptReference):null])
     return onePayment(result,'预收款创建失败')
   }
 
@@ -448,6 +455,7 @@ export class PaymentRepository {
     validateCreateInput(input)
     const order = await this.lockOrder(input.orderId)
     await this.assertOrderAccess(order, input.principal)
+    if(order.pending_table_credit)throw new PaymentEvidenceError('本单已有待确认的桌次预付款，请先查询原付款，不能重复收款')
     const carryover=input.principal.type==='employee'?await readCarryoverDebt(this.transaction,order.id):null
     if (order.status === 'draft' || order.status === 'cancelled' && !carryover || carryover?.eligibility==='review_required') {
       throw new OrderNotPayableError(order.id, carryover?.reviewReason??`status is ${order.status}`)
@@ -520,12 +528,13 @@ export class PaymentRepository {
     validateCreateInput({...input,orderId:input.orderIds[0]!})
     for(const id of input.orderIds)if(!/^[0-9a-f-]{36}$/i.test(id))throw new TypeError('订单编号无效')
     // Match callback/refund order lock ordering before locking the payment row.
-    const orders=(await this.transaction.query<OrderRow&{submitted_at:string}>(`SELECT id,table_session_id,total_amount_minor,currency,status,COALESCE(submitted_at,created_at)::text AS submitted_at FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderIds])).rows
+    const orders=(await this.transaction.query<OrderRow&{submitted_at:string}>(`SELECT id,table_session_id,total_amount_minor,currency,status,COALESCE(submitted_at,created_at)::text AS submitted_at,EXISTS(SELECT 1 FROM mbox.table_credit_order_links link JOIN mbox.payments credit ON(credit.tenant_id,credit.store_id,credit.prepaid_table_session_id)=(link.tenant_id,link.store_id,link.table_session_id) WHERE(link.tenant_id,link.store_id,link.order_id)=(orders.tenant_id,orders.store_id,orders.id) AND credit.status IN('created','pending')) AS pending_table_credit FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderIds])).rows
     if(orders.length!==input.orderIds.length)throw new OrderNotPayableError('batch','an order was not found')
     if(orders.some(order=>order.table_session_id!==orders[0]!.table_session_id||order.currency!==orders[0]!.currency))throw new TypeError('合并付款只支持同一桌次、同一币种的订单')
     const balances=[]
     for(const order of orders){
       await this.assertOrderAccess(order,input.principal)
+      if(order.pending_table_credit)throw new PaymentEvidenceError('所选订单已有待确认的桌次预付款，请先查询原付款')
       if(['draft','cancelled'].includes(order.status))throw new OrderNotPayableError(order.id,`status is ${order.status}`)
       const settled=await this.transaction.query('SELECT id FROM mbox.order_settlement_exception_events WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 LIMIT 1',[this.transaction.scope.tenantId,this.transaction.scope.storeId,order.id])
       if(settled.rowCount)throw new TypeError('所选订单已有财务结案记录，请移除该订单')
@@ -1489,7 +1498,8 @@ export class PaymentRepository {
 
   private async lockOrder(orderId: string): Promise<OrderRow> {
     const result = await this.transaction.query<OrderRow>(`
-      SELECT id, table_session_id, total_amount_minor, currency, status
+      SELECT id, table_session_id, total_amount_minor, currency, status,
+        EXISTS(SELECT 1 FROM mbox.table_credit_order_links link JOIN mbox.payments credit ON(credit.tenant_id,credit.store_id,credit.prepaid_table_session_id)=(link.tenant_id,link.store_id,link.table_session_id) WHERE(link.tenant_id,link.store_id,link.order_id)=(orders.tenant_id,orders.store_id,orders.id) AND credit.status IN('created','pending')) AS pending_table_credit
       FROM mbox.orders
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid

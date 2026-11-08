@@ -30,7 +30,12 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
   async function customer(){const id=randomUUID();await pool.query('INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)',[id,tenantId,storeId,`marketing-${id}`]);return id}
   const grant=(customerId:string,expectedRevision:string)=>run(repo=>repo.recordChoices({customerId,noticeId,expectedRevision,businessDate,choices:[{channel:'sms',purpose:'own_activities',decision:'granted'}]}))
   const delivery=<T>(action:(repo:MarketingDeliveryRepository)=>Promise<T>)=>runner.run(scope,tx=>action(new MarketingDeliveryRepository(tx)))
-  const evidence=(customerId:string):MarketingChannelEvidence=>({customerId,channel:'sms',purpose:'own_activities',checkedAt:new Date().toISOString(),validUntil:new Date(Date.now()+60000).toISOString(),channelReady:true,verifiedRecipient:true,platformPermissionVerified:true,capabilityRef:'isolated-capability',recipientRef:'isolated-recipient',platformRef:'isolated-platform'})
+  // The repository compares proofs with PostgreSQL time. Host/Docker clock
+  // skew must not turn an otherwise valid isolated proof into a future proof.
+  const evidence=async(customerId:string):Promise<MarketingChannelEvidence>=>{
+    const now=(await pool.query<{now:Date}>('SELECT clock_timestamp() AS now')).rows[0]!.now
+    return {customerId,channel:'sms',purpose:'own_activities',checkedAt:now.toISOString(),validUntil:new Date(now.getTime()+60000).toISOString(),channelReady:true,verifiedRecipient:true,platformPermissionVerified:true,capabilityRef:'isolated-capability',recipientRef:'isolated-recipient',platformRef:'isolated-platform'}
+  }
   const queue=(customerId:string,campaignKey=randomUUID())=>delivery(repo=>repo.queue({customerId,noticeId,channel:'sms',purpose:'own_activities',campaignKey,content:'隔离数据库任务，不发送真实客户',expiresAt:new Date(Date.now()+3600000).toISOString(),employeeId:publisher,businessDate}))
   it('defaults all scopes closed and keeps a chosen channel separate from delivery capability',async()=>{
     const customerId=await customer(),before=await run(repo=>repo.selfView(customerId))
@@ -101,44 +106,51 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL
   })
   it('persists blocked backoff and does not claim delivery without independent channel proofs',async()=>{
     const id=await customer();await grant(id,'none');const job=await queue(id)
-    const bad={...evidence(id),platformPermissionVerified:false}
+    const bad={...await evidence(id),platformPermissionVerified:false}
     expect(await delivery(repo=>repo.prepare(job.jobId,bad))).toMatchObject({status:'blocked',reason:'channel_authority_missing'})
     const row=(await pool.query('SELECT checks,next_check_at>clock_timestamp()+interval \'14 minutes\' AS backed_off FROM mbox.marketing_delivery_jobs WHERE id=$1',[job.jobId])).rows[0]
     expect(row).toEqual({checks:1,backed_off:true})
-    expect(await delivery(repo=>repo.prepare(job.jobId,evidence(id)))).toBeNull()
+    expect(await delivery(async repo=>repo.prepare(job.jobId,await evidence(id)))).toBeNull()
     await run(repo=>repo.stopAll({customerId:id,businessDate}))
+  })
+  it('rejects a future-dated channel proof without reserving a delivery attempt',async()=>{
+    const id=await customer();await grant(id,'none');const job=await queue(id),proof=await evidence(id)
+    proof.checkedAt=new Date(Date.parse(proof.checkedAt)+60000).toISOString()
+    proof.validUntil=new Date(Date.parse(proof.checkedAt)+60000).toISOString()
+    expect(await delivery(repo=>repo.prepare(job.jobId,proof))).toMatchObject({status:'blocked',reason:'channel_not_configured'})
+    expect((await pool.query('SELECT count(*)::int AS n FROM mbox.marketing_delivery_attempts WHERE job_id=$1',[job.jobId])).rows[0].n).toBe(0)
   })
   it('reserves frequency across concurrent campaigns and never retries an unknown attempt',async()=>{
     const id=await customer();await grant(id,'none');const a=await queue(id),b=await queue(id)
-    const prepared=await Promise.allSettled([delivery(repo=>repo.prepare(a.jobId,evidence(id))),delivery(repo=>repo.prepare(b.jobId,evidence(id)))])
+    const prepared=await Promise.allSettled([delivery(async repo=>repo.prepare(a.jobId,await evidence(id))),delivery(async repo=>repo.prepare(b.jobId,await evidence(id)))])
     const claimed=prepared.flatMap(result=>result.status==='fulfilled'&&result.value?.status==='dispatching'?[result.value]:[])
     expect(claimed).toHaveLength(1)
     const claim=claimed[0]!
     await delivery(repo=>repo.finish(claim.attemptId,{state:'unknown'}))
-    expect(await delivery(repo=>repo.prepare(claim.jobId,evidence(id)))).toBeNull()
+    expect(await delivery(async repo=>repo.prepare(claim.jobId,await evidence(id)))).toBeNull()
     const other=claim.jobId===a.jobId?b:a
     await pool.query('UPDATE mbox.marketing_delivery_jobs SET next_check_at=clock_timestamp() WHERE id=$1',[other.jobId])
-    expect(await delivery(repo=>repo.prepare(other.jobId,evidence(id)))).toMatchObject({status:'blocked',reason:'previous_delivery_unknown'})
+    expect(await delivery(async repo=>repo.prepare(other.jobId,await evidence(id)))).toMatchObject({status:'blocked',reason:'previous_delivery_unknown'})
     await delivery(repo=>repo.finish(claim.attemptId,{state:'sent',providerReceiptRef:'isolated-final-receipt'}))
     expect(await delivery(repo=>repo.finish(claim.attemptId,{state:'sent',providerReceiptRef:'isolated-final-receipt'}))).toEqual({replayed:true})
     await expect(delivery(repo=>repo.finish(claim.attemptId,{state:'sent',providerReceiptRef:'conflicting-receipt'}))).rejects.toThrow('冲突')
     await pool.query('UPDATE mbox.marketing_delivery_jobs SET next_check_at=clock_timestamp() WHERE id=$1',[other.jobId])
-    expect(await delivery(repo=>repo.prepare(other.jobId,evidence(id)))).toMatchObject({status:'blocked',reason:'frequency_limit'})
+    expect(await delivery(async repo=>repo.prepare(other.jobId,await evidence(id)))).toMatchObject({status:'blocked',reason:'frequency_limit'})
     await run(repo=>repo.stopAll({customerId:id,businessDate}))
   })
   it('rechecks a withdrawal after claim immediately before channel handoff',async()=>{
-    const id=await customer();await grant(id,'none');const job=await queue(id),claim=await delivery(repo=>repo.prepare(job.jobId,evidence(id)))
+    const id=await customer();await grant(id,'none');const job=await queue(id),claim=await delivery(async repo=>repo.prepare(job.jobId,await evidence(id)))
     if(claim?.status!=='dispatching')throw Error('Expected isolated claim')
     await run(repo=>repo.stopAll({customerId:id,businessDate}))
-    expect(await delivery(repo=>repo.beforeDispatch(claim.attemptId,evidence(id)))).toBe(false)
+    expect(await delivery(async repo=>repo.beforeDispatch(claim.attemptId,await evidence(id)))).toBe(false)
     expect((await delivery(repo=>repo.get(job.jobId))).status).toBe('cancelled')
   })
   it('authorizes handoff once and rejects status changes without matching attempt facts',async()=>{
     const id=await customer();await grant(id,'none');const job=await queue(id)
     await expect(pool.query("UPDATE mbox.marketing_delivery_jobs SET status='dispatching' WHERE id=$1",[job.jobId])).rejects.toThrow()
-    const claim=await delivery(repo=>repo.prepare(job.jobId,evidence(id)));if(claim?.status!=='dispatching')throw Error('Expected isolated claim')
-    expect(await delivery(repo=>repo.beforeDispatch(claim.attemptId,evidence(id)))).toBe(true)
-    expect(await delivery(repo=>repo.beforeDispatch(claim.attemptId,evidence(id)))).toBe(false)
+    const claim=await delivery(async repo=>repo.prepare(job.jobId,await evidence(id)));if(claim?.status!=='dispatching')throw Error('Expected isolated claim')
+    expect(await delivery(async repo=>repo.beforeDispatch(claim.attemptId,await evidence(id)))).toBe(true)
+    expect(await delivery(async repo=>repo.beforeDispatch(claim.attemptId,await evidence(id)))).toBe(false)
     await expect(pool.query('UPDATE mbox.marketing_delivery_attempts SET handoff_at=NULL WHERE id=$1',[claim.attemptId])).rejects.toThrow()
     await delivery(repo=>repo.finish(claim.attemptId,{state:'sent',providerReceiptRef:'isolated-handoff-receipt'}))
   })

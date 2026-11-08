@@ -59,6 +59,89 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   const close=(tableSessionId:string)=>runner.run(scope,tx=>new PostgresAutomaticTableTurnoverRepository(tx).close({scope,tableSessionId,businessDate:date,reasonNote:'自动截止保留原消费欠款',idempotencyKey:`cutoff:${tableSessionId}`}))
   const view=(orderId:string,extra:Record<string,unknown>={})=>new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:cashier,businessDate:date,capabilities,query:orderId,limit:50,...extra})
   const cash=(orderId:string,expectedOutstandingMinor:number,amountMinor?:number,employeeId=cashier)=>({ ...meta(employeeId),orderId,expectedOutstandingMinor,...(amountMinor===undefined?{}:{amountMinor}),publicId:randomUUID(),provider:'cash' as const,method:'cash' as const,evidence:{collectedByEmployeeId:employeeId,receiptReference:randomUUID()}})
+  const reviewCommand=async(orderId:string,amountMinor:number,employeeId=cashier)=>{
+    const basis=(await view(orderId,{collectionScope:'history'})).orders[0]?.carryoverReview?.basis
+    expect(basis).toBeTruthy()
+    return {...meta(employeeId),orderId,amountMinor,basis:{...basis!},reason:'已核对顾客约定与实际消费，原款未收'}
+  }
+  it('retains unfulfilled staff tabs for review without turning the quoted amount into a collectible debt',async()=>{
+    const f=await fixture({delivered:false})
+    const row=(await view(f.order,{collectionScope:'unsettled'})).orders[0]!
+    expect(row).toMatchObject({outstandingAmountMinor:0,carryoverReview:{canConfirm:true,basis:{maximumAmountMinor:10000}}})
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
+    await expect(money.recordManual(cash(f.order,10000))).rejects.toThrow()
+    await expect(online(f.order,10000)).rejects.toThrow()
+  })
+  it('confirms a reviewed amount, recovers the exact receipt, then collects it without replaying fulfillment',async()=>{
+    const f=await fixture({delivered:false}),input=await reviewCommand(f.order,6800)
+    const before=(await pool.query('SELECT to_jsonb(i) row FROM mbox.order_items i WHERE order_id=$1',[f.order])).rows
+    expect((await money.confirmCarryoverReview(input)).value.amountMinor).toBe(6800)
+    expect((await money.confirmCarryoverReview(input)).replayed).toBe(true)
+    expect((await view(f.order)).orders[0]).toMatchObject({outstandingAmountMinor:6800,closedDebtRecovery:{status:'available'},carryoverReviewDecision:{amountMinor:6800}})
+    await money.recordManual(cash(f.order,6800,2000))
+    await money.recordManual(cash(f.order,4800))
+    expect((await view(f.order)).orders[0]).toMatchObject({outstandingAmountMinor:0,paymentStatus:'paid',tableSessionStatus:'closed'})
+    expect((await pool.query('SELECT to_jsonb(i) row FROM mbox.order_items i WHERE order_id=$1',[f.order])).rows).toEqual(before)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_review_decisions WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
+  })
+  it('records no debt as a terminal review decision without a payment or receivable',async()=>{
+    const f=await fixture({delivered:false}),input=await reviewCommand(f.order,0)
+    await money.confirmCarryoverReview(input)
+    expect((await view(f.order,{collectionScope:'unsettled'})).orders).toHaveLength(0)
+    expect((await view(f.order,{collectionScope:'history'})).orders[0]).toMatchObject({outstandingAmountMinor:0,carryoverReviewDecision:{amountMinor:0}})
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_debts WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
+    await expect(money.recordManual(cash(f.order,10000))).rejects.toThrow()
+  })
+  it('rejects stale evidence, excessive amounts, unauthorized actors and another store',async()=>{
+    const f=await fixture({delivered:false}),input=await reviewCommand(f.order,10000)
+    await expect(money.confirmCarryoverReview({...input,basis:{...input.basis,maximumAmountMinor:20000},idempotencyKey:randomUUID()})).rejects.toThrow()
+    await expect(money.confirmCarryoverReview({...input,amountMinor:10001,idempotencyKey:randomUUID()})).rejects.toThrow()
+    await expect(money.confirmCarryoverReview({...input,actor:{type:'employee',employeeId:other},idempotencyKey:randomUUID()})).rejects.toThrow()
+    await expect(money.confirmCarryoverReview({...input,scope:{tenantId:scope.tenantId,storeId:randomUUID()},idempotencyKey:randomUUID()})).rejects.toThrow()
+    await expect(runner.run(scope,tx=>tx.query("INSERT INTO mbox.order_carryover_review_decisions(tenant_id,store_id,order_id,employee_id,amount_minor,reason,basis_snapshot) VALUES($1,$2,$3,$4,10000,'伪造确认','{}')",[scope.tenantId,scope.storeId,f.order,cashier]))).rejects.toThrow()
+  })
+  it('serializes two competing confirmations and does not reopen a completed decision',async()=>{
+    const f=await fixture({delivered:false}),input=await reviewCommand(f.order,10000)
+    const results=await Promise.allSettled([money.confirmCarryoverReview(input),money.confirmCarryoverReview({...input,idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),amountMinor:5000})])
+    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_review_decisions WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
+  })
+  it('keeps guest carts and immediate-payment staff orders out of deferred-tab review',async()=>{
+    for(const kind of ['guest','immediate']) {
+      const f=await fixture({delivered:false,close:false})
+      await pool.query(kind==='guest'?"UPDATE mbox.orders SET channel='guest_qr' WHERE id=$1":"UPDATE mbox.orders SET settlement_mode='immediate_payment' WHERE id=$1",[f.order])
+      await close(f.session)
+      expect((await view(f.order,{collectionScope:'history'})).orders[0]?.carryoverReview).toBeUndefined()
+      expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
+    }
+  })
+  it('does not confirm a tab with an unresolved channel attempt even when its retry was released',async()=>{
+    const f=await fixture({delivered:false,close:false})
+    await pool.query("INSERT INTO mbox.payments(tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status,retry_released_at,retry_release_reason,retry_released_by_employee_id,retry_release_idempotency_key) VALUES($1,$2,$3,$4,'postar','native_qr',10000,'CNY','pending',clock_timestamp(),'测试保留原结果未知',$5,$4)",[scope.tenantId,scope.storeId,f.order,randomUUID(),cashier])
+    await close(f.session)
+    expect((await view(f.order,{collectionScope:'unsettled'})).orders[0]?.carryoverReview).toMatchObject({basis:null,canConfirm:false})
+    const result=await runner.run(scope,tx=>tx.query('SELECT mbox.carryover_tab_review_basis($1,$2,$3) basis',[scope.tenantId,scope.storeId,f.order]))
+    expect(result.rows[0]?.basis).toBeNull()
+  })
+  it('collects an explicitly reviewed tab online through verified callback without reviving cancelled goods',async()=>{
+    const f=await fixture({delivered:false})
+    await money.confirmCarryoverReview(await reviewCommand(f.order,10000))
+    const payment=await online(f.order,10000)
+    await confirm(payment)
+    expect((await view(f.order)).orders[0]).toMatchObject({paymentStatus:'paid',outstandingAmountMinor:0,tableSessionStatus:'closed'})
+    expect((await pool.query('SELECT status FROM mbox.order_items WHERE id=$1',[f.item])).rows[0].status).toBe('cancelled')
+    expect((await pool.query('SELECT business_date::text FROM mbox.reconciliation_entries WHERE payment_id=$1',[payment.id])).rows).toEqual([{business_date:date}])
+  })
+  it('offers a read-only review of an explicitly located pre-feature tab without backfilling it',async()=>{
+    const f=await fixture({delivered:false})
+    await pool.query('ALTER TABLE mbox.order_carryover_reviews DISABLE TRIGGER carryover_review_immutable')
+    try {await pool.query('DELETE FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])}
+    finally {await pool.query('ALTER TABLE mbox.order_carryover_reviews ENABLE TRIGGER carryover_review_immutable')}
+    expect((await view(f.order,{collectionScope:'history'})).orders[0]?.carryoverReview?.canConfirm).toBe(true)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
+    await money.confirmCarryoverReview(await reviewCommand(f.order,10000))
+    expect((await view(f.order)).orders[0]?.outstandingAmountMinor).toBe(10000)
+  })
   async function online(orderId:string,expectedOutstandingMinor:number){return (await money.initiate({...meta(),orderId,expectedOutstandingMinor,publicId:randomUUID(),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:cashier}})).value}
   async function confirm(payment:Awaited<ReturnType<typeof online>>){
     const occurredAt=new Date().toISOString(),providerTransactionId=randomUUID(),integrationRef='postar-active-query'

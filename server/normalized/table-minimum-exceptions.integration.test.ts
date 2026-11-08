@@ -54,12 +54,12 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
   expect(order.paymentStatus).toBe('unpaid');expect((await summary(id)).consumedMinor).toBe(0)
   expect((await pool.query('SELECT count(*) n FROM mbox.payments WHERE tenant_id=$1',[tenantId])).rows[0].n).toBe('0')
  })
- it('does not bypass prepaid funding even with release permission, or after canceling the minimum',async()=>{
+ it('staff may create an unpaid prepaid order, but release permission or canceling minimum never marks it paid',async()=>{
   const id=await session('prepaid')
-  await expect(submit(id,{})).rejects.toThrow()
+  expect(await submit(id,{})).toMatchObject({paymentStatus:'unpaid',settlementMode:'immediate_payment'})
   await lower(id,20000,0)
-  await expect(submit(id,{})).rejects.toThrow()
-  expect((await pool.query('SELECT count(*) n FROM mbox.orders WHERE table_session_id=$1',[id])).rows[0].n).toBe('0')
+  expect(await submit(id,{})).toMatchObject({paymentStatus:'unpaid',settlementMode:'immediate_payment'})
+  expect((await pool.query("SELECT count(*) n FROM mbox.orders WHERE table_session_id=$1 AND payment_status='unpaid'",[id])).rows[0].n).toBe('2')
   expect((await summary(id)).history.filter(h=>h.kind==='release')).toHaveLength(0)
  })
  for(const mode of ['order_gate','prepaid'])it(`lowers and cancels ${mode} without modifying the original minimum or creating money`,async()=>{
@@ -140,19 +140,19 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
   expect((await summary(id)).effectiveMinimumMinor).toBe(20000)
  })
 
- it('retains minimum and release history across transfer, physical turnover and a fresh table session',async()=>{
+ it('adopts the target minimum while retaining release history across transfer and turnover',async()=>{
   const id=await session(),order=await submit(id)
   await lower(id,20000,18000)
   const target=randomUUID();await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,'转桌目标',4,99999)",[target,tenantId,storeId,areaId,'T'+target.slice(0,8)])
   const moved=await run(tx=>new TableManagementRepository(tx).transfer({tableSessionId:id,targetTableId:target,transferredByEmployeeId:managerId,reason:'客人整桌换位置',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()},{capture:async()=>({})}))
-  expect(moved.tableSessionId).toBe(id);expect((await summary(id)).effectiveMinimumMinor).toBe(18000);expect((await summary(id)).history).toHaveLength(2)
+  expect(moved.tableSessionId).toBe(id);expect((await summary(id)).effectiveMinimumMinor).toBe(99999);expect((await summary(id)).history).toHaveLength(2)
   const businessDate=(await run(tx=>tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text date',[tenantId,storeId]))).rows[0]!.date
   await pool.query('UPDATE mbox.table_sessions SET business_date=$2 WHERE id=$1',[id,businessDate])
   await run(tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope:{tenantId,storeId},tableSessionId:id,employeeId:managerId,businessDate,reasonNote:'顾客离场，保留低消和应付待办',idempotencyKey:randomUUID()}))
   const api=await app();try{const list=(await api.inject({url:'/table-management/prepayments'})).json().data;expect(list.find((r:{id:string})=>r.id===id)).toMatchObject({status:'closed',unsettled:true})}finally{await api.close()}
   const next=await run(tx=>new TableManagementRepository(tx).open({tableId:target,publicId:randomUUID(),businessDate,guestCount:2,openedByEmployeeId:managerId,primaryServiceEmployeeId:managerId,minimumSpendMode:'order_gate',minimumSpendMinor:30000}))
   expect(await summary(next.id)).toMatchObject({effectiveMinimumMinor:30000,consumedMinor:0,history:[]})
-  await lower(id,18000,0);expect((await summary(next.id)).effectiveMinimumMinor).toBe(30000)
+  await lower(id,99999,0);expect((await summary(next.id)).effectiveMinimumMinor).toBe(30000)
   expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[order.id])).rows[0].payment_status).toBe('unpaid')
  })
  it('recalculates the same table for staff orders, guest additions and cancelled merchandise',async()=>{

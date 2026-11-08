@@ -132,6 +132,7 @@ afterEach(async () => {
 
 function fixture(overrides: Partial<PaymentApiOptions> = {}, logs?:string[]) {
   const commands = {
+    confirmCarryoverReview: vi.fn(async () => ({value:{orderId,amountMinor:1000},replayed:false})),
     initiate: vi.fn(async (
       _input: Parameters<PaymentApiOptions['commands']['initiate']>[0],
     ) => ({ value: payment, replayed: false })),
@@ -1698,6 +1699,21 @@ describe('paymentApiPlugin', () => {
     }))
   })
 
+  it('requires explicit review confirmation and both current financial permissions', async () => {
+    const commands=fixtureCommands()
+    const value=fixture({commands,resolveStaffContext:()=>({scope:{tenantId,storeId},actor:{type:'employee',employeeId},employeeId,
+      businessDate:'2026-08-11',capabilities:['payment.history.collect','reconciliation.view']})})
+    const request={method:'POST' as const,url:`/api/orders/${orderId}/carryover-review`,headers:{'idempotency-key':'review-one'},
+      payload:{amountMinor:1000,basis:{orderId},reason:'现场核对原挂账',confirmed:true}}
+    expect((await value.app.inject({...request,payload:{...request.payload,confirmed:false}})).statusCode).toBe(400)
+    expect(commands.confirmCarryoverReview).not.toHaveBeenCalled()
+    expect((await value.app.inject(request)).statusCode).toBe(201)
+    expect(commands.confirmCarryoverReview).toHaveBeenCalledWith(expect.objectContaining({orderId,amountMinor:1000,actor:{type:'employee',employeeId}}))
+    const denied=fixture()
+    expect((await denied.app.inject(request)).statusCode).toBe(403)
+    expect(denied.commands.confirmCarryoverReview).not.toHaveBeenCalled()
+  })
+
   it('maps malformed requests and idempotency conflicts to stable errors', async () => {
     const value = fixture()
     const malformed = await value.app.inject({
@@ -1805,6 +1821,7 @@ describe('paymentApiPlugin', () => {
 
 function fixtureCommands(): PaymentApiOptions['commands'] {
   return {
+    confirmCarryoverReview: vi.fn(async () => ({value:{orderId,amountMinor:1000},replayed:false})),
     initiate: vi.fn(async () => ({ value: payment, replayed: false })),
     recordManual: vi.fn(async () => ({ value: payment, replayed: false })),
     recordManualActivity: vi.fn(async () => ({ value: payment, replayed: false })),

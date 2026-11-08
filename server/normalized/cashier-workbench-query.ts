@@ -1,3 +1,4 @@
+import {pendingTabReviewSql} from './carryover-tab-review.js'
 import {carryoverDebtSql} from './carryover-debt.js'
 import { bulkOrderNeedsCollectionSql, bulkOrderFinancialAttentionSql, orderCollectionBalancesCtesSql } from './order-collection-balances-sql.js'
 import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
@@ -42,6 +43,9 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  tab_review_basis?:NonNullable<CashierWorkbenchOrder['carryoverReview']>['basis']
+  tab_review_pending?:boolean
+  tab_review_decision?:CashierWorkbenchOrder['carryoverReviewDecision']
   matched_count?:string
   matched_due_minor?:string
   points?:CheckoutPointsView
@@ -258,6 +262,8 @@ export class PostgresCashierWorkbenchQuery {
     )
     const canUseActivityCashier = (input.collectionScope??'workbench')==='workbench'&&input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
+      const reviewSchema=(await transaction.query<{present:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")).rows[0]?.present===true
+      const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'
       const orderQuery = `
         WITH ${orderCollectionBalancesCtesSql}, cashier_recent_captured_orders AS MATERIALIZED (
           -- Read the shared payment facts once. Repeating this union for every
@@ -280,6 +286,9 @@ export class PostgresCashierWorkbenchQuery {
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
+          ${reviewSchema ? "CASE WHEN session.status='closed' AND orders.status='cancelled' AND orders.channel='staff_assisted' AND orders.settlement_mode='table_tab' THEN mbox.carryover_tab_review_basis(orders.tenant_id,orders.store_id,orders.id) END" : 'NULL::jsonb'} AS tab_review_basis,
+          ${pendingReview} AS tab_review_pending,
+          ${reviewSchema ? "(SELECT jsonb_build_object('amountMinor',decision.amount_minor,'reason',decision.reason,'createdAt',decision.created_at) FROM mbox.order_carryover_review_decisions decision WHERE (decision.tenant_id,decision.store_id,decision.order_id)=(orders.tenant_id,orders.store_id,orders.id))" : 'NULL::jsonb'} AS tab_review_decision,
           count(*) OVER()::text AS matched_count,sum(orders.amount) OVER()::text AS matched_due_minor,
           (SELECT jsonb_build_object('eligibility',mbox.carryover_collection_eligibility(d.tenant_id,d.store_id,d.order_id),'receivableMinor',d.receivable_minor,'reviewReason',COALESCE(d.review_reason,'存在退款或关桌后金额调整，请核对原单及实收后处理')) FROM mbox.order_carryover_debts d WHERE (d.tenant_id,d.store_id,d.order_id)=(orders.tenant_id,orders.store_id,orders.id)) AS carryover_debt,
           CASE WHEN session.status='closed' THEN ${closedDebtEligibilitySql()} ELSE false END AS closed_debt_eligible,
@@ -337,7 +346,7 @@ export class PostgresCashierWorkbenchQuery {
             OR (($4::text <> '' OR $9::text IS NOT NULL)
               AND orders.business_date < $3::date)
             OR (orders.business_date < $3::date AND (
-              ${bulkOrderFinancialAttentionSql('orders')} OR
+              ${pendingReview} OR ${bulkOrderFinancialAttentionSql('orders')} OR
               ${cashierCouponRefundReviewCountSql}>0 OR
               ${bulkOrderNeedsCollectionSql('orders')}
               -- Keep a just-collected carryover visible long enough for the
@@ -356,7 +365,8 @@ export class PostgresCashierWorkbenchQuery {
           -- late capture is intentionally retained here for refund handling.
           AND (
             orders.status <> 'cancelled'
-            OR $13::text='history' OR ${carryoverDebtSql('orders')}
+            OR $13::text='history' OR ${carryoverDebtSql('orders')} OR ${pendingReview}
+            OR ($4::text<>'' AND orders.channel='staff_assisted' AND orders.settlement_mode='table_tab')
             OR EXISTS (
               SELECT 1 FROM mbox.order_payment_facts abandoned_payment
               WHERE abandoned_payment.tenant_id=orders.tenant_id
@@ -433,7 +443,7 @@ export class PostgresCashierWorkbenchQuery {
               OR (orders.total_amount_minor=0 AND orders.status NOT IN ('draft','cancelled'))))
             OR ($9='refunded' AND orders.payment_status IN ('partially_refunded','refunded'))
           )
-          AND ($13::text<>'unsettled' OR ${bulkOrderNeedsCollectionSql('orders')})
+          AND ($13::text<>'unsettled' OR ${bulkOrderNeedsCollectionSql('orders')} OR ${pendingReview})
           AND ($15::date IS NULL OR orders.business_date >= $15::date)
           AND ($16::date IS NULL OR orders.business_date <= $16::date)
         ORDER BY ${bulkOrderNeedsCollectionSql('orders')} DESC,
@@ -904,6 +914,9 @@ function assembleView(
     const netCollectedMinor = grossPaidMinor - refundedMinor
     return {
       id: order.id,
+      ...(order.tab_review_basis || order.tab_review_pending ? {carryoverReview:{basis:order.tab_review_basis??null,
+        canConfirm:!!order.tab_review_basis && ['payment.history.collect','reconciliation.view'].every(code=>input.capabilities.includes(code))}} : {}),
+      ...(order.tab_review_decision?{carryoverReviewDecision:order.tab_review_decision}:{}),
       ...(Number(order.coupon_refund_review_count)>0?{couponRefundReviewCount:Number(order.coupon_refund_review_count)}:{}),
       publicId: order.public_id,
       tableCode: order.table_code,

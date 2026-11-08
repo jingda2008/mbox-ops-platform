@@ -71,3 +71,22 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
   }finally{h.dispose()}
  })
 }
+
+for(const platform of ['miniprogram','alipay-miniprogram']) {
+ test(`${platform}: scheduled cards show selling time without hiding dates or enabling early orders`,async()=>{
+  const products=[
+   {productId:'p-0',name:'龙舌兰日出',amountMinor:9800,available:false,availabilityStatus:'scheduled',supplyDescription:'供应条件（北京时间，须同时满足）：每天 18:00–次日02:00',availabilityDetail:'本时段已结束。供应条件（北京时间，须同时满足）：每天 18:00–次日02:00。请核对供应时间或选择其他商品。'},
+   {productId:'p-1',name:'限定款',amountMinor:9800,available:false,availabilityStatus:'scheduled',availableFrom:'18:00',availableUntil:'02:00',supplyDescription:'供应条件（北京时间，须同时满足）：2026-11-10至2026-11-20 周五、周六 20:00–次日01:00'},
+   {productId:'p-2',name:'售罄款',amountMinor:9800,available:false,availabilityStatus:'inventory_unavailable',availableFrom:'18:00',availableUntil:'02:00'},
+  ]
+  const h=createOrderPage({platform,overrides:{getMenu:async()=>products}})
+  try{
+   await h.page.preparePage()
+   const [daily,dated,soldOut]=h.page.data.products
+   assert.equal(daily.salesTimeText,'18:00–次日02:00');assert.equal(daily.scheduledDisplay,true);assert.equal(daily.available,false)
+   assert.equal(dated.salesTimeText,'2026-11-10至2026-11-20 周五、周六 20:00–次日01:00')
+   assert.equal(soldOut.scheduledDisplay,false);assert.equal(soldOut.availabilityDetail,'这款暂时售罄')
+   await h.page.addProduct({currentTarget:{dataset:{id:'p-0'}}});assert.equal(h.page.data.cartCount,0)
+  }finally{h.dispose()}
+ })
+}

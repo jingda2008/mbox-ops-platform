@@ -40,7 +40,7 @@ test('rollback callsites guard before starting old workers and record recovery/h
 })
 
 test('only explicit application boundaries require the contract maintenance chain',()=>{
- for(const [from,to,boundary] of [[95,96,96],[274,275,275],[274,282,275],[281,282,0],[282,283,0],[273,274,0],[275,281,0],[282,282,0]]){
+ for(const [from,to,boundary] of [[95,96,96],[274,275,275],[274,282,275],[281,282,0],[282,283,0],[273,274,0],[275,281,0],[282,282,0],[300,301,301],[301,302,302],[302,303,303],[303,304,304],[300,304,304],[304,304,0]]){
   const result=spawnSync('bash',['-c','source "$1"; release_contract_boundary_between "$2" "$3"','_',helper,String(from),String(to)],{encoding:'utf8'})
   assert.equal(result.status,0,result.stderr)
   assert.equal(result.stdout.trim(),String(boundary),`${from} -> ${to}`)
@@ -51,7 +51,7 @@ test('only explicit application boundaries require the contract maintenance chai
  }
 })
 
-for(const [source,target] of [[275,274],[281,274],[282,274]])test(`contract rollback ${source} -> ${target} stops every writer without running an old worker or relying on empty tasks`,async()=>{
+for(const [source,target,boundary] of [[275,274,275],[281,274,275],[282,274,275],[301,300,301],[302,301,302],[303,302,303],[304,303,304],[304,300,304]])test(`contract rollback ${source} -> ${target} stops every writer without running an old worker or relying on empty tasks`,async()=>{
  const dir=await mkdtemp(join(tmpdir(),'mbox-contract-rollback-')),bin=join(dir,'bin'),log=join(dir,'docker.log')
  try{
   await mkdir(bin);await writeFile(join(dir,'release-manifest.json'),JSON.stringify({migration:{count:source}}))
@@ -67,7 +67,7 @@ if [[ "$1" == inspect && "$*" == *State.Running* ]]; then echo false; fi
   assert.doesNotMatch(result.stdout,/unsafe-accepted/)
   assert.deepEqual(JSON.parse(await readFile(join(dir,'application-contract-rollback-guard.json'),'utf8')),{
    status:'blocked',reason:'incompatible_application_contract',sourceSchema:source,targetSchema:target,
-   contractBoundary:275,action:'keep_previous_workers_stopped',writerDrainVerified:true,
+   contractBoundary:boundary,action:'keep_previous_workers_stopped',writerDrainVerified:true,
    checkedAt:JSON.parse(await readFile(join(dir,'application-contract-rollback-guard.json'),'utf8')).checkedAt,
   })
  }finally{await rm(dir,{recursive:true,force:true})}

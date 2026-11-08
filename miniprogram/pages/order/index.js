@@ -30,7 +30,7 @@ const {
 } = require('../../utils/api')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
-const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
+const { getTableSession, tableSessionCacheScope, rememberTableConnection } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
@@ -62,7 +62,7 @@ const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
   'STORE_ACCESS_FORBIDDEN',
   'GUEST_CAPABILITY_DENIED',
   'PRODUCT_UNAVAILABLE', 'TABLE_MINIMUM_SPEND_NOT_MET',
-  'TABLE_PREPAYMENT_REQUIRED','TABLE_PREPAYMENT_INSUFFICIENT','TABLE_PREPAYMENT_NOT_ENABLED','TABLE_PREPAYMENT_SESSION_CLOSED',
+  'TABLE_CREDIT_CHANGED','TABLE_PREPAYMENT_REQUIRED','TABLE_PREPAYMENT_INSUFFICIENT','TABLE_PREPAYMENT_NOT_ENABLED','TABLE_PREPAYMENT_SESSION_CLOSED',
   'SHARED_CART_EMPTY',
   'SHARED_CART_OPERATION_CONFLICT',
   'SHARED_CART_LIMIT_EXCEEDED',
@@ -235,6 +235,24 @@ function parseScanValue(value) {
   }, {})
 }
 
+// Display only the authoritative selling window; purchase eligibility still
+// comes from the server. Keep date, weekday and card constraints intact.
+function salesTimeText(item) {
+  const source = String(item.supplyDescription || item.availabilityDetail || '').trim()
+  const description = source.match(/供应条件（([^）]+)）：([^。]+)/)
+  if (description) {
+    const zone = description[1].split('，')[0]
+    return (zone === '北京时间' ? '' : zone + ' ') + description[2].replace(/^每天\s+/, '')
+  }
+  // Older responses can contain a dated window without the supply header.
+  if (/\d{2}:\d{2}/.test(source)) return source.replace(/^[^。]*。/, '').replace(/。请.*$/, '').replace(/[。；]+$/, '').trim()
+  if (item.availableFrom && item.availableUntil) {
+    const from = String(item.availableFrom).slice(0, 5), until = String(item.availableUntil).slice(0, 5)
+    return from + '–' + (until <= from ? '次日' : '') + until
+  }
+  return ''
+}
+
 function menuAvailability(item) {
   if (item.available) return { text: '可下单', detail: '当前桌可直接加入购物车' }
   if (item.availabilityStatus === 'configuration_incomplete') {
@@ -270,6 +288,8 @@ function menuProducts(items) {
       includedText: (item.bundleComponents || []).map((line) => `${line.name || '组合内容'}×${line.quantity || 1}`).join(' · '),
       imageUrl: publicImageUrl(item.imageUrl),
       listImageUrl: publicImageUrl(item.imageUrl, 'menu'),
+      salesTimeText: salesTimeText(item),
+      scheduledDisplay: !item.available && item.availabilityStatus === 'scheduled' && !!salesTimeText(item),
       availabilityText: availability.text,
       availabilityDetail: availability.detail,
       bundleChoiceGroups:(item.bundleChoiceGroups||[]).map((group)=>Object.assign({},group,{
@@ -1975,6 +1995,18 @@ Page({
       this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview)
       this.checkoutCouponScope = couponScope
     }
+    const credit = sharedCart && sharedCart.prepayment
+    const location = sharedCart && sharedCart.tableLocation || credit
+    if (location && location.tableCode) {
+      const table = Object.assign({}, this.data.table, { code: location.tableCode, displayName: location.tableDisplayName })
+      const stored = getTableSession()
+      rememberTableConnection({ status: 'active', table, cartScope: stored.cartScope })
+      this.setData({ table, tableCode: location.tableCode })
+      if (credit && credit.locationVersion > 0 && credit.initialFundingRequiredMinor > 0 && this.transferFundingPrompt !== stored.cartScope + ':' + credit.locationVersion) {
+        this.transferFundingPrompt = stored.cartScope + ':' + credit.locationVersion
+        wx.showModal({ title: '转台补款提醒', content: '当前桌位 ' + credit.tableCode + '，还需补足 ¥' + (credit.initialFundingRequiredMinor / 100).toFixed(2) + '。补款可继续抵扣商品。', confirmText: '核对补款', success: () => {} })
+      }
+    }
     const serverTotal = sharedCart && Number(sharedCart.totalAmountMinor)
     const total = Number.isSafeInteger(serverTotal) && serverTotal >= 0
       ? serverTotal
@@ -2315,6 +2347,8 @@ Page({
       expectedVersion: this.data.cartVersion,
       offerPublicId: offerPublicId || null,
       prepayment: !!this.data.prepayment,
+      expectedLocationVersion: this.data.prepayment ? this.data.prepayment.locationVersion : undefined,
+      expectedMinimumMinor: this.data.prepayment ? this.data.prepayment.minimumMinor - this.data.prepayment.waiverMinor : undefined,
       ...(this.data.couponQuote && this.data.couponQuote.pointsUsed > 0 && this.data.couponQuote.payableMinor === 0 ? { pointsOnly: true } : {}),
       couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
       recommendationPublicId: attribution ? attribution.recommendationPublicId : null,
@@ -2381,6 +2415,20 @@ Page({
       if (this.data.cartSyncing || this.data.cartWritesFrozen || !this.checkoutDraftMatches(reviewedDraft)) {
         this.setData({ error: '确认期间购物车或优惠已变化，请重新核对后提交。' })
         return
+      }
+      if (this.data.prepayment) {
+        const credit = this.data.prepayment
+        const payable = this.data.couponQuote ? this.data.couponQuote.payableMinor : this.data.cart.reduce((sum, item) => sum + item.subtotalAmountMinor, 0)
+        const required = Math.max(credit.initialFundingRequiredMinor || 0, payable + (credit.pendingOrderDueMinor || 0) - credit.availableMinor, 0)
+        if (required > 0) {
+          const confirmed = await new Promise(resolve => wx.showModal({ title: '补足后完成点单', content: '本桌额度还差 ¥' + (required / 100).toFixed(2) + '。确认后补款供本桌共同点单抵扣，未消费余额按原付款处理。', confirmText: '确认补款', success: result => resolve(!!result.confirm), fail: () => resolve(false) }))
+          if (!this.isCurrentTableRequest(tableRequest) || !confirmed) return
+          if (!this.checkoutDraftMatches(reviewedDraft)) { this.setData({ error: '桌位或购物车已变化，请重新核对。' }); return }
+          this.setData({ prepaymentAmount: (required / 100).toFixed(2), prepaymentConsent: true })
+          await this.onPrepayTable()
+          this.setData({ success: '请核对到账后的最新余额，再确认本单。购物车已保留。' })
+          return
+        }
       }
       // Subscription prompts stay outside the final confirm -> payment flow.
       this.setData({ checkoutConfirmVisible: false })
@@ -2462,6 +2510,8 @@ Page({
           ...(attempt.confirmedDuplicateOrderId ? { confirmedDuplicateOrderId: attempt.confirmedDuplicateOrderId } : {}),
           checkoutUpgradeOfferPublicId: attempt.offerPublicId,
           prepayment: attempt.prepayment === true,
+          expectedLocationVersion: attempt.expectedLocationVersion,
+          expectedMinimumMinor: attempt.expectedMinimumMinor,
           ...(attempt.pointsOnly ? { pointsOnly: true } : {}),
           ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
           recommendationAttribution: attemptAttribution,
@@ -2603,9 +2653,10 @@ Page({
     if (!this.data.prepaymentConsent) { this.setData({ error: '请先确认本桌共享预收款规则' }); return }
     const storageKey = 'mbox.table-prepayment.v1:' + tableSessionCacheScope()
     this.setData({ prepaymentBusy: true, error: '', success: '' })
+    let attempt
     try {
       const ownerScope = commandIdentityScope()
-      let attempt = wx.getStorageSync(storageKey)
+      attempt = wx.getStorageSync(storageKey)
       const exists = attempt !== undefined && attempt !== null && (attempt !== '' || (typeof wx.getStorageInfoSync === 'function' && wx.getStorageInfoSync().keys.includes(storageKey)))
       if (exists && (!attempt || typeof attempt.key !== 'string' || attempt.key.length < 8
         || !Number.isSafeInteger(attempt.amount) || attempt.amount <= 0 || attempt.ownerScope !== ownerScope
@@ -2617,7 +2668,7 @@ Page({
         const text = pending ? (pending.amountMinor / 100).toFixed(2) : String(this.data.prepaymentAmount || '')
         const amount = Math.round(Number(text) * 100)
         if (!/^\d+(\.\d{1,2})?$/.test(text) || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('请输入有效的预收款金额，最多两位小数')
-        attempt = { key: randomId('table-prepay'), amount, ownerScope, createdAt: Date.now() }
+        attempt = { key: randomId('table-prepay'), amount, ownerScope, createdAt: Date.now(), expected: { expectedLocationVersion: this.data.prepayment.locationVersion, expectedMinimumMinor: this.data.prepayment.minimumMinor - this.data.prepayment.waiverMinor, expectedGeneration: this.data.cartGeneration, expectedVersion: this.data.cartVersion } }
         wx.setStorageSync(storageKey, attempt)
       }
       const saved = wx.getStorageSync(storageKey)
@@ -2627,7 +2678,7 @@ Page({
         const latest = wx.getStorageSync(storageKey)
         return latest && latest.key === attempt.key && latest.amount === attempt.amount && latest.ownerScope === ownerScope
       }
-      const action = await prepayTable(attempt.amount, attempt.key)
+      const action = await prepayTable(attempt.amount, attempt.key, attempt.expected)
       if (!current() || !ownsAttempt()) return
       if (action && action.status === 'resolved' && ['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed', 'cancelled'].includes(action.terminalPaymentStatus)) {
         wx.removeStorageSync(storageKey)
@@ -2642,6 +2693,7 @@ Page({
       }
       if (current()) await this.refreshSharedCart()
     } catch (error) {
+      if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt && wx.getStorageSync(storageKey)?.key === attempt.key) { wx.removeStorageSync(storageKey); await this.refreshSharedCart() }
       if (this.isCurrentTableRequest(guard)) this.setData({ error: isWechatCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })
     } finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }
   },

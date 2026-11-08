@@ -336,6 +336,7 @@ export class OrderRepository {
     let releasedMinimum:TableMinimumSpend|undefined
     const requested = normalizeRequestedLines(input.lines)
     const minimumSpendMinor = await this.lockOpenTableSession(input.tableSessionId,input)
+    if(this.prepaidSession&&input.channel!=='guest_qr')input={...input,settlementMode:'immediate_payment'}
     // Lock only capped products before the existing shared price locks. Without
     // this order two different tables could both try to upgrade a shared lock.
     await this.transaction.query(`/* product-sale-quantity */
@@ -483,8 +484,8 @@ export class OrderRepository {
 
     const result={...mapOrder(order),items:insertedItems,prepaymentRequired:this.prepaidSession}
     if(this.prepaidSession&&input.channel!=='guest_qr'&&pricingAuthorization?.kind!=='gift'&&result.totalAmountMinor>0){
-      await new TablePrepaymentRepository(this.transaction).allocate(input.tableSessionId,result.id)
-      result.paymentStatus='paid'
+      await new TablePrepaymentRepository(this.transaction).allocate(input.tableSessionId,result.id,true)
+      result.paymentStatus=(await this.transaction.query<{payment_status:SubmittedOrder['paymentStatus']}>('SELECT payment_status FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,result.id])).rows[0]!.payment_status
     }
     if(releasedMinimum)result.minimumSpendRelease=releasedMinimum
     if(releasedMinimum)await this.transaction.query(`INSERT INTO mbox.order_minimum_spend_releases
@@ -590,7 +591,7 @@ export class OrderRepository {
   private async lockOpenTableSession(tableSessionId: string,input:CreateSubmittedOrderInput): Promise<number> {
     requireUuidLike('tableSessionId', tableSessionId)
     const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string }>(`
-      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE minimum_spend_minor-minimum_spend_waiver_minor END AS minimum_spend_minor
+      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE effective_minimum_spend_minor END AS minimum_spend_minor
       FROM mbox.table_sessions
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid

@@ -6,7 +6,7 @@ import { ProductSaleQuantityUnavailableError } from './product-sale-quantity-rep
 import { customerSupplyProjection, customerSupplyCopy } from './product-supply-presentation.js'
 import {IssuedCouponPromiseError} from './issued-coupon-product-promise.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { IdempotencyConflictError, IdempotencyInProgressError } from './command-executor.js'
+import { IdempotencyConflictError, IdempotencyInProgressError, IdempotencyReceiptUnavailableError } from './command-executor.js'
 import { InventoryReturnCostProjectionBusyError } from './inventory-return-cost-projection.js'
 import { GuestServiceReceiptUnattributedError, readGuestServiceReceipt, saveGuestServiceReceipt } from './guest-service-command-receipt.js'
 import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
@@ -514,17 +514,27 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
 
   app.post('/guest/table-prepayment',async(request,reply)=>handleRoute(reply,async()=>{
     const context=await requireTableContext(options,request,'guest.order.create')
-    const body=readStrictObject(request.body,'预收款',['amountMinor','sharedTableConsent'])
+    const body=readStrictObject(request.body,'预收款',['amountMinor','sharedTableConsent','expectedLocationVersion','expectedMinimumMinor','expectedGeneration','expectedVersion'])
     if(body.sharedTableConsent!=='v1')throw new TablePrepaymentError('TABLE_PREPAYMENT_CONSENT_REQUIRED','请确认预收款供本桌共同点单使用，余额按原付款退回，差额收费未启用')
     const amountMinor=readInteger(body.amountMinor,'amountMinor',1,100_000_000),key=readIdempotencyKey(request)
+    const expectedLocationVersion=body.expectedLocationVersion===undefined?undefined:readInteger(body.expectedLocationVersion,'expectedLocationVersion',0,2_147_483_647)
+    const expectedMinimumMinor=body.expectedMinimumMinor===undefined?undefined:readInteger(body.expectedMinimumMinor,'expectedMinimumMinor',0,100_000_000)
+    const expectedGeneration=body.expectedGeneration===undefined?undefined:readInteger(body.expectedGeneration,'expectedGeneration',1,2_147_483_647)
+    const expectedVersion=body.expectedVersion===undefined?undefined:readInteger(body.expectedVersion,'expectedVersion',0,2_147_483_647)
     const mode=await effectivePaymentMode(options,context.scope,request);assertGuestSelfPaymentMode(mode)
     options.onlinePayments.assertAvailable(mode==='simulation'?'simulation':'postar')
     const method=await guestCheckoutPaymentMethod(options,context,mode)
-    const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.table-prepayment',idempotencyKey:key,requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,amountMinor,consent:'v1'}),resultCodec:{encode:v=>v,decode:jsonObject}},async tx=>{
+    const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.table-prepayment',idempotencyKey:key,retainReceipt:true,rejectExpiredReceipt:true,authorizeReplay:async tx=>{await new TablePrepaymentRepository(tx).lock(context.tableSessionId);if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()},requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,amountMinor,consent:'v1',expectedLocationVersion,expectedMinimumMinor,expectedGeneration,expectedVersion}),resultCodec:{encode:v=>v,decode:jsonObject}},async tx=>{
       const session=await new TablePrepaymentRepository(tx).lock(context.tableSessionId)
+      await new TablePrepaymentRepository(tx).assertCurrent(context.tableSessionId,expectedLocationVersion,expectedMinimumMinor)
       if(session.minimum_spend_mode!=='prepaid')throw new TablePrepaymentError('TABLE_PREPAYMENT_NOT_ENABLED','本桌未启用预收款，请按当前点单方式提交')
       if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
       const payment=await new PaymentRepository(tx).createForTablePrepayment({tableSessionId:context.tableSessionId,customerId:context.customerId,amountMinor,provider:mode==='simulation'?'simulation':'postar',method,publicId:createPublicId('payment',`${context.scope.storeId}:${key}`)})
+      if(expectedGeneration!==undefined&&expectedVersion!==undefined&&['created','pending'].includes(payment.status)){
+        const cart=await new GuestSharedCartRepository(tx,context.customerId).readOpen(context.tableSessionId,createSharedCartPublicId())
+        if(cart.generation!==expectedGeneration||cart.version!==expectedVersion)throw new TablePrepaymentError('TABLE_CREDIT_CHANGED','购物车已变化，请重新核对补款')
+        await new TablePrepaymentRepository(tx).holdCartBalance(context.tableSessionId,cart,payment.id)
+      }
       return {result:{paymentId:payment.id},auditEvents:[{actor:guestActor(context),action:'table.prepayment_requested',objectType:'payment',objectId:payment.id,businessDate:context.businessDate,afterData:{amountMinor:payment.amountMinor,sharedTableConsent:'v1',differenceChargingEnabled:false}}],outboxMessages:[]}
     })
     const stored=await options.transactions.run(context.scope,tx=>new PaymentProviderActionRepository(tx,options.paymentActionSecret).resolvePaymentContext(String(execution.value.paymentId),guestPaymentPrincipal(context),{lock:false}))
@@ -540,6 +550,7 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const execution=await options.commandExecutor.execute<JsonObject>({scope:context.scope,operationScope:'guest.shared-cart.prepayment-settlement',idempotencyKey,
       requestFingerprint:stableJson({customerId:context.customerId,tableSessionId:context.tableSessionId,...input}),resultCodec:{encode:value=>value,decode:value=>jsonObject(value)}},async tx=>{
       const prepayment=new TablePrepaymentRepository(tx);await prepayment.lock(context.tableSessionId)
+      await prepayment.assertCurrent(context.tableSessionId,input.expectedLocationVersion,input.expectedMinimumMinor)
       if(!await lockBoundGuestCheckoutPosition(tx,context))throw new GuestAuthenticationRequiredError()
       await requireGuestCartProtocol(tx,context.tableSessionId,2)
       const quote=input.couponQuoteId?await new CheckoutCouponQuoteRepository(tx).find(input.couponQuoteId,context.customerId):null
@@ -2659,6 +2670,8 @@ function readSharedCartBundleSelectionReplacement(value:unknown):{
 }
 
 function readSharedCartCheckout(value: unknown): {
+  expectedLocationVersion?:number
+  expectedMinimumMinor?:number
   lineNotes: CheckoutLineNote[]
   couponQuoteId:string|null
   expectedGeneration: number
@@ -2670,7 +2683,7 @@ function readSharedCartCheckout(value: unknown): {
   selectedRecommendationProductId: string | null
 } {
   const body = readStrictObject(value, '共享购物车结账请求', [
-    'lineNotes',
+    'lineNotes','expectedLocationVersion','expectedMinimumMinor',
     'couponQuoteId',
     'expectedGeneration', 'expectedVersion', 'note', 'confirmedDuplicateOrderId', 'checkoutUpgradeOfferPublicId',
     'recommendationPublicId', 'selectedRecommendationProductId',
@@ -2705,6 +2718,8 @@ function readSharedCartCheckout(value: unknown): {
     )
   }
   return {
+    expectedLocationVersion:body.expectedLocationVersion===undefined?undefined:readInteger(body.expectedLocationVersion,'expectedLocationVersion',0,2_147_483_647),
+    expectedMinimumMinor:body.expectedMinimumMinor===undefined?undefined:readInteger(body.expectedMinimumMinor,'expectedMinimumMinor',0,100_000_000),
     lineNotes: readCheckoutLineNotes(body.lineNotes),
     expectedGeneration: readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647),
     expectedVersion: readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647),
@@ -2862,6 +2877,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     if (error instanceof GuestServiceReceiptUnattributedError) {
       return reply.code(409).send({ error: { code: 'GUEST_SERVICE_RECEIPT_REVIEW_REQUIRED', message: error.message } })
     }
+    if (error instanceof IdempotencyReceiptUnavailableError) return reply.code(409).send({error:{code:'IDEMPOTENCY_RECEIPT_UNAVAILABLE',message:'原支付请求需要核对，请查询原付款；旧请求不会重新收款。'}})
     if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
       return reply.code(409).send({ error: {
         code: error instanceof IdempotencyConflictError ? 'IDEMPOTENCY_CONFLICT' : 'IDEMPOTENCY_IN_PROGRESS',

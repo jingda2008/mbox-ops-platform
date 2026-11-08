@@ -1,6 +1,51 @@
 import {readFile} from 'node:fs/promises'
 import {expect,test} from '@playwright/test'
 
+for (const amount of ['680','0']) test(`reviews an unfulfilled cross-day staff tab as ${amount} through real local HTTP`,async({page},testInfo)=>{
+  const fixture=JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE??'artifacts/normalized-browser/fixture.json','utf8'))
+  test.skip(!fixture.crossDayDebtFixture?.reviewOrderId,'Requires the isolated cross-day review fixture')
+  const debt=fixture.crossDayDebtFixture,orderId=amount==='0'?debt.zeroReviewOrderId:debt.reviewOrderId
+  await page.setViewportSize({width:390,height:844})
+  await page.goto(fixture.staffUrl)
+  await page.getByLabel('门店口令').fill(fixture.dailyCredential)
+  await page.getByRole('button',{name:/验证设备/}).click()
+  await page.getByLabel('员工账号').fill('sanmu')
+  await page.getByLabel('四位 PIN').fill(fixture.employeePin)
+  await page.getByRole('button',{name:/进入工作台/}).click()
+  await expect(page.getByTestId('normalized-workspace')).toBeVisible()
+  await page.goto(`/staff/payments?collectionScope=history&query=${amount==='0'?'DEBT-BROWSER-NO-DEBT':'DEBT-BROWSER-REVIEW'}&orderId=${orderId}`)
+  const card=page.locator(`[data-cashier-order-id="${orderId}"]`)
+  const panel=card.locator('[aria-label="跨日挂账待核对"]')
+  await expect(panel).toContainText('别出：隔离测试单')
+  await expect(card.getByRole('button',{name:'出示付款二维码',exact:true})).toHaveCount(0)
+  await expect(panel.getByRole('button',{name:'核对并继续',exact:true})).toBeDisabled()
+  await panel.getByLabel('确认仍欠金额（元；无欠款填0）').fill('1314.01')
+  await panel.getByLabel('核对依据').fill('隔离测试：核对原单与顾客约定及未收款事实')
+  await expect(panel.getByRole('button',{name:'核对并继续',exact:true})).toBeDisabled()
+  await panel.getByLabel('确认仍欠金额（元；无欠款填0）').fill(amount)
+  await panel.getByRole('button',{name:'核对并继续',exact:true}).click()
+  await expect(panel.getByRole('alert')).toBeVisible()
+  await page.screenshot({path:testInfo.outputPath(`review-${amount}-before-confirm.png`),fullPage:true})
+  const response=page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith(`/orders/${orderId}/carryover-review`))
+  await panel.getByRole('button',{name:'确认核对结果',exact:true}).click()
+  const receipt=await response
+  expect(receipt.status()).toBe(201)
+  expect(receipt.request().postDataJSON()).toMatchObject({amountMinor:Number(amount)*100,confirmed:true,basis:{orderId,maximumAmountMinor:131400}})
+  await expect(panel).toHaveCount(0)
+  await page.reload()
+  await expect(card).toContainText(amount==='0'?'挂账核对结果：无欠款':'挂账核对结果：确认欠款 ¥680.00')
+  if (amount==='0') await expect(card.getByRole('button',{name:'登记现金收款',exact:true})).toHaveCount(0)
+  else {
+    await expect(card).toContainText('剩余应收 ¥680.00')
+    await card.getByRole('button',{name:'登记现金收款',exact:true}).click()
+    await card.getByRole('button',{name:'核对并继续',exact:true}).click()
+    await card.getByRole('button',{name:'确认已收到现金',exact:true}).click()
+    await expect(card).toContainText('已支付')
+  }
+  const dimensions=await page.evaluate(()=>({width:document.documentElement.clientWidth,content:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth)}))
+  expect(dimensions.content).toBeLessThanOrEqual(dimensions.width+1)
+})
+
 test('finds and partially settles an original closed invoice through real local HTTP, then retains settled history',async({page},testInfo)=>{
   const fixture=JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE??'artifacts/normalized-browser/fixture.json','utf8'))
   test.skip(!fixture.crossDayDebtFixture,'Requires the isolated cross-day debt fixture')

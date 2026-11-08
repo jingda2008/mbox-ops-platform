@@ -176,7 +176,15 @@ export interface CashierClosableUnpresentedPayment {
   orderPublicIds: string[]
 }
 
+export interface CarryoverTabReviewBasis {
+  orderId:string;tableSessionId:string;originalBusinessDate:string;closedAt:string;cancellationId:string;
+  maximumAmountMinor:number;currency:string;orderNote:string|null;reason:string
+}
+
 export interface CashierWorkbenchOrder {
+  carryoverReview?: {basis:CarryoverTabReviewBasis|null;canConfirm:boolean}
+  carryoverReviewDecision?: {amountMinor:number;reason:string;createdAt:string}
+
   points?:{used:number;restored:number;credited:number;state:'held'|'consumed'|'released'}
   /** Closed sessions retain their original table/day; only proven old debt may be collected. */
   closedDebtRecovery?: {

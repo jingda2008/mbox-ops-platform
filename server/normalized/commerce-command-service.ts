@@ -1,4 +1,3 @@
-import {TablePrepaymentRepository} from './table-prepayment-repository.js'
 import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
 import {RecommendationFinancialAttributionRepository} from './recommendation-financial-attribution-repository.js'
 import {ItemAfterSalesReplacementRepository} from './item-after-sales-replacement-repository.js'
@@ -179,9 +178,6 @@ export class CommerceCommandService {
       if(input.replacementCaseId)await new ItemAfterSalesReplacementRepository(transaction).link({caseId:input.replacementCaseId,orderId:order.id,employeeId:input.createdByEmployeeId!,previousOrderId:input.replacementPreviousOrderId})
       if (pricingAuthorization) await this.pricingPolicy!.consume(transaction, pricingAuthorization, order.id)
 
-      if(order.prepaymentRequired&&input.channel!=='guest_qr'&&order.paymentStatus!=='paid'&&pricingAuthorization?.kind!=='gift'){
-        await new TablePrepaymentRepository(transaction).allocate(context.tableSessionId,order.id);order.paymentStatus='paid'
-      }
       const inventoryEnforcementMode = this.options.inventoryEnforcementMode ?? 'strict'
       const fulfillmentPlan = buildFulfillmentPlan(order.items, schedulingOverride)
       const inventoryReservations = await new PaymentFulfillmentRepository(transaction).prepareSubmittedOrder(
@@ -198,14 +194,15 @@ export class CommerceCommandService {
         pricingAuthorizationId: pricingAuthorization?.authorizationId ?? null,
         assistedOrderContextId: context.assistedContextId,
       }
-      const inventoryConsumptions = order.settlementMode === 'immediate_payment'
+      const prepaidActivation=order.prepaymentRequired&&order.paymentStatus==='paid'?await new PaymentFulfillmentRepository(transaction).activatePaidOrder(order.id,{metadata:{settlementKind:'table_prepayment'}}):null
+      const inventoryConsumptions = prepaidActivation?.inventoryConsumptions ?? (order.settlementMode === 'immediate_payment'
         ? []
         : await new InventoryRepository(transaction).consumeForOrderItems(order.items, {
             createdByEmployeeId: input.createdByEmployeeId ?? null,
             reason: 'order submitted for deferred settlement',
             metadata: inventoryMetadata,
             allowMissingRecipes: inventoryEnforcementMode === 'audit_only',
-          })
+          }))
       const inventoryEvidenceOrderItemIds = new Set([
         ...inventoryReservations.map((item) => item.orderItemId),
         ...inventoryConsumptions.map((item) => item.orderItemId),
@@ -220,9 +217,9 @@ export class CommerceCommandService {
         unconfiguredOrderItemIds: unconfiguredInventoryOrderItemIds,
         reservationCount: inventoryReservations.length,
       } as const
-      const kdsTasks = order.settlementMode === 'immediate_payment'
+      const kdsTasks = prepaidActivation?.kdsTasks ?? (order.settlementMode === 'immediate_payment'
         ? []
-        : await createServerScheduledKdsTasks(transaction, order, fulfillmentPlan)
+        : await createServerScheduledKdsTasks(transaction, order, fulfillmentPlan))
       if (selectedUpgrade !== null) {
         assertCheckoutUpgradeOrder(order, selectedUpgrade)
         await new CustomerExperienceRepository(transaction).markCheckoutUpgradeConverted({
@@ -246,12 +243,14 @@ export class CommerceCommandService {
           await new LoyaltyAccrualRepository(transaction).recordPaidOrder({paymentId:source.payment_id,orderId:order.id,occurredAt:new Date().toISOString()})
         }
       }
+      const nextPayment=paymentNextStep(order)
+      if(order.prepaymentRequired)nextPayment.amountMinor=Number((await transaction.query<{amount:string}>(`SELECT GREATEST(0,mbox.order_financial_receivable_amount($1,$2,$3)-COALESCE((SELECT sum(amount_minor) FROM mbox.order_payment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND status IN('succeeded','partially_refunded','refunded')),0))::text amount`,[transaction.scope.tenantId,transaction.scope.storeId,order.id])).rows[0]?.amount??order.totalAmountMinor)
       delete order.prepaymentRequired
       const result: SubmittedCommerceResult = {
         order,
         kdsTasks,
         inventoryConsumptions,
-        paymentNextStep: paymentNextStep(order),
+        paymentNextStep: nextPayment,
       }
       const outboxMessage: OutboxMessage = {
         aggregateType: 'order',

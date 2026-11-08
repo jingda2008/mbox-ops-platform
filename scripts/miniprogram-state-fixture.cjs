@@ -31,6 +31,7 @@ function fixture(pageName = 'order', overrides = {}, platform = 'miniprogram') {
   }
   const session = {
     getTableSession: () => state.session,
+    rememberTableConnection: value => { state.session = Object.assign({}, state.session, {tableCode:value.table.code,cartScope:value.cartScope}); return value },
     tableSessionCacheScope: (value = state.session) => 'cache.' + value.tableToken + ':' + value.cartScope,
   }
   const product = { productId: 'p1', name: '测试菜', available: true, amountMinor: 100 }

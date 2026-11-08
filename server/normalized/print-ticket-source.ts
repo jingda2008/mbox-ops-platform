@@ -1,6 +1,6 @@
 import {readCheckoutPoints,type CheckoutPointsView} from './checkout-points-view.js'
 import { settlementDisplayNumber } from './settlement-display-number.js'
-import { readCheckoutPrintSummary } from './checkout-print-summary.js'
+import { readCheckoutPrintSummary,readTableCreditPrintSummary } from './checkout-print-summary.js'
 import {orderReceivableSql} from './order-collection-sql.js'
 import { buildDailyReportLines, DEFAULT_DAILY_REPORT, type DailyReportOptions } from './daily-report-format.js'
 import {readOperatingHistory} from './operating-history-query.js'
@@ -141,6 +141,8 @@ export class PrintTicketSourceRepository {
     const context=await this.loadOrderContext(orders[0]!.id)
     const source=(await this.transaction.query<{occurred_at:string}>('SELECT occurred_at::text FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,sourceId])).rows[0]!
     const totals=await readCheckoutPrintSummary(this.transaction,orders.map(o=>o.id))
+    const credit=await readTableCreditPrintSummary(this.transaction,sessionId)
+    totals.received+=credit.received-credit.allocated;totals.refunded+=credit.unusedRefunded;totals.net=totals.received-totals.refunded
     const lines:PrintTicketLine[]=[]
     const reductions=new Map((await this.transaction.query<{order_id:string;amount:string}>(`SELECT order_id,sum(amount_minor)::text AS amount FROM mbox.item_receivable_adjustment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=ANY($3::uuid[]) GROUP BY order_id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orders.map(order=>order.id)])).rows.map(row=>[row.order_id,signedAdjustment(row.amount)]))
     const pointsByOrder=await readCheckoutPoints(this.transaction,orders.map(order=>order.id))
@@ -155,6 +157,7 @@ export class PrintTicketSourceRepository {
       {name:'桌次实际退款',quantity:1,totalAmountMinor:totals.refunded},
       {name:'桌次实际净收',quantity:1,totalAmountMinor:totals.net},
       {name:'尚未收款',quantity:1,totalAmountMinor:totals.due})
+    if(credit.received>0)lines.push({name:'其中本桌预收款累计（不另加收）',quantity:1,totalAmountMinor:credit.received},{name:'预收款已抵商品',quantity:1,totalAmountMinor:credit.allocated},{name:'本桌可继续点单余额',quantity:1,totalAmountMinor:credit.available})
     if(totals.pending>0)lines.push({name:'渠道待确认金额（不计入实收）',quantity:1,totalAmountMinor:totals.pending})
     // A manually generated bill is a document of its own. Keep the source UUID
     // for job idempotency and table tracing; older bridges print ticketReference directly.
@@ -530,6 +533,7 @@ export class PrintTicketSourceRepository {
     paymentId: string,
   ): Promise<readonly PrintJob[]> {
     const kind=(await this.transaction.query<{payable_kind:string}>('SELECT payable_kind FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])).rows[0]?.payable_kind
+    if(kind==='table_prepayment')return this.materializeTablePrepayment(sourceOutboxMessageId,paymentId)
     if(kind==='order_batch')return this.materializeBatchPayment(sourceOutboxMessageId,paymentId)
     const payment = await this.loadPaymentContext(paymentId)
     // A payment voucher states one committed payment, not the entire bill.
@@ -631,6 +635,12 @@ export class PrintTicketSourceRepository {
     return this.materializeActivityCashier(sourceOutboxMessageId, refund.refund_public_id, snapshot)
   }
 
+
+  private async materializeTablePrepayment(sourceId:string,paymentId:string):Promise<readonly PrintJob[]>{
+    const row=(await this.transaction.query<{public_id:string;amount_minor:string;status:string;succeeded_at:string;business_date:string;code:string;guest_count:number;allocated:string;available:string}>(`SELECT p.public_id,p.amount_minor::text,p.status,p.succeeded_at::text,COALESCE((SELECT business_date::text FROM mbox.reconciliation_entries e WHERE(e.tenant_id,e.store_id,e.payment_id)=(p.tenant_id,p.store_id,p.id) AND entry_type='payment' LIMIT 1),s.business_date::text) business_date,t.code,s.guest_count,(SELECT COALESCE(sum(amount_minor),0)::text FROM mbox.table_prepayment_allocations a WHERE(a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id)) allocated,mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text available FROM mbox.payments p JOIN mbox.table_sessions s ON(s.tenant_id,s.store_id,s.id)=(p.tenant_id,p.store_id,p.prepaid_table_session_id) JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])).rows[0]
+    if(!row||!['succeeded','partially_refunded','refunded'].includes(row.status))return[]
+    return this.materializeDocument(sourceId,paymentId,{kind:'cashier_payment',subtitle:'本桌预收款收据 · 商品抵扣不再收款',test:false,issuedAt:row.succeeded_at,businessDate:row.business_date,ticketReference:row.public_id,tableCode:row.code,guestCount:row.guest_count,operatorLabel:null,note:'本次实收仅记一次；商品抵扣为原款分配。余额以最新桌账为准，不自动转服务费。',payment:null,currency:'CNY',totalAmountMinor:Number(row.amount_minor),lines:[{name:'本笔原预收款',quantity:1,totalAmountMinor:Number(row.amount_minor)},{name:'截至打印已抵商品',quantity:1,totalAmountMinor:Number(row.allocated)},{name:'本笔可用余额',quantity:1,totalAmountMinor:Number(row.available)}]})
+  }
 
   private async materializeBatchPayment(sourceId:string,paymentId:string):Promise<readonly PrintJob[]>{
     const row=(await this.transaction.query<PaymentContextRow>(`SELECT p.public_id AS payment_public_id,p.provider AS payment_provider,p.method AS payment_method,p.amount_minor AS payment_amount_minor,p.status AS payment_status_value,p.succeeded_at::text,p.currency,t.code AS table_code,v.guest_count,COALESCE((SELECT e.business_date::text FROM mbox.reconciliation_entries e WHERE e.tenant_id=p.tenant_id AND e.store_id=p.store_id AND e.payment_id=p.id AND e.entry_type='payment' LIMIT 1),(p.succeeded_at AT TIME ZONE 'Asia/Shanghai')::date::text) AS business_date FROM mbox.payments p JOIN mbox.order_payment_batches b ON b.tenant_id=p.tenant_id AND b.store_id=p.store_id AND b.id=p.order_batch_id JOIN mbox.table_sessions v ON v.tenant_id=b.tenant_id AND v.store_id=b.store_id AND v.id=b.table_session_id JOIN mbox.tables t ON t.tenant_id=v.tenant_id AND t.store_id=v.store_id AND t.id=v.table_id WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,paymentId])).rows[0]

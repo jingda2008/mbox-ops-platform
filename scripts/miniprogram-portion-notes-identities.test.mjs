@@ -70,7 +70,7 @@ async function identityFixture(responses) {
 const identity = { id: 'one', project_id: 'music', name: '五迷卡', status: 'active', expired: false, valid_from: '2020-01-01', valid_until: '2099-01-01' }
 test('menu taste indicators use supported backend tags, deduplicate and tolerate legacy data', async () => {
   const source = await read('miniprogram/pages/order/index.js')
-  const fn = source.slice(source.indexOf('function menuProducts('), source.indexOf('function menuRecommendations('))
+  const fn = source.slice(source.indexOf('function salesTimeText('), source.indexOf('function menuRecommendations('))
   const menu = vm.runInNewContext(fn + '; menuProducts', { menuAvailability: () => ({}), bundleValuePresentation: () => ({}), customerCategoryName: () => '', money: String, publicImageUrl: value => value })
   const rows = menu([{ recommendation: { tasteTags: ['refreshing', 'refreshing', 'any', 'layered', 'strong', 'unknown'] } }, {}, { recommendation: { tasteTags: 'legacy' } }])
   assert.deepEqual(Array.from(rows[0].tasteLabels), ['清爽', '层次丰富', '浓郁'])

@@ -662,8 +662,8 @@
 .product-action {
   box-sizing: border-box;
   display: flex;
-  height: 110rpx;
-  min-height: 0;
+  height: auto;
+  min-height: 110rpx;
   padding: 0 14rpx 12rpx;
   align-items: flex-end;
   justify-content: space-between;
@@ -1851,3 +1851,7 @@
 .table-prepayment-card { margin: 16rpx 0; padding: 20rpx; border: 1rpx solid #bbd8cc; border-radius: 16rpx; background: #f0f8f4; color: #173d30; display: flex; flex-direction: column; gap: 16rpx; font-size: 26rpx; line-height: 1.6; }
 .table-prepayment-card input { min-height: 72rpx; padding: 0 16rpx; background: #fff; border: 1rpx solid #bbd8cc; border-radius: 10rpx; }
 .table-prepayment-card button { width: 100%; margin: 0; min-height: 72rpx; font-size: 26rpx; }
+
+/* Selling-window copy occupies its own row; never overlap price or taste tags. */
+.product-row.is-scheduled .product-availability-copy { max-width: 100%; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+.product-row.is-scheduled .product-availability { color: #315d46; font-weight: 500; }

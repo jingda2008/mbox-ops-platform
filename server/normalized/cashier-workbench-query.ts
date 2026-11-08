@@ -262,6 +262,10 @@ export class PostgresCashierWorkbenchQuery {
     )
     const canUseActivityCashier = (input.collectionScope??'workbench')==='workbench'&&input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
+      // Statistics refreshes can push this RLS-heavy interactive read above
+      // JIT's cost threshold, spending seconds compiling a millisecond query.
+      // SET LOCAL restores pooled connections on both commit and rollback.
+      await transaction.query('SET LOCAL jit = off')
       const reviewSchema=(await transaction.query<{present:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")).rows[0]?.present===true
       const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'
       const orderQuery = `

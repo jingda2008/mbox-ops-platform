@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import {afterAll,beforeAll,describe,expect,it} from 'vitest'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
-import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
+import {ScopedPostgresTransactionRunner,type ScopedTransaction,type StoreScope} from './transaction-runner.js'
 import {StaffBootstrapQuery} from './staff-bootstrap-query.js'
 import {PostgresCashierWorkbenchQuery} from './cashier-workbench-query.js'
 import {OperationsQueryService} from './operations-query-service.js'
@@ -46,7 +46,12 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
 
   it('keeps historical debt while excluding 5000 paid orders under simultaneous page queries',async()=>{
     const timings:number[]=[]
-    for(let round=0;round<2;round++){
+    for(let round=0;round<3;round++){
+      // Autovacuum can refresh each relation independently between requests.
+      // Exercise both partial and complete statistics instead of relying on
+      // a fresh fixture's underestimated row counts to avoid JIT compilation.
+      if(round===1)await admin.query('ANALYZE mbox.orders')
+      if(round===2)await admin.query('ANALYZE mbox.payments')
       const run=async(name:string,operation:()=>Promise<unknown>)=>{const at=performance.now();const value=await operation();const ms=performance.now()-at;timings.push(ms);console.info(JSON.stringify({check:'shared-query-growth',round,name,orders:count+2,ms:Math.round(ms)}));return value}
       const [workspace,cashier,history]=await Promise.all([
         run('workspace',()=>new StaffBootstrapQuery(runner).get(scope,employeeId,day)),
@@ -59,6 +64,26 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
     }
     // A bounded regression guard, not a claim about production peak capacity.
     expect(Math.max(...timings)).toBeLessThan(8000)
+  },60000)
+
+  it('keeps interactive query compilation settings local after commit and rollback',async()=>{
+    const single=new Pool({connectionString:runtimeUrl,max:1})
+    const serial=new ScopedPostgresTransactionRunner(single)
+    try{
+      await single.query('SET jit = on')
+      for(const abort of [false,true]){
+        const operation=serial.run(scope,async tx=>{
+          const sameTransaction={run:async<Result>(_scope:Readonly<StoreScope>,handler:(transaction:ScopedTransaction)=>Promise<Result>)=>handler(tx)}
+          const view=await new PostgresCashierWorkbenchQuery(sameTransaction as unknown as ScopedPostgresTransactionRunner).get({scope,employeeId,businessDate:day,capabilities:permissions,limit:50})
+          expect(view.orders.map(o=>o.publicId)).toEqual(['old-unpaid','old-overcollected'])
+          expect((await tx.query<{jit:string}>('SHOW jit')).rows[0]?.jit).toBe('off')
+          if(abort)throw new Error('rollback-setting-probe')
+        },{readOnly:true,isolation:'repeatable-read'})
+        if(abort)await expect(operation).rejects.toThrow('rollback-setting-probe')
+        else await operation
+        expect((await single.query('SHOW jit')).rows[0]?.jit).toBe('on')
+      }
+    }finally{await single.end()}
   },60000)
 
   it('retains recently captured historical receipts and excludes them again after the six-hour window',async()=>{

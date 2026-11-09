@@ -1,5 +1,6 @@
 import {StaffTableCreditPanel} from './staff-actions/StaffTableCreditPanel'
 import {CarryoverTabReviewPanel} from './CarryoverTabReviewPanel'
+import {CashierPageUpdateNotice} from './CashierPageUpdateNotice'
 import {activityRefundCommand,pendingActivityRefund,type ActivityRefundRequestBody} from './activity-refund-recovery'
 import {RefreshQueue} from './staff-actions/refresh-queue'
 import {businessStatus} from '../shared/staff-business-labels'
@@ -315,6 +316,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 
   const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
   return <><nav className="cashier-action-row" aria-label="账款范围">{([['workbench','收银待办'],['unsettled','未结账款'],['history','历史账单']] as const).map(([scope,label])=><button key={scope} type="button" className={collectionScope===scope?'cashier-primary-action':'cashier-secondary-action'} aria-pressed={collectionScope===scope} disabled={busyKey!==null} onClick={()=>{setCollectionScope(scope);setDebtPage(0);setPaymentState('all');setQuery('');setFromDate('');setToDate('')}}>{label}</button>)}</nav>
+    <CashierPageUpdateNotice blocked={busyKey!==null||mutationCoordinator.current.hasPending()}/>
     {collectionScope!=='workbench'&&<div className="cashier-action-row"><label className="cashier-field"><span>起始营业日（留空不限）</span><input type="date" value={fromDate} onChange={event=>{setFromDate(event.target.value);setDebtPage(0)}}/></label><label className="cashier-field"><span>结束营业日（留空不限）</span><input type="date" value={toDate} onChange={event=>{setToDate(event.target.value);setDebtPage(0)}}/></label><p>按原营业日和原账单查询；已关闭桌次的欠款不会转给新客。</p></div>}
     {view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}
     {!view&&<CashierReadState phase={phase} message={message} onReload={()=>void load(query)}/>}
@@ -678,6 +680,11 @@ export function CashierAfterSalesWorkbenchView({
                 <span><strong>{cancelledWithoutCollection || order.carryoverReview ? '原单 ¥' : '¥'}{formatAmount(cancelledWithoutCollection || order.carryoverReview ? order.originalAmountMinor ?? order.totalAmountMinor : order.totalAmountMinor)}</strong>{cancelledWithoutCollection && <small>当前可收 ¥0.00</small>}<em>{order.carryoverReview ? '挂账待核对' : cancelledWithoutCollection ? '已取消 · 未收款' : order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{order.points&&<small>积分{order.points.state==='held'?'占用':'抵扣'} {order.points.used} 分 / ¥{formatAmount(order.points.used*100)}；已返 {order.points.credited} 分{order.points.restored>order.points.credited?`，${order.points.restored-order.points.credited} 分原批次已过期`:''}。不计入现金实收。</small>}{(order.receivableIncreaseMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 套餐按单点价补差 ¥{formatAmount(order.receivableIncreaseMinor!)}</small>}{(order.stoppedAmountMinor??0)>0&&!order.carryoverReviewDecision&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 已停止减免 ¥{formatAmount(order.stoppedAmountMinor!)}</small>}{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
+              {(order.carryoverReview||order.outstandingAmountMinor>0)&&<div className="cashier-action-row" style={{padding:'0 16px 12px'}}>
+                <button type="button" className="cashier-primary-action" disabled={busyKey!==null}
+                  onClick={()=>setExpandedOrderId(order.id)}>{order.carryoverReview?'核对后收款':order.tableSessionStatus==='closed'?'查看补收入口':'收款'}</button>
+                <span>{order.carryoverReview?'跨日挂账需核对实际欠款，无需补做制作完成。':order.tableSessionStatus==='closed'?'按原单核对补收条件。':'可在制作完成前收款，出品进度保持独立。'}</span>
+              </div>}
               {expanded && <div className="cashier-order-detail">
                 {order.carryover && <p className="cashier-guidance">{order.carryoverReview
                   ? '原挂桌账已跨营业日，当前处于待核对状态。请先确认是否存在实际欠款及金额，再发起收款。'
@@ -1001,7 +1008,9 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
   if(closedTableSession&&!consumptionDebt&&order.settlementException&&['automatic_cutoff','customer_left'].includes(order.settlementException.reasonCode))return <div className="cashier-manual-collection is-blocked" role="status">历史账单仅供核对：原关桌记录不等于已付款或实际欠款。请核对送达、线下实收和原结算例外；本页不会自动恢复收款。</div>
   if (!canCollect) return closedTableSession && recovery?.status === 'available' && order.outstandingAmountMinor > 0
     ? <div className="cashier-manual-collection is-blocked" aria-label="已关桌订单补收"><div><strong>已关桌订单补收</strong><small>{recoveryDescription}</small></div><p className="cashier-guidance">当前账号没有人工收款登记权限，请交给具备对应收款方式权限的财务处理。</p></div>
-    : null
+    : !closedTableSession&&order.status!=='cancelled'&&order.outstandingAmountMinor>0
+      ? <div className="cashier-manual-collection is-blocked" role="status"><strong>收款方式暂不可用</strong><p>当前账号或门店未开放可用的收款方式，请交给有收款权限的员工处理；无需先完成制作。</p></div>
+      : null
   const mutationKey = provider === null ? '' : `manual-payment-${provider}-${order.id}`
 
   async function createPayment(method: 'native_qr' | 'auth_code', customerAuthCode?: string) {

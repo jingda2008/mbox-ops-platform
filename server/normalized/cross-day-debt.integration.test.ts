@@ -67,6 +67,11 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   it('retains unfulfilled staff tabs for review without turning the quoted amount into a collectible debt',async()=>{
     const f=await fixture({delivered:false})
     const row=(await view(f.order,{collectionScope:'unsettled'})).orders[0]!
+    for(const collectionScope of ['workbench','unsettled','history'] as const){
+      const filtered=await view(f.order,{collectionScope,paymentState:'unpaid'})
+      expect(filtered.orders.map(order=>order.id)).toContain(f.order)
+      expect(filtered.pagination?.totalOutstandingMinor).toBe(0)
+    }
     expect(row).toMatchObject({outstandingAmountMinor:0,carryoverReview:{canConfirm:true,basis:{maximumAmountMinor:10000}}})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
     await expect(money.recordManual(cash(f.order,10000))).rejects.toThrow()
@@ -137,7 +142,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await pool.query('ALTER TABLE mbox.order_carryover_reviews DISABLE TRIGGER carryover_review_immutable')
     try {await pool.query('DELETE FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])}
     finally {await pool.query('ALTER TABLE mbox.order_carryover_reviews ENABLE TRIGGER carryover_review_immutable')}
-    expect((await view(f.order,{collectionScope:'history'})).orders[0]?.carryoverReview?.canConfirm).toBe(true)
+    expect((await view(f.order,{collectionScope:'history',paymentState:'unpaid'})).orders[0]?.carryoverReview?.canConfirm).toBe(true)
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
     await money.confirmCarryoverReview(await reviewCommand(f.order,10000))
     expect((await view(f.order)).orders[0]?.outstandingAmountMinor).toBe(10000)

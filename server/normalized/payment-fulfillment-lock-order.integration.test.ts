@@ -66,6 +66,24 @@ integration('cash and current three-screen commands use one parent lock order',(
   }
   function command(body:KitchenCommand,key=randomUUID()){return app.inject({method:'POST',url:'/api/commerce/kitchen-board/commands',headers:{'idempotency-key':key},payload:{employeeId,command:body}})}
   async function expectOk(body:KitchenCommand,key?:string){const response=await command(body,key);expect(response.statusCode,response.body).toBe(200);return response.json().data as {batchId:string;quantity:number;released:boolean}}
+  it.each(['pending','accepted','preparing'] as const)('collects an active table tab while production is %s without completing it',async status=>{
+    const row=await item()
+    await pool.query("UPDATE mbox.orders SET settlement_mode='table_tab' WHERE id=$1",[row.orderId])
+    if(status!=='pending')await runtime.run(scope,tx=>new KdsRepository(tx).accept({taskId:row.taskId,actorEmployeeId:employeeId}))
+    if(status==='preparing')await runtime.run(scope,tx=>new KdsRepository(tx).startPreparing({taskId:row.taskId,actorEmployeeId:employeeId}))
+    const production=async()=>(await pool.query('SELECT status,ready_at,cancelled_at FROM mbox.kds_tasks WHERE id=$1',[row.taskId])).rows[0]
+    const before=await production()
+    expect(before).toEqual({status,ready_at:null,cancelled_at:null})
+    const service=new PaymentCommandService(new NormalizedCommandExecutor(runtime),new NormalizedPaymentCapabilityAuthorization())
+    const key=randomUUID()
+    const input:RecordManualPaymentCommand={scope,actor:{type:'employee',employeeId},businessDate,idempotencyKey:key,requestFingerprint:key,orderId:row.orderId,publicId:`cash-${key}`,provider:'cash',method:'cash',evidence:{collectedByEmployeeId:employeeId,receiptReference:key}}
+    expect((await service.recordManual(input)).value.status).toBe('succeeded')
+    expect((await service.recordManual(input)).replayed).toBe(true)
+    expect(await production()).toEqual(before)
+    expect((await pool.query('SELECT payment_status FROM mbox.orders WHERE id=$1',[row.orderId])).rows[0].payment_status).toBe('paid')
+    expect((await pool.query('SELECT status FROM mbox.order_items WHERE id=$1',[row.itemId])).rows[0].status).not.toBe('delivered')
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.payments WHERE order_id=$1',[row.orderId])).rows[0].n).toBe(1)
+  })
   for(const currentPath of ['kitchen-ready','pickup-take'] as const)it(`cash versus current ${currentPath} succeeds on the first attempt and replays once`,async()=>{
     const row=await item()
     const batch=await expectOk(await start([row],null,5,currentPath==='kitchen-ready'?'start':'quick-ready'))

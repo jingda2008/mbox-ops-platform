@@ -268,6 +268,7 @@ export class PostgresCashierWorkbenchQuery {
       await transaction.query('SET LOCAL jit = off')
       const reviewSchema=(await transaction.query<{present:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")).rows[0]?.present===true
       const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'
+      const tabReviewBasis=reviewSchema ? "CASE WHEN session.status='closed' AND orders.status='cancelled' AND orders.channel='staff_assisted' AND orders.settlement_mode='table_tab' THEN mbox.carryover_tab_review_basis(orders.tenant_id,orders.store_id,orders.id) END" : 'NULL::jsonb'
       const orderQuery = `
         WITH ${orderCollectionBalancesCtesSql}, cashier_recent_captured_orders AS MATERIALIZED (
           -- Read the shared payment facts once. Repeating this union for every
@@ -290,7 +291,7 @@ export class PostgresCashierWorkbenchQuery {
           area.id AS area_id,area.name AS area_name,
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
-          ${reviewSchema ? "CASE WHEN session.status='closed' AND orders.status='cancelled' AND orders.channel='staff_assisted' AND orders.settlement_mode='table_tab' THEN mbox.carryover_tab_review_basis(orders.tenant_id,orders.store_id,orders.id) END" : 'NULL::jsonb'} AS tab_review_basis,
+          ${tabReviewBasis} AS tab_review_basis,
           ${pendingReview} AS tab_review_pending,
           ${reviewSchema ? "(SELECT jsonb_build_object('amountMinor',decision.amount_minor,'reason',decision.reason,'createdAt',decision.created_at) FROM mbox.order_carryover_review_decisions decision WHERE (decision.tenant_id,decision.store_id,decision.order_id)=(orders.tenant_id,orders.store_id,orders.id))" : 'NULL::jsonb'} AS tab_review_decision,
           count(*) OVER()::text AS matched_count,sum(orders.amount) OVER()::text AS matched_due_minor,
@@ -438,7 +439,7 @@ export class PostgresCashierWorkbenchQuery {
           AND ($8::uuid IS NULL OR area.id=$8::uuid)
           AND (
             $9::text IS NULL
-            OR ($9='unpaid' AND ${bulkOrderNeedsCollectionSql('orders')})
+            OR ($9='unpaid' AND (${bulkOrderNeedsCollectionSql('orders')} OR ${pendingReview} OR (${tabReviewBasis}) IS NOT NULL))
             OR ($9='processing' AND EXISTS (SELECT 1 FROM mbox.order_payment_facts filter_payment
                 WHERE filter_payment.tenant_id=orders.tenant_id AND filter_payment.store_id=orders.store_id
                   AND filter_payment.order_id=orders.id AND filter_payment.status IN ('created','pending')

@@ -17,6 +17,10 @@ export class CashierMutationCoordinator {
   private readonly pending = new Map<string, Omit<CashierMutationAttempt, 'signature'>>()
   private readonly flights = new Map<string, Promise<unknown>>()
 
+  hasPending(): boolean {
+    return this.pending.size > 0 || this.flights.size > 0
+  }
+
   prepare(action: string, body: unknown): CashierMutationAttempt {
     const signature = mutationSignature(action, body)
     const attempt = this.pending.get(signature) ?? {

@@ -206,8 +206,10 @@ implements PaymentCapabilityAuthorizationPort {
       if (error instanceof EmployeeTableAccessDeniedError) {
         if (input.allowClosedDebtRecovery) {
           const recovery=await lockClosedDebtRecovery(input.transaction,input.orderId)
-          if(recovery?.carryover){
-            await this.assertEmployeeCapability({...input,capability:'payment.history.collect'})
+          if(recovery?.carryover || (await input.transaction.query<{eligible:boolean}>(
+            'SELECT mbox.carryover_tab_review_basis($1,$2,$3) IS NOT NULL AS eligible',
+            [input.transaction.scope.tenantId,input.transaction.scope.storeId,input.orderId])).rows[0]?.eligible){
+            await assertCarryoverCollectionScope(input.transaction,input.employeeId,input.orderId)
             return
           }
           if(recovery?.hasPreCloseObligation){
@@ -463,4 +465,11 @@ function toSafeMinor(value: string | number): number {
     throw new PaymentAuthorizationError('Financial authorization amount is invalid')
   }
   return parsed
+}
+
+export async function assertCarryoverCollectionScope(transaction: ScopedTransaction,employeeId:string,orderId:string):Promise<void>{
+  const result=await transaction.query<{allowed:boolean}>(
+    'SELECT mbox.employee_can_collect_carryover($1,$2,$3,$4) AS allowed',
+    [transaction.scope.tenantId,transaction.scope.storeId,employeeId,orderId])
+  if(result.rows[0]?.allowed!==true)throw new PaymentAuthorizationError('Employee is not responsible for the order collection')
 }

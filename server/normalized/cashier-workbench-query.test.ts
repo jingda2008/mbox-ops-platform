@@ -820,8 +820,8 @@ class QueryRunner {
       query: async <Row extends Record<string, unknown>>(text: string, values: readonly unknown[] = []) => {
         if (text === 'SET LOCAL jit = off') return {rows:[] as Row[],rowCount:null}
         // Schema capability discovery is independent of the ordered domain rows below.
-        if (text === "SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present") {
-          return {rows:[{present:true}] as unknown as Row[],rowCount:1}
+        if (text.startsWith("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")) {
+          return {rows:[{present:true,direct:true}] as unknown as Row[],rowCount:1}
         }
         this.calls.push({ sql: text.replace(/\s+/g, ' ').trim(), values })
         const rows = this.resultSets.shift() ?? []

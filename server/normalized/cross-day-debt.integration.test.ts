@@ -18,7 +18,7 @@ import {PaymentRepository} from './payment-repository.js'
 const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
 ;(url&&runtimeUrl?describe:describe.skip)('cross-day ordinary debt, restricted runtime LOGIN',()=>{
   let pool:Pool,runtime:Pool,runner:ScopedPostgresTransactionRunner,money:PaymentCommandService,date:string,yesterday:string
-  const scope={tenantId:randomUUID(),storeId:randomUUID()},area=randomUUID(),product=randomUUID(),cashier=randomUUID(),other=randomUUID()
+  const scope={tenantId:randomUUID(),storeId:randomUUID()},area=randomUUID(),product=randomUUID(),cashier=randomUUID(),other=randomUUID(),directCollector=randomUUID()
   const capabilities=['payment.history.collect','payment.initiate.staff','payment.manual.cash.record','payment.manual.pos.record','payment.manual.external.record','reconciliation.view']
   beforeAll(async()=>{
     await runNormalizedMigrations(url!)
@@ -32,12 +32,12 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await pool.query("INSERT INTO mbox.store_automatic_table_turnover_policies(tenant_id,store_id,enabled) VALUES($1,$2,true)",[scope.tenantId,scope.storeId])
     await pool.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($1,$2,$3,'A','A','indoor')",[area,scope.tenantId,scope.storeId])
     await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) VALUES($1,$2,$3,'DEBT','fixture','drink','none')",[product,scope.tenantId,scope.storeId])
-    for(const employeeId of [cashier,other]){
+    for(const employeeId of [cashier,other,directCollector]){
       await pool.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)',[employeeId,scope.tenantId,scope.storeId,employeeId])
       const role=randomUUID()
       await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,'fixture')",[role,scope.tenantId,scope.storeId,`D_${role.replaceAll('-','').toUpperCase()}`])
       await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[scope.tenantId,scope.storeId,employeeId,role])
-      for(const code of employeeId===cashier?capabilities:['payment.initiate.staff','payment.manual.cash.record']){
+      for(const code of employeeId===cashier?capabilities:employeeId===directCollector?['payment.collect.all_tables','payment.initiate.staff','payment.manual.cash.record']:['payment.initiate.staff','payment.manual.cash.record']){
         const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'finance') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[scope.tenantId,scope.storeId,code])).rows[0].id
         await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[scope.tenantId,scope.storeId,role,permission])
       }
@@ -67,10 +67,59 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   it('retains unfulfilled staff tabs for review without turning the quoted amount into a collectible debt',async()=>{
     const f=await fixture({delivered:false})
     const row=(await view(f.order,{collectionScope:'unsettled'})).orders[0]!
+    for(const collectionScope of ['workbench','unsettled','history'] as const){
+      const filtered=await view(f.order,{collectionScope,paymentState:'unpaid'})
+      expect(filtered.orders.map(order=>order.id)).toContain(f.order)
+      expect(filtered.pagination?.totalOutstandingMinor).toBe(0)
+    }
     expect(row).toMatchObject({outstandingAmountMinor:0,carryoverReview:{canConfirm:true,basis:{maximumAmountMinor:10000}}})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
     await expect(money.recordManual(cash(f.order,10000))).rejects.toThrow()
     await expect(online(f.order,10000)).rejects.toThrow()
+  })
+  it('collects an unfulfilled cross-day tab directly with ordinary collection permissions and one atomic receipt',async()=>{
+    const f=await fixture({delivered:false}),basis=(await reviewCommand(f.order,10000)).basis
+    const before=(await pool.query('SELECT to_jsonb(i) row FROM mbox.order_items i WHERE order_id=$1',[f.order])).rows
+    const reader=new PostgresCashierWorkbenchQuery(runner)
+    const directView=()=>reader.get({scope,employeeId:directCollector,businessDate:date,capabilities:['payment.collect.all_tables','payment.initiate.staff','payment.manual.cash.record'],query:f.order,limit:50,collectionScope:'history',paymentState:'unpaid'})
+    expect((await directView()).orders[0]?.carryoverReview).toMatchObject({canConfirm:false,canCollect:true})
+    const input={...cash(f.order,10000,4000,directCollector),carryoverCollection:{basis,receivableMinor:10000}}
+    const receipt=await money.recordManual(input)
+    expect(receipt.value.amountMinor).toBe(4000)
+    expect((await money.recordManual(input)).replayed).toBe(true)
+    expect((await directView()).orders[0]).toMatchObject({outstandingAmountMinor:6000,closedDebtRecovery:{status:'available'}})
+    await money.recordManual(cash(f.order,6000,6000,directCollector))
+    expect((await money.recordManual(input)).replayed).toBe(true)
+    expect((await view(f.order)).orders[0]).toMatchObject({paymentStatus:'paid',tableSessionStatus:'closed'})
+    expect((await pool.query('SELECT to_jsonb(i) row FROM mbox.order_items i WHERE order_id=$1',[f.order])).rows).toEqual(before)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_review_decisions WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.payments WHERE order_id=$1',[f.order])).rows[0].n).toBe(2)
+  })
+  it('initiates online payment directly without recording receipt or restarting cancelled fulfillment',async()=>{
+    const f=await fixture({delivered:false}),basis=(await reviewCommand(f.order,10000)).basis
+    const input={...meta(directCollector),orderId:f.order,expectedOutstandingMinor:10000,amountMinor:4000,
+      carryoverCollection:{basis,receivableMinor:10000},publicId:randomUUID(),provider:'postar' as const,method:'native_qr' as const,principal:{type:'employee' as const,employeeId:directCollector}}
+    const receipt=await money.initiate(input)
+    expect(receipt.value.status).toBe('pending')
+    expect((await money.initiate(input)).replayed).toBe(true)
+    expect((await view(f.order)).orders[0]).toMatchObject({status:'cancelled',tableSessionStatus:'closed',outstandingAmountMinor:10000,paymentStatus:'unpaid'})
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.reconciliation_entries WHERE payment_id=$1',[receipt.value.id])).rows[0].n).toBe(0)
+  })
+  it('rolls back direct receivables when amount, snapshot or collection scope is invalid',async()=>{
+    for(const invalid of ['amount','receivable','snapshot','scope'] as const){
+      const f=await fixture({delivered:false}),basis=(await reviewCommand(f.order,10000)).basis
+      const input={...cash(f.order,10000,invalid==='amount'?10001:4000,invalid==='scope'?other:directCollector),
+        carryoverCollection:{basis:invalid==='snapshot'?{...basis,maximumAmountMinor:9999}:basis,receivableMinor:invalid==='receivable'?9000:10000}}
+      await expect(money.recordManual(input)).rejects.toThrow()
+      expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_debts WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
+      expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_review_decisions WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
+    }
+  })
+  it('serializes competing direct collection attempts without duplicate debt or overcollection',async()=>{
+    const f=await fixture({delivered:false}),basis=(await reviewCommand(f.order,10000)).basis
+    const results=await Promise.allSettled([1,2].map(()=>money.recordManual({...cash(f.order,10000,10000,directCollector),carryoverCollection:{basis,receivableMinor:10000}})))
+    expect(results.filter(result=>result.status==='fulfilled')).toHaveLength(1)
+    expect((await pool.query('SELECT count(*)::int n FROM mbox.payments WHERE order_id=$1',[f.order])).rows[0].n).toBe(1)
   })
   it('confirms a reviewed amount, recovers the exact receipt, then collects it without replaying fulfillment',async()=>{
     const f=await fixture({delivered:false}),input=await reviewCommand(f.order,6800)
@@ -137,7 +186,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await pool.query('ALTER TABLE mbox.order_carryover_reviews DISABLE TRIGGER carryover_review_immutable')
     try {await pool.query('DELETE FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])}
     finally {await pool.query('ALTER TABLE mbox.order_carryover_reviews ENABLE TRIGGER carryover_review_immutable')}
-    expect((await view(f.order,{collectionScope:'history'})).orders[0]?.carryoverReview?.canConfirm).toBe(true)
+    expect((await view(f.order,{collectionScope:'history',paymentState:'unpaid'})).orders[0]?.carryoverReview?.canConfirm).toBe(true)
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_carryover_reviews WHERE order_id=$1',[f.order])).rows[0].n).toBe(0)
     await money.confirmCarryoverReview(await reviewCommand(f.order,10000))
     expect((await view(f.order)).orders[0]?.outstandingAmountMinor).toBe(10000)
@@ -207,7 +256,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     expect((await view(f.order)).orders[0]).toMatchObject({outstandingAmountMinor:0,overCollectedAmountMinor:10000})
     expect((await pool.query("SELECT signal FROM mbox.payment_financial_monitoring_signals WHERE subject_id=$1 AND signal='order_overcollected'",[f.order])).rows).toHaveLength(1)
   })
-  it('does not grant collection through a former/current table assignment or another store',async()=>{
+  it('rejects an unscoped collector or another store',async()=>{
     const f=await fixture()
     await expect(money.recordManual(cash(f.order,10000,undefined,other))).rejects.toThrow()
     await expect(money.recordManual({...cash(f.order,10000),scope:{tenantId:scope.tenantId,storeId:randomUUID()}})).rejects.toThrow()
@@ -277,15 +326,18 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await money.recordManual(cash(f.order,7000))
     expect((await view(f.order)).orders[0]?.outstandingAmountMinor).toBe(0)
   })
-  it('creates and replays a provider QR from original debt after the product is no longer for sale',async()=>{
-    const f=await fixture(),payment=await online(f.order,10000),calls:unknown[]=[]
+  it.each([false,true])('creates and replays a provider QR with ordinary collection scope, direct unprepared tab=%s',async direct=>{
+    const f=await fixture({delivered:!direct}),basis=direct?(await reviewCommand(f.order,10000)).basis:null
+    const payment=(await money.initiate({...meta(directCollector),orderId:f.order,expectedOutstandingMinor:10000,
+      ...(basis?{carryoverCollection:{basis,receivableMinor:10000}}:{}),publicId:randomUUID(),provider:'postar',method:'native_qr',principal:{type:'employee',employeeId:directCollector}})).value
+    const calls:unknown[]=[]
     const unavailable=async()=>{throw new Error('Unexpected provider operation')}
     const config={provider:'postar' as const,environment:'test' as const,agencyId:'SYNTHETIC',merchantId:'SYNTHETIC',publicKey:'synthetic-unused-with-adapter',callbackUrl:'https://example.test/unused',timeoutMs:1000,wechat:null}
     const service=new OnlinePaymentService(runner,'local-cross-day-debt-provider-secret',config,{
       createPayment:async request=>{calls.push(request);return {paymentIntentId:request.paymentIntentId,providerTransactionId:null,status:'processing',amount:request.amount,currency:request.currency,merchantId:'SYNTHETIC',occurredAt:new Date().toISOString(),paymentPayload:{code_url:'https://example.test/synthetic-qr'}}},
       queryPayment:unavailable,closePayment:unavailable,requestRefund:unavailable,queryRefund:unavailable,
     })
-    const input={scope,paymentId:payment.id,principal:{type:'employee' as const,employeeId:cashier},clientIp:'127.0.0.1',operatorId:cashier,idempotencyKey:randomUUID()}
+    const input={scope,paymentId:payment.id,principal:{type:'employee' as const,employeeId:directCollector},clientIp:'127.0.0.1',operatorId:directCollector,idempotencyKey:randomUUID()}
     // No product price exists in this fixture: it is an original consumed debt,
     // not a fresh sale. The adapter is entirely in-process, with no network I/O.
     expect(await service.create(input)).toMatchObject({paymentId:payment.id,presentation:'qr',status:'pending'})
@@ -315,7 +367,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     for(const mutation of ["payment_status='paid'","total_amount_minor=1","currency='USD'","status='submitted'","table_session_id=NULL"])
       await expect(runner.run(scope,tx=>tx.query(`UPDATE mbox.orders SET ${mutation} WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[scope.tenantId,scope.storeId,f.order]))).rejects.toThrow()
   })
-  it('denies creation of provider actions by a collector without the historical permission',async()=>{
+  it('denies creation of provider actions by an unscoped collector',async()=>{
     const f=await fixture(),payment=await online(f.order,10000),service=new OnlinePaymentService(runner,'local-cross-day-debt-provider-secret',null)
     await expect(service.create({scope,paymentId:payment.id,principal:{type:'employee',employeeId:other},clientIp:'127.0.0.1',operatorId:other,idempotencyKey:randomUUID()})).rejects.toThrow()
     expect((await pool.query('SELECT * FROM mbox.payment_provider_actions WHERE payment_id=$1',[payment.id])).rows).toHaveLength(0)

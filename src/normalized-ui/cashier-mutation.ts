@@ -17,7 +17,18 @@ export class CashierMutationCoordinator {
   private readonly pending = new Map<string, Omit<CashierMutationAttempt, 'signature'>>()
   private readonly flights = new Map<string, Promise<unknown>>()
 
+  hasPending(): boolean {
+    return this.pending.size > 0 || this.flights.size > 0
+  }
+
   prepare(action: string, body: unknown): CashierMutationAttempt {
+    // A read refresh may replace the original carryover basis with a remaining
+    // balance after the server committed but the response was lost. Recover
+    // that original collection, never turn the refreshed body into a second receipt.
+    if(action.startsWith('manual-payment-')||action.startsWith('cashier-online-payment-')){
+      const original=[...this.pending.entries()].find(([signature])=>signature.startsWith(`${action}:`))
+      if(original)return {signature:original[0],...original[1]}
+    }
     const signature = mutationSignature(action, body)
     const attempt = this.pending.get(signature) ?? {
       idempotencyKey: createIdempotencyKey(action),

@@ -22,6 +22,23 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const otherEmployeeId = '44444444-4444-4444-8444-444444444444'
 
 describe('CashierAfterSalesWorkbenchView', () => {
+  it.each(['pending','accepted','preparing'] as const)('offers collection before production finishes: %s',status=>{
+    const view=workbench([])
+    Object.assign(view.orders[0]!,{paymentStatus:'unpaid',outstandingAmountMinor:6800,tableSessionStatus:'open'})
+    view.orders[0]!.items[0]!.status='submitted'
+    view.orders[0]!.kdsTasks=[{id:'unfinished-task',orderItemId:'item-1',stationCode:'bar',status,quantity:1,succeededRefundAmountMinor:0}]
+    const html=render(view)
+    for(const label of ['出示付款二维码','扫顾客付款码','登记现金收款','登记实体POS收款'])expect(html).toContain(label)
+  })
+  it('explains unavailable collection methods instead of hiding the unpaid collection panel',()=>{
+    const view=workbench([])
+    Object.assign(view.orders[0]!,{paymentStatus:'unpaid',outstandingAmountMinor:6800,tableSessionStatus:'open'})
+    Object.assign(view.actions,{canInitiateOnlinePayment:false,canRecordManualCash:false,canRecordManualPos:false,canRecordManualExternal:false})
+    const html=render(view)
+    expect(html).toContain('收款方式暂不可用')
+    expect(html).toContain('无需先完成制作')
+    expect(html).not.toContain('登记现金收款')
+  })
   it.each([true,false])('separates a pending staff tab review from collectible debt, with confirmation permission %s',canConfirm=>{
     const view=closedDebtWorkbench('ineligible')
     Object.assign(view.orders[0]!,{status:'cancelled',outstandingAmountMinor:0,carryoverReview:{canConfirm,basis:{
@@ -538,9 +555,11 @@ describe('CashierAfterSalesWorkbenchView', () => {
 
   it('reuses the exact key and body after an uncertain failure', () => {
     const coordinator = new CashierMutationCoordinator()
+    expect(coordinator.hasPending()).toBe(false)
     const firstBody = { succeeded: true, receiptReference: 'POS-1001', occurredAt: '2026-08-13T12:00:00.000Z' }
     const first = coordinator.prepare('refund-manual-success-refund-1', firstBody)
     coordinator.fail(first.signature, true)
+    expect(coordinator.hasPending()).toBe(true)
 
     const retry = coordinator.prepare('refund-manual-success-refund-1', {
       ...firstBody,
@@ -550,11 +569,24 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(retry.body).toEqual(firstBody)
 
     coordinator.complete(retry.signature)
+    expect(coordinator.hasPending()).toBe(false)
     const nextOperation = coordinator.prepare('refund-manual-success-refund-1', {
       ...firstBody,
       occurredAt: '2026-08-13T12:00:20.000Z',
     })
     expect(nextOperation.idempotencyKey).not.toBe(first.idempotencyKey)
+  })
+
+  it.each(['manual-payment-cash-order-1','cashier-online-payment-native_qr-order-1'])('recovers the original collection after refreshed debt changes the request body: %s',action=>{
+    const coordinator=new CashierMutationCoordinator()
+    const original={orderId:'order-1',expectedOutstandingMinor:6800,amountMinor:2000,carryoverCollection:{receivableMinor:6800,basis:{orderId:'order-1'}}}
+    const first=coordinator.prepare(action,original)
+    const refreshed={orderId:'order-1',expectedOutstandingMinor:4800,amountMinor:2000}
+    const retry=coordinator.prepare(action,refreshed)
+    expect(retry).toEqual(first)
+    expect(retry.body).toEqual(original)
+    coordinator.complete(retry.signature)
+    expect(coordinator.prepare(action,refreshed).idempotencyKey).not.toBe(first.idempotencyKey)
   })
 
   it('does not reuse an idempotency key after a definite rejection', () => {

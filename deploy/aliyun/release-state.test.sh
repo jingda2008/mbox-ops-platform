@@ -45,3 +45,5 @@ test "$(release_contract_boundary_between 298 299)" = 0
 test "$(release_contract_boundary_between 300 304)" = 304
 test "$(release_contract_boundary_between 303 304)" = 304
 test "$(release_contract_boundary_between 304 304)" = 0
+test "$(release_contract_boundary_between 304 305)" = 305
+test "$(release_contract_boundary_between 305 305)" = 0

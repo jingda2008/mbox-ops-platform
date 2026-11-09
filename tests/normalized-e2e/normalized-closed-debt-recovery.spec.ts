@@ -229,3 +229,45 @@ test('whole historical batch confirmation displays total and every original orde
   expect(requests[0]!.body).toEqual({ reason: '核对全部原订单，整笔付款从未外送' })
   expect(requests[0]!.key).toMatch(/^cashier:payment-close-unpresented-history-original-pending-payment:/)
 })
+
+test('offers a page update without dropping an unresolved collection attempt',async({page})=>{
+  await login(page)
+  let documents=0,state:RecoveryStatus='available',lost=true
+  const keys:string[]=[]
+  const oldSha='a'.repeat(40),newSha='b'.repeat(40)
+  await page.route('**/staff/payments',async route=>{
+    if(route.request().resourceType()==='document'){
+      documents++
+      const response=await route.fetch()
+      return route.fulfill({response,body:(await response.text()).replace(/(<meta name="mbox-build-commit" content=")[^"]+/,`$1${documents===1?oldSha:newSha}`)})
+    }
+    return route.fulfill({contentType:'text/html',body:`<html><head><meta name="mbox-build-commit" content="${newSha}"></head></html>`})
+  })
+  await page.route('**/api/payments/workbench?*',route=>route.fulfill({json:{data:workbench(state)}}))
+  await page.route('**/api/payments/manual',async route=>{
+    keys.push(route.request().headers()['idempotency-key'])
+    if(lost){lost=false;return route.abort('failed')}
+    state='settled'
+    return route.fulfill({status:201,json:{data:{},meta:{replayed:true}}})
+  })
+  await page.goto('/staff/payments')
+  const banner=page.getByLabel('收银页面更新'),update=banner.getByRole('button',{name:'更新收银页面'})
+  await expect(update).toBeEnabled()
+  expect(documents).toBe(1)
+  const card=page.locator('[data-cashier-order-id="closed-debt-order"]')
+  await card.getByRole('button',{name:'查看补收入口',exact:true}).click()
+  await card.getByRole('button',{name:'登记现金收款',exact:true}).click()
+  await card.getByRole('button',{name:'核对并继续',exact:true}).click()
+  await card.getByRole('button',{name:'确认已收到现金',exact:true}).click()
+  await expect(banner).toContainText('结果待核对')
+  await expect(update).toBeDisabled()
+  expect(documents).toBe(1)
+  await card.getByRole('button',{name:'确认已收到现金',exact:true}).click()
+  await expect(update).toBeEnabled()
+  expect(keys).toHaveLength(2)
+  expect(keys[0]).toBe(keys[1])
+  await update.click()
+  await expect(page.locator('meta[name="mbox-build-commit"]')).toHaveAttribute('content',newSha)
+  await expect(banner).toHaveCount(0)
+  expect(documents).toBe(2)
+})

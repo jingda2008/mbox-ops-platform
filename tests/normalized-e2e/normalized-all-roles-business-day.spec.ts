@@ -319,7 +319,7 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   const pendingOrder = cashier.page.locator('.cashier-order').filter({ has: cashier.page.getByText('W1', { exact: true }) }).first()
   await expect(pendingOrder).toBeVisible()
   await expect(pendingOrder).toContainText('未支付')
-  await pendingOrder.getByRole('button').click()
+  await pendingOrder.locator('.cashier-order-toggle').click()
   await expect(pendingOrder).toContainText('不能申请退款')
   await expect(pendingOrder.getByRole('button', { name: /申请退款/ })).toHaveCount(0)
   await cashier.context.close()

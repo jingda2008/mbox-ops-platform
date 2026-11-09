@@ -43,6 +43,7 @@ export interface CashierWorkbenchQueryInput {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  carryover_collection_allowed?:boolean
   tab_review_basis?:NonNullable<CashierWorkbenchOrder['carryoverReview']>['basis']
   tab_review_pending?:boolean
   tab_review_decision?:CashierWorkbenchOrder['carryoverReviewDecision']
@@ -266,7 +267,9 @@ export class PostgresCashierWorkbenchQuery {
       // JIT's cost threshold, spending seconds compiling a millisecond query.
       // SET LOCAL restores pooled connections on both commit and rollback.
       await transaction.query('SET LOCAL jit = off')
-      const reviewSchema=(await transaction.query<{present:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")).rows[0]?.present===true
+      const schema=(await transaction.query<{present:boolean;direct:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct")).rows[0]
+      const reviewSchema=schema?.present===true
+      const directCollectionSchema=schema?.direct===true
       const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'
       const tabReviewBasis=reviewSchema ? "CASE WHEN session.status='closed' AND orders.status='cancelled' AND orders.channel='staff_assisted' AND orders.settlement_mode='table_tab' THEN mbox.carryover_tab_review_basis(orders.tenant_id,orders.store_id,orders.id) END" : 'NULL::jsonb'
       const orderQuery = `
@@ -292,6 +295,7 @@ export class PostgresCashierWorkbenchQuery {
           session.id AS table_session_id, session.status AS table_session_status,
           orders.channel, orders.status, orders.payment_status,
           ${tabReviewBasis} AS tab_review_basis,
+          ${directCollectionSchema?"CASE WHEN session.status='closed' THEN mbox.employee_can_collect_carryover(orders.tenant_id,orders.store_id,$6::uuid,orders.id) ELSE false END":'NULL::boolean'} AS carryover_collection_allowed,
           ${pendingReview} AS tab_review_pending,
           ${reviewSchema ? "(SELECT jsonb_build_object('amountMinor',decision.amount_minor,'reason',decision.reason,'createdAt',decision.created_at) FROM mbox.order_carryover_review_decisions decision WHERE (decision.tenant_id,decision.store_id,decision.order_id)=(orders.tenant_id,orders.store_id,orders.id))" : 'NULL::jsonb'} AS tab_review_decision,
           count(*) OVER()::text AS matched_count,sum(orders.amount) OVER()::text AS matched_due_minor,
@@ -388,7 +392,7 @@ export class PostgresCashierWorkbenchQuery {
               AND workbench_employee.status='active'
               AND (
                 $7::boolean
-                OR ($12::boolean AND ${carryoverDebtSql('orders')})
+                OR ($12::boolean AND (${carryoverDebtSql('orders')} OR (${tabReviewBasis}) IS NOT NULL))
                 OR EXISTS (
                   SELECT 1 FROM mbox.table_assignments AS workbench_assignment
                   WHERE workbench_assignment.tenant_id=session.tenant_id
@@ -920,6 +924,7 @@ function assembleView(
     return {
       id: order.id,
       ...(order.tab_review_basis || order.tab_review_pending ? {carryoverReview:{basis:order.tab_review_basis??null,
+        canCollect:!!order.tab_review_basis&&order.carryover_collection_allowed===true,
         canConfirm:!!order.tab_review_basis && ['payment.history.collect','reconciliation.view'].every(code=>input.capabilities.includes(code))}} : {}),
       ...(order.tab_review_decision?{carryoverReviewDecision:order.tab_review_decision}:{}),
       ...(Number(order.coupon_refund_review_count)>0?{couponRefundReviewCount:Number(order.coupon_refund_review_count)}:{}),
@@ -931,7 +936,7 @@ function assembleView(
       tableSessionStatus: order.table_session_status,
       ...(order.table_session_status==='closed'?{closedDebtRecovery:{
         ...(order.carryover_debt?{kind:'consumption' as const,reviewReason:order.carryover_debt.reviewReason}:{}),
-        status:order.carryover_debt?(Number(order.persistent_due_minor)<=0?'settled':order.carryover_debt.eligibility!=='confirmed'?'ineligible':!input.capabilities.includes('payment.history.collect')?'permission_required':'available'):!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
+        status:order.carryover_debt?(Number(order.persistent_due_minor)<=0?'settled':order.carryover_debt.eligibility!=='confirmed'?'ineligible':!(order.carryover_collection_allowed??input.capabilities.includes('payment.history.collect'))?'permission_required':'available'):!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
           (order.closed_debt_pending_payment_ids?.length??0)>0?'pending_payment':
           !['payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?'permission_required':
           recollectionByOrder.has(order.id)?'available':'authorization_required',

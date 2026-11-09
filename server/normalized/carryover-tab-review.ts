@@ -29,3 +29,25 @@ export function pendingTabReviewSql(order:string):string {
     AND NOT EXISTS(SELECT 1 FROM mbox.order_carryover_review_decisions decision
       WHERE (decision.tenant_id,decision.store_id,decision.order_id)=(review.tenant_id,review.store_id,review.order_id)))`
 }
+
+export interface DirectCarryoverCollection {
+  basis: JsonObject
+  receivableMinor: number
+}
+
+/** Runs only in the payment mutation, so a failed receipt rolls back the debt too. */
+export async function prepareDirectCarryoverCollection(tx: ScopedTransaction, input: Readonly<{
+  orderId: string; employeeId: string; provider: string; collection: DirectCarryoverCollection
+}>): Promise<void> {
+  const {receivableMinor,basis}=input.collection
+  if(!Number.isSafeInteger(receivableMinor)||receivableMinor<=0)throw new RecollectionAuthorizationConflictError('收款原单金额无效')
+  try {
+    await tx.query('SELECT mbox.prepare_carryover_collection($1,$2,$3,$4,$5,$6::jsonb,$7,$8)',
+      [tx.scope.tenantId,tx.scope.storeId,input.orderId,input.employeeId,receivableMinor,JSON.stringify(basis),
+        '员工直接发起收款，按所展示原单金额建立应收；制作及桌次状态保持',input.provider])
+  } catch(error) {
+    if(error&&typeof error==='object'&&'code' in error&&['55000','23505','42501'].includes(String(error.code)))
+      throw new RecollectionAuthorizationConflictError('原单金额或收款状态已变化，请刷新后发起收款')
+    throw error
+  }
+}

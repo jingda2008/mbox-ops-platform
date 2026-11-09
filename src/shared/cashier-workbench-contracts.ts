@@ -182,7 +182,7 @@ export interface CarryoverTabReviewBasis {
 }
 
 export interface CashierWorkbenchOrder {
-  carryoverReview?: {basis:CarryoverTabReviewBasis|null;canConfirm:boolean}
+  carryoverReview?: {basis:CarryoverTabReviewBasis|null;canConfirm:boolean;canCollect?:boolean}
   carryoverReviewDecision?: {amountMinor:number;reason:string;createdAt:string}
 
   points?:{used:number;restored:number;credited:number;state:'held'|'consumed'|'released'}

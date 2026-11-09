@@ -98,6 +98,8 @@ release_state_transition_allowed() {
 # 300 preserves closed consumption debt: old writers use original totals and
 # cannot safely project partial carried-over receipts or refunds.
 # 301 preserves reviewed unfulfilled tabs, 302 changes effective minimum after
+# 305 allows ordinary scoped collectors to collect closed tabs atomically;
+# older writers must not resume after this new financial contract.
 # transfer, 303 links staff receipts to original orders, and 304 reserves guest
 # credit and excludes unresolved original funds from new cross-day collection.
 # Old writers must never resume after these contracts have accepted new facts.
@@ -105,7 +107,7 @@ release_contract_boundary_between() {
   local from_schema=$1 to_schema=$2 boundary result=0
   [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
-  for boundary in 96 275 300 301 302 303 304; do
+  for boundary in 96 275 300 301 302 303 304 305; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

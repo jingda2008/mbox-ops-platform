@@ -81,6 +81,7 @@ interface KdsCancellationDraft {
 }
 
 interface CashierOnlinePaymentInput {
+  carryoverCollection?: {basis: NonNullable<CashierWorkbenchOrder['carryoverReview']>['basis'];receivableMinor:number}
   expectedOutstandingMinor?:number
   amountMinor?:number
   orderId: string
@@ -677,17 +678,17 @@ export function CashierAfterSalesWorkbenchView({
                 onClick={() => setExpandedOrderId(expanded ? null : order.id)}
               >
                 <span><b>{order.tableCode}</b><small>{order.carryover ? `${order.businessDate ?? '前一营业日'}遗留 · ` : ''}{shortReference(order.publicId)} · {formatTime(order.submittedAt ?? order.createdAt)}</small></span>
-                <span><strong>{cancelledWithoutCollection || order.carryoverReview ? '原单 ¥' : '¥'}{formatAmount(cancelledWithoutCollection || order.carryoverReview ? order.originalAmountMinor ?? order.totalAmountMinor : order.totalAmountMinor)}</strong>{cancelledWithoutCollection && <small>当前可收 ¥0.00</small>}<em>{order.carryoverReview ? '挂账待核对' : cancelledWithoutCollection ? '已取消 · 未收款' : order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{order.points&&<small>积分{order.points.state==='held'?'占用':'抵扣'} {order.points.used} 分 / ¥{formatAmount(order.points.used*100)}；已返 {order.points.credited} 分{order.points.restored>order.points.credited?`，${order.points.restored-order.points.credited} 分原批次已过期`:''}。不计入现金实收。</small>}{(order.receivableIncreaseMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 套餐按单点价补差 ¥{formatAmount(order.receivableIncreaseMinor!)}</small>}{(order.stoppedAmountMinor??0)>0&&!order.carryoverReviewDecision&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 已停止减免 ¥{formatAmount(order.stoppedAmountMinor!)}</small>}{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
+                <span><strong>{cancelledWithoutCollection || order.carryoverReview ? '原单 ¥' : '¥'}{formatAmount(cancelledWithoutCollection || order.carryoverReview ? order.originalAmountMinor ?? order.totalAmountMinor : order.totalAmountMinor)}</strong>{cancelledWithoutCollection && <small>当前可收 ¥0.00</small>}<em>{order.carryoverReview ? (order.carryoverReview.canCollect?'未支付':'挂账待核对') : cancelledWithoutCollection ? '已取消 · 未收款' : order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{order.points&&<small>积分{order.points.state==='held'?'占用':'抵扣'} {order.points.used} 分 / ¥{formatAmount(order.points.used*100)}；已返 {order.points.credited} 分{order.points.restored>order.points.credited?`，${order.points.restored-order.points.credited} 分原批次已过期`:''}。不计入现金实收。</small>}{(order.receivableIncreaseMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 套餐按单点价补差 ¥{formatAmount(order.receivableIncreaseMinor!)}</small>}{(order.stoppedAmountMinor??0)>0&&!order.carryoverReviewDecision&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 已停止减免 ¥{formatAmount(order.stoppedAmountMinor!)}</small>}{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
               {(order.carryoverReview||order.outstandingAmountMinor>0)&&<div className="cashier-action-row" style={{padding:'0 16px 12px'}}>
                 <button type="button" className="cashier-primary-action" disabled={busyKey!==null}
-                  onClick={()=>setExpandedOrderId(order.id)}>{order.carryoverReview?'核对后收款':order.tableSessionStatus==='closed'?'查看补收入口':'收款'}</button>
-                <span>{order.carryoverReview?'跨日挂账需核对实际欠款，无需补做制作完成。':order.tableSessionStatus==='closed'?'按原单核对补收条件。':'可在制作完成前收款，出品进度保持独立。'}</span>
+                  onClick={()=>setExpandedOrderId(order.id)}>{order.carryoverReview?.canCollect?'收款':order.carryoverReview?'查看原单':order.tableSessionStatus==='closed'?'查看补收入口':'收款'}</button>
+                <span>{order.carryoverReview?(order.carryoverReview.canCollect?'可直接发起收款，无需先完成制作或单独核对。':'请查看原单金额和收款权限说明。'):order.tableSessionStatus==='closed'?'按原单核对补收条件。':'可在制作完成前收款，出品进度保持独立。'}</span>
               </div>}
               {expanded && <div className="cashier-order-detail">
                 {order.carryover && <p className="cashier-guidance">{order.carryoverReview
-                  ? '原挂桌账已跨营业日，当前处于待核对状态。请先确认是否存在实际欠款及金额，再发起收款。'
+                  ? (order.carryoverReview.canCollect?'原挂桌账已跨营业日。可直接按原单金额发起收款，款项按当前营业日入账；不会重开桌次或重新出品。':'原挂桌账已跨营业日，请查看下方金额记录与处理说明。')
                   : cancelledWithoutCollection
                   ? '这是原营业日的已取消订单，当前没有可补收余额；原单金额不代表仍需收款。若实际已消费或约定挂账，请交财务核对原单与履约记录。'
                   : order.tableSessionStatus === 'closed'
@@ -715,7 +716,6 @@ export function CashierAfterSalesWorkbenchView({
                 </section>
                 <section>
                   <h3>收款与退款</h3>
-                  <CarryoverTabReviewPanel key={`${order.id}:${JSON.stringify(order.carryoverReview?.basis)}`} order={order} busyKey={busyKey} onMutation={onMutation} />
                   {order.carryoverReviewDecision && <p className="cashier-guidance">挂账核对结果：{order.carryoverReviewDecision.amountMinor===0?'无欠款':`确认欠款 ¥${formatAmount(order.carryoverReviewDecision.amountMinor)}`}；依据：{order.carryoverReviewDecision.reason}。此记录不是付款凭证。</p>}
                   <ManualCollectionPanel
                     order={order}
@@ -724,9 +724,11 @@ export function CashierAfterSalesWorkbenchView({
                     onMutation={onMutation}
                     onCreateOnlinePayment={onCreateOnlinePayment}
                   />
+                  {order.carryoverReview&&!order.carryoverReview.canCollect&&<CarryoverTabReviewPanel order={order} busyKey={busyKey} onMutation={onMutation}/> }
+                  {order.carryoverReview?.canCollect&&order.carryoverReview.canConfirm && <details><summary>调整原单应收或记录无欠款（可选）</summary><CarryoverTabReviewPanel key={`${order.id}:${JSON.stringify(order.carryoverReview?.basis)}`} order={order} busyKey={busyKey} onMutation={onMutation} /></details>}
                   {order.payments.length === 0
                     ? <p className="cashier-guidance">{order.carryoverReview
-                      ? '本单没有支付记录；待核对完成后，按确认的欠款金额开放支付。'
+                      ? (order.carryoverReview.canCollect?'本单没有支付记录；可直接选择收款方式。发起线上支付不代表已经到账。':'本单没有支付记录，请查看上方原单金额和处理说明。')
                       : cancelledWithoutCollection
                       ? '本单没有支付记录，也没有保留可补收欠款，因此不能发起支付或退款。'
                       : '该订单尚无支付记录；只有实际收到现金或实体POS确认到账后才能登记，未收款不能申请退款。'}</p>
@@ -912,13 +914,16 @@ export function CashierAfterSalesWorkbenchView({
   </div>
 }
 
-function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOnlinePayment }: {
+function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutation, onCreateOnlinePayment }: {
   order: CashierWorkbenchOrder
   actions: CashierWorkbenchView['actions']
   busyKey: string | null
   onMutation(key: string, endpoint: string, body: unknown, successMessage: string): Promise<boolean>
   onCreateOnlinePayment?: (input: Readonly<CashierOnlinePaymentInput>) => Promise<OnlinePaymentAction | null>
 }) {
+  const directBasis=sourceOrder.carryoverReview?.canCollect?sourceOrder.carryoverReview.basis:null
+  const order:CashierWorkbenchOrder=directBasis?{...sourceOrder,outstandingAmountMinor:directBasis.maximumAmountMinor,
+    closedDebtRecovery:{...sourceOrder.closedDebtRecovery!,kind:'consumption',status:'available'}}:sourceOrder
   const [provider, setProvider] = useState<'cash' | 'physical_pos' | 'external_manual' | null>(null)
   const [receiptReference, setReceiptReference] = useState('')
   const [terminalId, setTerminalId] = useState('')
@@ -1019,6 +1024,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
     const action = await onCreateOnlinePayment({
       orderId: order.id,
       ...(consumptionDebt?{expectedOutstandingMinor:order.outstandingAmountMinor,amountMinor}:{}),
+      ...(directBasis?{carryoverCollection:{basis:directBasis,receivableMinor:directBasis.maximumAmountMinor}}:{}),
       provider: actions.onlinePaymentProvider,
       method,
       ...(customerAuthCode === undefined ? {} : { customerAuthCode }),
@@ -1043,6 +1049,7 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
       {
         orderId: order.id,
         ...(consumptionDebt?{expectedOutstandingMinor:order.outstandingAmountMinor,amountMinor}:{}),
+      ...(directBasis?{carryoverCollection:{basis:directBasis,receivableMinor:directBasis.maximumAmountMinor}}:{}),
         provider,
         method: provider === 'cash' ? 'cash' : provider === 'physical_pos' ? 'card' : 'manual',
         ...(provider === 'cash' ? {} : { receiptReference: receiptReference.trim() }),
@@ -1069,7 +1076,8 @@ function ManualCollectionPanel({ order, actions, busyKey, onMutation, onCreateOn
     && typeof onlineAction.payload?.qrCodeUrl === 'string' ? onlineAction.payload.qrCodeUrl : null
 
   return <div className="cashier-manual-collection">
-    <div><strong>{closedTableSession ? '已关桌订单补收' : '现场收款'}</strong><small>剩余应收 ¥{formatAmount(order.outstandingAmountMinor)}；{closedTableSession ? recoveryDescription : order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
+    <div><strong>{closedTableSession ? '已关桌订单补收' : '现场收款'}</strong><small>{directBasis?'按原单金额发起收款 ¥':'剩余应收 ¥'}{formatAmount(order.outstandingAmountMinor)}；{closedTableSession ? recoveryDescription : order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
+    {directBasis&&<p className="cashier-guidance">发起收款将按上方原单金额保留应收，可分次支付；无需先完成制作或核对流程。原订单商品及桌次状态保持。{directBasis.orderNote?`原单备注：${directBasis.orderNote}`:''}</p>}
     {consumptionDebt&&<label className="cashier-field"><span>本次收款金额（元，留空收取全部剩余欠款）</span><input inputMode="decimal" value={collectionAmount} placeholder={formatAmount(order.outstandingAmountMinor)} onChange={event=>{setCollectionAmount(event.target.value);setConfirmed(false);setOnlineAction(null)}}/>{!validAmount&&<small role="alert">请输入不超过剩余欠款的正数金额</small>}</label>}
     {(!closedTableSession||consumptionDebt) && onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">
       {qrValue !== null ? <><CashierPaymentQr value={qrValue} /><strong>请顾客扫码付款</strong><p>实际到账以渠道回传为准；长时间无结果时可保留本次待核对并重新收款。</p></>

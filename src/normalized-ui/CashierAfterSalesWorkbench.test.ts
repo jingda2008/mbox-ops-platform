@@ -577,6 +577,18 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(nextOperation.idempotencyKey).not.toBe(first.idempotencyKey)
   })
 
+  it.each(['manual-payment-cash-order-1','cashier-online-payment-native_qr-order-1'])('recovers the original collection after refreshed debt changes the request body: %s',action=>{
+    const coordinator=new CashierMutationCoordinator()
+    const original={orderId:'order-1',expectedOutstandingMinor:6800,amountMinor:2000,carryoverCollection:{receivableMinor:6800,basis:{orderId:'order-1'}}}
+    const first=coordinator.prepare(action,original)
+    const refreshed={orderId:'order-1',expectedOutstandingMinor:4800,amountMinor:2000}
+    const retry=coordinator.prepare(action,refreshed)
+    expect(retry).toEqual(first)
+    expect(retry.body).toEqual(original)
+    coordinator.complete(retry.signature)
+    expect(coordinator.prepare(action,refreshed).idempotencyKey).not.toBe(first.idempotencyKey)
+  })
+
   it('does not reuse an idempotency key after a definite rejection', () => {
     const coordinator = new CashierMutationCoordinator()
     const body = { reason: '金额不符' }

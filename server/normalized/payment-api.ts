@@ -322,6 +322,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
     )
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
     const expectedOutstandingMinor=body.expectedOutstandingMinor===undefined?undefined:readInteger(body.expectedOutstandingMinor,'确认剩余欠款',1,Number.MAX_SAFE_INTEGER)
+    const carryoverCollection=readDirectCarryoverCollection(body)
     assertActorPaymentMethod(context.actor, method)
     const customerAuthCode = method === 'auth_code'
       ? readString(body.customerAuthCode, 'customerAuthCode', 32, 16)
@@ -334,6 +335,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         ...metadata(request, context, idempotencyKey, {
           orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
           ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
+          ...(carryoverCollection===undefined?{}:{carryoverCollection}),
           publicId,
           provider,
           method,
@@ -343,6 +345,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         }),
         orderId, orderIds, amountMinor,
         ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
+          ...(carryoverCollection===undefined?{}:{carryoverCollection}),
         publicId,
         provider,
         method,
@@ -407,6 +410,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
         : `P${createHash('sha256').update(`${context.scope.tenantId}:${context.scope.storeId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`)
     const {orderId,orderIds,amountMinor}=readOrderCollection(body)
     const expectedOutstandingMinor=body.expectedOutstandingMinor===undefined?undefined:readInteger(body.expectedOutstandingMinor,'确认剩余欠款',1,Number.MAX_SAFE_INTEGER)
+    const carryoverCollection=readDirectCarryoverCollection(body)
     if (path === '/payments/manual/closed-debt' && body.closedDebtGuard === undefined) throw new TypeError('历史补收必须确认原欠款金额和授权')
     const closedDebtGuard = body.closedDebtGuard === undefined ? undefined : (() => {
       if (orderIds !== undefined || amountMinor !== undefined) throw new TypeError('历史欠款只支持原单全额补收')
@@ -417,6 +421,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       ...metadata(request, context, idempotencyKey, {
         orderId, orderIds:orderIds??null, amountMinor:amountMinor??null,
           ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
+          ...(carryoverCollection===undefined?{}:{carryoverCollection}),
         ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
         publicId,
         provider,
@@ -425,6 +430,7 @@ export const paymentApiPlugin: FastifyPluginAsync<PaymentApiOptions> = async (ap
       }),
       orderId, orderIds, amountMinor,
         ...(expectedOutstandingMinor===undefined?{}:{expectedOutstandingMinor}),
+          ...(carryoverCollection===undefined?{}:{carryoverCollection}),
       ...(closedDebtGuard === undefined ? {} : {closedDebtGuard}),
       publicId,
       provider,
@@ -1929,4 +1935,13 @@ function readOptionalActivityFilter(value: unknown): CashierWorkbenchQueryInput[
 function readCollectionScope(value:unknown):'workbench'|'unsettled'|'history'{
   if(value==='workbench'||value==='unsettled'||value==='history')return value
   throw new PaymentApiRequestError('账款查询范围无效')
+}
+
+function readDirectCarryoverCollection(body:Record<string,unknown>):{basis:JsonObject;receivableMinor:number}|undefined{
+  if(body.carryoverCollection===undefined)return undefined
+  const collection=readObject(body.carryoverCollection,'原单收款金额')
+  if(body.expectedOutstandingMinor===undefined||body.orderIds!==undefined)throw new TypeError('请按单确认原单收款金额')
+  const basis=readOptionalJsonObject(collection.basis,'原单金额依据')
+  if(!basis)throw new TypeError('请刷新原单金额依据')
+  return {basis,receivableMinor:readInteger(collection.receivableMinor,'原单应收金额',1,Number.MAX_SAFE_INTEGER)}
 }

@@ -1,5 +1,5 @@
 import {settleTableCreditOrders} from './table-credit-settlement.js'
-import { confirmCarryoverTabReview } from './carryover-tab-review.js'
+import {confirmCarryoverTabReview,prepareDirectCarryoverCollection,type DirectCarryoverCollection} from './carryover-tab-review.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {lockClosedDebtRecovery,lockClosedDebtPaymentTargets,assertClosedDebtWritable} from './closed-debt-recovery.js'
@@ -26,6 +26,7 @@ import {
   type PaymentProvider,
 } from './payment-repository.js'
 import {
+  assertCarryoverCollectionScope,
   paymentBusinessEventKey,
   sanitizeClientPaymentHints,
   sanitizeClientRefundEvidence,
@@ -70,6 +71,7 @@ interface CommandMetadata {
 }
 
 export interface InitiatePaymentCommand extends CommandMetadata {
+  carryoverCollection?: DirectCarryoverCollection
   expectedOutstandingMinor?:number
   orderIds?:readonly string[]
   amountMinor?:number
@@ -87,6 +89,7 @@ export interface InitiatePaymentCommand extends CommandMetadata {
 export class HistoricalCollectionChangedError extends Error {}
 
 export interface RecordManualPaymentCommand extends CommandMetadata {
+  carryoverCollection?: DirectCarryoverCollection
   expectedOutstandingMinor?:number
   closedDebtGuard?: Readonly<{ amountMinor: number; authorizationId: string }>
   orderIds?:readonly string[]
@@ -218,8 +221,8 @@ export class PaymentCommandService {
       if(input.expectedOutstandingMinor===undefined)return
       const employeeId=requireEmployee(input.actor,'Historical payment initiation')
       if(input.principal.type!=='employee'||input.principal.employeeId!==employeeId)throw new TypeError('Historical collector must match actor')
-      for(const capability of ['payment.initiate.staff','payment.history.collect'] as const)
-        await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
+      await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.initiate.staff'})
+      await assertCarryoverCollectionScope(transaction,employeeId,input.orderId)
     })
   }
 
@@ -247,6 +250,10 @@ export class PaymentCommandService {
         })
       } else if (input.actor.type !== 'guest') {
         throw new TypeError('Guest payment initiation requires a guest actor')
+      }
+      if(input.carryoverCollection){
+        if(input.principal.type!=='employee'||input.orderIds!==undefined)throw new TypeError('Direct carryover collection requires one staff order')
+        await prepareDirectCarryoverCollection(transaction,{orderId:input.orderId,employeeId:input.principal.employeeId,provider:input.provider,collection:input.carryoverCollection})
       }
       const recovery=input.principal.type==='employee'&&input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
       if(recovery){
@@ -392,6 +399,10 @@ export class PaymentCommandService {
     return this.commands.execute(command(input, 'payment.manual-record', paymentCodec), async (transaction) => {
       const orderIds=input.orderIds??[input.orderId]
       for(const orderId of orderIds)await this.authorization.assertEmployeeOrderAccess({transaction,employeeId,orderId,allowClosedDebtRecovery:input.orderIds===undefined})
+      if(input.carryoverCollection){
+        if(input.orderIds!==undefined)throw new TypeError('Direct carryover collection requires one order')
+        await prepareDirectCarryoverCollection(transaction,{orderId:input.orderId,employeeId,provider:input.provider,collection:input.carryoverCollection})
+      }
       const recovery=input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
       if(recovery){
         assertClosedDebtWritable(recovery)
@@ -492,7 +503,7 @@ export class PaymentCommandService {
           WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3 AND payment.public_id=$4
             AND original.provider_snapshot->>'collectedByEmployeeId'=$5`,[input.scope.tenantId,input.scope.storeId,orderId,input.publicId,employeeId])
         if(ownReceipt.rowCount){
-          if(await readCarryoverDebt(transaction,orderId))await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.history.collect'})
+          if(await readCarryoverDebt(transaction,orderId))await assertCarryoverCollectionScope(transaction,employeeId,orderId)
           else if(ownReceipt.rows[0]?.historical)for(const capability of ['payment.collect.all_tables','payment.recollect.authorize'] as const)await this.authorization.assertEmployeeCapability({transaction,employeeId,capability})
           continue
         }

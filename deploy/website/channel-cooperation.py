@@ -26,8 +26,8 @@ def update_pages(pages):
         if '/cooperation/' in html:
             raise ValueError('Cooperation already exists: ' + path)
         link = '<a class="cooperation-nav" href="/cooperation/">' + LABELS[language] + '</a>'
-        # Existing v25 hides the whole header nav below 1150px; the footer is
-        # visible on phones and avoids squeezing the reservation/language tools.
+        # Keep a second entry in the footer, independent of responsive header
+        # navigation, without changing the reservation/language tools.
         result[path] = html.replace('<nav aria-label="M-BOX">', '<nav aria-label="M-BOX">' + link, 1).replace('<div class="footer-bottom">', '<div class="footer-bottom">' + link, 1)
     if len(result) != 14 or '/zh/' not in result or '/zh/menu/' not in result:
         raise ValueError('Website page set changed; review latest content before preparing')

@@ -1,5 +1,6 @@
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import {TableMinimumSpendPanel} from './TableMinimumSpendPanel'
+import {ChannelActivationPanel} from './ChannelActivationPanel'
 import {TablePrepaymentPanel,TablePrepaymentDirectory} from './TablePrepaymentPanel'
 import { PrimaryServiceSelect, TableServicePanel } from './TableServicePanel'
 import {ReservationCancel} from './ReservationCancel'
@@ -1916,6 +1917,7 @@ function TableActionSheet(props: TableActionSheetProps) {
 
       {table.activeSession&&<StaffTableCreditPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession&&(props.permissions.includes('table.view_all')||props.permissions.includes('order.create'))&&<TableMinimumSpendPanel key={table.activeSession.id} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
+      {table.activeSession&&props.permissions.includes('channel.activate')&&<ChannelActivationPanel key={`channel-${table.activeSession.id}`} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId}/>}
       {table.activeSession&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession === null ? (
         <div className="staff-open-table">

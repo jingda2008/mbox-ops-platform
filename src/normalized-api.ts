@@ -139,13 +139,14 @@ export class NormalizedApiClient {
   async postEndpoint<Data>(
     endpointRef: string,
     body: unknown,
-    options: Readonly<{ idempotencyKey?: string; timeoutMs?: number }> = {},
+    options: Readonly<{ idempotencyKey?: string; timeoutMs?: number; channelRecovery?: boolean }> = {},
   ): Promise<Data> {
     if (!endpointRef.startsWith('/api/')) {
       throw new NormalizedApiError('接口地址不受信任', 'invalid_response', 'none')
     }
     const headers = new Headers({ accept: 'application/json', 'content-type': 'application/json' })
     if (options.idempotencyKey !== undefined) headers.set('idempotency-key', options.idempotencyKey)
+    if (options.channelRecovery && endpointRef.startsWith('/api/staff/channel/')) headers.set('x-channel-recovery', '1')
     const response = await this.request(endpointRef, {
       method: 'POST',
       headers,

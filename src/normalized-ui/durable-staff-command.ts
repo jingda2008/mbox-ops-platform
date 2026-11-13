@@ -7,9 +7,9 @@ const flights=new Map<string,Promise<unknown>>()
 export class DurableStaffCommand<B,R>{
   private readonly requirePersistent:boolean
   private readonly storageKey:string
-  private readonly send:(body:B,key:string)=>Promise<R>
+  private readonly send:(body:B,key:string,context:Readonly<{recovery:boolean}>)=>Promise<R>
   private readonly storage:StoragePort|undefined
-  constructor(namespace:string,send:(body:B,key:string)=>Promise<R>,storage:StoragePort|undefined=optionalStorage(),requirePersistent=false){
+  constructor(namespace:string,send:(body:B,key:string,context:Readonly<{recovery:boolean}>)=>Promise<R>,storage:StoragePort|undefined=optionalStorage(),requirePersistent=false){
     this.send=send;this.storage=storage;this.requirePersistent=requirePersistent
     this.storageKey=`mbox.staff-command.v1:${namespace}`
   }
@@ -27,11 +27,11 @@ export class DurableStaffCommand<B,R>{
     const running=flights.get(this.storageKey);if(running)return running as Promise<R>
     const attempt=previous??{key:crypto.randomUUID(),body:structuredClone(body)}
     this.save(attempt)
-    const request=this.send(attempt.body,attempt.key).then(result=>{this.save({...attempt,result});return result}).catch((error:unknown)=>{
+    const request=this.send(attempt.body,attempt.key,{recovery:previous!==null}).then(result=>{this.save({...attempt,result});return result}).catch((error:unknown)=>{
       const details=error as {status?:number;code?:string;commitDisposition?:string}|null
       // A later refusal cannot establish that the first attempt never committed.
       if(details?.code==='NATIVE_BUSINESS_NOT_COMMITTED'&&details.commitDisposition==='not_committed')this.clear()
-      else if(!previous&&details&&([400,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
+      else if(!previous&&details&&((details.commitDisposition==='not_committed'&&details.status===403)||[400,404,422].includes(details.status??0)||details.status===409&&!!details.code&&(!/(IDEMPOTENCY|IN_PROGRESS|TEMPORAR|UNAVAILABLE|INTERNAL)/.test(details.code)||['QUANTITY_UNAVAILABLE','TABLE_SESSION_UNAVAILABLE'].includes(details.code))))this.clear()
       throw error
     }).finally(()=>flights.delete(this.storageKey))
     flights.set(this.storageKey,request);return request

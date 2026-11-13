@@ -5,7 +5,7 @@ import {verifyPricingLineAllocations,type PricingLineAllocation} from './pricing
 import type {IssuedCouponProductLine} from './issued-coupon-product-promise.js'
 
 export type PricingAuthorizationKind = 'discount' | 'gift'
-export type PricingAuthorizationSourceType = 'employee' | 'activity' | 'benefit' | 'checkout_quote'
+export type PricingAuthorizationSourceType = 'employee' | 'activity' | 'benefit' | 'checkout_quote' | 'channel_quote'
 
 export interface PricingAuthorizationRequest {
   sourceType: PricingAuthorizationSourceType

@@ -102,12 +102,14 @@ release_state_transition_allowed() {
 # older writers must not resume after this new financial contract.
 # transfer, 303 links staff receipts to original orders, and 304 reserves guest
 # credit and excludes unresolved original funds from new cross-day collection.
+# 313 introduces continuous-party caps together with channel zero-price and
+# gift accounting. Pre-channel or pre-cap writers cannot enforce these facts.
 # Old writers must never resume after these contracts have accepted new facts.
 release_contract_boundary_between() {
   local from_schema=$1 to_schema=$2 boundary result=0
   [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
-  for boundary in 96 275 300 301 302 303 304 305; do
+  for boundary in 96 275 300 301 302 303 304 305 313; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

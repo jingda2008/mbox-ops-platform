@@ -98,9 +98,9 @@ assert(project.compileType === 'mini', 'mini.project.json format 2 的 compileTy
 assert(!Object.prototype.hasOwnProperty.call(project, 'enableAppxNg'), 'format 2 不得保留旧版 enableAppxNg 配置')
 assert(!Object.prototype.hasOwnProperty.call(project, 'component2'), 'format 2 的 component2 必须迁移到 compileOptions')
 assert(project.compileOptions && project.compileOptions.component2 === true, 'mini.project.json 必须显式启用 compileOptions.component2')
-// The requested customer custody feature is WeChat-only. Keep all existing
+// Customer custody and channel distribution are WeChat-only in this scope. Keep all existing
 // Alipay pages checked; only these exact new routes are outside parity scope.
-const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index'])
+const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index', 'pages/channel-partner/index'])
 for (const page of wechatOnlyPages) {
   assert(wechatApp.pages.includes(page) && !alipayApp.pages.includes(page), `微信独有页面范围变化: ${page}`)
   for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(join(wechatRoot, page + extension))
@@ -125,6 +125,8 @@ assert(JSON.stringify(alipayTabs) === JSON.stringify(wechatTabs), '支付宝 tab
 // Alipay keeps its frozen retry and coupon navigation; both retain true-zero/unknown distinctions.
 // Re-reviewed existing QR/policy differences; the changed progress blocks are tested on both platforms.
 const wechatPolicyTemplateDivergences = {
+  // 2026-11-12: channel wallet navigation, price confirmation and 0-yuan copy.
+  'pages/profile-coupons/index': { wechat: 'd7091863bfb06ca96e677b463e00d425c0e5ea4aee62f3c5fc91a7692674db7f', alipay: 'f0050b6bdb3fc1d568f07cb9f6238a426112033c02280d2c5503e2560245f36f' },
   // 2026-10-21: official-account consent is WeChat-only; Alipay has no bound OA identity contract.
   // Freeze this reviewed addition while retaining all Alipay syntax, handler, style and API guards.
   'pages/profile-notifications/index': { wechat: '2c52219ebe17c25c2c539fa0f19c7e1908f1eb3dc7d9d714d0a10e6cba74876b', alipay: '3968ed9454102f463e26a0aab169f895fac5e1d57fad0bc0e13475ed773d496c' },
@@ -136,7 +138,7 @@ const wechatPolicyTemplateDivergences = {
   // 2026-10-23: same supply explanation and stale-menu retry added on both platforms; prior consent differences retained.
   // 2026-10-31: both platforms show prepaid balance and consent at the top; checkout names balance deduction.
   // 2026-11-08: both platforms show concise selling windows and flexible card footers; existing platform-specific policy blocks remain reviewed.
-  'pages/order/index': {"wechat": "840bd04bebf48c7ec186dbeb5878028595aa96e19275c892638c4c030799a63f", "alipay": "c9ff0661784d515dbbe80ff45f593d62949b9d95e97dfa862270a4c0df1879a5"},
+  'pages/order/index': {"wechat": "be6e012c1736b79c64d3e2e2ac4fc0f29cef82b55ba812caf602b9757b040340", "alipay": "c9ff0661784d515dbbe80ff45f593d62949b9d95e97dfa862270a4c0df1879a5"},
   'pages/profile/index': {"wechat": "b0ff38b0e715accef87b1a788c4ae2536417bc16692d2c39f0ff8dda602590b3", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},

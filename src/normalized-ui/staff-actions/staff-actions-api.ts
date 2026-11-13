@@ -357,6 +357,7 @@ export interface StaffActionsApiPort {
   submitAssistedOrder(input: Readonly<{
     tableSessionId: string
     assistedOrderContextToken: string
+    channelQuoteId?: string
     orderMode: 'paid' | 'gift'
     replacementCaseId?:string
     replacementPreviousOrderId?:string
@@ -984,6 +985,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
   async submitAssistedOrder(input: Readonly<{
     tableSessionId: string
     assistedOrderContextToken: string
+    channelQuoteId?: string
     orderMode: 'paid' | 'gift'
     replacementCaseId?:string
     replacementPreviousOrderId?:string

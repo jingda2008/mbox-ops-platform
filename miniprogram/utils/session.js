@@ -26,7 +26,10 @@ function normalizeTableCode(value) {
 
 function applyLaunchSession(options, config) {
   const launch = options && typeof options === 'object' ? options : {}
-  const rawQuery = launch.query && typeof launch.query === 'object' ? launch.query : {}
+  // A promotional Mini Code scene identifies an offer, never a billable table.
+  // Ignore all table-like parameters on this page, including forged ones.
+  const channelEntry = String(launch.path || '').replace(/^\/+/, '') === 'pages/channel-coupons/index'
+  const rawQuery = !channelEntry && launch.query && typeof launch.query === 'object' ? launch.query : {}
   const forceTableScan = launch.forceTableScan === true
   const sceneQuery = decodeScene(rawQuery.scene)
   const explicitToken = consistentAlias(rawQuery.token, rawQuery.tableToken, '桌码凭证')

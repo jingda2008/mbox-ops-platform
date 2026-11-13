@@ -108,8 +108,12 @@ try {
 }
 
 function runVitest(databaseUrl, runtimeDatabaseUrl) {
+  const selected = process.argv.slice(2)
+  if (selected.some(path => !/^server\/(?:normalized\/)?[a-z0-9.-]+\.test\.ts$/.test(path))) {
+    throw new Error('定向数据库测试只接受 server 下的测试文件路径')
+  }
   return runChild([
-    './node_modules/vitest/vitest.mjs', 'run', 'server/migrate-normalized.test.ts', 'server/normalized',
+    './node_modules/vitest/vitest.mjs', 'run', ...(selected.length ? selected : ['server/migrate-normalized.test.ts', 'server/normalized']),
     '--reporter=dot', '--hookTimeout=30000', '--pool=forks', '--maxWorkers=1',
   ], {
     TEST_NORMALIZED_DATABASE_URL: databaseUrl,

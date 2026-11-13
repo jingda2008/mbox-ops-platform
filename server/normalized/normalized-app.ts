@@ -72,6 +72,8 @@ import { ownerFinanceApiPlugin } from './owner-finance-api.js'
 import { customerBenefitApiPlugin } from './customer-benefit-api.js'
 import { memberVisitRewardApiPlugin } from './member-visit-reward-api.js'
 import { memberVisitApiPlugin } from './member-visit-api.js'
+import { channelDistributionApiPlugin } from './channel-distribution-api.js'
+import { OfficialWechatMiniProgramCodeProvider } from './wechat-mini-program-code.js'
 import { customerExperienceAnalyticsApiPlugin } from './customer-experience-analytics-api.js'
 import { customerExperienceApiPlugin } from './customer-experience-api.js'
 import { CustomerExperienceService } from './customer-experience-service.js'
@@ -858,6 +860,10 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(memberNumberApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(memberVisitRewardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(memberVisitApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
+    const channelMiniCodeProvider = options.config.wechatIdentity === null ? undefined : new OfficialWechatMiniProgramCodeProvider(options.config.wechatIdentity)
+    instance.register(channelDistributionApiPlugin, { prefix: '/api', transactions, commerce, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext, resolveGuestContext: guestReservationContext,
+      miniCode: channelMiniCodeProvider && { appId: options.config.wechatIdentity!.appId, render: input => channelMiniCodeProvider.render(input) },
+    })
     instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(launchPopupApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext })
     instance.register(customerCustodyApiPlugin, { prefix: '/api', transactions, resolveSelfContext: memberSelfContext, protection: activityContactProtection })

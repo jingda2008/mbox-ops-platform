@@ -1,3 +1,4 @@
+import type { ChannelReconciliationBatch } from './channel-reconciliation-worker.js'
 import type {OfficialPointsBatch} from './official-points-notification-worker.js'
 import type { NativePushBatch } from './native-push-worker.js'
 import type { IdempotencyCleanupResult } from './idempotency-cleanup-worker.js'
@@ -186,6 +187,7 @@ export type NormalizedWorkerName =
   | 'official-points-notifications'
   | 'marketing-delivery'
   | 'checkout-coupon-recovery'
+  | 'channel-reconciliation'
 
 export interface NormalizedWorkerCycleResult {
   startedAt: string
@@ -226,6 +228,7 @@ export interface NormalizedWorkerCycleResult {
     memberGiftDelivery: MemberGiftDeliveryBatch | null
     officialPointsNotifications?: OfficialPointsBatch | null
     marketingDelivery: MarketingDeliveryBatch | null
+    channelReconciliation?:ChannelReconciliationBatch|null
     checkoutCouponRecovery:CheckoutCouponRecoveryBatch|null
     nativePush?: NativePushBatch|null
     printSource?: PrintSourceBatch|null
@@ -278,6 +281,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       memberGiftDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MemberGiftDeliveryBatch>}
       officialPointsNotifications?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<OfficialPointsBatch>}
       marketingDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MarketingDeliveryBatch>}
+      channelReconciliation?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<ChannelReconciliationBatch>}
       checkoutCouponRecovery?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<CheckoutCouponRecoveryBatch>}
       nativePush?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<NativePushBatch>}
       printSource?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<PrintSourceBatch>}
@@ -358,6 +362,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'print-source',
       'native-push',
       'official-points-notifications',
+      'channel-reconciliation',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -498,6 +503,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.workers.printSource===undefined?Promise.resolve(null):this.runWhenDue('print-source',()=>this.workers.printSource!.runBatch(this.scope,`${this.options.workerId}:print-source`)),
       this.workers.nativePush===undefined?Promise.resolve(null):this.runWhenDue('native-push',()=>this.workers.nativePush!.runBatch(this.scope,`${this.options.workerId}:native-push`)),
       this.workers.officialPointsNotifications===undefined?Promise.resolve(null):this.runWhenDue('official-points-notifications',()=>this.workers.officialPointsNotifications!.runBatch(this.scope,`${this.options.workerId}:official-points`)),
+      this.workers.channelReconciliation===undefined?Promise.resolve(null):this.runWhenDue('channel-reconciliation',()=>this.workers.channelReconciliation!.runBatch(this.scope,`${this.options.workerId}:channel`)),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -540,6 +546,8 @@ export class NormalizedBackgroundWorkerCoordinator {
       )
     }
 
+    const channelReconciliation=fulfilledValue(executions[35])
+    if(channelReconciliation?.failed){failures.push('channel-reconciliation');this.options.onError?.('channel-reconciliation',new Error('channel_reconciliation_failed'))}
     const memberGiftDelivery=fulfilledValue(executions[29])
     const officialPointsNotifications=fulfilledValue(executions[34])
     const marketingDelivery=fulfilledValue(executions[30])
@@ -616,6 +624,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         memberGiftDelivery,
         officialPointsNotifications,
         marketingDelivery,
+        channelReconciliation,
         checkoutCouponRecovery,
         printSource,
         nativePush,
@@ -688,6 +697,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'official-points-notifications': 30_000,
   'marketing-delivery': 30_000,
   'checkout-coupon-recovery': 60_000,
+  'channel-reconciliation': 30_000,
   'print-source': 1_000,
   'native-push': 2_000,
 })

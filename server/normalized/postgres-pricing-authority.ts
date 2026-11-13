@@ -1,3 +1,4 @@
+import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import { randomUUID } from 'node:crypto'
 import {authorizeCheckoutCouponQuote} from './checkout-coupon-pricing-authority.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
@@ -68,6 +69,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       )
     }
 
+    if(context.request.sourceType==='channel_quote')return new ChannelPricingRepository(transaction).authorize(context)
     if(context.request.sourceType==='checkout_quote')return authorizeCheckoutCouponQuote(transaction,context)
     const basket = await loadServerPricedBasket(transaction, context)
     if (context.request.sourceType === 'employee') {
@@ -106,6 +108,7 @@ export class PostgresPricingAuthority implements PricingAuthorityPort {
       orderId,
     ])
     const row = requireOne(consumed, 'Pricing authorization could not be consumed')
+    if(authorization.sourceType==='channel_quote')await new ChannelPricingRepository(transaction).consume(authorization.sourceId,orderId)
     if(authorization.sourceType==='checkout_quote'){
       await transaction.query('INSERT INTO mbox.checkout_coupon_order_links(tenant_id,store_id,quote_id,order_id) VALUES($1,$2,$3,$4)',[transaction.scope.tenantId,transaction.scope.storeId,authorization.sourceId,orderId])
     }

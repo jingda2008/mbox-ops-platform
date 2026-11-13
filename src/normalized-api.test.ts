@@ -212,6 +212,14 @@ describe('NormalizedApiClient', () => {
     expect(paths).not.toContain('/api/staff/workspace')
   })
 
+  it('sends receipt-only recovery only for opted-in channel POSTs',async()=>{
+    const send=vi.fn(async(_input:RequestInfo|URL,_init?:RequestInit)=>new Response(JSON.stringify({data:{id:'receipt'}}),{status:200,headers:{'content-type':'application/json'}}))
+    const client=new NormalizedApiClient({fetch:send})
+    await client.postEndpoint('/api/staff/channel/finance',{}, {idempotencyKey:'original',channelRecovery:true})
+    await client.postEndpoint('/api/staff/channel/finance',{}, {idempotencyKey:'new'})
+    await client.postEndpoint('/api/staff-access/deploy',{}, {channelRecovery:true})
+    expect(send.mock.calls.map(c=>new Headers(c[1]?.headers).get('x-channel-recovery'))).toEqual(['1',null,null])
+  })
   it('sends permission deployments with an idempotency key and returns verified data', async () => {
     const send = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       data: { status: 'verified', changes: [{ applied: true }] },

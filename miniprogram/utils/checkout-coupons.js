@@ -21,8 +21,23 @@ function couponPortions(cart, coupons, selections, money) {
       optionLabels: options.map(option => option.label), selectedIndex, selectedLabel: options[selectedIndex].label }
   }))
 }
-function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money, randomId, scope, errorMessage }) {
+function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quoteChannel, money, randomId, scope, errorMessage }) {
   return {
+    async quoteCheckoutChannel() {
+      if (this.data.busy || this.data.couponLoading || !quoteChannel) return
+      this.invalidateCheckoutCoupons(false, false)
+      const epoch = this.checkoutCouponEpoch, identity = scope()
+      const input = { expectedGeneration: this.data.cartGeneration, expectedVersion: this.data.cartVersion,
+        lineNotes: Object.entries(this.checkoutLineNotes || {}).filter(([, note]) => note.trim()).map(([portionId, note]) => ({ portionId, note: note.trim() })) }
+      this.setData({ couponLoading: true, couponError: '', couponNeedsReview: true })
+      try {
+        const result = await quoteChannel(input)
+        if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
+        if (!result.current || result.sourceType !== 'channel_quote' || result.generation !== this.data.cartGeneration || result.version !== this.data.cartVersion || result.currency !== 'CNY' || !Number.isSafeInteger(result.subtotalMinor) || result.subtotalMinor < 0 || !Number.isSafeInteger(result.discountMinor) || result.discountMinor < 0 || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(Date.parse(result.expiresAt) > Date.now())) throw new Error('渠道报价已失效')
+        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
+      } catch (error) { if (epoch === this.checkoutCouponEpoch && identity === scope()) this.setData({ couponError: errorMessage(error, '请先绑定本桌渠道券并核对使用门槛，也可选择不用券。') }) }
+      finally { if (epoch === this.checkoutCouponEpoch && identity === scope()) this.setData({ couponLoading: false }) }
+    },
     async openCheckoutPoints() {
       if (this.data.busy || this.data.couponLoading) return
       this.invalidateCheckoutCoupons(false, false)
@@ -148,7 +163,7 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, money
         this.setData({ couponError: this.data.issuedCouponPending ? '原加入结果未确认，请先核对原加入。' : '暂不可售商品须逐份使用有效原券并核对报价；不用券时请先移除这些商品。' })
         return false
       }
-      if (this.data.couponNeedsReview || ((this.data.couponSelections.length || this.data.pointsInput) && (!quote || quote.generation !== this.data.cartGeneration
+      if (this.data.couponNeedsReview || ((this.data.couponSelections.length || this.data.pointsInput || quote && quote.sourceType === 'channel_quote') && (!quote || quote.generation !== this.data.cartGeneration
         || quote.version !== this.data.cartVersion || !(Date.parse(quote.expiresAt) > Date.now())))) {
         this.setData({ couponError: '请先确认有效优惠报价，或选择不使用优惠按原价提交。' })
         return false

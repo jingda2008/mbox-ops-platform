@@ -1,3 +1,4 @@
+import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import {IdempotencyReceiptUnavailableError} from './command-executor.js'
 import { reauthorizingCommands } from './staff-authorized-command.js'
 import {TablePrepaymentError} from './table-prepayment-repository.js'
@@ -576,6 +577,15 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.code(201).send({ data: issued })
   }))
 
+  app.post('/commerce/channel-quote', async (request, reply) => handleCommerceRoute(reply, async () => {
+    const context=await resolveContext(options,request),body=readObject(request.body,'请求正文')
+    assertActorBinding(body,context.employeeId)
+    const tableSessionId=readUuid(readRequiredString(body.tableSessionId,'tableSessionId',64),'tableSessionId'),input=readOrderInput(body)
+    if(input.orderMode!=='paid')throw new CommerceKdsRequestError('CHANNEL_NO_STACK','渠道优惠不能与员工赠送叠加')
+    const data=await options.staffAccessTransactions.run(context.scope,tx=>new ChannelPricingRepository(tx).prepare({tableSessionId,channel:'staff_assisted',actorRef:`employee:${context.employeeId}`,lines:input.lines}))
+    return reply.send({data})
+  }))
+
   app.post('/commerce/orders', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context = await resolveContext(options, request)
     await requirePermission(options, context, 'order.create')
@@ -583,7 +593,9 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     assertActorBinding(body, context.employeeId)
     const idempotencyKey = readIdempotencyKey(request, body)
     const input = readOrderInput(body)
-    const pricingAuthorization = input.orderMode === 'gift'
+    const channelQuoteId=readOptionalUuid(body.channelQuoteId,'channelQuoteId')
+    if(channelQuoteId&&input.orderMode==='gift')throw new CommerceKdsRequestError('CHANNEL_NO_STACK','渠道优惠不能与员工赠送叠加')
+    const pricingAuthorization = channelQuoteId ? {sourceType:'channel_quote' as const,sourceId:channelQuoteId} : input.orderMode === 'gift'
       ? await resolveEmployeeGiftAuthorization(options, context)
       : undefined
     const assistedToken = readAssistedOrderContextToken(request, body)

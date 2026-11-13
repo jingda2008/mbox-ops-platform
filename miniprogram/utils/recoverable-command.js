@@ -67,7 +67,7 @@ function recoverableGuestCommand(operation, body, send, options) {
       if (current && current.key === record.key) wx.removeStorageSync(storageKey)
     }
     const pending = { promise: null }
-    pending.promise = Promise.resolve().then(() => { assertCurrent(); return send(record.key) }).then(result => {
+    pending.promise = Promise.resolve().then(() => { assertCurrent(); return send(record.key, { recovery }) }).then(result => {
       assertCurrent()
       if (!result || typeof result !== 'object' || Array.isArray(result) || Object.keys(result).length === 0 || ('data' in result && (!result.data || typeof result.data !== 'object'))) throw failure('COMMAND_RECOVERY_UNCONFIRMED', '操作回执暂时无法确认，请核对原请求，不要重复提交。')
       clear(); return result
@@ -75,7 +75,11 @@ function recoverableGuestCommand(operation, body, send, options) {
       assertCurrent()
       const status = Number(error && (error.statusCode || error.status))
       // A later rejection cannot prove the earlier timed-out request failed.
-      if (!recovery && [400, 422].includes(status)) clear()
+      // Only opted-in commands may trust an explicit rollback on their FIRST send.
+      // A later rejection cannot resolve an earlier lost response.
+      const knownNotCommitted = options && options.clearOnNotCommitted
+        && error && error.commitDisposition === 'not_committed' && [400, 403, 404, 409, 422].includes(status)
+      if (!recovery && ([400, 422].includes(status) || knownNotCommitted)) clear()
       throw error
     }).finally(() => { if (flights.get(storageKey) === pending) flights.delete(storageKey) })
     flights.set(storageKey, pending)

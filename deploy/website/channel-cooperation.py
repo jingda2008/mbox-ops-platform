@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a minimal v25 -> v26 website clone; --activate runs only after backend rc290 is verified.
+"""Prepare a minimal v26 -> v27 website clone; --activate runs only after backend rc291 is verified.
 No accounts, offers or business records are created. Existing website files are copied verbatim,
 except data/pages.json navigation. Caddy routes cooperation assets/API to the standard app.
 """
@@ -11,10 +11,12 @@ import re
 import shutil
 import subprocess
 
-OLD = 'mbox-public-site-www-v25'
-NEW = 'mbox-public-site-www-v26'
+OLD = 'mbox-public-site-www-v26'
+NEW = 'mbox-public-site-www-v27'
 ORIGIN = 'https://www.shmbox.com'
 LABELS = {'zh': '合作', 'en': 'Partners', 'ru': 'Партнёрам', 'ja': '提携', 'ko': '제휴', 'fr': 'Partenaires', 'de': 'Partner'}
+# node:http preserves Host; fetch can replace it with the loopback address.
+HEALTH_PROBE = "import http from 'node:http';let ok=false;for(let i=0;i<20;i++){try{const status=await new Promise((resolve,reject)=>{const req=http.get({hostname:'127.0.0.1',port:8080,path:'/healthz',headers:{Host:'www.shmbox.com'}},res=>{res.resume();resolve(res.statusCode)});req.setTimeout(2000,()=>req.destroy(new Error('health timeout')));req.on('error',reject)});if(status===200){ok=true;break}}catch{}await new Promise(r=>setTimeout(r,250))}if(!ok)process.exit(1)"
 
 
 def update_pages(pages):
@@ -49,7 +51,7 @@ def update_caddy(source):
         reverse_proxy mbox-app:8787
     }
     handle {
-        reverse_proxy mbox-public-site-www-v26:8080 {
+        reverse_proxy mbox-public-site-www-v27:8080 {
             header_up X-Mbox-Client-Ip {remote_host}
         }
     }'''
@@ -96,10 +98,10 @@ def activate(target, caddy, evidence, expected_sha):
     if caddy.read_bytes() != before:
         raise ValueError('Ingress changed since preparation')
     info = json.loads(run('docker', 'inspect', OLD))[0]
-    if info['HostConfig'].get('PortBindings'):
-        raise ValueError('Published website ports require separate review')
+    if info['HostConfig'].get('PortBindings') != {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '8817'}]}:
+        raise ValueError('Reviewed website loopback port binding changed')
     mounts = [m for m in info['Mounts'] if m['Destination'] == '/site']
-    if len(mounts) != 1 or mounts[0]['RW'] or Path(mounts[0]['Source']).name != '20261030-venue-v25':
+    if len(mounts) != 1 or mounts[0]['RW'] or Path(mounts[0]['Source']).name != '20261113-search-v26':
         raise ValueError('Website source mount changed')
     if info['HostConfig'].get('NetworkMode') != 'mbox-net':
         raise ValueError('Website network changed')
@@ -107,6 +109,7 @@ def activate(target, caddy, evidence, expected_sha):
     config['Image'] = info['Image']  # immutable, already-running image
     config.pop('Hostname', None)
     host = info['HostConfig'].copy()
+    host['PortBindings'] = {}  # v26 retains its loopback-only check port; new site uses mbox-net
     host['Binds'] = [f'{target}:/site:ro']
     if len(info['Mounts']) != 1:
         raise ValueError('Unexpected website mounts')
@@ -116,7 +119,7 @@ def activate(target, caddy, evidence, expected_sha):
     switched = False
     try:
         run('docker', 'start', new_id)
-        run('docker', 'exec', new_id, 'node', '--input-type=module', '-e', "let ok=false;for(let i=0;i<20;i++){try{const r=await fetch('http://127.0.0.1:8080/healthz',{headers:{host:'www.shmbox.com'}});if(r.ok){ok=true;break}}catch{}await new Promise(r=>setTimeout(r,250))}if(!ok)process.exit(1)")
+        run('docker', 'exec', new_id, 'node', '--input-type=module', '-e', HEALTH_PROBE)
         caddy.write_bytes((evidence / 'Caddyfile.candidate').read_bytes())
         switched = True
         run('docker', 'exec', 'mbox-caddy', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile')

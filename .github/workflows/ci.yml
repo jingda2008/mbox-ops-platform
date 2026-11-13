@@ -91,7 +91,7 @@ jobs:
           echo "npm audit failed after 5 attempts"
           exit 1
       - name: Run code, unit, metadata and production-build checks
-        run: npm run check && npm run release:system:test
+        run: npm run check && npm run release:system:test && python3 deploy/website/channel-cooperation.test.py
       - name: Verify activity, cashier and gift recovery in real browser components
         run: npm run test:activity-recovery
       - name: Verify operating dashboard periods, permissions and recovery

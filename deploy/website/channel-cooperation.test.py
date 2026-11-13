@@ -5,10 +5,11 @@ spec=importlib.util.spec_from_file_location('cooperation',Path(__file__).with_na
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 class PatchTest(unittest.TestCase):
  def test_navigation_only(self):
-  pages={f'/{lang}/{suffix}':'prefix<nav aria-label="M-BOX"><a href="/menu">菜单</a></nav>suffix' for lang in module.LABELS for suffix in ['', 'menu/']}
+  pages={f'/{lang}/{suffix}':'prefix<nav aria-label="M-BOX"><a href="/menu">菜单</a></nav><footer><div class="footer-bottom">suffix</div></footer>' for lang in module.LABELS for suffix in ['', 'menu/']}
   result=module.update_pages(pages)
   for path,html in result.items():
    label=module.LABELS[path.split('/')[1]]
+   self.assertEqual(html.count(f'<a class="cooperation-nav" href="/cooperation/">{label}</a>'),2)
    self.assertEqual(html.replace(f'<a class="cooperation-nav" href="/cooperation/">{label}</a>',''),pages[path])
   with self.assertRaises(ValueError):module.update_pages(result)
  def test_routes_only_in_website_proxy(self):

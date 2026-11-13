@@ -21,11 +21,14 @@ def update_pages(pages):
     result = {}
     for path, html in pages.items():
         language = path.split('/')[1]
-        if language not in LABELS or html.count('<nav aria-label="M-BOX">') != 1:
+        if language not in LABELS or html.count('<nav aria-label="M-BOX">') != 1 or html.count('<div class="footer-bottom">') != 1:
             raise ValueError('Unexpected website navigation: ' + path)
         if '/cooperation/' in html:
             raise ValueError('Cooperation already exists: ' + path)
-        result[path] = html.replace('<nav aria-label="M-BOX">', '<nav aria-label="M-BOX"><a class="cooperation-nav" href="/cooperation/">' + LABELS[language] + '</a>', 1)
+        link = '<a class="cooperation-nav" href="/cooperation/">' + LABELS[language] + '</a>'
+        # Existing v25 hides the whole header nav below 1150px; the footer is
+        # visible on phones and avoids squeezing the reservation/language tools.
+        result[path] = html.replace('<nav aria-label="M-BOX">', '<nav aria-label="M-BOX">' + link, 1).replace('<div class="footer-bottom">', '<div class="footer-bottom">' + link, 1)
     if len(result) != 14 or '/zh/' not in result or '/zh/menu/' not in result:
         raise ValueError('Website page set changed; review latest content before preparing')
     return result

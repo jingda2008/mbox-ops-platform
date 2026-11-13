@@ -149,6 +149,36 @@ test('focused fields remain usable when the mobile visual viewport is reduced', 
   await expectNoHorizontalOverflow(page, 'reduced visual viewport')
 })
 
+test('cashier navigation retains touch targets during a held read, failed read and recovery', async ({ page }) => {
+  const data = await fixture()
+  await loginManager(page, data)
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/payments/workbench?*', async route => {
+    await held
+    await route.fulfill({status:503,json:{error:{code:'UNAVAILABLE',message:'受控读取失败'}}})
+  })
+  try {
+    await page.goto('/staff/payments')
+    await expect(page.getByRole('navigation', {name:'账款范围'})).toBeVisible()
+    await expect(page.getByText('正在读取本营业日订单', {exact:true})).toBeVisible()
+    for (const width of [320,390,844]) {
+      await page.setViewportSize({width,height:844})
+      await expectTouchTargets(page, 'nav[aria-label="账款范围"]', `held cashier ${width}`)
+    }
+    release()
+    await expect(page.getByText('收银订单读取失败', {exact:true})).toBeVisible()
+    await expectTouchTargets(page, 'nav[aria-label="账款范围"]', 'failed cashier')
+    await page.unrouteAll({behavior:'wait'})
+    await page.getByRole('button', {name:'重新读取订单',exact:true}).click()
+    await expect(page.locator('.cashier-workbench')).toBeVisible()
+    await expectTouchTargets(page, 'nav[aria-label="账款范围"]', 'recovered cashier')
+  } finally {
+    release()
+    await page.unrouteAll({behavior:'wait'})
+  }
+})
+
 test('manager mobile pages prioritize current actions and keep low-frequency detail on demand', async ({ page }) => {
   const data = await fixture()
   await page.setViewportSize({ width: 390, height: 844 })

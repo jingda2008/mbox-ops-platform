@@ -22,7 +22,7 @@ export class ChannelOperationsRepository{
   await this.repo.event(id,enabled?'batch.published':'batch.paused',`employee:${employee}`,{},reason);return{id}
  }
  async promoter(id:string,enabled:boolean,confirm:boolean,restaurantScope:boolean,contactEmployeeId:string,employee:string,reason:string){
-  await this.repo.lockIdentity();const row=await this.tx.query(`UPDATE mbox.channel_promoters SET status=$4,can_confirm_statement=$5,restaurant_scope=$6,contact_employee_id=$7 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled?'active':'disabled',confirm,restaurantScope,contactEmployeeId]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);await this.repo.event(id,'promoter.access',`employee:${employee}`,{enabled,confirm,restaurantScope,contactEmployeeId},reason);return{id}
+  await this.repo.lockIdentity();const row=await this.tx.query(`UPDATE mbox.channel_promoters SET status=$4,can_confirm_statement=$5,restaurant_scope=$6,contact_employee_id=$7 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled?'active':'disabled',confirm,restaurantScope,contactEmployeeId]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);if(!enabled)await this.tx.query(`UPDATE mbox.channel_web_sessions SET revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND promoter_id=$3 AND revoked_at IS NULL`,[...this.scope,id]);await this.repo.event(id,'promoter.access',`employee:${employee}`,{enabled,confirm,restaurantScope,contactEmployeeId},reason);return{id}
  }
  private async replacementCapacity(id:string,cost:number){
   await this.repo.assertStoreCapacity(cost,id)

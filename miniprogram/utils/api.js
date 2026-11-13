@@ -802,16 +802,7 @@ async function getChannelWalletPage(options) {
 async function getChannelWallet() { return (await getChannelWalletPage()).items }
 
 async function getChannelOffer(code) { return (await publicRequest('/api/public/mini/channel/offer?code=' + encodeURIComponent(code))).data }
-async function getChannelPartner() { return (await publicRequest('/api/public/mini/channel/partner')).data }
-async function getChannelHistory(kind,cursor) {
-  const response=await publicRequest('/api/public/mini/channel/history?kind='+encodeURIComponent(kind)+(cursor?'&cursor='+encodeURIComponent(cursor):''))
-  if(!Array.isArray(response.data)||!response.meta||!Object.prototype.hasOwnProperty.call(response.meta,'nextCursor'))throw new Error('历史记录分页信息缺失，请刷新核对')
-  return {items:response.data,nextCursor:response.meta.nextCursor}
-}
-async function getChannelPoster(batchId) { return (await publicRequest('/api/public/mini/channel/poster/' + encodeURIComponent(batchId) + '?format=data')).data }
-async function getChannelStatement(id) { return (await publicRequest('/api/public/mini/channel/statement/'+encodeURIComponent(id))).data }
-async function respondChannelStatement(id,dispute,reason) { return recoverableMemberWrite('channel.statement.response','/api/public/mini/channel/statement-response','POST',{id,dispute,reason},[],{initialKey:randomId('channel'),clearOnNotCommitted:true,channelRecovery:true}) }
-async function acceptChannelInvitation(token) { return recoverableMemberWrite('channel.partner.accept', '/api/public/mini/channel/partner/accept', 'POST', { token }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true }) }
+
 async function claimChannelCoupon(code) {
   return recoverableMemberWrite('channel.claim', '/api/public/mini/channel/claim', 'POST', { code }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true })
 }
@@ -935,6 +926,5 @@ module.exports = {
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   getChannelWallet, getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon,
-  getChannelPartner, getChannelHistory, getChannelPoster, acceptChannelInvitation, respondChannelStatement, getChannelStatement,
   logoutWechatIdentity,
 }

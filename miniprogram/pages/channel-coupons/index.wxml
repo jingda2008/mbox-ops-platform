@@ -27,5 +27,4 @@
   <text wx:if="{{!loading && !nextCursor && coupons.length}}">当前筛选的优惠券已全部显示</text>
   <text>换桌或拆单不增加次数；需符合最低消费及适用商品条件。到店后也可请服务员核对本人及优惠号码办理。</text>
   <text>自行绑定后，请服务员核对本人及到店情况；单独扫描桌码不作为已到店证明。</text>
-  <navigator url="/pages/channel-partner/index">合作店长入口 ›</navigator>
 </view>

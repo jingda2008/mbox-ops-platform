@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>合作 · M-BOX</title><link rel="stylesheet" href="/cooperation/style.css"><script type="module" src="/cooperation/app.js"></script></head>
+<body><header><a href="/">M-BOX</a><span>合作伙伴</span><button id="logout" hidden>退出登录</button></header><main>
+<section class="hero"><p class="eyebrow">餐后，再坐一会儿</p><h1>把相聚留给客人，<br>把推荐记录交给我们。</h1><p>下载专属推广图，了解推荐到店与佣金进展。</p></section>
+<p id="message" role="status" aria-live="polite"></p>
+<section id="auth" class="card"><h2 id="auth-title">合作账号登录</h2><p id="auth-help">由 M-BOX 管理员开通合作账号。忘记密码请联系管理员重新发送开通链接。</p><form id="login"><label>账号<input name="username" autocomplete="username" required minlength="4" maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9_-]{3,39}" placeholder="4—40位字母、数字或下划线"></label><label>密码<input name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="128" placeholder="至少12位"></label><button type="submit" id="submit-login">登录</button><button type="button" id="switch-login" hidden>已开通，返回登录</button></form></section>
+<section id="dashboard" hidden><div class="section-title"><h2>我的合作记录</h2><button id="refresh">刷新</button></div><p class="muted">仅展示匿名推荐记录及汇总金额，不包含客户身份、桌号或点单明细。退款、核对和观察期可能影响佣金；余额不等于立即可结算金额。</p><div id="balance" class="grid"></div><div id="pending" class="card" hidden><p>上次操作结果尚未确认，请恢复原操作核对，避免重复提交。</p><button id="recover">恢复原操作</button></div>
+<section><h2>专属推广图</h2><p class="muted">发给客户后，客户用微信扫码或长按识别，直接打开优惠页，点击领取即可。</p><div id="batches" class="grid"></div><button id="more-batches" hidden>更多推广图</button></section>
+<section id="poster-preview" class="card" hidden><h2>专属推广图</h2><p>手机可长按图片保存或转发；电脑可点击保存图片。</p><img id="poster-image" alt="本账号专属优惠推广图"><p><a id="poster-save">保存图片</a></p><button id="poster-close">关闭图片</button></section>
+<section><h2>推荐到店记录</h2><div id="visits"></div><button id="more-visits" hidden>更多记录</button></section>
+<section><h2>佣金结算</h2><div id="statements"></div><button id="more-statements" hidden>更多结算单</button></section>
+<section id="detail" class="card" hidden><h2>结算汇总</h2><div id="detail-body"></div><div id="response" hidden><label>核对说明<textarea id="reason" maxlength="500" placeholder="确认无误，或说明存在的差异"></textarea></label><button id="confirm">确认汇总金额</button><button id="dispute" class="secondary">提出异议</button></div></section>
+</section><footer>合作记录仅用于推荐及结算核对。需核实差异时，请联系 M-BOX 管理员。</footer></main></body></html>

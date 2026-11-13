@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { channelRuleSchema } from '../../src/shared/channel-distribution.js'
 import { allocateChannelAmount, channelCommissionDelta, ChannelDistributionError, ChannelBusinessError } from './channel-distribution-policy.js'
 import { ChannelDistributionRepository } from './channel-distribution-repository.js'
-import { ChannelPartnerRepository } from './channel-partner-repository.js'
+import { channelAnonymousVisit, channelPublicDate, ChannelPartnerRepository } from './channel-partner-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 const amount=(v:unknown)=>{const n=Number(v);if(!Number.isSafeInteger(n)||n<0)throw new ChannelBusinessError('渠道源金额无效');return n}
@@ -135,6 +135,15 @@ export class ChannelFinanceRepository {
   const row=await this.tx.query(`UPDATE mbox.channel_statements SET status=$5,confirmed_by=$6 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND promoter_id=$4 AND status IN('pending','confirmed') RETURNING id`,[...this.scope,id,promoter.id,dispute?'disputed':'confirmed',customerId])
   if(!row.rows[0])throw new ChannelDistributionError('VERSION_CONFLICT');await this.event(id,dispute?'statement.disputed':'statement.confirmed',`customer:${customerId}`,{},reason);return{id}
  }
+ async respondForWeb(id:string,promoterId:string,dispute:boolean,reason:string){
+  await this.lock()
+  const allowed=await this.tx.query(`SELECT id FROM mbox.channel_promoters WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='active' AND can_confirm_statement`,[...this.scope,promoterId])
+  if(!allowed.rows[0])throw new ChannelDistributionError('NOT_AUTHORIZED',403)
+  const row=await this.tx.query(`UPDATE mbox.channel_statements SET status=$5,confirmed_by=NULL,confirmed_by_promoter_id=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND promoter_id=$4 AND (status='pending' OR (status='confirmed' AND $5='disputed')) RETURNING id`,[...this.scope,id,promoterId,dispute?'disputed':'confirmed'])
+  if(!row.rows[0])throw new ChannelDistributionError('VERSION_CONFLICT')
+  await this.event(id,dispute?'statement.disputed':'statement.confirmed',`promoter:${promoterId}`,{},reason)
+  return{id}
+ }
  private async lockedStatement(id:string){
   await this.lock();const s=(await this.tx.query<{id:string;promoter_id:string;account_id:string;source_statement_id:string|null;status:string;created_by:string;amount_minor:string}>(`SELECT id,promoter_id,account_id,source_statement_id,status,created_by,amount_minor::text FROM mbox.channel_statements WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...this.scope,id])).rows[0]
   if(!s)throw new ChannelDistributionError('NOT_FOUND',404);return s
@@ -198,7 +207,7 @@ export class ChannelFinanceRepository {
   const statement=(await this.tx.query(`SELECT s.id,s.promoter_id AS "promoterId",s.source_statement_id AS "sourceStatementId",s.amount_minor::text AS "amountMinor",s.status,a.subject AS "accountSubject",a.account_reference AS "accountReference" FROM mbox.channel_statements s JOIN mbox.channel_settlement_accounts a ON (a.tenant_id,a.store_id,a.id)=(s.tenant_id,s.store_id,s.account_id) WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.id=$3 AND ($4::uuid IS NULL OR s.promoter_id=$4)`,[...this.scope,id,promoterId??null])).rows[0]
   if(!statement)throw new ChannelDistributionError('NOT_AUTHORIZED',403)
   const lines=(await this.tx.query(`SELECT l.visit_id AS "visitId",x.amount_minor::text AS "deltaMinor",l.net_basis_minor::text AS "basisMinor",l.evidence,l.created_at::text AS "createdAt" FROM mbox.channel_statement_lines x JOIN mbox.channel_ledger l ON (l.tenant_id,l.store_id,l.id)=(x.tenant_id,x.store_id,x.ledger_id) WHERE x.tenant_id=$1 AND x.store_id=$2 AND x.statement_id=$3 ORDER BY l.sequence`,[...this.scope,statement.sourceStatementId??id])).rows
-  return promoterId?channelPartnerStatementSchema.parse({statement,lines}):{statement,lines}
+  return promoterId?channelPartnerStatementSchema.parse({statement,lines:lines.map(line=>({visitNumber:channelAnonymousVisit(promoterId,String(line.visitId)),deltaMinor:line.deltaMinor,basisMinor:line.basisMinor,date:channelPublicDate(String(line.createdAt))}))}):{statement,lines}
  }
  async overview(promoterId?:string){
   const args=[...this.scope,promoterId??null]
@@ -207,6 +216,6 @@ export class ChannelFinanceRepository {
   const ledger=(await this.tx.query(`SELECT l.id,l.visit_id AS "visitId",l.net_basis_minor::text AS "basisMinor",l.commission_delta_minor::text AS "deltaMinor",l.created_at::text AS "createdAt",b.promoter_id AS "promoterId" FROM mbox.channel_ledger l JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(l.tenant_id,l.store_id,l.batch_id) WHERE l.tenant_id=$1 AND l.store_id=$2 AND ($3::uuid IS NULL OR b.promoter_id=$3) ORDER BY l.sequence DESC LIMIT 500`,args)).rows
   const payouts=(await this.tx.query(`SELECT p.id,p.statement_id AS "statementId",p.amount_minor::text AS "amountMinor",p.status,p.attempt_reference AS "attemptReference",p.receipt_reference AS "receiptReference",COALESCE((SELECT sum(r.amount_minor) FROM mbox.channel_payout_returns r WHERE (r.tenant_id,r.store_id,r.payout_id)=(p.tenant_id,p.store_id,p.id)),0)::text AS "returnedMinor" FROM mbox.channel_payouts p JOIN mbox.channel_statements s ON (s.tenant_id,s.store_id,s.id)=(p.tenant_id,p.store_id,p.statement_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND ($3::uuid IS NULL OR s.promoter_id=$3) ORDER BY p.created_at DESC LIMIT 500`,args)).rows
   const balances=(await this.tx.query(`SELECT p.id AS "promoterId",COALESCE((SELECT sum(l.commission_delta_minor) FROM mbox.channel_ledger l JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(l.tenant_id,l.store_id,l.batch_id) WHERE b.tenant_id=p.tenant_id AND b.store_id=p.store_id AND b.promoter_id=p.id),0)::text AS "accruedMinor",COALESCE((SELECT sum(pay.amount_minor-COALESCE((SELECT sum(r.amount_minor) FROM mbox.channel_payout_returns r WHERE (r.tenant_id,r.store_id,r.payout_id)=(pay.tenant_id,pay.store_id,pay.id)),0)) FROM mbox.channel_payouts pay JOIN mbox.channel_statements s ON (s.tenant_id,s.store_id,s.id)=(pay.tenant_id,pay.store_id,pay.statement_id) WHERE s.tenant_id=p.tenant_id AND s.store_id=p.store_id AND s.promoter_id=p.id AND pay.status='succeeded'),0)::text AS "paidMinor" FROM mbox.channel_promoters p WHERE p.tenant_id=$1 AND p.store_id=$2 AND ($3::uuid IS NULL OR p.id=$3)`,args)).rows.map(b=>({...b,balanceMinor:String(BigInt(String(b.accruedMinor))-BigInt(String(b.paidMinor)))}))
-  return{positions,statements,ledger,payouts,balances,limit:500}
+  return{positions,statements,ledger,payouts,balances:balances as {promoterId:string;accruedMinor:string;paidMinor:string;balanceMinor:string}[],limit:500}
  }
 }

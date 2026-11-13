@@ -109,7 +109,8 @@ release_contract_boundary_between() {
   local from_schema=$1 to_schema=$2 boundary result=0
   [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
-  for boundary in 96 275 300 301 302 303 304 305 313; do
+  # 314 removes customer-authenticated partner access and adds website-only private projections.
+  for boundary in 96 275 300 301 302 303 304 305 313 314; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

@@ -125,8 +125,6 @@ for(const state of ['settled','missing','unpaid'])test(`batch original readback 
 
 for(const [method,original,changed] of [
  ['claimChannelCoupon',['ABCDEFGH2345'],['DIFFERENT234']],
- ['acceptChannelInvitation',['invite-original'],['invite-different']],
- ['respondChannelStatement',['statement-a',false,'已核对无误'],['statement-b',false,'已核对无误']],
 ])test(`${method}: a lost response blocks edited intent and restores the original key across restart`,async()=>{
  let sent=0
  const respond=async()=>++sent===1?{networkError:true}:sent===2?{status:503,data:{error:{code:'UNAVAILABLE'}}}:{data:{data:{id:'original-record',claimId:'original-claim'}}}
@@ -170,8 +168,6 @@ test('channel claim never clears an unknown original attempt on a later uncommit
 })
 
 for(const [method,original,changed] of [
- ['acceptChannelInvitation',['expired-invite'],['new-invite']],
- ['respondChannelStatement',['statement-a',false,'核对无误'],['statement-b',false,'核对无误']],
 ])test(`${method}: a first confirmed rollback allows a corrected deliberate operation`,async()=>{
  let sent=0
  const f=fixture(async()=>++sent===1?{status:409,data:{error:{code:'CHANNEL_NOT_COMMITTED',commitDisposition:'not_committed'}}}:{data:{data:{id:'valid-record'}}})
@@ -212,7 +208,7 @@ for(const outcome of ['success','network-error'])test(`channel activation ${outc
  assert.ok(![...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
 })
 
-for(const [method,args] of [['claimChannelCoupon',['ABCDEFGH2345']],['acceptChannelInvitation',['invite-original']],['respondChannelStatement',['statement-a',false,'已核对']]])test(`${method} retries only an existing server receipt after response loss`,async()=>{
+for(const [method,args] of [['claimChannelCoupon',['ABCDEFGH2345']]])test(`${method} retries only an existing server receipt after response loss`,async()=>{
  let sent=0;const f=fixture(async()=>++sent===1?{networkError:true}:{data:{data:{id:'original',claimId:'original'}}})
  await assert.rejects(f.api[method](...args));await f.api[method](...args)
  assert.equal(f.calls[0].headers['x-channel-recovery'],undefined)
@@ -231,4 +227,9 @@ test('missing channel receipt leaves the original journal blocked for manual ver
  await assert.rejects(f.api.claimChannelCoupon('DIFFERENT234'),{code:'COMMAND_RECOVERY_PENDING'})
  assert.equal(f.calls.length,2);assert.equal(f.calls[1].headers['x-channel-recovery'],'1')
  assert.ok([...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+
+test('Mini Program no longer exports partner account or settlement operations',()=>{
+ const f=fixture(async()=>({data:{data:{}}}))
+ for(const name of ['getChannelPartner','getChannelHistory','getChannelPoster','acceptChannelInvitation','respondChannelStatement','getChannelStatement'])assert.equal(f.api[name],undefined)
 })

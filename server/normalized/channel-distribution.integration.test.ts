@@ -1,3 +1,5 @@
+import { inviteChannelWeb, hashChannelWebToken } from './channel-web-auth.js'
+import { channelAnonymousVisit } from './channel-partner-repository.js'
 import { PostgresOrderCancellationRepository } from './order-cancellation-repository.js'
 import { tableManagementApiPlugin } from './table-management-api.js'
 import { TableManagementCommandService } from './table-management-repository.js'
@@ -66,7 +68,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query(`INSERT INTO mbox.channel_promoters(id,tenant_id,store_id,partner_id,name) VALUES($3,$1,$2,$4,'川菜店长')`, [...args, promoter, partner])
     await grantFixtureStaffPermissions(admin, scope, [employee], ['order.create', 'channel.manage', 'channel.activate', 'channel.view', 'table.view_all', 'table.transfer', 'table.participation.manage'])
     app = Fastify()
-    await app.register(channelDistributionApiPlugin, { miniCode, transactions: runner, commands: new NormalizedCommandExecutor(runner),
+    await app.register(channelDistributionApiPlugin, { miniCode, webScope: scope, transactions: runner, commands: new NormalizedCommandExecutor(runner),
       resolveSelfContext: async () => ({ scope, customerId: selfCustomer, tableSessionId: null, businessDate: '2026-11-12', actorRef: `customer:${selfCustomer}` }),
       resolveGuestContext: async () => { throw new Error('No authenticated table guest in this fixture') },
       resolveStaffContext: async () => ({ scope, employeeId: employee, businessDate: '2026-11-12' }),
@@ -76,6 +78,12 @@ integration('channel distribution real PostgreSQL authority', () => {
   })
   afterAll(async () => { await app?.close(); await runtime?.end(); await admin?.end() })
 
+  async function webSession(pid:string) {
+    const token=Buffer.from(randomUUID()+randomUUID()).subarray(0,32).toString('base64url')
+    await admin.query(`INSERT INTO mbox.channel_web_accounts(tenant_id,store_id,promoter_id,username,password_hash) VALUES($1,$2,$3,$4,'fixture') ON CONFLICT DO NOTHING`,[...args,pid,'u'+pid.replaceAll('-','')])
+    await admin.query(`INSERT INTO mbox.channel_web_sessions(tenant_id,store_id,promoter_id,token_hash,expires_at) VALUES($1,$2,$3,$4,clock_timestamp()+interval '1 hour')`,[...args,pid,hashChannelWebToken(token)])
+    return {cookie:`__Secure-mbox_channel_partner_session=${token}`}
+  }
   async function customer(verified = true) {
     const id = randomUUID()
     await admin.query(`INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($3::uuid,$1,$2,$3::text)`, [...args, id])
@@ -782,7 +790,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(tail).toMatchObject({amountMinor:500,sourceStatementId:original.id})
     await expect(run(r=>r.reissueAccount(original.id,a2.id,employee,'重复续结'))).rejects.toThrow('已有未结')
     await expect(run(r=>r.startPayment(tail.id,500,randomUUID(),employee,'未审批'))).rejects.toThrow('确认和独立审批')
-    const detail=await run(r=>r.statementDetail(tail.id,f.rid));expect(detail.lines).toHaveLength(1);expect(detail.statement.accountReference).toMatch(/^new-bank-/)
+    const detail=await run(r=>r.statementDetail(tail.id,f.rid));expect(detail.lines).toHaveLength(1);expect(detail.statement).not.toHaveProperty('accountReference')
     await approve(tail.id);await pay(tail.id,200)
     const a3=await account(),final=await run(r=>r.reissueAccount(tail.id,a3.id,employee,'再次换账户续结'))
     expect(final).toMatchObject({amountMinor:300,sourceStatementId:original.id});await approve(final.id)
@@ -989,22 +997,22 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query(`INSERT INTO mbox.channel_visits(tenant_id,store_id,source_batch_id,locked_use_limit,opened_at) SELECT tenant_id,store_id,source_batch_id,locked_use_limit,'2026-11-12T01:00:00Z'::timestamptz FROM mbox.channel_visits CROSS JOIN generate_series(1,101) WHERE id=$1`,[f.visitId])
     await admin.query(`INSERT INTO mbox.channel_statements(tenant_id,store_id,promoter_id,account_id,amount_minor,cutoff_at,created_by,created_at)
       SELECT tenant_id,store_id,promoter_id,account_id,0,cutoff_at,created_by,'2026-11-12T01:00:00Z'::timestamptz FROM mbox.channel_statements CROSS JOIN generate_series(1,501) WHERE id=$1`,[statement.id])
-    selfCustomer=f.owner
+    const headers=await webSession(f.rid)
     for(const [kind,count,original] of [['batches',102,ownBatch],['visits',102,f.visitId],['statements',502,statement.id]] as const){
       let cursor:string|null=null;const ids:string[]=[]
-      do{const response=await app.inject({method:'GET',url:`/public/mini/channel/history?kind=${kind}&limit=100`+(cursor?'&cursor='+cursor:'')})
-        expect(response.statusCode,response.body).toBe(200);ids.push(...response.json().data.map((item:{id:string})=>item.id));cursor=response.json().meta.nextCursor
+      do{const response=await app.inject({method:'GET',headers,url:`/cooperation/history?kind=${kind}&limit=100`+(cursor?'&cursor='+cursor:'')})
+        expect(response.statusCode,response.body).toBe(200);ids.push(...response.json().data.map((item:{id?:string;visitNumber?:string})=>item.id??item.visitNumber));cursor=response.json().meta.nextCursor
       }while(cursor)
-      expect(ids).toHaveLength(count);expect(new Set(ids).size).toBe(count);expect(ids).toContain(original)
+      expect(ids).toHaveLength(count);expect(new Set(ids).size).toBe(count);expect(ids).toContain(kind==='visits'?channelAnonymousVisit(f.rid,original):original)
     }
-    const original=await app.inject({method:'GET',url:'/public/mini/channel/statement/'+statement.id})
+    const original=await app.inject({method:'GET',headers,url:'/cooperation/statement/'+statement.id})
     expect(original.statusCode,original.body).toBe(200);expect(original.json().data.lines).toHaveLength(1)
-    expect(JSON.stringify(original.json().data.lines)).not.toMatch(/payments|refunds|principalMinor|costMinor/)
+    expect(JSON.stringify(original.json().data.lines)).not.toMatch(/payments|refunds|principalMinor|costMinor|orderId|evidence|accountReference|visitId/)
     const foreign=await batch()
-    expect((await app.inject({method:'GET',url:'/public/mini/channel/history?kind=batches&cursor='+foreign.id})).statusCode).toBe(403)
-    expect((await app.inject({method:'GET',url:'/public/mini/channel/history?kind=batches&promoterId='+promoter})).statusCode).toBe(400)
+    expect((await app.inject({method:'GET',headers,url:'/cooperation/history?kind=batches&cursor='+foreign.id})).statusCode).toBe(403)
+    expect((await app.inject({method:'GET',headers,url:'/cooperation/history?kind=batches&promoterId='+promoter})).statusCode).toBe(400)
     await admin.query("UPDATE mbox.channel_promoters SET status='disabled' WHERE id=$1",[f.rid])
-    expect((await app.inject({method:'GET',url:'/public/mini/channel/history?kind=batches&cursor='+ownBatch})).statusCode).toBe(403)
+    expect((await app.inject({method:'GET',headers,url:'/cooperation/history?kind=batches&cursor='+ownBatch})).statusCode).toBe(401)
   })
   it('binds a single-use promoter invitation and refuses cross-account data and posters', async () => {
     const invited = await customer(), outsider = await customer(), b = await batch()
@@ -1014,27 +1022,27 @@ integration('channel distribution real PostgreSQL authority', () => {
     const own = await runner.run(scope, tx => new ChannelPartnerRepository(tx).dashboard(invited), { readOnly: true })
     expect(own.batches.some(row => row.id === b.id)).toBe(true)
     expect(JSON.stringify(own.batches)).not.toMatch(/costMinor|publicToken|contract_snapshot/)
-    selfCustomer=invited
-    const history=await app.inject({method:'GET',url:'/public/mini/channel/history?kind=batches'})
+    const headers=await webSession(promoter)
+    const history=await app.inject({method:'GET',headers,url:'/cooperation/history?kind=batches'})
     expect(history.statusCode,history.body).toBe(200);expect(history.body).not.toMatch(/costMinor|publicToken|contract_snapshot/)
     expect(own.visits.every(row => !('customer_id' in row) && !('customerId' in row))).toBe(true)
     await expect(runner.run(scope, tx => new ChannelPartnerRepository(tx).dashboard(outsider), { readOnly: true })).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' })
     selfCustomer = outsider
-    const blocked = await app.inject({ method: 'GET', url: `/public/mini/channel/poster/${b.id}?format=data` })
-    expect(blocked.statusCode).toBe(403)
+    const blocked = await app.inject({ method: 'GET', url: `/cooperation/poster/${b.id}?format=data` })
+    expect(blocked.statusCode).toBe(401)
     selfCustomer = invited
-    const poster = await app.inject({ method: 'GET', url: `/public/mini/channel/poster/${b.id}?format=data` })
+    const poster = await app.inject({ method: 'GET', headers, url: `/cooperation/poster/${b.id}?format=data` })
     expect(poster.statusCode, poster.body.slice(0, 300)).toBe(200)
     expect(Buffer.from(poster.json().data.base64, 'base64').subarray(1, 4).toString()).toBe('PNG')
-    expect((await admin.query(`SELECT actor_ref,employee_id FROM mbox.channel_followups WHERE batch_id=$1 AND kind='download'`, [b.id])).rows).toEqual([{ actor_ref: `customer:${invited}`, employee_id: null }])
+    expect((await admin.query(`SELECT actor_ref,employee_id FROM mbox.channel_followups WHERE batch_id=$1 AND kind='download'`, [b.id])).rows).toEqual([{ actor_ref: `promoter:${promoter}`, employee_id: null }])
     const another=await batch()
     miniCode.render.mockImplementationOnce(async()=>{
       await admin.query("UPDATE mbox.channel_promoters SET status='disabled' WHERE id=$1",[promoter])
       return sharp({create:{width:430,height:430,channels:3,background:'#186a42'}}).png().toBuffer()
     })
     try {
-      const revoked=await app.inject({method:'GET',url:`/public/mini/channel/poster/${another.id}`})
-      expect(revoked.statusCode).toBe(403)
+      const revoked=await app.inject({method:'GET',headers,url:`/cooperation/poster/${another.id}`})
+      expect(revoked.statusCode).toBe(401)
       expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_poster_versions WHERE batch_id=$1',[another.id])).rows[0].n).toBe(0)
     } finally {await admin.query("UPDATE mbox.channel_promoters SET status='active' WHERE id=$1",[promoter])}
 
@@ -1409,10 +1417,72 @@ integration('channel distribution real PostgreSQL authority', () => {
     const original=await app.inject(request);expect(original.statusCode,original.body).toBe(200)
     const replay=await app.inject({...request,headers:{...request.headers,'x-channel-recovery':'1'}})
     expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true);expect(replay.json().data).toEqual(original.json().data)
-    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_invitations WHERE promoter_id=$1',[pid])).rows[0].n).toBe(1)
-    selfCustomer=await customer()
-    const accepted=await app.inject({method:'POST',url:'/public/mini/channel/partner/accept',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{token:original.json().data.token}})
-    expect(accepted.statusCode,accepted.body).toBe(200);expect(accepted.json().data.promoterId).toBe(pid)
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_web_invitations WHERE promoter_id=$1',[pid])).rows[0].n).toBe(1)
+    const accepted=await app.inject({method:'POST',url:'/cooperation/activate',headers:{origin:'https://www.shmbox.com','x-channel-web':'1'},payload:{token:original.json().data.token,username:'invite_'+pid.replaceAll('-','').slice(0,20),password:'fixture-password-123'}})
+    expect(accepted.statusCode,accepted.body).toBe(200);expect(accepted.json().data.activated).toBe(true)
+
+  })
+
+  it('website invitation activation, password login, reset and logout isolate customer and staff identities',async()=>{
+    const f=await financeFixture(),origin={origin:'https://www.shmbox.com','x-channel-web':'1'},username='web_'+f.rid.replaceAll('-','').slice(0,20),password='fixture-password-123'
+    const post=(url:string,payload:object,headers:Record<string,string>=origin)=>app.inject({method:'POST',url:'/cooperation/'+url,remoteAddress:'192.0.2.91',headers,payload})
+    const invite=await runner.run(scope,tx=>inviteChannelWeb(tx,f.rid,employee))
+    expect((await post('activate',{token:invite.token,username,password},{origin:'https://evil.example','x-channel-web':'1'})).statusCode).toBe(403)
+    const results=await Promise.all([post('activate',{token:invite.token,username,password}),post('activate',{token:invite.token,username,password})])
+    expect(results.map(r=>r.statusCode).sort()).toEqual([200,401])
+    expect((await post('login',{username,password:'wrong-password-123'})).statusCode).toBe(401)
+    const login=await post('login',{username,password});expect(login.statusCode,login.body).toBe(200)
+    const cookie=String(login.headers['set-cookie']);expect(cookie).toMatch(/HttpOnly; Secure; SameSite=Strict/);expect(cookie).toContain('Path=/cooperation')
+    const headers={cookie:cookie.split(';')[0]!}
+    const own=await app.inject({method:'GET',url:'/cooperation/partner',headers});expect(own.statusCode,own.body).toBe(200)
+    expect(own.body).not.toMatch(/customerId|customerName|customerPhone|orderId|orderCount|tableId|tableName|evidence|accountReference|accountSubject|promoterId|contact|restaurant/)
+    expect((await app.inject({method:'GET',url:'/cooperation/partner'})).statusCode).toBe(401)
+    for(const url of ['/public/mini/channel/partner','/public/mini/channel/history','/public/mini/channel/poster/'+randomUUID(),'/public/mini/channel/statement/'+randomUUID()])expect((await app.inject({method:'GET',url,headers})).statusCode).toBe(404)
+    const statement=await runner.run(scope,tx=>new ChannelFinanceRepository(tx).statement(f.rid,f.account,employee,'网页核对'))
+    const input={id:statement.id,dispute:false,reason:'核对匿名金额'},key='channel-'+randomUUID()
+    expect((await post('statement-response',input,{...headers,'idempotency-key':key})).statusCode).toBe(403)
+    const command={...origin,...headers,'idempotency-key':key}
+    const confirmed=await post('statement-response',input,command);expect(confirmed.statusCode,confirmed.body).toBe(200)
+    expect((await post('statement-response',input,{...command,'idempotency-key':'channel-'+randomUUID()})).statusCode).toBe(409)
+    const replay=await post('statement-response',input,{...command,'x-channel-recovery':'1'});expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)
+    expect((await admin.query('SELECT confirmed_by,confirmed_by_promoter_id FROM mbox.channel_statements WHERE id=$1',[statement.id])).rows[0]).toEqual({confirmed_by:null,confirmed_by_promoter_id:f.rid})
+    const foreign=await financeFixture(),foreignStatement=await runner.run(scope,tx=>new ChannelFinanceRepository(tx).statement(foreign.rid,foreign.account,employee,'其他推荐人'))
+    expect((await app.inject({method:'GET',url:'/cooperation/statement/'+foreignStatement.id,headers})).statusCode).toBe(403)
+    await runner.run(scope,tx=>new ChannelFinanceRepository(tx).approve(statement.id,reviewer,'网页确认后独立审批'))
+    const reset=await runner.run(scope,tx=>inviteChannelWeb(tx,f.rid,employee)),newPassword='reset-fixture-password'
+    expect((await post('activate',{token:reset.token,username,password:newPassword})).statusCode).toBe(200)
+    expect((await post('statement-response',input,{...command,'x-channel-recovery':'1'})).statusCode).toBe(401)
+    expect((await app.inject({method:'GET',url:'/cooperation/partner',headers})).statusCode).toBe(401)
+    expect((await post('login',{username,password})).statusCode).toBe(401)
+    const newLogin=await post('login',{username,password:newPassword});expect(newLogin.statusCode,newLogin.body).toBe(200)
+    const fresh={cookie:String(newLogin.headers['set-cookie']).split(';')[0]!}
+    expect((await post('statement-response',input,{...origin,...fresh,'idempotency-key':key,'x-channel-recovery':'1'})).json().meta.replayed).toBe(true)
+    expect((await post('logout',{}, {...origin,...fresh})).statusCode).toBe(200)
+    expect((await app.inject({method:'GET',url:'/cooperation/partner',headers:fresh})).statusCode).toBe(401)
+  },30000)
+  it('stopping a website promoter permanently revokes sessions and runtime cannot reassign or un-revoke them',async()=>{
+    const f=await financeFixture(),headers=await webSession(f.rid)
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).promoter(f.rid,false,true,false,employee,employee,'停止合作'))
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).promoter(f.rid,true,true,false,employee,employee,'恢复账号但需重新登录'))
+    expect((await app.inject({method:'GET',url:'/cooperation/partner',headers})).statusCode).toBe(401)
+    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.channel_web_sessions SET revoked_at=NULL WHERE promoter_id=$1',[f.rid]))).rejects.toThrow('revocation is final')
+    await expect(runner.run(scope,tx=>tx.query('UPDATE mbox.channel_web_sessions SET promoter_id=$2 WHERE promoter_id=$1',[f.rid,promoter]))).rejects.toMatchObject({code:'42501'})
+  })
+  it('website login throttling persists rejected attempts and ignores forged client IP headers',async()=>{
+    const username='missing_'+randomUUID().replaceAll('-','').slice(0,16)
+    for(let i=0;i<11;i++){
+      const response=await app.inject({method:'POST',url:'/cooperation/login',remoteAddress:'192.0.2.92',headers:{origin:'https://www.shmbox.com','x-channel-web':'1','x-forwarded-for':`198.51.100.${i}`},payload:{username,password:'wrong-password-123'}})
+      expect(response.statusCode,response.body).toBe(i<10?401:429)
+    }
+  },30000)
+  it('rejects expired and regenerated website invitations without consuming another account',async()=>{
+    const f=await financeFixture(),old=await runner.run(scope,tx=>inviteChannelWeb(tx,f.rid,employee)),current=await runner.run(scope,tx=>inviteChannelWeb(tx,f.rid,employee))
+    const send=(token:string)=>app.inject({method:'POST',url:'/cooperation/activate',remoteAddress:'192.0.2.93',headers:{origin:'https://www.shmbox.com','x-channel-web':'1'},payload:{token,username:'expire_'+f.rid.slice(0,8),password:'fixture-password-123'}})
+    expect((await send(old.token)).statusCode).toBe(401)
+    await admin.query("UPDATE mbox.channel_web_invitations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[current.id])
+    expect((await send(current.token)).statusCode).toBe(401)
+    const replacement=await runner.run(scope,tx=>inviteChannelWeb(tx,f.rid,employee));expect(replacement.token).not.toBe(current.token)
+    expect((await admin.query('SELECT count(*)::integer AS n FROM mbox.channel_web_accounts WHERE promoter_id=$1',[f.rid])).rows[0].n).toBe(0)
   })
 
   it('defaults to no stacking even when L is larger, and rolls back a second staff claim atomically',async()=>{

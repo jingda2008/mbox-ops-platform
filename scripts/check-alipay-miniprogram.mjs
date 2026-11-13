@@ -100,7 +100,7 @@ assert(!Object.prototype.hasOwnProperty.call(project, 'component2'), 'format 2 �
 assert(project.compileOptions && project.compileOptions.component2 === true, 'mini.project.json 必须显式启用 compileOptions.component2')
 // Customer custody and channel distribution are WeChat-only in this scope. Keep all existing
 // Alipay pages checked; only these exact new routes are outside parity scope.
-const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index', 'pages/channel-partner/index'])
+const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index'])
 for (const page of wechatOnlyPages) {
   assert(wechatApp.pages.includes(page) && !alipayApp.pages.includes(page), `微信独有页面范围变化: ${page}`)
   for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(join(wechatRoot, page + extension))

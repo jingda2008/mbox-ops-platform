@@ -25,9 +25,15 @@ export function publicChannelRule(value: unknown) {
 }
 export interface ChannelWalletQuery { limit?: number; cursor?: string; status?: 'all'|'available'|'active'|'fulfilled'|'expired'|'revoked'; code?: string; claimId?: string }
 
-// External reconciliation needs sale/refund totals, not internal evidence blobs or payment identifiers.
-export const channelPartnerStatementSchema=z.object({
-  statement:z.object({id:z.string(),promoterId:z.string(),sourceStatementId:z.string().nullable(),amountMinor:z.string(),status:z.string(),accountSubject:z.string(),accountReference:z.string()}),
-  lines:z.array(z.object({visitId:z.string(),deltaMinor:z.string(),basisMinor:z.string(),createdAt:z.string(),
-    evidence:z.object({evidence:z.array(z.object({orderId:z.string(),paid:z.number().optional(),refunded:z.number().optional(),basis:z.number().optional(),excluded:z.string().optional(),pending:z.string().optional()})).default([])})})),
+// Exact public allowlists: never expose order evidence, customer/table identifiers or bank details.
+export const channelPartnerStatementSchema = z.object({
+  statement: z.object({ id:z.string(), sourceStatementId:z.string().nullable(), amountMinor:z.string(), status:z.string() }),
+  lines: z.array(z.object({ visitNumber:z.string(), deltaMinor:z.string(), basisMinor:z.string(), date:z.string() })),
+})
+export const channelWebVisitSchema = z.object({
+  visitNumber:z.string(), date:z.string(), arrived:z.boolean(), closed:z.boolean(),
+  qualifiedConsumptionMinor:z.string().nullable(), accruedCommissionMinor:z.string().nullable(),
+})
+export const channelWebStatementSummarySchema = z.object({
+  id:z.string(), sourceStatementId:z.string().nullable(), amountMinor:z.string(), status:z.string(), createdAt:z.string(), paidMinor:z.string(),
 })

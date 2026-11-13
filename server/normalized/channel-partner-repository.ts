@@ -1,4 +1,4 @@
-import { publicChannelRule } from './channel-public-view.js'
+import { channelWebVisitSchema, channelWebStatementSummarySchema, publicChannelRule } from './channel-public-view.js'
 import { ChannelFinanceRepository } from './channel-finance-repository.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { ChannelDistributionError } from './channel-distribution-policy.js'
@@ -98,6 +98,23 @@ export class ChannelPartnerRepository {
     return {items,nextCursor:rows.length>limit?String(items[items.length-1]!.id):null}
   }
 
+  async webHistory(promoterId:string, kind:'batches'|'visits'|'statements', cursor?:string, limit=30) {
+    const page = await this.historyFor(promoterId,kind,cursor,limit)
+    return {nextCursor:page.nextCursor,items:page.items.map(row => {
+      if(kind==='batches') return {id:row.id,offerCode:row.offerCode,rule:row.rule,acceptingClaims:row.acceptingClaims,claims:row.claims,arrivals:row.arrivals}
+      if(kind==='statements') return channelWebStatementSummarySchema.parse(row)
+      return channelWebVisitSchema.parse({visitNumber:channelAnonymousVisit(promoterId,String(row.id)),date:channelPublicDate(String(row.boundAt)),arrived:row.arrivedAt!==null,closed:row.closedAt!==null,qualifiedConsumptionMinor:row.qualifiedConsumptionMinor,accruedCommissionMinor:row.accruedCommissionMinor})
+    })}
+  }
+  async webDashboard(promoter:{id:string;can_confirm_statement:boolean}) {
+    const batches=await this.webHistory(promoter.id,'batches'),visits=await this.webHistory(promoter.id,'visits'),statements=await this.webHistory(promoter.id,'statements')
+    const finance=await new ChannelFinanceRepository(this.tx).overview(promoter.id)
+    const balance=finance.balances[0]
+    return {accountRef:createHash('sha256').update(promoter.id).digest('hex'),promoter:{canConfirmStatement:promoter.can_confirm_statement},batches:batches.items,visits:visits.items,statements:statements.items,
+      balance:{accruedMinor:String(balance?.accruedMinor??'0'),paidMinor:String(balance?.paidMinor??'0'),balanceMinor:String(balance?.balanceMinor??'0')},
+      nextCursors:{batches:batches.nextCursor,visits:visits.nextCursor,statements:statements.nextCursor}}
+  }
+
   async followup(input: { promoterId: string; batchId: string | null; employeeId: string | null; actorRef: string; kind: string; note: string; nextContactAt: string | null }) {
     if (input.batchId) {
       const match = await this.tx.query(`SELECT id FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND promoter_id=$4`, [...this.args, input.batchId, input.promoterId])
@@ -106,4 +123,11 @@ export class ChannelPartnerRepository {
     return (await this.tx.query(`INSERT INTO mbox.channel_followups(tenant_id,store_id,promoter_id,batch_id,employee_id,actor_ref,kind,note,next_contact_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [...this.args, input.promoterId, input.batchId, input.employeeId, input.actorRef, input.kind, input.note, input.nextContactAt])).rows[0]!
   }
+}
+
+export const channelAnonymousVisit=(promoterId:string,visitId:string)=>createHash('sha256').update(`${promoterId}:${visitId}`).digest('hex').slice(0,16).toUpperCase()
+export function channelPublicDate(value:string) {
+  const date=new Date(value)
+  if(!Number.isFinite(date.getTime()))throw new TypeError('Invalid channel date')
+  return new Date(date.getTime()+8*3600000).toISOString().slice(0,10)
 }

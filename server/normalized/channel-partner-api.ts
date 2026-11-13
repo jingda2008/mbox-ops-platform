@@ -1,3 +1,4 @@
+import { authorizeChannelWeb, channelWebScope, channelWebToken, inviteChannelWeb } from './channel-web-auth.js'
 import { readChannelReport,channelReportCsv } from './channel-report.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
@@ -7,7 +8,6 @@ import { ChannelPartnerRepository } from './channel-partner-repository.js'
 import { StaffAccessRepository } from './staff-access-repository.js'
 import type { JsonCodec, JsonValue } from './command-executor.js'
 import type { ScopedTransaction } from './transaction-runner.js'
-import { ChannelDistributionRepository } from './channel-distribution-repository.js'
 import { ChannelDistributionError } from './channel-distribution-policy.js'
 import { renderChannelPoster } from './channel-poster.js'
 import { WechatMiniProgramCodeError } from './wechat-mini-program-code.js'
@@ -20,28 +20,21 @@ const schemas = {
   followup: channelManagementSchemas.followup,
 }
 export function registerChannelPartnerRoutes(app: FastifyInstance, options: ChannelApiOptions) {
-  app.get('/public/mini/channel/partner', async request => {
-    const ctx = await options.resolveSelfContext(request)
-    return { data: await options.transactions.run(ctx.scope, tx => new ChannelPartnerRepository(tx).dashboard(ctx.customerId), { readOnly: true }) }
+  app.get('/cooperation/partner', async request => {
+    const token = channelWebToken(request)
+    return { data: await options.transactions.run(channelWebScope(options), async tx => {
+      const promoter = await authorizeChannelWeb(tx, token)
+      return new ChannelPartnerRepository(tx).webDashboard(promoter)
+    }, { readOnly: true }) }
   })
-  app.get('/public/mini/channel/history',async request=>{
-    const ctx=await options.resolveSelfContext(request)
-    const query=z.object({kind:z.enum(['batches','visits','statements']),cursor:z.string().uuid().optional(),limit:z.coerce.number().int().min(1).max(100).optional()}).strict().parse(request.query)
-    const page=await options.transactions.run(ctx.scope,tx=>new ChannelPartnerRepository(tx).history(ctx.customerId,query.kind,query.cursor,query.limit),{readOnly:true})
+  app.get('/cooperation/history', async request => {
+    const token = channelWebToken(request)
+    const query = z.object({ kind:z.enum(['batches','visits','statements']), cursor:z.string().uuid().optional(), limit:z.coerce.number().int().min(1).max(100).optional() }).strict().parse(request.query)
+    const page = await options.transactions.run(channelWebScope(options), async tx => {
+      const promoter = await authorizeChannelWeb(tx, token)
+      return new ChannelPartnerRepository(tx).webHistory(promoter.id, query.kind, query.cursor, query.limit)
+    }, { readOnly: true })
     return {data:page.items,meta:{nextCursor:page.nextCursor}}
-  })
-  app.post('/public/mini/channel/partner/accept', { bodyLimit: 2048 }, async request => {
-    const ctx = await options.resolveSelfContext(request), input = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict().parse(request.body)
-    const result = await options.commands.execute({ scope: ctx.scope, operationScope: 'channel.partner.accept', idempotencyKey: keySchema.parse(request.headers['idempotency-key']),
-      requestFingerprint: JSON.stringify({ input, customerId: ctx.customerId }), resultCodec: codec, retainReceipt: true, rejectExpiredReceipt: true,
-      replayOnly: request.headers['x-channel-recovery'] === '1', authorizeReplay: async (tx, authorization) => {
-        const expected = z.object({ promoterId: z.string().uuid() }).parse(authorization)
-        if ((await new ChannelPartnerRepository(tx).authorize(ctx.customerId)).id !== expected.promoterId) throw new ChannelDistributionError('NOT_AUTHORIZED', 403)
-      } }, async tx => {
-      const value = await new ChannelPartnerRepository(tx).accept(input.token, ctx.customerId)
-      return { result: value, replayAuthorization: value, auditEvents: [], outboxMessages: [] }
-    }, async tx => { await new ChannelDistributionRepository(tx).verifiedCustomer(ctx.customerId) })
-    return { data: result.value, meta: { replayed: result.replayed } }
   })
   for (const action of ['invite', 'followup'] as const) app.post(`/staff/channel/${action}`, { bodyLimit: action === 'followup' ? 16384 : 4096 }, async request => {
     const ctx = await options.resolveStaffContext(request), input = schemas[action].parse(request.body)
@@ -50,7 +43,7 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
       requestFingerprint: JSON.stringify({ input, employeeId: ctx.employeeId }), resultCodec: codec, retainReceipt: true, rejectExpiredReceipt: true,
       replayOnly: request.headers['x-channel-recovery'] === '1', authorizeReplay: authorize }, async tx => {
       const repo = new ChannelPartnerRepository(tx)
-      const value = action === 'invite' ? await repo.invite(input.promoterId, ctx.employeeId)
+      const value = action === 'invite' ? await inviteChannelWeb(tx, input.promoterId, ctx.employeeId)
         : await repo.followup({ ...input as z.infer<typeof schemas.followup>, employeeId: ctx.employeeId, actorRef: `employee:${ctx.employeeId}` })
       return { result: value, auditEvents: [{ actor: { type: 'employee', employeeId: ctx.employeeId }, businessDate: ctx.businessDate,
         action: `channel.partner.${action}`, objectType: 'channel_promoter', objectId: input.promoterId, afterData: { recordId: String(value.id), operation: action } }], outboxMessages: [] }
@@ -69,7 +62,7 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
     const data = await options.transactions.run(ctx.scope, async tx => {
       await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'channel.view')
       const args = [ctx.scope.tenantId, ctx.scope.storeId]
-      const partners = (await tx.query(`SELECT p.id,p.name,p.settlement_subject AS "settlementSubject",r.id AS "promoterId",r.name AS "promoterName",r.customer_id IS NOT NULL AS linked,r.status
+      const partners = (await tx.query(`SELECT p.id,p.name,p.settlement_subject AS "settlementSubject",r.id AS "promoterId",r.name AS "promoterName",EXISTS(SELECT 1 FROM mbox.channel_web_accounts a WHERE (a.tenant_id,a.store_id,a.promoter_id)=(r.tenant_id,r.store_id,r.id)) AS linked,r.status
         FROM mbox.channel_partners p JOIN mbox.channel_promoters r ON (r.tenant_id,r.store_id,r.partner_id)=(p.tenant_id,p.store_id,p.id)
         WHERE p.tenant_id=$1 AND p.store_id=$2 ORDER BY p.created_at DESC,p.id LIMIT 100`, args)).rows
       const campaigns = (await tx.query(`SELECT id,title,claim_limit AS "claimLimit",capacity_limit AS "capacityLimit",cost_limit_minor::text AS "costLimitMinor",accepting_claims AS "acceptingClaims" FROM mbox.channel_campaigns WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id LIMIT 100`, args)).rows
@@ -85,14 +78,14 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
     }, { readOnly: true })
     return { data }
   })
-  for (const who of ['staff', 'partner'] as const) app.get(`${who === 'staff' ? '/staff' : '/public/mini'}/channel/poster/:batchId`, async (request, reply) => {
+  for (const who of ['staff', 'partner'] as const) app.get(`${who === 'staff' ? '/staff/channel' : '/cooperation'}/poster/:batchId`, async (request, reply) => {
     const { batchId } = z.object({ batchId: z.string().uuid() }).parse(request.params)
     const staff = who === 'staff' ? await options.resolveStaffContext(request) : null
-    const self = who === 'partner' ? await options.resolveSelfContext(request) : null
-    const scope = (staff ?? self)!.scope
+    const token = who === 'partner' ? channelWebToken(request) : null
+    const scope = staff?.scope ?? channelWebScope(options)
     const poster = await options.transactions.run(scope, async tx => {
       const repo = new ChannelPartnerRepository(tx)
-      const promoter = self ? await repo.authorize(self.customerId) : null
+      const promoter = token ? await authorizeChannelWeb(tx, token) : null
       if (staff) await new StaffAccessRepository(tx).assertPermission(staff.employeeId, 'channel.manage')
       const row = (await tx.query<{ promoter_id: string; code: string; token: string; rule: unknown; source: string; accepting: boolean }>(`
         SELECT b.promoter_id,b.offer_code AS code,b.public_token AS token,b.rule_snapshot AS rule,p.name AS source,
@@ -103,7 +96,7 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
         WHERE b.tenant_id=$1 AND b.store_id=$2 AND b.id=$3`, [scope.tenantId, scope.storeId, batchId])).rows[0]
       if (!row || (promoter && row.promoter_id !== promoter.id)) throw new ChannelDistributionError('NOT_AUTHORIZED', 403)
       await repo.followup({ promoterId: row.promoter_id, batchId, employeeId: staff?.employeeId ?? null,
-        actorRef: staff ? `employee:${staff.employeeId}` : `customer:${self!.customerId}`, kind: 'download', note: '请求生成推广图；不代表已发送或已保存', nextContactAt: null })
+        actorRef: staff ? `employee:${staff.employeeId}` : `promoter:${promoter!.id}`, kind: 'download', note: '请求生成推广图；不代表已发送或已保存', nextContactAt: null })
       return { ...row, rule: channelRuleSchema.parse(row.rule) }
     })
     const provider = options.miniCode
@@ -123,7 +116,7 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
     const sha256=createHash('sha256').update(png).digest('hex')
     await options.transactions.run(scope,async tx=>{
       if(staff)await new StaffAccessRepository(tx).assertPermission(staff.employeeId,'channel.manage')
-      if(self&&(await new ChannelPartnerRepository(tx).authorize(self.customerId)).id!==poster.promoter_id)throw new ChannelDistributionError('NOT_AUTHORIZED',403)
+      if(token&&(await authorizeChannelWeb(tx,token)).id!==poster.promoter_id)throw new ChannelDistributionError('NOT_AUTHORIZED',403)
       if(!cached)await tx.query(`INSERT INTO mbox.channel_poster_versions(tenant_id,store_id,batch_id,artifact_key,sha256,png,snapshot) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT DO NOTHING`,[scope.tenantId,scope.storeId,batchId,artifactKey,sha256,png,JSON.stringify(snapshot)])
     })
     const query = z.object({ format: z.literal('data').optional() }).strict().parse(request.query)

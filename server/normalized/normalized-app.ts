@@ -225,6 +225,9 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'req.headers.cookie',
   'headers.authorization',
   'headers.cookie',
+  'body.password',
+  'req.body.password',
+  'res.headers.set-cookie',
   'body.token',
   'body.revocationSecret',
   'req.body.token',
@@ -532,6 +535,14 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         }],
       })
     }
+    app.addHook('onSend', async (request, reply, payload) => {
+      if (request.url.split('?')[0]?.startsWith('/cooperation/')) {
+        reply.header('cache-control','private, no-store').header('referrer-policy','no-referrer').header('x-robots-tag','noindex, nofollow')
+          .header('x-frame-options','DENY').header('x-content-type-options','nosniff')
+          .header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+      }
+      return payload
+    })
     registerDomainPlugins(app)
     registerNativeUpdateDistribution(app, options.config.nativeUpdatesDir ?? null)
     await registerInjectedPlugins(app, options.injectedPlugins ?? [])
@@ -861,7 +872,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(memberVisitRewardApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     instance.register(memberVisitApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })
     const channelMiniCodeProvider = options.config.wechatIdentity === null ? undefined : new OfficialWechatMiniProgramCodeProvider(options.config.wechatIdentity)
-    instance.register(channelDistributionApiPlugin, { prefix: '/api', transactions, commerce, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext, resolveGuestContext: guestReservationContext,
+    instance.register(channelDistributionApiPlugin, { prefix: '/api', webScope: scope, transactions, commerce, commands: commandExecutor, resolveStaffContext: staffReservationContext, resolveSelfContext: memberSelfContext, resolveGuestContext: guestReservationContext,
       miniCode: channelMiniCodeProvider && { appId: options.config.wechatIdentity!.appId, render: input => channelMiniCodeProvider.render(input) },
     })
     instance.register(socialBroadcastApiPlugin, { prefix: '/api', transactions, commands: commandExecutor, resolveStaffContext: staffReservationContext })

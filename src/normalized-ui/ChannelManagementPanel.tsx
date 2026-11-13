@@ -90,7 +90,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     <button type="button" disabled={busy} onClick={() => void reload().catch(e => setError(message(e)))}>刷新渠道记录</button>
     {pending && <button type="button" disabled={busy} onClick={() => void mutate()}>恢复上次操作并核对</button>}
-    {invitation && <p>本次账号邀请码（请单独交给对应店长，72 小时有效）：<code>{invitation}</code></p>}
+    {invitation && <p>官网合作账号邀请链接（请单独交给对应店长，72 小时有效；再次开通将重置原账号并退出旧登录）：<a href={`https://www.shmbox.com/cooperation/#invite=${encodeURIComponent(invitation)}`} target="_blank" rel="noreferrer">{`https://www.shmbox.com/cooperation/#invite=${invitation}`}</a></p>}
     {canManage && <>
       <details><summary>1. 登记合作店和推荐店长</summary><form onSubmit={e => form(e, 'partner')}><fieldset disabled={disabled} className="gift-form-grid">
         <label>合作店名称<input name="name" required minLength={2} maxLength={100}/></label><label>约定佣金结算主体<input name="settlementSubject" required minLength={2} maxLength={200}/></label><label>店长姓名<input name="promoterName" required maxLength={100}/></label><label>登记依据<input name="reason" required minLength={2}/></label><button>保存合作方</button>
@@ -99,7 +99,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
         <label>活动名称<input name="title" required minLength={2}/></label><label>活动最多发券数<input name="claimLimit" type="number" min="1" max="1000000" required/></label><label>最多可承诺份数<input name="capacityLimit" type="number" min="1" max="1000000" required/></label><label>优惠成本总上限（元）<input name="costYuan" type="number" min="0" step="0.01" required/></label><label>额度依据<input name="reason" required minLength={2}/></label><button>保存暂停状态的活动</button>
       </fieldset></form></details>
       <label>当前推荐店长<select value={promoterId} disabled={busy} onChange={e => setPromoter(e.target.value)}><option value="">请选择</option>{data?.partners.map(p => <option key={p.promoterId} value={p.promoterId}>{p.name} · {p.promoterName}{p.linked ? '（已绑定）' : '（待邀请）'}</option>)}</select></label>
-      <button type="button" disabled={disabled || !promoterId} onClick={() => void mutate({ action: 'invite', body: { promoterId } })}>生成账号邀请码</button>
+      <button type="button" disabled={disabled || !promoterId} onClick={() => void mutate({ action: 'invite', body: { promoterId } })}>生成官网开通／重置链接</button>
       <details><summary>3. 生成每日专属推广批次</summary><form onSubmit={e => form(e, 'batch')}><fieldset disabled={disabled}>
         <div className="gift-form-grid"><label>所属活动<select value={campaignId} onChange={e => setCampaign(e.target.value)} required><option value="">请选择</option>{data?.campaigns.map(c => <option value={c.id} key={c.id}>{c.title}</option>)}</select></label><label>图片标题<input name="title" required minLength={2} maxLength={100}/></label>
           <label>本批最多领取 N<input name="N" type="number" min="1" max="1000000" required/></label><label>每人限领 K<input name="K" type="number" min="1" max="1000000" defaultValue="1" required/></label><label>每客组限用 L<input name="L" type="number" min="1" max="100" defaultValue="1" required/></label>

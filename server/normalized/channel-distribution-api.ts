@@ -1,3 +1,4 @@
+import { registerChannelWebAuth } from './channel-web-auth.js'
 import { channelManagementSchemas } from '../../src/shared/channel-distribution.js'
 import { createHash } from 'node:crypto'
 import { WechatMiniProgramCodeError, type WechatMiniProgramCodeInput } from './wechat-mini-program-code.js'
@@ -21,7 +22,7 @@ import { isStaffAuthenticationRequiredError, STAFF_AUTHENTICATION_REQUIRED_ERROR
 import type { ScopedTransaction } from './transaction-runner.js'
 import { registerChannelPartnerRoutes } from './channel-partner-api.js'
 
-export type ChannelApiOptions = Pick<CustomerBenefitApiOptions, 'transactions' | 'resolveSelfContext' | 'resolveGuestContext' | 'resolveStaffContext'> & { commands: Pick<NormalizedCommandExecutor, 'execute'>; commerce?: Pick<CommerceCommandService,'submitOrderInTransaction'>; miniCode?: { appId: string; render(input: Readonly<WechatMiniProgramCodeInput>): Promise<Buffer> } }
+export type ChannelApiOptions = Pick<CustomerBenefitApiOptions, 'transactions' | 'resolveSelfContext' | 'resolveGuestContext' | 'resolveStaffContext'> & { webScope?: import('./transaction-runner.js').StoreScope; commands: Pick<NormalizedCommandExecutor, 'execute'>; commerce?: Pick<CommerceCommandService,'submitOrderInTransaction'>; miniCode?: { appId: string; render(input: Readonly<WechatMiniProgramCodeInput>): Promise<Buffer> } }
 const uuid = z.string().uuid()
 const code = z.string().trim().min(8).max(100).transform(v => {
   const normalized = v.replace(/^MBOX_CHANNEL_V1:/, '')
@@ -42,6 +43,7 @@ const schemas = {
 }
 
 export const channelDistributionApiPlugin: FastifyPluginAsync<ChannelApiOptions> = async (app, options) => {
+  registerChannelWebAuth(app, options)
   registerChannelPartnerRoutes(app, options)
   registerChannelFinanceRoutes(app, options)
   registerChannelOperationsRoutes(app, options)
@@ -67,7 +69,7 @@ export const channelDistributionApiPlugin: FastifyPluginAsync<ChannelApiOptions>
     if (error instanceof ChannelDistributionError) return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     if (error instanceof StaffAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) return reply.code(403).send({ error: { code: 'CHANNEL_FORBIDDEN', message: '没有此操作或此桌权限' } })
     if (error instanceof CustomerNotFoundError) return reply.code(404).send({ error: { code: 'CHANNEL_CUSTOMER_NOT_FOUND', message: '请确认顾客有效身份' } })
-    if (error instanceof z.ZodError || error instanceof TypeError) return reply.code(400).send({ error: { code: 'CHANNEL_INVALID', message: '请核对优惠号码、顾客和本次桌号' } })
+    if (error instanceof z.ZodError || error instanceof TypeError) return reply.code(400).send({ error: { code: 'CHANNEL_INVALID', message: (_request.routeOptions.url??'').includes('/cooperation/') ? '请核对账号、密码和填写内容' : '请核对优惠号码、顾客和本次桌号' } })
     if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError || error instanceof IdempotencyReceiptUnavailableError) return reply.code(409).send({ error: { code: 'CHANNEL_RECEIPT', message: '请恢复原操作并核对结果，不能换编号重做' } })
     if (error instanceof Error && 'code' in error && ['23503', '23505', '23514'].includes(String(error.code))) return reply.code(409).send({ error: { code: 'CHANNEL_CONFLICT', message: '关联记录或状态已变化，请重新读取核对' } })
     throw error

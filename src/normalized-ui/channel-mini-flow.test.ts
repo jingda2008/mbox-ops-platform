@@ -30,6 +30,16 @@ function harness(name: string) {
 }
 
 describe('channel mini program identity and action boundaries', () => {
+  it('opens a WeChat poster scene directly and claims with one tap without invoking in-app scanning',async()=>{
+    const {page,api,wx,auth}=harness('channel-coupons')
+    page.onLoad({scene:'CH_ABCDEFGH2345'});await page.onShow()
+    expect(auth.ensureCustomerSession).toHaveBeenCalled();expect(page.data.offer.title).toBe('餐后小聚')
+    expect(api.claimChannelCoupon).not.toHaveBeenCalled()
+    await page.claim()
+    expect(api.claimChannelCoupon).toHaveBeenCalledExactlyOnceWith('ABCDEFGH2345')
+    expect(wx.scanCode).not.toHaveBeenCalled()
+  })
+
 
 
   it.each([{allowStacking:false,visitDiscountCapMinor:null,text:'不允许叠加'}, {allowStacking:true,visitDiscountCapMinor:1234,text:'客组总优惠最高 ¥12.34'}, {allowStacking:true,visitDiscountCapMinor:null,text:'未设置客组总上限'}])('shows stacking policy consistently in landing and wallet: %j',async config=>{
@@ -47,48 +57,6 @@ describe('channel mini program identity and action boundaries', () => {
     page.onLoad({scene:'CH_ABCDEFGH2345'});await page.load()
     expect(page.data.offer.offerText).toBe('优惠 15%，最多 ¥20.00')
     expect(page.data.coupons[0].offerText).toBe('优惠 15%，最多 ¥20.00')
-  })
-  it.each(['account','hide','selection'])('cancels a statement confirmation when %s changes while the modal is open',async change=>{
-    const {page,api,wx,changeOwner}=harness('channel-partner')
-    page.data.statementDetail={statement:{id:'statement-a'},lines:[]}
-    const pending=page.statementResponse({currentTarget:{dataset:{id:'statement-a'}}})
-    expect(wx.showModal).toHaveBeenCalledTimes(1)
-    if(change==='account')changeOwner()
-    if(change==='hide')page.onHide()
-    if(change==='selection')page.data.statementDetail={statement:{id:'statement-b'},lines:[]}
-    wx.showModal.mock.calls[0]![0].success({confirm:true})
-    await pending
-    expect(api.respondChannelStatement).not.toHaveBeenCalled()
-  })
-  it('keeps the last selected statement when older detail requests finish later',async()=>{
-    const {page,api}=harness('channel-partner')
-    let finishA!:(value:any)=>void,finishB!:(value:any)=>void
-    api.getChannelStatement.mockImplementation(id=>new Promise(resolve=>{if(id==='a')finishA=resolve;else finishB=resolve}))
-    const a=page.viewStatement({currentTarget:{dataset:{id:'a'}}}),b=page.viewStatement({currentTarget:{dataset:{id:'b'}}})
-    finishB({statement:{id:'b'},lines:[]});await b
-    finishA({statement:{id:'a'},lines:[]});await a
-    expect(page.data.statementDetail.statement.id).toBe('b')
-  })
-  it('allows only one pending confirmation modal and one statement response',async()=>{
-    const {page,api,wx}=harness('channel-partner')
-    page.data.statementDetail={statement:{id:'a'},lines:[]}
-    const event={currentTarget:{dataset:{id:'a'}}}
-    const first=page.statementResponse(event),second=page.statementResponse(event)
-    expect(wx.showModal).toHaveBeenCalledTimes(1)
-    wx.showModal.mock.calls[0]![0].success({confirm:true})
-    await Promise.all([first,second])
-    expect(api.respondChannelStatement).toHaveBeenCalledExactlyOnceWith('a',false,'已核对本单消费及退款明细，无异议')
-  })
-  it.each(['cancel','invalid-dispute','failure'])('releases the statement action lock after %s without replaying the write',async outcome=>{
-    const {page,api,wx}=harness('channel-partner')
-    page.data.statementDetail={statement:{id:'a'},lines:[]}
-    if(outcome==='failure')api.respondChannelStatement.mockRejectedValue(new Error('结果未确认'))
-    const pending=page.statementResponse({currentTarget:{dataset:{id:'a',dispute:outcome==='invalid-dispute'?'1':'0'}}})
-    wx.showModal.mock.calls[0]![0].success({confirm:outcome!=='cancel',content:' '})
-    await pending
-    expect(api.respondChannelStatement).toHaveBeenCalledTimes(outcome==='failure'?1:0)
-    expect(page.writing).toBe(false);expect(page.data.busy).toBe(false)
-    if(outcome==='failure')expect(page.data.error).toBe('结果未确认')
   })
   it.each(['hide','account','manual-input'])('ignores a delayed native scan after %s changes the current operation',async change=>{
     const {page,api,wx,changeOwner}=harness('channel-coupons')
@@ -255,43 +223,6 @@ describe('channel mini program identity and action boundaries', () => {
     api.getChannelWalletPage.mockImplementationOnce(()=>new Promise(r=>{resolve=r}))
     const pending=page.loadMore();changeOwner();resolve({items:[{id:'stale',offer:{kind:'credit',amountMinor:100}}],nextCursor:null});await pending
     expect(page.data.coupons).toEqual([])
-  })
-  it('loads older partner statements without replacing balances or issuing confirmation',async()=>{
-    const {page,api}=harness('channel-partner')
-    api.getChannelPartner.mockResolvedValue({promoter:{name:'店长'},batches:[],visits:[],nextCursors:{statements:'cursor'},finance:{positions:[],statements:[],balances:[{balanceMinor:'1200'}]}} as never)
-    await page.load();api.getChannelHistory.mockResolvedValueOnce({items:[{id:'old-statement',amountMinor:'500',paidMinor:'100'}],nextCursor:null})
-    await page.loadHistory({currentTarget:{dataset:{kind:'statements'}}})
-    expect(page.data.account.finance.statements[0]).toMatchObject({id:'old-statement',amountText:'¥5.00'})
-    expect(page.data.account.finance.balances[0].balanceText).toBe('¥12.00');expect(page.data.account.nextCursors.statements).toBeNull()
-  })
-  it('ignores partner history from a previous account',async()=>{
-    const {page,api,changeOwner}=harness('channel-partner')
-    api.getChannelPartner.mockResolvedValue({promoter:{name:'店长'},batches:[],visits:[],nextCursors:{batches:'cursor'}} as never)
-    await page.load();let resolve!:(v:any)=>void
-    api.getChannelHistory.mockImplementationOnce(()=>new Promise(r=>{resolve=r}))
-    const pending=page.loadHistory({currentTarget:{dataset:{kind:'batches'}}});changeOwner();resolve({items:[{id:'private'}],nextCursor:null});await pending
-    expect(page.data.account.batches).toEqual([])
-  })
-  it('does not present unknown commission as zero', async () => {
-    const { page, api } = harness('channel-partner')
-    api.getChannelPartner.mockResolvedValue({ promoter: { name: '店长' }, batches: [], visits: [{ qualifiedConsumptionMinor: null, accruedCommissionMinor: null }] } as never)
-    await page.load()
-    expect(page.data.account.visits[0].commissionText).toBe('待核算')
-  })
-  it('does not save another account’s image after an identity change during download', async () => {
-    const { page, api, wx, changeOwner } = harness('channel-partner')
-    let complete!: (value: { filename: string; base64: string }) => void
-    api.getChannelPoster.mockImplementation(() => new Promise(resolve => { complete = resolve }))
-    const download = page.download({ currentTarget: { dataset: { id: 'batch' } } })
-    changeOwner(); complete({ filename: 'poster.png', base64: 'PNG' }); await download
-    expect(wx.saveImageToPhotosAlbum).not.toHaveBeenCalled()
-  })
-  it('saves a returned poster and removes the private temporary copy', async () => {
-    const { page, wx, fs } = harness('channel-partner')
-    await page.download({ currentTarget: { dataset: { id: 'batch' } } })
-    expect(wx.saveImageToPhotosAlbum).toHaveBeenCalledTimes(1)
-    expect(fs.unlink).toHaveBeenCalledTimes(1)
-    expect(page.data.notice).toContain('已保存')
   })
 })
 

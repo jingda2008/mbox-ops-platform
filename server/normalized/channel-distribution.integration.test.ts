@@ -1647,14 +1647,31 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(performance.now()-started).toBeLessThan(8000)
   },15_000)
 
-  it('fulfills only paid delivered channel orders and bounds reconciliation with accumulated visits',async()=>{
+  it.each(['initial','partial','full'] as const)('fulfills only paid delivered channel orders under %s table statistics',async statistics=>{
     const paid=await financeFixture(),unmade=await financeFixture()
     await admin.query("UPDATE mbox.order_items SET status='submitted' WHERE order_id=$1",[unmade.order.id])
+    if(statistics!=='initial')await admin.query('ANALYZE mbox.orders')
+    if(statistics==='full')await admin.query('ANALYZE mbox.channel_visits,mbox.channel_price_applications,mbox.channel_activations,mbox.channel_order_attributions,mbox.channel_order_corrections')
     const started=performance.now(),result=await new ChannelReconciliationWorker(runner).runBatch(scope,'fulfillment-regression')
     expect(result.failed).toBe(0)
     const status=async(visit:string)=>(await admin.query('SELECT status FROM mbox.channel_activations WHERE visit_id=$1',[visit])).rows[0].status
     expect(await status(paid.visitId)).toBe('fulfilled');expect(await status(unmade.visitId)).toBe('active')
-    expect(performance.now()-started).toBeLessThan(8000)
+    const elapsed=performance.now()-started
+    console.info(JSON.stringify({check:'channel-reconciliation-growth',statistics,visits:result.claimed,ms:Math.round(elapsed)}))
+    expect(elapsed).toBeLessThan(8000)
   },15_000)
+
+  it('closes corrected historical visits only after their source tables close',async()=>{
+    const f=await financeFixture(),b=await batch(),empty=randomUUID()
+    await admin.query('UPDATE mbox.channel_visits SET closed_at=NULL WHERE id=$1',[f.visitId])
+    const correction=await runner.run(scope,tx=>new ChannelOperationsRepository(tx).correctOrders([f.order.publicId],b.id,employee,'历史来源核对'))
+    await admin.query('INSERT INTO mbox.channel_visits(id,tenant_id,store_id) VALUES($3,$1,$2)',[...args,empty])
+    const closed=async(id:string)=>(await admin.query('SELECT closed_at FROM mbox.channel_visits WHERE id=$1',[id])).rows[0].closed_at
+    expect((await new ChannelReconciliationWorker(runner).runBatch(scope,'corrected-open')).failed).toBe(0)
+    expect(await closed(correction.visitId)).toBeNull();expect(await closed(empty)).toBeNull()
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=(SELECT table_session_id FROM mbox.orders WHERE id=$1)",[f.order.id])
+    expect((await new ChannelReconciliationWorker(runner).runBatch(scope,'corrected-closed')).failed).toBe(0)
+    expect(await closed(correction.visitId)).not.toBeNull();expect(await closed(empty)).toBeNull()
+  },30_000)
 
 })

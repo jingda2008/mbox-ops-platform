@@ -49,7 +49,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   const h=fixture('order',{prepayTable:async()=>({status:'resolved',terminalPaymentStatus:'closed'})},platform)
   h.page.refreshSharedCart=async()=>{}
   h.page.setData({prepayment:{},prepaymentAmount:'100.00',prepaymentConsent:true})
-  await h.page.onPrepayTable();assert.match(h.page.data.success,/未新增收款/)
+  await h.page.onPrepayTable();assert.match(platform==='miniprogram'?h.page.data.error:h.page.data.success,/未新增收款/)
   assert.equal([...h.state.storage.keys()].filter(k=>k.startsWith('mbox.table-prepayment.v1:')).length,0)
  })
 }

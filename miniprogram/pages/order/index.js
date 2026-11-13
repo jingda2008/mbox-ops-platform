@@ -2427,9 +2427,23 @@ Page({
           if (!this.isCurrentTableRequest(tableRequest) || !confirmed) return
           if (!this.checkoutDraftMatches(reviewedDraft)) { this.setData({ error: '桌位或购物车已变化，请重新核对。' }); return }
           this.setData({ prepaymentAmount: (required / 100).toFixed(2), prepaymentConsent: true })
-          await this.onPrepayTable()
-          this.setData({ success: '请核对到账后的最新余额，再确认本单。购物车已保留。' })
-          return
+          const funding = await this.onPrepayTable()
+          if (!this.isCurrentTableRequest(tableRequest)) return
+          // Funding is not an order. Continue only the same reviewed intent,
+          // after this payment AND a fresh server cart have been confirmed.
+          if (!funding || funding.status !== 'confirmed') return
+          if (this.data.orderReady === false || this.data.checkoutLocked || this.data.cartSyncing || this.data.cartWritesFrozen
+            || !this.checkoutDraftMatches(reviewedDraft) || !this.couponCheckoutReady()
+            || this.data.cart.some(item => !item.available && !item.couponReviewAvailable)) {
+            this.setData({ success: '', error: '预付款已到账，但商品尚未提交。桌位、购物车或优惠已变化，请重新核对后提交。' })
+            return
+          }
+          const fresh = this.data.prepayment
+          const remaining = fresh && Math.max(fresh.initialFundingRequiredMinor || 0, payable + (fresh.pendingOrderDueMinor || 0) - fresh.availableMinor, 0)
+          if (!fresh || !Number.isFinite(remaining) || remaining > 0) {
+            this.setData({ success: '', error: '预付款已到账，但可用额度尚不足，本单未提交。请核对本桌余额和原付款，不要重复付款。' })
+            return
+          }
         }
       }
       // Subscription prompts stay outside the final confirm -> payment flow.
@@ -2681,20 +2695,47 @@ Page({
         const latest = wx.getStorageSync(storageKey)
         return latest && latest.key === attempt.key && latest.amount === attempt.amount && latest.ownerScope === ownerScope
       }
+      let resolvedCleared = false
+      const ownsFunding = () => current() && (resolvedCleared ? !wx.getStorageSync(storageKey) : ownsAttempt())
+      let paymentConfirmed = false
       const action = await prepayTable(attempt.amount, attempt.key, attempt.expected)
       if (!current() || !ownsAttempt()) return
       if (action && action.status === 'resolved' && ['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed', 'cancelled'].includes(action.terminalPaymentStatus)) {
         wx.removeStorageSync(storageKey)
+        resolvedCleared = true
+        paymentConfirmed = action.terminalPaymentStatus === 'succeeded'
         this.setData({ success: ['succeeded','partially_refunded','refunded'].includes(action.terminalPaymentStatus) ? '原预付款已确认，请查看最新余额' : '原付款已结束，本次未新增收款，请重新填写金额' })
       } else if (isPresentableWechatJsapiAction(action)) {
         await new Promise((resolve, reject) => wx.requestPayment(Object.assign({}, action.payload, { success: resolve, fail: reject })))
         if (!current() || !ownsAttempt()) return
-        try { await queryPrepayment(action.paymentId) } catch (_) { /* Callback and original payment query remain authoritative. */ }
+        try {
+          const queried = await queryPrepayment(action.paymentId)
+          paymentConfirmed = !!(queried && queried.data && queried.data.status === 'succeeded'
+            && (!queried.data.id || queried.data.id === action.paymentId))
+        } catch (_) {
+          // Provider callback may win the active-query race. Recover the exact
+          // original payment command, never create a second payment intent.
+          if (current() && ownsAttempt()) {
+            try {
+              const original = await prepayTable(attempt.amount, attempt.key, attempt.expected)
+              paymentConfirmed = !!(original && original.status === 'resolved'
+                && original.terminalPaymentStatus === 'succeeded' && original.paymentId === action.paymentId)
+            } catch (_) { /* Unknown funding never resumes a product submission. */ }
+          }
+        }
+        if (!ownsFunding()) return
         if (current()) this.setData({ success: '已提交付款，请查看最新余额；未确认时继续核对原付款，请勿重复付款' })
       } else {
         this.setData({ error: '预付款尚未确认，请核对原付款或联系员工处理' })
       }
-      if (current()) await this.refreshSharedCart()
+      const refreshed = ownsFunding() && await this.refreshSharedCart(false, guard)
+      if (!ownsFunding()) return
+      if (!refreshed || !paymentConfirmed) {
+        this.setData({ success: '', error: this.data.error || (action && action.status === 'resolved' && ['failed','closed','cancelled'].includes(action.terminalPaymentStatus) ? '原付款已结束，本次未新增收款，商品尚未提交。请核对后重新操作。' : '预付款结果尚待核对，商品尚未提交。请继续核对原付款，不要重复付款。') })
+        return { status: 'unconfirmed' }
+      }
+      this.setData({ success: '预付款已到账，商品尚未提交。请完成本单确认。', error: '' })
+      return { status: 'confirmed' }
     } catch (error) {
       if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt && wx.getStorageSync(storageKey)?.key === attempt.key) { wx.removeStorageSync(storageKey); await this.refreshSharedCart() }
       if (this.isCurrentTableRequest(guard)) this.setData({ error: isWechatCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })

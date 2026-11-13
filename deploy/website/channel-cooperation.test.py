@@ -17,5 +17,6 @@ class PatchTest(unittest.TestCase):
   self.assertTrue(result.startswith('operations-unchanged\n'));self.assertTrue(result.endswith('\nother-unchanged'))
   self.assertIn('uri replace /cooperation/api/ /api/cooperation/',result)
   self.assertIn('handle /cooperation/*',result)
+  self.assertIn('redir * /cooperation/ 308',result)
   with self.assertRaises(ValueError):module.update_caddy(result)
 if __name__=='__main__':unittest.main()

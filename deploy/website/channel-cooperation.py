@@ -36,7 +36,7 @@ def update_caddy(source):
     if source.count(old) != 1 or 'handle /cooperation' in source:
         raise ValueError('Website ingress changed; do not overwrite it')
     new = '''\thandle /cooperation {
-        redir /cooperation/ 308
+        redir * /cooperation/ 308
     }
     handle /cooperation/api/* {
         uri replace /cooperation/api/ /api/cooperation/
@@ -122,6 +122,9 @@ def activate(target, caddy, evidence, expected_sha):
             body = run('curl', '--fail', '--silent', '--show-error', '--max-time', '30', '--resolve', 'www.shmbox.com:443:127.0.0.1', ORIGIN + path).decode()
             if expected not in body:
                 raise ValueError('Website readback mismatch: ' + path)
+        redirect = run('curl', '--silent', '--show-error', '--max-time', '15', '--resolve', 'www.shmbox.com:443:127.0.0.1', '-D', '-', '-o', '/dev/null', ORIGIN + '/cooperation').decode().lower()
+        if ' 308' not in redirect.splitlines()[0] or 'location: /cooperation/' not in redirect:
+            raise ValueError('Cooperation slash redirect did not match')
         response = run('curl', '--silent', '--show-error', '--max-time', '15', '--resolve', 'www.shmbox.com:443:127.0.0.1', '-w', '\n%{http_code}', ORIGIN + '/cooperation/api/partner').decode()
         if not response.endswith('\n401'):
             raise ValueError('Anonymous partner API did not deny access')

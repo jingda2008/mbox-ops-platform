@@ -3,6 +3,7 @@ import {normalizeMenu,renderMenu,escapeHTML as e} from '../../public/menu-model.
 import {MENU_COPY,TRANSLATIONS} from '../../public/menu-copy.js';
 import {normalize,shanghaiDate} from '../../public/performance-model.js';
 import {createReader} from './content-cache.js';
+import {dateSignals,datedPage,validDate} from './dated-performance.js';
 const ORIGIN='https://mbox.shmbox.com';
 const json=value=>JSON.stringify(value).replace(/</g,'\\u003c');
 export function renderPage(html,lang,data){
@@ -15,18 +16,31 @@ export function renderPage(html,lang,data){
 export function renderPerformance(html,snapshot){
  const messages=JSON.parse(html.match(/id="performance-messages" type="application\/json">(.*?)<\/script>/s)[1]);
  const rows=snapshot.schedules.map((s,i)=>`<article class="performance"><span class="set-number">${e(messages.set.replace('{n}',String(i+1)))}</span><h3>${e(s.performerStageName)}</h3><span class="genre">${e(messages.verified)}</span><time datetime="${e(s.startsAt)}">${e(s.startsAt.slice(11,16))} — ${e(s.endsAt.slice(11,16))}${s.startsAt.slice(0,10)!==s.endsAt.slice(0,10)?' · '+e(messages.nextDay):''}</time></article>`).join('');
- return html.replace(/(<strong id="schedule-date">).*?(<\/strong>)/s,()=>`<strong id="schedule-date">${snapshot.localDate}</strong>`)
+ return dateSignals(html.replace(/(<strong id="schedule-date">).*?(<\/strong>)/s,()=>`<strong id="schedule-date">${snapshot.localDate}</strong>`)
  .replace(/<div class="schedule" id="schedule-list">.*?<\/div>/s,()=>`<div class="schedule" id="schedule-list">${rows}</div>`)
  .replace(/(<[^>]+ id="schedule-label"[^>]*>).*?(<\/[^>]+>)/s,(_a,start,end)=>start+e(snapshot.unavailable?messages.staleLabel:messages.verified)+end)
- .replace(/(<[^>]+ id="schedule-status"[^>]*>).*?(<\/[^>]+>)/s,(_a,start,end)=>start+e(snapshot.unavailable?messages.staleNote:snapshot.schedules.length?messages.fresh:messages.empty)+end)
+ .replace(/(<[^>]+ id="schedule-status"[^>]*>).*?(<\/[^>]+>)/s,(_a,start,end)=>start+snapshot.localDate+' · '+e(snapshot.unavailable?messages.staleNote:snapshot.schedules.length?messages.verified:messages.empty)+end)
  .replace(/<p class="fineprint" id="schedule-checked">.*?<\/p>/s,()=>`<p class="fineprint" id="schedule-checked">${snapshot.checkedAt?e(messages.checked)+' · '+e(snapshot.checkedAt)+' (UTC)':''}</p>`)
- .replace(/(<script id="performance-snapshot" type="application\/json">).*?(<\/script>)/s,()=>`<script id="performance-snapshot" type="application/json">${json(snapshot)}</script>`);
+ .replace(/(<script id="performance-snapshot" type="application\/json">).*?(<\/script>)/s,()=>`<script id="performance-snapshot" type="application/json">${json(snapshot)}</script>`),snapshot);
 }
 export function createWebsiteContent(send=fetch){
  const menu=createReader(ORIGIN+'/api/public/website/menu',normalizeMenu,300000,send);
  let performanceDate='',performance;
+ const datedReaders=new Map();
  return async(request,enabled=false)=>{
   const u=new URL(request.url),html=pages[u.pathname];
+  const dated=/^\/(zh|en|ru|ja|ko|fr|de)\/performances\/(\d{4}-\d{2}-\d{2})\/$/.exec(u.pathname);
+  if(dated&&['GET','HEAD'].includes(request.method)){
+   const [,lang,date]=dated;
+   if(!validDate(date))return new Response('Not found',{status:404,headers:{'x-robots-tag':'noindex'}});
+   if(!datedReaders.has(date)){
+    if(datedReaders.size>=32)datedReaders.delete(datedReaders.keys().next().value);
+    datedReaders.set(date,createReader(ORIGIN+'/api/public/reservation/performances?date='+date,p=>({...normalize(p,date),checkedAt:new Date().toISOString()}),60000,send));
+   }
+   let snapshot;try{snapshot=await datedReaders.get(date)()}catch{snapshot={timezone:'Asia/Shanghai',localDate:date,schedules:[],unavailable:true,checkedAt:null}}
+   const output=datedPage(renderPerformance(pages['/'+lang+'/'],snapshot),lang,snapshot,u.origin);
+   return new Response(request.method==='HEAD'?null:output,{status:snapshot.unavailable?503:200,headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...(snapshot.unavailable?{'retry-after':'60','x-robots-tag':'noindex'}:{})}});
+  }
   if(u.pathname==='/api/website/menu'){
    if(request.method!=='GET'||u.search)return new Response(null,{status:404});
    if(!enabled)return Response.json({error:{code:'MENU_SYNC_PENDING'}},{status:503,headers:{'cache-control':'no-store'}});

@@ -19,6 +19,8 @@ if(root){
  }
  function render(){
   q('schedule-date').textContent=dateText(state.localDate);rows(q('schedule-list'),state);
+  if(q('schedule-title')&&m.dateHeading)q('schedule-title').textContent=m.dateHeading.replaceAll('{date}',state.localDate);
+  if(q('schedule-permalink')&&m.dateLink){q('schedule-permalink').href='/'+document.body.dataset.language+'/performances/'+state.localDate+'/';q('schedule-permalink').textContent=m.dateLink.replaceAll('{date}',state.localDate)+' ↗';}
   const active=overnight?.schedules.filter(s=>phase(s)!=='ended')||[];
   q('overnight-schedule').hidden=!active.length&&!overnightFailed;
   q('overnight-note').textContent=overnightFailed?m.overnightFailed:m.overnightNote;

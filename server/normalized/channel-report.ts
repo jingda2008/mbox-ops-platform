@@ -3,17 +3,31 @@ import type {ScopedTransaction} from './transaction-runner.js'
  * and an unknown item/production cost never becomes a zero-cost profit. */
 export async function readChannelReport(tx:ScopedTransaction){
  const scope=[tx.scope.tenantId,tx.scope.storeId]
- return(await tx.query(`SELECT b.id,b.offer_code AS "offerCode",b.rule_snapshot->>'title' AS title,r.name AS "promoterName",
+ // Compute identity and paid-history facts once per scoped report, not once
+ // for every batch and every pair of table participants.
+ return(await tx.query(`WITH identities AS MATERIALIZED(
+  SELECT tenant_id,store_id,table_session_id,mbox.canonical_customer_id(tenant_id,store_id,customer_id) AS customer_id
+  FROM mbox.table_session_customer_participations WHERE tenant_id=$1 AND store_id=$2
+ ), paid_history AS MATERIALIZED(
+  SELECT o.table_session_id,o.created_at,min(p.succeeded_at) AS paid_at FROM mbox.orders o
+  JOIN mbox.order_payment_facts p ON (p.tenant_id,p.store_id,p.order_id)=(o.tenant_id,o.store_id,o.id)
+  WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.status NOT IN('draft','cancelled')
+   AND p.status IN('succeeded','partially_refunded') AND p.provider<>'simulation'
+  GROUP BY o.id,o.table_session_id,o.created_at
+ ), returning_visits AS MATERIALIZED(
+  SELECT DISTINCT v.id FROM mbox.channel_visits v
+  JOIN mbox.channel_visit_tables t ON (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,COALESCE(v.reporting_root_id,v.id))
+  JOIN identities current_customer ON (current_customer.tenant_id,current_customer.store_id,current_customer.table_session_id)=(t.tenant_id,t.store_id,t.table_session_id)
+  JOIN identities prior_customer ON (prior_customer.tenant_id,prior_customer.store_id,prior_customer.customer_id)=(current_customer.tenant_id,current_customer.store_id,current_customer.customer_id)
+  JOIN paid_history old_order ON old_order.table_session_id=prior_customer.table_session_id
+  WHERE v.tenant_id=$1 AND v.store_id=$2 AND prior_customer.table_session_id<>current_customer.table_session_id
+   AND old_order.created_at<v.opened_at AND old_order.paid_at<v.opened_at
+ ) SELECT b.id,b.offer_code AS "offerCode",b.rule_snapshot->>'title' AS title,r.name AS "promoterName",
   (SELECT count(*)::integer FROM mbox.channel_claims q WHERE (q.tenant_id,q.store_id,q.batch_id)=(b.tenant_id,b.store_id,b.id) AND NOT q.voided AND q.entry='staff') AS "staffClaims",
   (SELECT count(*)::integer FROM mbox.channel_claims q WHERE (q.tenant_id,q.store_id,q.batch_id)=(b.tenant_id,b.store_id,b.id) AND NOT q.voided AND q.entry='self') AS "selfClaims",
   (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND v.arrival_confirmed_at IS NOT NULL) AS "arrivedVisits",
   (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND (v.source_review_required OR EXISTS(SELECT 1 FROM mbox.channel_visit_tables t JOIN mbox.reservation_seating_sessions seating ON (seating.tenant_id,seating.store_id,seating.table_session_id)=(t.tenant_id,t.store_id,t.table_session_id) WHERE (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,COALESCE(v.reporting_root_id,v.id))))) AS "priorReservationVisits",
-  (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND EXISTS(
-   SELECT 1 FROM mbox.channel_visit_tables t JOIN mbox.table_session_customer_participations current_customer ON (current_customer.tenant_id,current_customer.store_id,current_customer.table_session_id)=(t.tenant_id,t.store_id,t.table_session_id)
-   JOIN mbox.table_session_customer_participations prior_customer ON (prior_customer.tenant_id,prior_customer.store_id)=(current_customer.tenant_id,current_customer.store_id) AND mbox.canonical_customer_id(prior_customer.tenant_id,prior_customer.store_id,prior_customer.customer_id)=mbox.canonical_customer_id(current_customer.tenant_id,current_customer.store_id,current_customer.customer_id)
-   JOIN mbox.orders old_order ON (old_order.tenant_id,old_order.store_id,old_order.table_session_id)=(prior_customer.tenant_id,prior_customer.store_id,prior_customer.table_session_id)
-   WHERE (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,COALESCE(v.reporting_root_id,v.id)) AND prior_customer.table_session_id<>current_customer.table_session_id AND old_order.created_at<v.opened_at AND old_order.status NOT IN('draft','cancelled')
-    AND EXISTS(SELECT 1 FROM mbox.order_payment_facts paid WHERE (paid.tenant_id,paid.store_id,paid.order_id)=(old_order.tenant_id,old_order.store_id,old_order.id) AND paid.status IN('succeeded','partially_refunded') AND paid.provider<>'simulation' AND paid.succeeded_at<v.opened_at))) AS "knownReturningVisits",
+  (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND EXISTS(SELECT 1 FROM returning_visits prior_visit WHERE prior_visit.id=v.id)) AS "knownReturningVisits",
   COALESCE((SELECT sum(p.net_basis_minor) FROM mbox.channel_financial_positions p WHERE (p.tenant_id,p.store_id,p.batch_id)=(b.tenant_id,b.store_id,b.id)),0)::text AS "qualifiedMinor",
   COALESCE((SELECT sum(p.commission_minor) FROM mbox.channel_financial_positions p WHERE (p.tenant_id,p.store_id,p.batch_id)=(b.tenant_id,b.store_id,b.id)),0)::text AS "commissionMinor",
   COALESCE((SELECT sum((o->>'netReceipt')::bigint) FROM mbox.channel_financial_positions p CROSS JOIN LATERAL jsonb_array_elements(p.evidence) o WHERE (p.tenant_id,p.store_id,p.batch_id)=(b.tenant_id,b.store_id,b.id)),0)::text AS "netReceiptsMinor",

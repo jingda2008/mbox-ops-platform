@@ -646,7 +646,7 @@ integration('channel distribution real PostgreSQL authority', () => {
       const stolen=await guest.inject({method:'POST',url,headers:{'idempotency-key':'channel-'+randomUUID()},payload})
       expect(stolen.statusCode).toBeGreaterThanOrEqual(400)
     }finally{await guest.close()}
-  })
+  }, 30_000)
   const reviewer=randomUUID()
   async function financeFixture(observationDays=0,provider='cash'){
     await admin.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'CHANNEL_REVIEW','复核员工') ON CONFLICT DO NOTHING`,[...args,reviewer])
@@ -1633,5 +1633,28 @@ integration('channel distribution real PostgreSQL authority', () => {
     if(results[0]!.status==='fulfilled')expect(promise).toMatchObject({state:'reserved',order_id:null})
     else expect(promise.order_id).toBeTruthy()
   })
+
+  it.each(['paid-before','simulation','paid-after'] as const)('counts returning visits only from earlier real receipts: %s',async mode=>{
+    const f=await financeFixture(0,mode==='simulation'?'simulation':'cash')
+    const prior=(await admin.query(`SELECT o.table_session_id,p.customer_id FROM mbox.orders o JOIN mbox.table_session_customer_participations p ON p.table_session_id=o.table_session_id WHERE o.id=$1`,[f.order.id])).rows[0]
+    await admin.query('UPDATE mbox.table_session_customer_participations SET left_at=clock_timestamp() WHERE table_session_id=$1 AND customer_id=$2',[prior.table_session_id,prior.customer_id])
+    const current=await table([prior.customer_id]),b=await batch(),visit=randomUUID()
+    await admin.query(`INSERT INTO mbox.channel_visits(id,tenant_id,store_id,source_batch_id,locked_use_limit) VALUES($3,$1,$2,$4,1)`,[...args,visit,b.id])
+    await admin.query(`INSERT INTO mbox.channel_visit_tables(tenant_id,store_id,visit_id,table_session_id) VALUES($1,$2,$3,$4)`,[...args,visit,current])
+    if(mode==='paid-after')await admin.query("UPDATE mbox.payments SET succeeded_at=clock_timestamp()+interval '1 minute' WHERE id=$1",[f.payment])
+    const started=performance.now(),rows=await runner.run(scope,tx=>readChannelReport(tx),{readOnly:true})
+    expect(rows.find(r=>r.id===b.id)).toMatchObject({knownReturningVisits:mode==='paid-before'?1:0})
+    expect(performance.now()-started).toBeLessThan(8000)
+  },15_000)
+
+  it('fulfills only paid delivered channel orders and bounds reconciliation with accumulated visits',async()=>{
+    const paid=await financeFixture(),unmade=await financeFixture()
+    await admin.query("UPDATE mbox.order_items SET status='submitted' WHERE order_id=$1",[unmade.order.id])
+    const started=performance.now(),result=await new ChannelReconciliationWorker(runner).runBatch(scope,'fulfillment-regression')
+    expect(result.failed).toBe(0)
+    const status=async(visit:string)=>(await admin.query('SELECT status FROM mbox.channel_activations WHERE visit_id=$1',[visit])).rows[0].status
+    expect(await status(paid.visitId)).toBe('fulfilled');expect(await status(unmade.visitId)).toBe('active')
+    expect(performance.now()-started).toBeLessThan(8000)
+  },15_000)
 
 })

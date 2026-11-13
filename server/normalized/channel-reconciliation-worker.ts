@@ -18,11 +18,21 @@ export class ChannelReconciliationWorker{
    for(const q of closed){await tx.query(`UPDATE mbox.channel_claims SET status='expired',version=version+1 WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[scope.tenantId,scope.storeId,q.id]);await tx.query(`UPDATE mbox.channel_activations SET status='cancelled',cancelled_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND claim_id=$3 AND status='active'`,[scope.tenantId,scope.storeId,q.id]);await new ChannelGiftInventory(tx).release(q.id);await repo.event(q.id,'claim.visit-ended',workerId,{},'离店后未兑现，保留发行历史');batch.expired++}
    await tx.query(`UPDATE mbox.channel_visits v SET closed_at=clock_timestamp(),version=version+1 WHERE v.tenant_id=$1 AND v.store_id=$2 AND v.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM mbox.channel_visit_tables t WHERE (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,v.id)) AND EXISTS(SELECT 1 FROM mbox.channel_effective_attributions a WHERE (a.tenant_id,a.store_id,a.visit_id)=(v.tenant_id,v.store_id,v.id)) AND NOT EXISTS(SELECT 1 FROM mbox.channel_effective_attributions a JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(a.tenant_id,a.store_id,a.order_id) JOIN mbox.table_sessions s ON (s.tenant_id,s.store_id,s.id)=(o.tenant_id,o.store_id,o.table_session_id) WHERE (a.tenant_id,a.store_id,a.visit_id)=(v.tenant_id,v.store_id,v.id) AND s.status='open')`,[scope.tenantId,scope.storeId])
    // Fulfillment is derived from actual goods, never from clicking redeem.
-   await tx.query(`UPDATE mbox.channel_activations a SET status='fulfilled',fulfilled_at=clock_timestamp() WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.status='active' AND EXISTS(
-    SELECT 1 FROM mbox.channel_price_applications p JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.order_id)
-    WHERE (p.tenant_id,p.store_id,p.activation_id)=(a.tenant_id,a.store_id,a.id) AND o.status<>'cancelled' AND mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id)
-    AND EXISTS(SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL)
-    AND NOT EXISTS(SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL AND i.status NOT IN('delivered','cancelled')))`,[scope.tenantId,scope.storeId])
+   // Materialize relevant orders before evaluating the financial predicate: a
+   // nested-loop plan must not recalculate the same payment facts per activation.
+   await tx.query(`WITH candidates AS MATERIALIZED(
+    SELECT DISTINCT o.tenant_id,o.store_id,o.id FROM mbox.channel_price_applications p
+    JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.order_id)
+    JOIN mbox.channel_activations a ON (a.tenant_id,a.store_id,a.id)=(p.tenant_id,p.store_id,p.activation_id)
+    WHERE p.tenant_id=$1 AND p.store_id=$2 AND a.status='active' AND o.status<>'cancelled'
+     AND EXISTS(SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL)
+     AND NOT EXISTS(SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL AND i.status NOT IN('delivered','cancelled'))
+   ), settled AS MATERIALIZED(
+    SELECT * FROM candidates o WHERE mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id)
+   ) UPDATE mbox.channel_activations a SET status='fulfilled',fulfilled_at=clock_timestamp()
+   WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.status='active' AND EXISTS(
+    SELECT 1 FROM mbox.channel_price_applications p JOIN settled o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.order_id)
+    WHERE (p.tenant_id,p.store_id,p.activation_id)=(a.tenant_id,a.store_id,a.id))`,[scope.tenantId,scope.storeId])
    await tx.query(`UPDATE mbox.channel_claims q SET status='fulfilled',version=version+1 WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.status='active' AND EXISTS(SELECT 1 FROM mbox.channel_activations a WHERE (a.tenant_id,a.store_id,a.claim_id)=(q.tenant_id,q.store_id,q.id) AND a.status='fulfilled')`,[scope.tenantId,scope.storeId])
   })
   const visits=await this.transactions.run(scope,async tx=>(await tx.query<{id:string}>(`SELECT v.id FROM mbox.channel_visits v LEFT JOIN mbox.channel_financial_positions p ON (p.tenant_id,p.store_id,p.visit_id)=(v.tenant_id,v.store_id,v.id) WHERE v.tenant_id=$1 AND v.store_id=$2 AND v.source_batch_id IS NOT NULL ORDER BY p.checked_at NULLS FIRST,v.id LIMIT 100`,[scope.tenantId,scope.storeId])).rows,{readOnly:true})

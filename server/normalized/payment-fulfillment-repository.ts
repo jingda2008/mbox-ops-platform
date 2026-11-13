@@ -166,7 +166,8 @@ export class PaymentFulfillmentRepository {
     await new CheckoutCouponLifecycleRepository(this.transaction).redeemPaidOrder(orderId)
     await new FulfillmentCapacityRepository(this.transaction).activateForPaidOrder(orderId)
     const order = await new OrderRepository(this.transaction).getSubmittedForFulfillment(orderId)
-    const inventoryConsumptions = await new InventoryRepository(this.transaction)
+    const channelGift=(await this.transaction.query<{gift:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.channel_gift_promises WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND state='converted') AS gift`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])).rows[0]?.gift===true
+    const inventoryConsumptions = channelGift ? [] : await new InventoryRepository(this.transaction)
       .consumeImmediatePaymentReservations(orderId, {
         createdByEmployeeId: options.createdByEmployeeId ?? null,
         reason: 'trusted payment succeeded',

@@ -2,6 +2,36 @@ import {describe,it,expect,vi} from 'vitest'
 import {DurableStaffCommand} from './durable-staff-command'
 function storage(){const map=new Map<string,string>();return{getItem:(k:string)=>map.get(k)??null,setItem:(k:string,v:string)=>{map.set(k,v)},removeItem:(k:string)=>{map.delete(k)}}}
 describe('durable staff command recovery',()=>{
+  it('allows correcting a first explicitly rolled-back channel ownership mistake',async()=>{
+    let sent=0
+    const cmd=new DurableStaffCommand(crypto.randomUUID(),async(body:{customerId:string})=>{
+      if(++sent===1)throw Object.assign(new Error('顾客已离桌'),{status:403,code:'OWNERSHIP',commitDisposition:'not_committed'})
+      return {id:body.customerId}
+    },storage(),true)
+    await expect(cmd.submit({customerId:'wrong'})).rejects.toThrow('顾客已离桌')
+    expect(cmd.pending()).toBeNull()
+    await expect(cmd.submit({customerId:'correct'})).resolves.toEqual({id:'correct'})
+  })
+  it('keeps an unknown staff attempt when recovery later reports channel rollback',async()=>{
+    let sent=0;const keys:string[]=[]
+    const cmd=new DurableStaffCommand(crypto.randomUUID(),async(_body:{customerId:string},key)=>{
+      keys.push(key)
+      if(++sent===1)throw new Error('reply lost')
+      throw Object.assign(new Error('顾客已离桌'),{status:403,code:'OWNERSHIP',commitDisposition:'not_committed'})
+    },storage(),true)
+    await expect(cmd.submit({customerId:'original'})).rejects.toThrow('reply lost')
+    await expect(cmd.recover()).rejects.toThrow('顾客已离桌')
+    await expect(cmd.submit({customerId:'different'})).rejects.toThrow('原操作')
+    expect(keys).toHaveLength(2);expect(keys[0]).toBe(keys[1]);expect(cmd.pending()).not.toBeNull()
+  })
+  it('marks an unresolved retry for receipt-only transport without changing its key',async()=>{
+    const contexts:unknown[]=[],keys:string[]=[];let sent=0
+    const command=new DurableStaffCommand(crypto.randomUUID(),async(_body:{id:string},key:string,...context:unknown[])=>{
+      contexts.push(context[0]);keys.push(key);if(++sent===1)throw new Error('lost');return{id:'receipt'}
+    },storage(),true)
+    await expect(command.submit({id:'operation'})).rejects.toThrow('lost');await command.recover()
+    expect(contexts).toEqual([{recovery:false},{recovery:true}]);expect(keys[0]).toBe(keys[1])
+  })
   it('recovers after closing the tab with fresh session storage and module memory',async()=>{
     const persisted=storage(),namespace=crypto.randomUUID(),keys:string[]=[],ledger=new Set<string>()
     vi.stubGlobal('localStorage',persisted);vi.stubGlobal('sessionStorage',storage())

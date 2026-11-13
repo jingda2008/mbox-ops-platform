@@ -195,6 +195,9 @@ function mapError(error: unknown): {
   body: ApiErrorBody
   clearCookie?: boolean
 } {
+  if (error instanceof Error && 'code' in error && error.code === '23514' && error.message === 'channel_guest_rescan_requires_staff') {
+    return { statusCode: 409, body: { error: { code: 'CHANNEL_TABLE_MOVE_REQUIRES_STAFF', message: '本次消费已绑定推荐优惠，请服务员办理转桌，原优惠和限用次数会随客组保留。' } } }
+  }
   if (error instanceof GuestSessionBusyError) {
     return {
       statusCode: 503,

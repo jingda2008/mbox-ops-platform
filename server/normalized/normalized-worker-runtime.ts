@@ -1,3 +1,4 @@
+import { ChannelReconciliationWorker } from './channel-reconciliation-worker.js'
 import {OfficialPointsNotificationWorker} from './official-points-notification-worker.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import { NativePushWorker } from './native-push-worker.js'
@@ -145,6 +146,7 @@ export function createNormalizedWorkerRuntime(
   const transactions = options.transactions
   const coordinator = new NormalizedBackgroundWorkerCoordinator(options.scope, {
     ...((options.nativePush||options.getuiPush) ? {nativePush:new NativePushWorker(transactions,options.nativePush??null,options.hashSecret,options.nativePush?new OfficialApnsAdapter(options.nativePush):null,options.getuiPush??null,options.getuiPush?new OfficialGetuiAdapter(options.getuiPush):null)} : {}),
+    channelReconciliation:new ChannelReconciliationWorker(transactions),
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),

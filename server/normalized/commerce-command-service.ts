@@ -1,3 +1,4 @@
+import { ChannelDistributionRepository } from './channel-distribution-repository.js'
 import {LoyaltyAccrualRepository} from './loyalty-accrual-repository.js'
 import {RecommendationFinancialAttributionRepository} from './recommendation-financial-attribution-repository.js'
 import {ItemAfterSalesReplacementRepository} from './item-after-sales-replacement-repository.js'
@@ -137,6 +138,7 @@ export class CommerceCommandService {
   ): Promise<CommandOutcome<SubmittedCommerceResult>> {
       validateCommand(input)
       if(input.replacementPreviousOrderId&&!input.replacementCaseId)throw new TypeError('原换品关联缺失，请重新打开商品')
+      if(input.pricingAuthorization?.sourceType==='channel_quote')await new ChannelDistributionRepository(transaction).lockIdentity()
       const context = await resolveAuthoritativeTableContext(transaction, input)
       if(input.replacementCaseId){
         if(!this.options.quantityAfterSalesEnabled)throw new ItemQuantityConflict('QUANTITY_BATCH_NOT_ENABLED','暂不新增换品关联；已经创建的新单仍按原订单继续')
@@ -188,13 +190,19 @@ export class CommerceCommandService {
           allowMissingRecipes: inventoryEnforcementMode === 'audit_only',
         },
       )
+      const channelZero=pricingAuthorization?.sourceType==='channel_quote'&&order.totalAmountMinor===0
+      if(channelZero){
+        const marked=await transaction.query(`UPDATE mbox.orders SET payment_status='paid' WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND mbox.order_fully_settled_by_channel($1,$2,$3)`,[input.scope.tenantId,input.scope.storeId,order.id])
+        if(marked.rowCount!==1)throw new Error('Channel zero-price settlement proof is incomplete')
+        order.paymentStatus='paid'
+      }
       const inventoryMetadata = {
         orderId: order.id,
         orderPublicId: order.publicId,
         pricingAuthorizationId: pricingAuthorization?.authorizationId ?? null,
         assistedOrderContextId: context.assistedContextId,
       }
-      const prepaidActivation=order.prepaymentRequired&&order.paymentStatus==='paid'?await new PaymentFulfillmentRepository(transaction).activatePaidOrder(order.id,{metadata:{settlementKind:'table_prepayment'}}):null
+      const prepaidActivation=((order.prepaymentRequired||channelZero&&order.settlementMode==='immediate_payment')&&order.paymentStatus==='paid')?await new PaymentFulfillmentRepository(transaction).activatePaidOrder(order.id,{metadata:{settlementKind:'table_prepayment'}}):null
       const inventoryConsumptions = prepaidActivation?.inventoryConsumptions ?? (order.settlementMode === 'immediate_payment'
         ? []
         : await new InventoryRepository(transaction).consumeForOrderItems(order.items, {

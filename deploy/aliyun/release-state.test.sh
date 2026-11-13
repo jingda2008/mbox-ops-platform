@@ -47,3 +47,10 @@ test "$(release_contract_boundary_between 303 304)" = 304
 test "$(release_contract_boundary_between 304 304)" = 0
 test "$(release_contract_boundary_between 304 305)" = 305
 test "$(release_contract_boundary_between 305 305)" = 0
+
+# Channel zero-price/gift accounting and party caps require a compatible writer.
+test "$(release_contract_boundary_between 305 313)" = 313
+test "$(release_contract_boundary_between 312 313)" = 313
+test "$(release_contract_boundary_between 313 313)" = 0
+test "$(release_contract_boundary_between 313 314)" = 314
+test "$(release_contract_boundary_between 305 314)" = 314

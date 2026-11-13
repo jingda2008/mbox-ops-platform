@@ -22,6 +22,7 @@ import { PromotionalLoyaltyPanel } from './PromotionalLoyaltyPanel'
 import { CheckoutUpgradeManagementPanel } from './CheckoutUpgradeManagementPanel'
 import { RecommendationPolicyManagementPanel } from './RecommendationPolicyManagementPanel'
 import { MembershipConfigurationCenterPanel } from './MembershipConfigurationCenterPanel'
+import { ChannelManagementPanel } from './ChannelManagementPanel'
 import { MemberCardManagementPanel } from './MemberCardManagementPanel'
 import { MarketingContactPanel } from './MarketingContactPanel'
 import { PersonalContactGovernancePanel } from './PersonalContactGovernancePanel'
@@ -251,6 +252,7 @@ export function CustomerExperienceManagementPanel({ api, auth, dashboard, mode =
     <MemberAccountLookupPanel api={api} auth={auth} />
   </div>
   if (mode === 'member-management') return <div className="staff-module-body customer-experience-management"><TaskSections label="会员办理与管理" sections={[
+    {id:'channel-partners',label:'周边店合作',visible:auth.permissions.includes('channel.view'),content:<ChannelManagementPanel key={auth.session.id} api={api} auth={auth}/>},
     {id:'custody',label:'存酒办理',visible:auth.permissions.some(p=>p.startsWith('bottle.')),content:<BottleCustodyPanel key={auth.employee.id} api={api} auth={auth} />},
     {id:'member-cards',label:'会员卡',visible:auth.permissions.some(p=>p.startsWith('member.card.')),content:<><MemberCardManagementPanel api={api} auth={auth} /><MemberNumberPolicyPanel key={auth.employee.id} api={api} auth={auth} /></>},
     {id:'member-benefits',label:'权益与兑换',visible:auth.permissions.some(p=>p.startsWith('loyalty.')),content:<><LoyaltyTierAndRedemptionPanel api={api} auth={auth} /><AnnualBenefitManagementPanel api={api} auth={auth} /><TierBenefitPolicyPanel api={api} auth={auth} /></>},

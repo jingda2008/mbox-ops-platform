@@ -7,7 +7,7 @@ const {
   getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart, prepayTable, queryPrepayment, revokeTablePrepayment,
-  quoteSharedCartCoupons, getCheckoutPoints, quoteSharedCartPoints,
+  quoteSharedCartCoupons, quoteSharedCartChannel, getCheckoutPoints, quoteSharedCartPoints,
   prepareSharedCartUpgrade,
   decideSharedCartUpgrade,
   getCustomerBenefitWallet,
@@ -562,7 +562,7 @@ function applyBundleUnitSelection(product,unit){
 const { initialCheckoutCoupons, checkoutCouponMethods, couponPortions } = require('../../utils/checkout-coupons')
 const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
 const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
-const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
+const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, quoteChannel: quoteSharedCartChannel, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
 Page({
   ...checkoutUpgradeActions,
   acceptCheckoutUpgrade() { return checkoutUpgradeActions.acceptCheckoutUpgrade.call(this) },
@@ -592,6 +592,7 @@ Page({
   loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
   chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
   quoteCheckoutCoupons() { return checkoutCouponActions.quoteCheckoutCoupons.call(this) },
+  quoteCheckoutChannel() { return checkoutCouponActions.quoteCheckoutChannel.call(this) },
   skipCheckoutCoupons() { return checkoutCouponActions.skipCheckoutCoupons.call(this) },
   data: {
     ...initialCheckoutCoupons,
@@ -1992,7 +1993,7 @@ Page({
     }) }))
     this.checkoutLineNotes = retainedNotes
     if (this.checkoutCouponScope !== couponScope || (sharedCart && (Number(sharedCart.version) !== this.data.cartVersion || Number(sharedCart.generation) !== this.data.cartGeneration))) {
-      this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview)
+      this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview || this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote')
       this.checkoutCouponScope = couponScope
     }
     const credit = sharedCart && sharedCart.prepayment
@@ -2350,6 +2351,7 @@ Page({
       expectedLocationVersion: this.data.prepayment ? this.data.prepayment.locationVersion : undefined,
       expectedMinimumMinor: this.data.prepayment ? this.data.prepayment.minimumMinor - this.data.prepayment.waiverMinor : undefined,
       ...(this.data.couponQuote && this.data.couponQuote.pointsUsed > 0 && this.data.couponQuote.payableMinor === 0 ? { pointsOnly: true } : {}),
+      ...(this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote' && this.data.couponQuote.payableMinor === 0 ? { channelOnly: true } : {}),
       couponQuoteId: this.data.couponQuote && this.data.couponQuote.id || null,
       recommendationPublicId: attribution ? attribution.recommendationPublicId : null,
       selectedRecommendationProductId: attribution ? attribution.selectedProductId : null,
@@ -2512,6 +2514,7 @@ Page({
           prepayment: attempt.prepayment === true,
           expectedLocationVersion: attempt.expectedLocationVersion,
           expectedMinimumMinor: attempt.expectedMinimumMinor,
+          ...(attempt.channelOnly ? { channelOnly: true } : {}),
           ...(attempt.pointsOnly ? { pointsOnly: true } : {}),
           ...(attempt.couponQuoteId ? { couponQuoteId: attempt.couponQuoteId } : {}),
           recommendationAttribution: attemptAttribution,
@@ -2520,12 +2523,12 @@ Page({
         submitMeasured = true
         if (!this.isCurrentTableRequest(tableRequest)) return
         const data = result.data || result
-        if ((data.prepaymentSettlement === true && data.payment === null) || (data.pointsSettlement === true && data.payment === null && data.settlement && data.settlement.payableAmountMinor === 0)) {
+        if ((data.prepaymentSettlement === true && data.payment === null) || ((data.pointsSettlement === true || data.channelSettlement === true) && data.payment === null && data.settlement && data.settlement.payableAmountMinor === 0)) {
           wx.removeStorageSync(CHECKOUT_ATTEMPT_KEY)
           wx.removeStorageSync(PENDING_PAYMENT_KEY)
           this.updateCart([], data.sharedCart || null)
           this.invalidateCheckoutCoupons(false, false)
-          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : data.channelSettlement ? '优惠已按本次消费核销，订单进入出品，无需另付款。' : '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
           return
         }
         const pendingPayment = {

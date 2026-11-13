@@ -254,6 +254,7 @@ function request(path, options) {
           const error = new Error(detail.message || `请求失败（${response.statusCode}）`)
           error.code = detail.code || (detail.status === 'rate_limited' ? 'GUEST_SERVICE_RATE_LIMITED' : 'HTTP_ERROR')
           error.statusCode = response.statusCode
+          if (detail.commitDisposition === 'not_committed') error.commitDisposition = 'not_committed'
           attachErrorDetails(error, detail)
           if (typeof detail.retryAt === 'string') error.retryAt = detail.retryAt
           // A rejected guest call is the first reliable evidence that this

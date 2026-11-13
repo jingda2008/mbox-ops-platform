@@ -14,6 +14,7 @@ function isActivityShareLaunch(options) {
 function hasTableScanLaunch(options) {
   const launch = options && typeof options === 'object' ? options : {}
   const query = launch.query && typeof launch.query === 'object' ? launch.query : {}
+  if (String(launch.path || '').replace(/^\/+/, '') === 'pages/channel-coupons/index') return false
   // applyLaunchSession remains the authority that parses and validates these
   // values. This merely marks a cold QR deep link as a new table visit so a
   // fixed physical code never inherits a prior turnover's local guest state.
@@ -31,6 +32,7 @@ App({
     this.skipInitialShow = true;
     const config = getRuntimeConfig()
     this.globalData.config = config
+    this.captureChannelLaunch(options)
     const launchSessionOptions = hasTableScanLaunch(options)
       ? Object.assign({}, options || {}, { forceTableScan: true })
       : options
@@ -48,11 +50,18 @@ App({
   onShow(options) {
     this.globalData.foregroundSequence += 1
     if (this.skipInitialShow) { this.skipInitialShow = false; return }
+    this.captureChannelLaunch(options)
     if (!hasTableScanLaunch(options)) return
     try {
       this.globalData.tableSession = applyLaunchSession(Object.assign({}, options || {}, { forceTableScan: true }), this.globalData.config || getRuntimeConfig())
     } catch (error) {
       this.globalData.tableConnectionError = customerErrorMessage(error, '桌码无法识别，请重新扫码')
+    }
+  },
+
+  captureChannelLaunch(options) {
+    if (options && String(options.path || '').replace(/^\/+/, '') === 'pages/channel-coupons/index') {
+      this.globalData.channelOfferLaunch = options.query || {}
     }
   },
 

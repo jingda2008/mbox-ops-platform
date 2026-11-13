@@ -1,0 +1,2 @@
+.channel-page{padding:28rpx;color:#29281f}.intro,.card{display:flex;flex-direction:column;gap:20rpx;margin-bottom:24rpx;padding:28rpx;background:#fffdfa;border-radius:20rpx}.title{font-size:36rpx;font-weight:600}.card input{min-height:88rpx;border-bottom:1rpx solid #ccc}.card button{width:100%;font-size:30rpx}.error{color:#a13725;padding:16rpx 0}.channel-page>text{display:block;font-size:25rpx;line-height:1.6}
+.featured{border:2rpx solid #315d46}.offer{font-size:44rpx;color:#315d46;font-weight:600}.notice{padding:24rpx;color:#315d46;line-height:1.6}

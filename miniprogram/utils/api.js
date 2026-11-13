@@ -137,9 +137,9 @@ async function publicRequest(path, options) {
 
 async function recoverableMemberWrite(operation, path, method, data, legacyKeys, extra) {
   await ensureBoundCustomerSession()
-  return (await recoverableGuestCommand(operation, data, key => publicRequest(path, {
-    ...(extra || {}), method, headers: { ...((extra || {}).headers || {}), 'idempotency-key': key }, data,
-  }), { customerOnly: true, legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey })).data
+  return (await recoverableGuestCommand(operation, data, (key, context) => publicRequest(path, {
+    ...(extra || {}), method, headers: { ...((extra || {}).headers || {}), 'idempotency-key': key, ...(extra && extra.channelRecovery && context.recovery ? { 'x-channel-recovery': '1' } : {}) }, data,
+  }), { customerOnly: true, legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey, clearOnNotCommitted: Boolean(extra && extra.clearOnNotCommitted) })).data
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
@@ -706,6 +706,7 @@ async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyK
 }
 async function getCheckoutPoints() { return (await request('/api/guest/shared-cart/points')).data }
 async function quoteSharedCartPoints(input, idempotencyKey) { return (await request('/api/guest/shared-cart/points-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input })).data }
+async function quoteSharedCartChannel(input) { return (await request('/api/guest/shared-cart/channel-quote', { method: 'POST', data: input })).data }
 async function quoteSharedCartCoupons(input, idempotencyKey) {
   return (await request('/api/guest/shared-cart/coupon-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('coupon-quote') }, data: input })).data
 }
@@ -729,7 +730,7 @@ async function checkoutSharedCart(input, idempotencyKey) {
     input.checkoutUpgradeOfferPublicId,
     input.recommendationAttribution,
   )
-  return request(input.prepayment ? '/api/guest/shared-cart/prepayment-settlement' : input.pointsOnly ? '/api/guest/shared-cart/points-settlement' : '/api/guest/shared-cart/checkout', {
+  return request(input.channelOnly ? '/api/guest/shared-cart/channel-settlement' : input.prepayment ? '/api/guest/shared-cart/prepayment-settlement' : input.pointsOnly ? '/api/guest/shared-cart/points-settlement' : '/api/guest/shared-cart/checkout', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId('shared-cart-checkout') },
     data: {
       note: input.note || null,
@@ -790,6 +791,26 @@ async function getCustomerBenefits() {
 async function getCustomerBenefitWallet(cursor) {
   const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
   return (await publicRequest(`/api/public/mini/customer/benefit-wallet?limit=30${suffix}`)).data
+}
+async function getChannelWalletPage(options) {
+  const input=options||{}, query=['limit=30']
+  for(const key of ['cursor','status','code']) if(input[key])query.push(key+'='+encodeURIComponent(input[key]))
+  const response=await publicRequest('/api/public/mini/channel/wallet?'+query.join('&'))
+  if(!Array.isArray(response.data)||!response.meta||!Object.prototype.hasOwnProperty.call(response.meta,'nextCursor'))throw new Error('券包分页信息缺失，请刷新核对')
+  return {items:response.data,nextCursor:response.meta.nextCursor}
+}
+async function getChannelWallet() { return (await getChannelWalletPage()).items }
+
+async function getChannelOffer(code) { return (await publicRequest('/api/public/mini/channel/offer?code=' + encodeURIComponent(code))).data }
+
+async function claimChannelCoupon(code) {
+  return recoverableMemberWrite('channel.claim', '/api/public/mini/channel/claim', 'POST', { code }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true })
+}
+async function activateChannelCoupon(claimId) {
+  await getGuestSession()
+  return (await recoverableGuestCommand('channel.activate', { claimId }, (key, context) => request('/api/guest/channel/activate', {
+    method: 'POST', headers: { 'idempotency-key': key, ...(context.recovery ? { 'x-channel-recovery': '1' } : {}) }, data: { claimId },
+  }), { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true })).data
 }
 async function getCustomerBottles(cursor) {
   return (await publicRequest('/api/public/mini/customer/bottle-custody' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))).data
@@ -901,8 +922,9 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
+  revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, quoteSharedCartChannel, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
+  getChannelWallet, getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon,
   logoutWechatIdentity,
 }

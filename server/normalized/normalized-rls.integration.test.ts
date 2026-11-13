@@ -151,9 +151,9 @@ integration('normalized runtime role and RLS integration', () => {
           JOIN pg_namespace namespace ON namespace.oid = sequence.relnamespace
           WHERE namespace.nspname = 'mbox'
             AND sequence.relkind = 'S'
-            -- 264's counter is private to its stamping definer, unlike the
-            -- public runtime sequences. Assert its denial separately below.
-            AND sequence.relname <> 'financial_fact_sequence'
+            -- Financial stamping and channel ledger identity counters are private.
+            -- Identity inserts do not need direct sequence access; assert denial below.
+            AND sequence.relname NOT IN ('financial_fact_sequence', 'channel_ledger_sequence_seq')
             AND (
               NOT has_sequence_privilege(
                 'mbox_runtime', format('%I.%I', namespace.nspname, sequence.relname), 'USAGE'
@@ -180,12 +180,14 @@ integration('normalized runtime role and RLS integration', () => {
     })
 
     const privateCounter = await pool.query<{
+      name: string
       owner_not_runtime: boolean
       runtime_usage: boolean
       runtime_select: boolean
       runtime_update: boolean
     }>(`
       SELECT
+        sequence.relname AS name,
         sequence.relowner <> runtime.oid AS owner_not_runtime,
         has_sequence_privilege('mbox_runtime', sequence.oid, 'USAGE') AS runtime_usage,
         has_sequence_privilege('mbox_runtime', sequence.oid, 'SELECT') AS runtime_select,
@@ -195,14 +197,16 @@ integration('normalized runtime role and RLS integration', () => {
       JOIN pg_roles runtime ON runtime.rolname = 'mbox_runtime'
       WHERE namespace.nspname = 'mbox'
         AND sequence.relkind = 'S'
-        AND sequence.relname = 'financial_fact_sequence'
+        AND sequence.relname IN ('financial_fact_sequence', 'channel_ledger_sequence_seq')
+      ORDER BY sequence.relname
     `)
-    expect(privateCounter.rows).toEqual([{
+    expect(privateCounter.rows).toEqual(['channel_ledger_sequence_seq', 'financial_fact_sequence'].map(name => ({
+      name,
       owner_not_runtime: true,
       runtime_usage: false,
       runtime_select: false,
       runtime_update: false,
-    }])
+    })))
   })
 
   it('keeps FORCE RLS enabled and PUBLIC access revoked', async () => {

@@ -219,3 +219,53 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(storage.size, 0)
   })
 }
+
+test('channel quote requires review after a live cart update rather than silently falling back to full price', async () => {
+  const { page } = await issuedEntryFixture('miniprogram')
+  page.checkoutCouponScope = 'table-a'
+  page.setData({ couponQuote: { sourceType: 'channel_quote', generation: 1, version: 1, expiresAt: new Date(Date.now()+60000).toISOString() }, checkoutConfirmVisible: true })
+  page.updateCart([], { generation: 1, version: 2, lines: [] })
+  assert.equal(page.data.couponQuote, null)
+  assert.equal(page.data.couponNeedsReview, true)
+  assert.equal(page.couponCheckoutReady(), false)
+  page.skipCheckoutCoupons()
+  assert.equal(page.couponCheckoutReady(), true)
+})
+
+for (const previous of ['member-coupon', 'points']) {
+  test(`channel discount replaces ${previous} selection and cannot retain both authorities`, async () => {
+    const utils=loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js',import.meta.url))
+    const quote={id:'channel-only',sourceType:'channel_quote',generation:1,version:2,current:true,expiresAt:new Date(Date.now()+60000).toISOString(),subtotalMinor:10000,discountMinor:1500,payableMinor:8500,currency:'CNY'}
+    const page={...utils.checkoutCouponMethods({quoteChannel:async()=>quote,getPoints:async()=>({availablePoints:10,minorPerPoint:100,allowCoupons:false}),money:n=>String(n),randomId:()=> 'test',scope:()=> 'same-table',errorMessage:(_,fallback)=>fallback}),data:{...structuredClone(utils.initialCheckoutCoupons),busy:false,cart:[],cartGeneration:1,cartVersion:2,checkoutConfirmVisible:true,couponQuote:{sourceType:'checkout_quote'},couponSelections:previous==='member-coupon'?[{portionId:'p',benefitId:'member'}]:[],pointsInput:previous==='points'?'10':''},setData(v){Object.assign(this.data,v)}}
+    await page.quoteCheckoutChannel()
+    assert.deepEqual(Array.from(page.data.couponSelections),[]);assert.equal(page.data.pointsInput,'');assert.equal(page.data.couponQuote.id,'channel-only');assert.equal(page.couponCheckoutReady(),true)
+    await page.openCheckoutPoints()
+    assert.equal(page.data.couponQuote,null);assert.equal(page.data.pointsPickerOpen,true)
+  })
+}
+
+function channelQuoteFixture() {
+  const utils=loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js',import.meta.url))
+  let identity='table-a'
+  const result={id:'channel-only',sourceType:'channel_quote',generation:1,version:2,current:true,expiresAt:new Date(Date.now()+60000).toISOString(),subtotalMinor:10000,discountMinor:1500,payableMinor:8500,currency:'CNY'}
+  const api={quote:async()=>result}
+  const page={...utils.checkoutCouponMethods({quoteChannel:()=>api.quote(),money:n=>String(n),randomId:()=> 'test',scope:()=>identity,errorMessage:(e)=>e.message}),data:{...structuredClone(utils.initialCheckoutCoupons),busy:false,cart:[],cartGeneration:1,cartVersion:2,checkoutConfirmVisible:true},setData(v){Object.assign(this.data,v)}}
+  return {page,api,result,setScope:value=>{identity=value}}
+}
+for(const amounts of [
+  {subtotalMinor:10000,discountMinor:-100,payableMinor:10100},
+  {subtotalMinor:10000.5,discountMinor:1500.5,payableMinor:8500},
+  {subtotalMinor:10000,discountMinor:'1500',payableMinor:8500},
+  {subtotalMinor:'10000',discountMinor:1500,payableMinor:8500},
+  {subtotalMinor:Number.MAX_SAFE_INTEGER+1,discountMinor:Number.MAX_SAFE_INTEGER+1,payableMinor:0},
+])test(`channel quote rejects invalid minor-unit amounts ${JSON.stringify(amounts)}`,async()=>{
+  const {page,result}=channelQuoteFixture();Object.assign(result,amounts);await page.quoteCheckoutChannel()
+  assert.equal(page.data.couponQuote,null);assert.equal(page.data.couponNeedsReview,true);assert.equal(page.couponCheckoutReady(),false)
+})
+for(const outcome of ['success','failure'])test(`late channel ${outcome} cannot change a different table scope`,async()=>{
+  const {page,api,result,setScope}=channelQuoteFixture();let finish
+  api.quote=()=>new Promise((resolve,reject)=>{finish=()=>outcome==='success'?resolve(result):reject(Error('旧桌断网'))})
+  const pending=page.quoteCheckoutChannel();setScope('table-b');page.setData({couponLoading:true,couponError:'新桌状态'})
+  finish();await pending
+  assert.equal(page.data.couponQuote,null);assert.equal(page.data.couponError,'新桌状态');assert.equal(page.data.couponLoading,true)
+})

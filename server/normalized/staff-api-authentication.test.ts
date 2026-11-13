@@ -27,6 +27,17 @@ describe('staff API authentication classification', () => {
       if (!source.includes('resolveStaffContext')) continue
       if (source.includes('isStaffAuthenticationRequiredError')
         || source.includes('NormalizedAuthenticationRequiredError')) continue
+      const channelDelegates:Record<string,string>={
+        'channel-finance-api.ts':'registerChannelFinanceRoutes',
+        'channel-operations-api.ts':'registerChannelOperationsRoutes',
+        'channel-partner-api.ts':'registerChannelPartnerRoutes',
+      }
+      const delegated=channelDelegates[fileName]
+      if(delegated){
+        const parent=await readFile(new URL('channel-distribution-api.ts',directory),'utf8')
+        if(source.includes(`export function ${delegated}`)&&parent.includes(`${delegated}(app, options)`)
+          &&parent.includes('isStaffAuthenticationRequiredError(error)')&&parent.includes('reply.code(401)'))continue
+      }
       unmapped.push(fileName)
     }
     expect(unmapped).toEqual([])

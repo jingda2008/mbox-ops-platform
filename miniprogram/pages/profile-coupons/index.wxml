@@ -1,6 +1,7 @@
 <view class="page coupons-page">
   <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>查看待生效、可用与历史权益。时间均为北京时间。</text></view>
   <navigator url="/pages/profile-cards/index" class="coupon-nav">我的专属卡 <text>发现同好 ›</text></navigator>
+  <navigator url="/pages/channel-coupons/index" class="coupon-nav">餐后推荐优惠 <text>扫码或输入优惠号码 ›</text></navigator>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取优惠券" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取优惠券</button></view>

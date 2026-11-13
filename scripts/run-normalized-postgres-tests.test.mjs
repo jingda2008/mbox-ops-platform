@@ -92,6 +92,8 @@ function launch(_executable,args,options){
   return child;
 }
 const source=(await readFile(path,'utf8')).replace(/^import .*\\n/gm,'');
+// Fixture phase is a harness argument, not a selected Vitest path.
+process.argv=[process.execPath,path];
 const execute=new (Object.getPrototypeOf(async function(){}).constructor)('Client','spawn','process','randomBytes',source);
 await execute(Client,launch,process,randomBytes);
 `

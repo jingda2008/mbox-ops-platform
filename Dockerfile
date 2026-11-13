@@ -8,6 +8,9 @@ COPY . .
 RUN APP_COMMIT_SHA="${APP_COMMIT_SHA}" npm run build:normalized
 
 FROM node:24-alpine AS runtime
+# Channel posters render Chinese text through libvips/librsvg. The base Node
+# image has no CJK fonts; installing these avoids blank/tofu production posters.
+RUN apk add --no-cache font-noto-cjk && fc-cache -f
 ARG APP_COMMIT_SHA=development
 ARG APP_RELEASE_VERSION=development
 LABEL org.opencontainers.image.revision="${APP_COMMIT_SHA}"
@@ -16,6 +19,7 @@ LABEL com.mbox.schema-flavor="normalized-core-v1"
 
 ENV NODE_ENV=production \
   PORT=8787 \
+  XDG_CACHE_HOME=/tmp/mbox-cache \
   MBOX_STATIC_DIR=/app/dist
 WORKDIR /app
 

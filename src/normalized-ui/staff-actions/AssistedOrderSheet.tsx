@@ -1,5 +1,6 @@
+import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Banknote, Check, CreditCard, Gift, LoaderCircle, Minus, Plus, QrCode, ReceiptText, RefreshCcw, ScanLine, Search, ShoppingCart, X } from 'lucide-react'
 import { MenuOrderingWorkspace, type MenuCartItem, type MenuSubmitOptions } from '../../components/MenuOrderingWorkspace'
 import { CustomerPaymentCodeScanner } from '../../components/CustomerPaymentCodeScanner'
@@ -200,6 +201,13 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
     }
   }
 
+  const quoteChannelOrder=useCallback(async(items:MenuCartItem[])=>{
+    const headers=new Headers({'content-type':'application/json'});if(staffSessionId)headers.set(STAFF_SESSION_BINDING_HEADER,staffSessionId)
+    const response=await fetch('/api/commerce/channel-quote',{method:'POST',credentials:'include',headers,body:JSON.stringify({tableSessionId:table.activeSession.id,items,orderMode:'paid'}),signal:AbortSignal.timeout(15000)})
+    const body=await response.json();if(!response.ok)throw new Error(body.error?.message??'渠道优惠报价失败，请先核验本桌渠道券')
+    return body.data as {id:string;expiresAt:string;payableMinor:number;discountMinor:number;currency:string}
+  },[staffSessionId,table.activeSession.id])
+
   const submitPaidOrder = async (items: MenuCartItem[], options: MenuSubmitOptions) => {
     if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) throw new Error('当前不可提交，请重新核对点单权限和菜品')
     if (settlementMode === 'immediate_payment' && !canSettleImmediately(access)) {
@@ -216,6 +224,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
         orderMode: 'paid',
         ...(replacementCaseId?{replacementCaseId,...(replacementPreviousOrderId?{replacementPreviousOrderId}:{})}:{}),
         items,
+        ...(options.channelQuoteId?{channelQuoteId:options.channelQuoteId}:{}),
         ...(options.fulfillmentNote.trim().length > 0 ? { fulfillmentNote: options.fulfillmentNote.trim() } : {}),
         settlementMode,
       })
@@ -414,6 +423,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
             includeNonGuestProducts
             partySize={table.activeSession.guestCount}
             recommendationScene={recommendationScene(table.activeSession.guestProfileSnapshot ?? {})}
+            onQuoteChannel={quoteChannelOrder}
             onSubmit={submitPaidOrder}
           />
         )}

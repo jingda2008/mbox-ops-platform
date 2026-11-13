@@ -1,0 +1,30 @@
+<view class="page channel-page">
+  <view class="intro"><text class="title">餐后再坐一会儿</text><text>优惠领到本人账户，已关联的会员账户自动同步。领取不代表已到店。</text></view>
+  <view wx:if="{{loading}}" class="card">正在读取优惠…</view>
+  <view wx:if="{{offer}}" class="card featured">
+    <text class="title">{{offer.title}}</text><text class="offer">{{offer.offerText}}</text>
+    <text>推荐来源：{{offer.sourceLabel}}</text><text>满 {{offer.minimumText}} 可用 · {{offer.productText}}</text>
+    <text>领取：{{offer.claimTimeText}}</text><text>使用：{{offer.timeText}}（北京时间）</text>
+    <text>每人限领 {{offer.perCustomerClaims}} 次 · 每客组限用 {{offer.perVisitUses}} 次</text>
+    <text>{{offer.stackingText}}</text>
+    <text wx:if="{{offer.existingClaimId}}">本优惠已在本人账户，可在下方“本次推广已领券”直接查看和使用。</text>
+    <text wx:if="{{offer.unavailable}}">{{offer.unavailable}}</text>
+    <button wx:if="{{!offer.unavailable}}" bindtap="claim" loading="{{busy}}" disabled="{{busy || loading}}">{{offer.claimedCount ? '再领取一张到本人账户' : '立即领取到本人账户'}}</button>
+    <text>以领取时余量和核验结果为准；不与会员券、积分优惠叠加。</text>
+  </view>
+  <view wx:if="{{offer.existingCoupon}}" class="card featured">
+    <text class="title">本次推广已领券</text><text>{{offer.existingCoupon.offerText}} · {{offer.existingCoupon.stateText}}</text>
+    <text>{{offer.existingCoupon.stackingText}}</text><text>{{offer.existingCoupon.timeText}}（北京时间）</text><text>适用商品：{{offer.existingCoupon.productText}}</text>
+    <button wx:if="{{offer.existingCoupon.status === 'available'}}" data-id="{{offer.existingCoupon.id}}" bindtap="useCoupon" disabled="{{busy || loading}}">使用本次推广已领券</button>
+  </view>
+  <view wx:if="{{needsLogin}}" class="card"><text>请先登录本人账号，登录后会回到这张优惠。</text><button bindtap="login">登录并返回领券</button></view>
+  <view wx:if="{{!offer && !loading && !needsLogin}}" class="card"><input value="{{code}}" maxlength="100" disabled="{{busy}}" placeholder="输入图片上的优惠号码" bindinput="inputCode"/><button bindtap="scan" disabled="{{busy}}">扫描推广图</button><button bindtap="load" disabled="{{busy || !code}}">查看优惠</button></view>
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{notice}}" class="notice">{{notice}}</view>
+  <button bindtap="load" disabled="{{busy || loading}}">{{loading ? '正在读取…' : '刷新我的推荐优惠'}}</button>
+  <picker range="{{filters}}" range-key="label" value="{{filterIndex}}" bindchange="filterChanged" disabled="{{busy}}"><view class="card">我的券：{{filters[filterIndex].label}} · 点击筛选</view></picker>
+  <view class="card" wx:for="{{coupons}}" wx:key="id"><text class="title">{{item.title}}</text><text>{{item.offerText}} · {{item.stateText}}</text><text>推荐来源：{{item.sourceLabel}}</text><text>优惠号码：{{item.offerCode}}</text><text>适用商品：{{item.productText}}</text><text>满 {{item.minimumText}} 可用 · 每人限领 {{item.perCustomerClaims}} 次 · 每客组限用 {{item.perVisitUses}} 次</text><text>{{item.stackingText}}</text><text>{{item.timeText}}（北京时间）</text><button wx:if="{{item.status === 'available'}}" data-id="{{item.id}}" bindtap="useCoupon" disabled="{{busy || loading}}">使用到当前桌次</button></view>
+  <button wx:if="{{nextCursor}}" bindtap="loadMore" disabled="{{loading || loadingMore || busy}}">{{loadingMore ? '正在读取…' : '加载更多优惠券'}}</button>
+  <text wx:if="{{!loading && !nextCursor && coupons.length}}">当前筛选的优惠券已全部显示</text>
+  <text>换桌或拆单不增加次数；需符合最低消费及适用商品条件。到店后也可请服务员核对本人及优惠号码办理。</text>
+  <text>自行绑定后，请服务员核对本人及到店情况；单独扫描桌码不作为已到店证明。</text>
+</view>

@@ -122,3 +122,114 @@ for(const state of ['settled','missing','unpaid'])test(`batch original readback 
  const key='mbox.table-batch-attempt:'+JSON.stringify(f.state.session);f.state.storage.set(key,{ids:['original'],key:'original-request-key'})
  await p.loadData();assert.equal(f.state.storage.has(key),state!=='settled')
 })
+
+for(const [method,original,changed] of [
+ ['claimChannelCoupon',['ABCDEFGH2345'],['DIFFERENT234']],
+])test(`${method}: a lost response blocks edited intent and restores the original key across restart`,async()=>{
+ let sent=0
+ const respond=async()=>++sent===1?{networkError:true}:sent===2?{status:503,data:{error:{code:'UNAVAILABLE'}}}:{data:{data:{id:'original-record',claimId:'original-claim'}}}
+ const f=fixture(respond)
+ await assert.rejects(f.api[method](...original))
+ await assert.rejects(f.api[method](...changed),{code:'COMMAND_RECOVERY_PENDING'})
+ assert.equal(f.calls.length,1)
+ await assert.rejects(f.api[method](...original))
+ const g=fixture(respond,{storage:f.storage});await g.api[method](...original)
+ const calls=[...f.calls,...g.calls]
+ assert.equal(calls.length,3)
+ assert.equal(new Set(calls.map(c=>c.headers['idempotency-key'])).size,1)
+ assert.ok(![...g.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+test('channel activation stops before mutation when the customer changes table during session verification',async()=>{
+ let finish
+ const f=fixture(call=>call.path.includes('/channel/activate')?{data:{data:{activationId:'should-not-happen'}}}:new Promise(resolve=>{finish=resolve}))
+ const action=f.api.activateChannelCoupon('claim-original'),denied=assert.rejects(action)
+ await new Promise(setImmediate)
+ const table=f.load(f.root+'/utils/session.js').getTableSession();table.tableToken='table-b';table.cartScope='cart-b'
+ finish({data:{data:{status:'active'}}});await denied
+ assert.equal(f.calls.filter(c=>c.path.includes('/channel/activate')).length,0)
+})
+
+test('channel claim allows corrected input after a first explicitly uncommitted rejection',async()=>{
+ let sent=0
+ const f=fixture(async()=>++sent===1?{status:409,data:{error:{code:'CLAIM_LIMIT',message:'本批次已领完',commitDisposition:'not_committed'}}}:{data:{data:{claimId:'valid-coupon'}}})
+ await assert.rejects(f.api.claimChannelCoupon('EXHAUSTED234'))
+ await f.api.claimChannelCoupon('AVAILABLE234')
+ assert.equal(f.calls.length,2)
+ assert.notEqual(f.calls[0].headers['idempotency-key'],f.calls[1].headers['idempotency-key'])
+})
+test('channel claim never clears an unknown original attempt on a later uncommitted rejection',async()=>{
+ let sent=0
+ const f=fixture(async()=>++sent===1?{networkError:true}:{status:409,data:{error:{code:'CLAIM_LIMIT',commitDisposition:'not_committed'}}})
+ await assert.rejects(f.api.claimChannelCoupon('ORIGINAL234'))
+ await assert.rejects(f.api.claimChannelCoupon('ORIGINAL234'))
+ await assert.rejects(f.api.claimChannelCoupon('DIFFERENT234'),{code:'COMMAND_RECOVERY_PENDING'})
+ assert.equal(f.calls.length,2)
+ assert.equal(f.calls[0].headers['idempotency-key'],f.calls[1].headers['idempotency-key'])
+})
+
+for(const [method,original,changed] of [
+])test(`${method}: a first confirmed rollback allows a corrected deliberate operation`,async()=>{
+ let sent=0
+ const f=fixture(async()=>++sent===1?{status:409,data:{error:{code:'CHANNEL_NOT_COMMITTED',commitDisposition:'not_committed'}}}:{data:{data:{id:'valid-record'}}})
+ await assert.rejects(f.api[method](...original));await f.api[method](...changed)
+ assert.equal(f.calls.length,2);assert.notEqual(f.calls[0].headers['idempotency-key'],f.calls[1].headers['idempotency-key'])
+})
+test('channel activation allows a corrected coupon after a first confirmed rollback',async()=>{
+ let sent=0
+ const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{status:409,data:{error:{code:'VERSION_CONFLICT',commitDisposition:'not_committed'}}}:{data:{data:{activationId:'valid-activation'}}})
+ await assert.rejects(f.api.activateChannelCoupon('old-coupon'));await f.api.activateChannelCoupon('valid-coupon')
+ const calls=f.calls.filter(c=>c.path.includes('/channel/activate'))
+ assert.equal(calls.length,2);assert.notEqual(calls[0].headers['idempotency-key'],calls[1].headers['idempotency-key'])
+})
+test('uncommitted recovery handling stays opt-in for unrelated customer commands',async()=>{
+ const f=fixture(async()=>({status:409,data:{error:{code:'CONFLICT',commitDisposition:'not_committed'}}}))
+ await assert.rejects(f.api.updatePreferences({seatPreference:'quiet'},'first',{}))
+ await assert.rejects(f.api.updatePreferences({seatPreference:'bar'},'second',{}),{code:'COMMAND_RECOVERY_PENDING'})
+ assert.equal(f.calls.length,1)
+})
+
+for(const outcome of ['success','network-error'])test(`channel activation ${outcome} after table switch keeps the original table journal`,async()=>{
+ let finish,hold=true
+ const f=fixture(async call=>{
+   if(!call.path.includes('/channel/activate'))return{data:{data:{status:'active'}}}
+   if(hold)return new Promise(resolve=>{finish=resolve})
+   return{data:{data:{activationId:'original-activation'}}}
+ })
+ const table=f.load(f.root+'/utils/session.js').getTableSession(),original={...table}
+ const action=f.api.activateChannelCoupon('claim-original'),denied=assert.rejects(action)
+ await new Promise(setImmediate)
+ table.tableToken='table-b';table.cartScope='cart-b'
+ finish(outcome==='success'?{data:{data:{activationId:'original-activation'}}}:{networkError:true});await denied
+ assert.ok([...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+ Object.assign(table,original);hold=false
+ await f.api.activateChannelCoupon('claim-original')
+ const writes=f.calls.filter(c=>c.path.includes('/channel/activate'))
+ assert.equal(writes.length,2);assert.equal(writes[0].headers['idempotency-key'],writes[1].headers['idempotency-key'])
+ assert.ok(![...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+
+for(const [method,args] of [['claimChannelCoupon',['ABCDEFGH2345']]])test(`${method} retries only an existing server receipt after response loss`,async()=>{
+ let sent=0;const f=fixture(async()=>++sent===1?{networkError:true}:{data:{data:{id:'original',claimId:'original'}}})
+ await assert.rejects(f.api[method](...args));await f.api[method](...args)
+ assert.equal(f.calls[0].headers['x-channel-recovery'],undefined)
+ assert.equal(f.calls[1].headers['x-channel-recovery'],'1')
+})
+test('coupon activation recovery also requests receipt-only lookup',async()=>{
+ let sent=0;const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{networkError:true}:{data:{data:{activationId:'original'}}})
+ await assert.rejects(f.api.activateChannelCoupon('claim'));await f.api.activateChannelCoupon('claim')
+ const calls=f.calls.filter(c=>c.path.includes('/channel/activate'))
+ assert.equal(calls[0].headers['x-channel-recovery'],undefined);assert.equal(calls[1].headers['x-channel-recovery'],'1')
+})
+
+test('missing channel receipt leaves the original journal blocked for manual verification',async()=>{
+ let count=0;const f=fixture(async()=>++count===1?{networkError:true}:{status:409,data:{error:{code:'CHANNEL_RECEIPT',message:'原回执不可用'}}})
+ await assert.rejects(f.api.claimChannelCoupon('ABCDEFGH2345'));await assert.rejects(f.api.claimChannelCoupon('ABCDEFGH2345'))
+ await assert.rejects(f.api.claimChannelCoupon('DIFFERENT234'),{code:'COMMAND_RECOVERY_PENDING'})
+ assert.equal(f.calls.length,2);assert.equal(f.calls[1].headers['x-channel-recovery'],'1')
+ assert.ok([...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+
+test('Mini Program no longer exports partner account or settlement operations',()=>{
+ const f=fixture(async()=>({data:{data:{}}}))
+ for(const name of ['getChannelPartner','getChannelHistory','getChannelPoster','acceptChannelInvitation','respondChannelStatement','getChannelStatement'])assert.equal(f.api[name],undefined)
+})

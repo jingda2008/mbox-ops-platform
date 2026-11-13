@@ -208,3 +208,23 @@ test('published activity and home images resolve against the reviewed API host i
     assert.match(pageSource, /publicImageUrl/)
   }
 })
+
+test('official channel code cold launch does not interpret its scene or forged fields as a table', async () => {
+  const storage=new Map(), calls=[]
+  const {app}=await loadAppModule(storage,{ensureCustomerSessionCalls:calls})
+  app.onLaunch({path:'pages/channel-coupons/index',query:{scene:'CH_ABCDEFGH2345',tableToken:'T'.repeat(32)}})
+  assert.equal(app.globalData.tableSession.tableToken,'')
+  assert.equal(calls.length,1)
+  assert.equal(app.globalData.tableConnectionError,undefined)
+})
+
+test('official channel code warm launch leaves the current table generation and guest cookie intact', async () => {
+  const storage=new Map(); const {app}=await loadAppModule(storage)
+  app.onLaunch({path:'pages/order/index',query:{scene:'T'.repeat(32)}})
+  app.onShow({path:'pages/order/index'})
+  const table=JSON.stringify(app.globalData.tableSession)
+  storage.set('mbox.http.cookie.guest.v2','current-table-cookie')
+  app.onShow({path:'pages/channel-coupons/index',query:{scene:'CH_ABCDEFGH2345'}})
+  assert.equal(JSON.stringify(app.globalData.tableSession),table)
+  assert.equal(storage.get('mbox.http.cookie.guest.v2'),'current-table-cookie')
+})

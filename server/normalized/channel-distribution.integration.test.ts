@@ -1423,6 +1423,24 @@ integration('channel distribution real PostgreSQL authority', () => {
 
   })
 
+  it('website distinguishes a reconciled zero commission from a pending or frozen calculation',async()=>{
+    const f=await financeFixture(),headers=await webSession(f.rid)
+    const visit=async()=>{
+      const response=await app.inject({method:'GET',url:'/cooperation/partner',headers})
+      expect(response.statusCode,response.body).toBe(200)
+      return response.json().data.visits.find((v:{visitNumber:string})=>v.visitNumber===channelAnonymousVisit(f.rid,f.visitId))
+    }
+    expect(await visit()).toMatchObject({qualifiedConsumptionMinor:null,accruedCommissionMinor:null})
+    await admin.query("UPDATE mbox.payments SET status='pending' WHERE id=$1",[f.payment])
+    expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(f.visitId))).toMatchObject({target:0,frozen:true})
+    expect(await visit()).toMatchObject({accruedCommissionMinor:null})
+    await admin.query("UPDATE mbox.payments SET status='succeeded' WHERE id=$1",[f.payment])
+    await financeRefund(f,9000)
+    expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(f.visitId))).toMatchObject({target:0,frozen:false})
+    expect(await visit()).toMatchObject({qualifiedConsumptionMinor:'0',accruedCommissionMinor:'0'})
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_ledger WHERE visit_id=$1',[f.visitId])).rows[0].n).toBe(0)
+  })
+
   it('website invitation activation, password login, reset and logout isolate customer and staff identities',async()=>{
     const f=await financeFixture(),origin={origin:'https://www.shmbox.com','x-channel-web':'1'},username='web_'+f.rid.replaceAll('-','').slice(0,20),password='fixture-password-123'
     const post=(url:string,payload:object,headers:Record<string,string>=origin)=>app.inject({method:'POST',url:'/cooperation/'+url,remoteAddress:'192.0.2.91',headers,payload})

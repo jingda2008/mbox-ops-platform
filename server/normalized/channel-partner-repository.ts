@@ -80,7 +80,8 @@ export class ChannelPartnerRepository {
       visits:{alias:'v',time:'opened_at',from:'mbox.channel_visits v JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(v.tenant_id,v.store_id,v.source_batch_id)',where:'v.tenant_id=$1 AND v.store_id=$2 AND b.promoter_id=$3',select:`SELECT v.id,right(v.id::text,8) AS "visitNumber",v.opened_at::text AS "boundAt",v.arrival_confirmed_at::text AS "arrivedAt",v.closed_at::text AS "closedAt",
       b.offer_code AS "offerCode",(SELECT count(*)::integer FROM mbox.channel_order_attributions o WHERE (o.tenant_id,o.store_id,o.visit_id)=(v.tenant_id,v.store_id,v.id)) AS "orderCount",
       (SELECT l.net_basis_minor::text FROM mbox.channel_financial_positions l WHERE (l.tenant_id,l.store_id,l.visit_id)=(v.tenant_id,v.store_id,v.id)) AS "qualifiedConsumptionMinor",
-      (SELECT sum(l.commission_delta_minor)::text FROM mbox.channel_ledger l WHERE (l.tenant_id,l.store_id,l.visit_id)=(v.tenant_id,v.store_id,v.id)) AS "accruedCommissionMinor"
+      COALESCE((SELECT sum(l.commission_delta_minor)::text FROM mbox.channel_ledger l WHERE (l.tenant_id,l.store_id,l.visit_id)=(v.tenant_id,v.store_id,v.id)),
+        (SELECT '0' FROM mbox.channel_financial_positions f WHERE (f.tenant_id,f.store_id,f.visit_id)=(v.tenant_id,v.store_id,v.id) AND NOT f.frozen)) AS "accruedCommissionMinor"
       FROM mbox.channel_visits v JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(v.tenant_id,v.store_id,v.source_batch_id)
       WHERE v.tenant_id=$1 AND v.store_id=$2 AND b.promoter_id=$3`},
       statements:{alias:'s',time:'created_at',from:'mbox.channel_statements s',where:'s.tenant_id=$1 AND s.store_id=$2 AND s.promoter_id=$3',select:`SELECT s.id,s.source_statement_id AS "sourceStatementId",s.amount_minor::text AS "amountMinor",s.status,s.created_at::text AS "createdAt",

@@ -1,0 +1,49 @@
+name: print-bridge-windows
+on:
+  push:
+    branches: ['codex/print-bridge-113-installable-20261114']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-native:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build exact venue baseline upgrade
+        run: python scripts/build-print-bridge-113-upgrade.py
+      - name: Verify production bytes with Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          python scripts/verify-print-bridge-113-package.py --package artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1 --pwsh powershell.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -File deploy/windows-print-bridge/upgrade-core.tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test deploy/windows-print-bridge/release-1.0.13/package.test.mjs deploy/windows-print-bridge/diagnostic-events.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real Windows service upgrade rollback and spooler
+        shell: powershell
+        run: ./deploy/windows-print-bridge/release-1.0.13/windows-native.tests.ps1
+      - name: Upload verified installable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MBOX-PrintBridge-1.0.13-Windows-verified
+          path: |
+            artifacts/print-bridge-1.0.13/*.zip
+            artifacts/print-bridge-1.0.13/*.sha256
+            artifacts/print-bridge-1.0.13/*evidence.json
+          if-no-files-found: error
+      - name: Preserve native test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-bridge-windows-test-evidence
+          path: artifacts/print-bridge-native-evidence/
+          if-no-files-found: warn

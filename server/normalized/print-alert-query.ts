@@ -1,11 +1,12 @@
 import type { ScopedTransaction } from './transaction-runner.js'
 import { StaffAccessRepository, StaffAccessDeniedError } from './staff-access-repository.js'
+import { resolveFulfillmentAllowedStations } from './fulfillment-query-service.js'
 import { printAlertStations, type PrintAlertSnapshot, type PrintAlertStation } from '../../src/shared/print-alerts.js'
 
 /** A read-only live alarm. A missing heartbeat is not proof of a missing paper. */
 export async function readPrintAlerts(tx: ScopedTransaction, employeeId: string): Promise<PrintAlertSnapshot> {
   const access = await new StaffAccessRepository(tx).resolve(employeeId)
-  const stations = printAlertStations(access.permissions)
+  const stations = printAlertStations(access.permissions, resolveFulfillmentAllowedStations(access.dataScopes))
   if (!stations.length) throw new StaffAccessDeniedError('当前岗位无打印提醒查看权限')
   const manager = access.permissions.some(p => ['printer.manage', 'hardware.manage', 'print.view_all'].includes(p))
   const rows = await tx.query<{

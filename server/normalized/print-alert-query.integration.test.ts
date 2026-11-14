@@ -23,7 +23,7 @@ suite('print alerts on a restricted PostgreSQL login', () => {
     await owner.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1,$2,'Print alert test')", [scope.tenantId, 'alerts-' + scope.tenantId])
     await owner.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1,$2,'alerts','Print alerts')", [scope.storeId, scope.tenantId])
     for (const [name, employee] of Object.entries(employees)) {
-      const role = randomUUID(), permission = {bar: 'work.bar', delivery: 'work.delivery', manager: 'printer.manage', denied: null}[name]
+      const role = randomUUID(), permission = {bar: 'kds.prepare', delivery: 'kds.deliver', manager: 'printer.manage', denied: null}[name]
       await owner.query('INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,$4,$4)', [employee, scope.tenantId, scope.storeId, name])
       await owner.query('INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,$4,$4)', [role, scope.tenantId, scope.storeId, 'ALERT_' + name.toUpperCase()])
       await owner.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,'2020-01-01')", [scope.tenantId, scope.storeId, employee, role])
@@ -31,6 +31,7 @@ suite('print alerts on a restricted PostgreSQL login', () => {
         await owner.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING', [scope.tenantId, scope.storeId, permission])
         await owner.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4', [scope.tenantId, scope.storeId, role, permission])
       }
+      if (name === 'bar') await owner.query(`INSERT INTO mbox.role_data_scopes(tenant_id,store_id,role_id,scope_key,effect,scope_value,value_kind,text_values,enabled) VALUES($1,$2,$3,'kds.station_codes','include','["bar"]','text_set',ARRAY['bar'],true)`, [scope.tenantId, scope.storeId, role])
     }
     await tx.run(scope, async t => {
       const repo = new HardwareRepository(t)

@@ -48,7 +48,7 @@ for (const width of [320, 1280]) test(`active print alarms, sound and recovery a
   await expect(notice.getByText('声音已暂缓，新故障仍会提醒。')).toBeVisible()
   expect(await tones()).toBe(4)
   data = {...data, alerts: [{...data.alerts[0]!, failed: 2, escalated: true, newestKey: '22345678-1234-4234-8234-123456789012'}]}
-  await refresh()
+  await notice.getByRole('button', {name: '重新检查打印状态'}).click()
   await expect(notice.getByText('管理员请处理：打印异常持续未恢复', {exact: true})).toBeVisible()
   await expect.poll(tones).toBe(6)
   const sizes = await notice.locator('button').evaluateAll(elements => elements.map(el => el.getBoundingClientRect().height))

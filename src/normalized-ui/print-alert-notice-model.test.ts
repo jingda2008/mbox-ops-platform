@@ -7,6 +7,10 @@ const alert: PrintAlert = {station: 'bar', failed: 1, stalled: 0, oldestAt: '202
 describe('print alert audience and announcement', () => {
   it('gives delivery staff anonymous production alarms without cashier access', () => {
     expect(printAlertStations(['work.delivery'])).toEqual(['bar', 'kitchen'])
+    expect(printAlertStations(['kds.deliver'])).toEqual(['bar', 'kitchen'])
+    expect(printAlertStations(['kds.prepare'], ['kitchen'])).toEqual(['kitchen'])
+    expect(printAlertStations(['kds.prepare'], ['bar'])).toEqual(['bar'])
+    expect(printAlertStations(['kds.prepare'], [])).toEqual([])
     expect(printAlertStations(['work.bar'])).toEqual(['bar'])
     expect(printAlertStations(['work.cashier'])).toEqual(['cashier'])
     expect(printAlertStations(['printer.manage'])).toEqual(['bar', 'kitchen', 'cashier', 'generation', 'diagnostics'])

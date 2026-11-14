@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { NormalizedApiClient } from '../normalized-api'
 import { printAlertStations, type PrintAlert, type PrintAlertSnapshot } from '../shared/print-alerts'
 import { hasNewPrintAlert, validatePrintAlertSnapshot } from './print-alert-notice-model'
@@ -6,10 +6,10 @@ import './staff-print-alert-notice.css'
 
 const names = { bar: '吧台', kitchen: '后厨', cashier: '收银', generation: '票据生成', diagnostics: '打印终端故障' }
 
-export function StaffPrintAlertNotice({api, permissions, canOpenDevices, onNavigate}: {
-  api: NormalizedApiClient; permissions: readonly string[]; canOpenDevices: boolean; onNavigate(route: string): void
+export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact = false, onNavigate}: {
+  api: NormalizedApiClient; permissions: readonly string[]; canOpenDevices: boolean; compact?: boolean; onNavigate(route: string): void
 }) {
-  const enabled = printAlertStations(permissions).length > 0
+  const enabled = printAlertStations(permissions).length > 0 || permissions.includes('kds.prepare')
   const signature = permissions.join(',')
   const [snapshot, setSnapshot] = useState<PrintAlertSnapshot | null>(null)
   const [stale, setStale] = useState(false), [forbidden, setForbidden] = useState(false)
@@ -19,6 +19,23 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, onNavig
   const audio = useRef<AudioContext | null>(null)
   const soundOn = useRef(false), hushUntil = useRef(0), lastSound = useRef(0)
   const known = useRef<PrintAlert[]>([]), audience = useRef('')
+  const notice = useRef<HTMLElement | null>(null)
+  // Dedicated production/pickup screens keep their full normal-state workspace.
+  const showing = enabled && !forbidden && (!compact || stale || Boolean(snapshot?.alerts.length))
+  useLayoutEffect(() => {
+    const element = notice.current
+    if (!element) return
+    let height = -1
+    const publish = (next: number) => {
+      if (height === next) return
+      height = next
+      document.documentElement.style.setProperty('--staff-print-notice-height', `${next}px`)
+      window.dispatchEvent(new Event('mbox:print-notice-resize'))
+    }
+    const observer = new ResizeObserver(() => publish(element.getBoundingClientRect().height))
+    observer.observe(element); publish(element.getBoundingClientRect().height)
+    return () => { observer.disconnect(); publish(0) }
+  }, [showing, compact])
 
   const tone = async () => {
     const context = audio.current
@@ -90,18 +107,10 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, onNavig
       await play.current()
     } catch { setSoundError('无法开启声音，请检查浏览器声音权限和电脑音量。') }
   }
-  if (!enabled || forbidden) return null
+  if (!showing) return null
   const alerts = snapshot?.alerts ?? [], active = alerts.length > 0
   const urgent = snapshot?.manager && alerts.some(alert => alert.escalated)
-  return <aside className={`staff-print-alert-notice${active || stale ? ' needs-attention' : ''}`} aria-label="打印故障主动提醒">
-    <div className="print-alert-heading">
-      <span role={active || stale ? 'alert' : 'status'}>
-        <strong>{stale ? '打印监测连接中断' : urgent ? '管理员请处理：打印异常持续未恢复' : active ? '打印异常，请核对出纸' : snapshot ? '打印监测中' : '正在连接打印监测'}</strong>
-        {stale && <small>当前状态无法确认；请现场核对打印机和电子出品单。</small>}
-      </span>
-      <button type="button" aria-pressed={sound} onClick={() => void toggleSound()}>{sound ? '关闭打印提醒声音' : '开启打印提醒声音'}</button>
-    </div>
-    {(active || stale) && <div className="print-alert-content">
+  const details = <div className="print-alert-content">
       {alerts.map(alert => <p key={alert.station}><strong>{names[alert.station]}</strong>：{alert.failed > 0 && (alert.station === 'diagnostics' ? `${alert.failed} 项待处理或待核验` : `${alert.failed} 张失败或结果不确定`)}{alert.failed > 0 && alert.stalled > 0 && '；'}{alert.stalled > 0 && `${alert.stalled} 张等待超过 90 秒`}{alert.escalated && ' · 已持续至少 3 分钟'}{stale && '（上次读取）'}</p>)}
       <details><summary>查看处理方法</summary><ol>
         <li>核对电子出品单和已经打印的纸票，先联系对应岗位确认，避免漏做或重复出品。</li>
@@ -114,8 +123,18 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, onNavig
         {active && sound && <button type="button" onClick={() => { hushUntil.current = Date.now() + 300_000; setMutedUntil(hushUntil.current) }}>暂缓声音 5 分钟</button>}
       </div>
       {mutedUntil > 0 && <small>声音已暂缓，新故障仍会提醒。</small>}
-    </div>}
+    </div>
+  return <aside ref={notice} className={`staff-print-alert-notice${active || stale ? ' needs-attention' : ''}${compact ? ' is-compact' : ''}`} aria-label="打印故障主动提醒">
+    <div className="print-alert-heading">
+      <span role={active || stale ? 'alert' : 'status'}>
+        <strong>{stale ? '打印监测连接中断' : urgent ? '管理员请处理：打印异常持续未恢复' : active ? '打印异常，请核对出纸' : snapshot ? '打印监测中' : '正在连接打印监测'}</strong>
+        {stale && !compact && <small>当前状态无法确认；请现场核对打印机和电子出品单。</small>}
+      </span>
+      <button type="button" aria-label={sound ? '关闭打印提醒声音' : '开启打印提醒声音'} aria-pressed={sound} onClick={() => void toggleSound()}>{compact ? sound ? '声音已开' : '开启声音' : sound ? '关闭打印提醒声音' : '开启打印提醒声音'}</button>
+      {compact && (active || stale) && <details className="print-alert-compact"><summary aria-label="查看异常与处理方法">查看异常</summary>{details}</details>}
+    </div>
+    {(active || stale) && !compact && details}
     {soundError && <p role="status">{soundError}</p>}
-    {sound && <small>本页保持打开时，新异常及未恢复异常每分钟响铃提醒；切换到其他应用或锁屏可能暂停。请确认电脑未静音。</small>}
+    {sound && !compact && <small>新异常会响铃，同一未恢复异常每分钟提醒。本页须保持可见；切换应用或锁屏可能暂停，请确认电脑未静音。</small>}
   </aside>
 }

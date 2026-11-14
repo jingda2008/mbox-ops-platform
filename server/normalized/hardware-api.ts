@@ -33,6 +33,7 @@ import { NormalizedAuthenticationRequiredError } from './normalized-request-cont
 import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 import {StaffAccessRepository, StaffAccessDeniedError, StaffNotFoundError} from './staff-access-repository.js'
+import { readPrintAlerts } from './print-alert-query.js'
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
 import {OrderStockReturnRepository} from './order-stock-return-repository.js'
@@ -65,6 +66,13 @@ class HardwareAccessDeniedError extends Error {
 
 export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (app, options) => {
   await registerNativeHardware(app,options)
+  app.get('/hardware/print-alerts', async (request, reply) => handle(reply, async () => {
+    const context = await options.resolveContext(request)
+    reply.header('cache-control', 'private, no-store')
+    const data = await options.transactions.run(context.scope,
+      tx => readPrintAlerts(tx, context.employeeId), { readOnly: true })
+    return reply.send({ data })
+  }))
   app.post('/hardware/operating-report', async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolveContext(request)
     requireAny(context,['commercial.profit.view'])

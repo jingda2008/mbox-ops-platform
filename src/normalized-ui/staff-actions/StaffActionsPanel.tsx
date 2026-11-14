@@ -426,6 +426,7 @@ export function StaffActionsPanel({
   }, [resetTableActionState])
 
   const openTableSecondary = useCallback((sessionId: string, open: () => void) => {
+    if (sessionId.startsWith('optimistic-')) return
     secondaryTableSessionIdRef.current = sessionId
     setTableActionDialogOpen(false)
     open()
@@ -1203,8 +1204,9 @@ export function StaffActionsPanel({
                     </button>
                     {canCollect && <button type="button" className="staff-table-quick-payment"
                       aria-label={`${table.code}直接收款`}
-                      disabled={pendingAction === `table:${table.id}`}
+                      disabled={pendingAction === `table:${table.id}` || table.activeSession?.id.startsWith('optimistic-')}
                       onClick={() => {
+                        if (!table.activeSession || table.activeSession.id.startsWith('optimistic-')) return
                         selectTable(table, false)
                         secondaryTableSessionIdRef.current = table.activeSession?.id ?? null
                         setTablePaymentOpen(true)
@@ -1243,6 +1245,7 @@ export function StaffActionsPanel({
               onCapacityReason={setCapacityReason}
               onTransferTarget={setTransferTargetId}
               onTransferReason={setTransferReason}
+              onRefreshSession={() => void load(true)}
               onOpen={() => void openTable()}
               onClose={() => void closeTable()}
               onCloseAfterCustomerLeft={() => void closeAfterCustomerLeft()}
@@ -1831,6 +1834,7 @@ interface TableActionSheetProps {
   onCapacityReason(value: string): void
   onTransferTarget(value: string | null): void
   onTransferReason(value: string): void
+  onRefreshSession(): void
   onOpen(): void
   onClose(): void
   onCloseAfterCustomerLeft(): void
@@ -1851,6 +1855,9 @@ interface TableActionSheetProps {
 
 function TableActionSheet(props: TableActionSheetProps) {
   const { table, onDismiss } = props
+  // A successful open receipt precedes the authoritative operations refresh.
+  // Never mount business panels or move to a secondary action with a temporary ID.
+  const sessionSyncing = table.activeSession?.id.startsWith('optimistic-') === true
   const dialogRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -1907,7 +1914,7 @@ function TableActionSheet(props: TableActionSheetProps) {
       role="presentation"
       onClick={(event) => { if (event.target === event.currentTarget) onDismiss() }}
     >
-    <section ref={dialogRef} className="staff-table-sheet staff-table-action-dialog" role="dialog" aria-modal="true" aria-label={`${table.code}桌台操作`} data-action-reveal>
+    <section ref={dialogRef} className={`staff-table-sheet staff-table-action-dialog${table.activeSession&&!sessionSyncing ? ' is-confirmed-session' : ''}`} role="dialog" aria-modal="true" aria-label={`${table.code}桌台操作`} data-action-reveal>
       <header>
         <span className="staff-table-sheet-icon"><TableProperties size={20} /></span>
         <div><strong>{table.code} · {table.displayName}</strong><small>{table.areaName} · 容量{table.capacity}人</small></div>
@@ -1915,10 +1922,27 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
-      {table.activeSession&&<StaffTableCreditPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
-      {table.activeSession&&(props.permissions.includes('table.view_all')||props.permissions.includes('order.create'))&&<TableMinimumSpendPanel key={table.activeSession.id} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
-      {table.activeSession&&props.permissions.includes('channel.activate')&&<ChannelActivationPanel key={`channel-${table.activeSession.id}`} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId}/>}
-      {table.activeSession&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
+      {table.activeSession&&!sessionSyncing&&(
+          <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
+            {hasTableCollectionPermission(props.permissions) && (
+              <button type="button" className="is-payment" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
+            )}
+            {hasPermission(props.permissions, 'order.create') && (
+              <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
+            )}
+            {hasPermission(props.permissions, 'observation.record') && (
+              <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
+            )}
+            {closeInPrimary && closeAction}
+            {table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
+              <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyholeOpen size={17} /> 恢复顾客修改</button>
+            )}
+          </div>
+      )}
+      {table.activeSession&&!sessionSyncing&&<StaffTableCreditPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
+      {table.activeSession&&!sessionSyncing&&(props.permissions.includes('table.view_all')||props.permissions.includes('order.create'))&&<TableMinimumSpendPanel key={table.activeSession.id} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
+      {table.activeSession&&!sessionSyncing&&props.permissions.includes('channel.activate')&&<ChannelActivationPanel key={`channel-${table.activeSession.id}`} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId}/>}
+      {table.activeSession&&!sessionSyncing&&(props.permissions.includes('reconciliation.view')||(props.permissions.includes('refund.request')&&props.permissions.includes('table.view_all')))&&<TablePrepaymentPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession === null ? (
         <div className="staff-open-table">
           {hasPermission(props.permissions, 'table.open')&&<PrimaryServiceSelect tableId={table.id} staffSessionId={props.staffSessionId} value={props.primaryServiceEmployeeId} onChange={props.onPrimaryServiceEmployeeId}/>}
@@ -1969,6 +1993,10 @@ function TableActionSheet(props: TableActionSheetProps) {
             <button className="staff-guidance-action" type="button" onClick={() => props.onPermissionGuidance('table.open')}>联系有权限同事开台</button>
           )}
         </div>
+      ) : sessionSyncing ? (
+        <div className="staff-open-session"><p>正在同步已开桌次，请稍候再点单或收款。</p>
+          <button type="button" disabled={props.pending} onClick={props.onRefreshSession}>刷新桌次状态</button>
+        </div>
       ) : (
         <div className="staff-open-session">
           <TableServicePanel compact key={`${table.id}:${table.activeSession?.id}`} tableId={table.id} staffSessionId={props.staffSessionId} canHandover={hasPermission(props.permissions, 'table.assignment.manage')}/>
@@ -1992,21 +2020,6 @@ function TableActionSheet(props: TableActionSheetProps) {
               {props.customerLeftConfirm && <button type="button" className="staff-turnover-exception-cancel" onClick={props.onCancelClose}>暂不翻台</button>}
             </section>
           )}
-          <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
-            {hasTableCollectionPermission(props.permissions) && (
-              <button type="button" className="is-payment" onClick={props.onPayment}><QrCode size={17} /> 本桌收款</button>
-            )}
-            {hasPermission(props.permissions, 'order.create') && (
-              <button type="button" className="is-commerce" onClick={props.onOrder}><ShoppingCart size={17} /> 协助点单</button>
-            )}
-            {hasPermission(props.permissions, 'observation.record') && (
-              <button type="button" className="is-observation" onClick={props.onObservation}><MessageSquareText size={17} /> 记录桌台情况</button>
-            )}
-            {closeInPrimary && closeAction}
-            {table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
-              <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyholeOpen size={17} /> 恢复顾客修改</button>
-            )}
-          </div>
           <details className="staff-table-more" open={moreOpen || props.transferTargetId !== null || props.closeConfirm || props.customerLeftConfirm} onToggle={event => setMoreOpen(event.currentTarget.open)}>
             <summary>更多操作 <small>赠送、推荐、转桌与结台</small></summary>
             <div className="staff-session-actions" role="group" aria-label="更多桌台操作">

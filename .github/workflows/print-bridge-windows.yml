@@ -26,6 +26,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -File deploy/windows-print-bridge/upgrade-core.tests.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -File deploy/windows-print-bridge/release-1.0.13/finalization.tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test deploy/windows-print-bridge/release-1.0.13/package.test.mjs deploy/windows-print-bridge/diagnostic-events.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Real Windows service upgrade rollback and spooler

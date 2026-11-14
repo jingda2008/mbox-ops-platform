@@ -20,7 +20,7 @@ def build(output):
  for n,h in manifest['files'].items():assert sha(old[n])==h,n
  files=dict(old)
  original=old['bridge.mjs'].decode('utf-8-sig').replace('\r\n','\n')
- ref=(SOURCE/'bridge.mjs').read_text()
+ ref=(SOURCE/'bridge.mjs').read_text(encoding='utf-8')
  bridge=replace_once(original,"const VERSION = '1.0.11'","const VERSION = '1.0.13'")
  bridge=replace_once(bridge,"import { promisify } from 'node:util'","import { promisify } from 'node:util'\nimport { createDiagnosticQueue, atomicState } from './diagnostic-events.mjs'")
  bridge=replace_once(bridge,"const journalPath = join(dataDirectory, 'journal.json')","const journalPath = join(dataDirectory, 'journal.json')\nconst diagnosticQueue = createDiagnosticQueue(join(dataDirectory, 'diagnostic-events.json'))\nconst progressPath = join(dataDirectory, 'progress.json')\nconst runtimeStatusPath = join(dataDirectory, 'runtime-status.json')")
@@ -39,9 +39,9 @@ def build(output):
  assert block(bridge,'function usesSmallBillItems','async function authenticatedRequest')==block(original,'function usesSmallBillItems','async function authenticatedRequest')
  assert block(bridge,'async function printText','async function listQueues')==block(original,'async function printText','async function listQueues')
  files['bridge.mjs']=bridge.encode()
- files['diagnostic-events.mjs']=(SOURCE/'diagnostic-events.mjs').read_text().encode()
+ files['diagnostic-events.mjs']=(SOURCE/'diagnostic-events.mjs').read_text(encoding='utf-8').encode()
  b=old['print-ticket.ps1'];start=b.index(b'  public static void SendBytes(');end=b.index(b"\r\n}\r\n'@",start)
- ref_bytes=(SOURCE/'print-ticket.ps1').read_text().encode();rs=ref_bytes.index(b'  public static void SendBytes(');re_=ref_bytes.index(b"\n}\n'@",rs)
+ ref_bytes=(SOURCE/'print-ticket.ps1').read_text(encoding='utf-8').encode();rs=ref_bytes.index(b'  public static void SendBytes(');re_=ref_bytes.index(b"\n}\n'@",rs)
  files['print-ticket.ps1']=b[:start]+ref_bytes[rs:re_].replace(b'\n',b'\r\n')+b[end:]
  # Known original installer with explicit absent-file rollback and new-heartbeat verification.
  u=old['upgrade.ps1'].decode('utf-8-sig').replace('\r\n','\n').replace('1.0.11','1.0.13')
@@ -73,6 +73,11 @@ def build(output):
  u=replace_once(u,"        if ((Get-FileHash -LiteralPath (Join-Path $InstallDirectory $file) -Algorithm SHA256).Hash -ne $validatedHashes[$file]) { throw '升级期间原程序发生变化，停止覆盖。' }",'''        $path = Join-Path $InstallDirectory $file
         if ((Test-Path -LiteralPath $path -PathType Leaf) -ne $originalPresence[$file]) { throw '升级期间原程序发生变化。' }
         if ($originalPresence[$file] -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $validatedHashes[$file]) { throw '升级期间原程序发生变化。' }''')
+ u=replace_once(u,"      if ($null -eq $journal.entries -or $journal.entries -isnot [pscustomobject]) { throw '防重复记录格式无法核实。' }","""      if ($journal.version -ne 1 -or $null -eq $journal.entries -or $journal.entries -isnot [pscustomobject]) { throw '防重复记录格式无法核实。' }
+      foreach ($entry in $journal.entries.psobject.Properties) {
+        $when=[DateTimeOffset]::MinValue
+        if ($entry.Value.state -notin @('printing','printed','ambiguous') -or -not [DateTimeOffset]::TryParse([string]$entry.Value.updatedAt,[ref]$when) -or [string]$entry.Value.jobId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') { throw '防重复记录损坏，停止升级。' }
+      }""")
  u=replace_once(u,"    Start = { Start-MboxBridge }","    Start = { $script:activationStarted = Get-Date; Start-MboxBridge }")
  u=replace_once(u,"    VerifyRunning = { Assert-MboxRunning }",'''    VerifyRunning = {
       Assert-MboxRunning

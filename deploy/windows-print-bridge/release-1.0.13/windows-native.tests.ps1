@@ -77,6 +77,10 @@ try {
  Assert ([IO.File]::ReadAllText((Join-Path $data 'journal.json')) -eq $printing) 'journal modified'
  Record 'in-flight journal blocks upgrade and remains unchanged'
  Reset-Old
+ [IO.File]::WriteAllText((Join-Path $data 'journal.json'),'{"version":1,"entries":{"broken":{"state":"unknown"}}}')
+ Assert ((Run-Upgrade) -ne 0) 'corrupt journal accepted';Assert-Old
+ Record 'corrupt journal rejected without clearing records'
+ Reset-Old
  [IO.File]::WriteAllText((Join-Path $data 'control.json'),'{"rejectNewHeartbeat":true}')
  Assert ((Run-Upgrade) -ne 0) 'new heartbeat failure not detected'
  $failure=Get-Content -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Raw | ConvertFrom-Json

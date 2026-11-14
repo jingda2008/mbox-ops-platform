@@ -15,6 +15,7 @@ async function setup(browser: Browser) {
   const fixture: Fixture = JSON.parse(await readFile('artifacts/normalized-browser/fixture.json', 'utf8'))
   const counter = await browser.newContext(), reviewer = await browser.newContext()
   const counterPage = await counter.newPage(), page = await reviewer.newPage()
+  await page.route('**/api/hardware/print-alerts',route=>route.fulfill({json:{data:{manager:true,asOf:new Date().toISOString(),alerts:[{station:'generation',failed:0,stalled:88,oldestAt:new Date().toISOString(),newestKey:'12345678-1234-4234-8234-123456789012',escalated:false}]}}}))
   await login(counterPage, fixture, 'lengyanzhi'); await login(page, fixture, 'hugu')
   const nonce = crypto.randomUUID()
   const item = await page.request.post('/api/inventory/items', { headers: { 'idempotency-key': `heartbeat-item-${nonce}` }, data: {
@@ -91,6 +92,7 @@ test('equivalent heartbeats preserve a real stock-count selection; access change
     await expect(row).toBeVisible()
     mode = 'navigation'; await heartbeat(page)
     await expect(page.getByRole('alert').filter({hasText:'当前账号没有这个页面的有效权限'})).toContainText('当前账号没有这个页面的有效权限')
+    await page.locator('.normalized-route-notice').scrollIntoViewIfNeeded()
     expect(await page.locator('.normalized-route-notice').evaluate(node => node.getBoundingClientRect().top >= (document.querySelector('.staff-print-alert-notice')?.getBoundingClientRect().bottom ?? 0))).toBe(true)
     await expect(panel).toHaveCount(0)
     mode = 'same'; await heartbeat(page)

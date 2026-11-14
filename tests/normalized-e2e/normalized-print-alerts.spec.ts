@@ -37,6 +37,7 @@ for (const width of [320, 1280]) test(`active print alarms, sound and recovery a
   await refresh()
   await expect(notice.getByText('打印异常，请核对出纸', {exact: true})).toBeVisible()
   await expect.poll(tones).toBe(4)
+  await notice.getByLabel('查看异常与处理方法', {exact: true}).click()
   await refresh()
   await expect(notice.getByText('1 张失败或结果不确定', {exact: false})).toBeVisible()
   expect(await tones()).toBe(4)

@@ -6,6 +6,9 @@ for (const width of [320, 390]) test(`printer recovery is isolated and readable 
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.setViewportSize({ width, height: 800 })
+  // Keep a fault present even in an otherwise fresh fixture: returning to a
+  // scrolled short viewport must leave the history search button reachable.
+  await page.route('**/api/hardware/print-alerts',route=>route.fulfill({json:{data:{manager:true,asOf:new Date().toISOString(),alerts:[{station:'generation',failed:0,stalled:88,oldestAt:new Date().toISOString(),newestKey:'12345678-1234-4234-8234-123456789012',escalated:false}]}}}))
   await page.goto(fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential)
   await page.getByRole('button', { name: /验证设备/ }).click()

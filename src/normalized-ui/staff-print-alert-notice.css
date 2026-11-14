@@ -10,3 +10,5 @@
 .print-alert-compact>summary{min-height:44px;min-width:44px;padding:0 8px;display:flex;align-items:center;cursor:pointer;text-decoration:underline}
 .print-alert-compact[open]>.print-alert-content{position:absolute;top:100%;left:0;right:0;max-height:45vh;overflow:auto;padding:12px;background:#fff0d8;border:2px solid #b95b13;box-shadow:0 8px 18px #0003}
 @media(max-width:480px){.staff-print-alert-notice{padding:6px 8px}.print-alert-heading>span{min-width:150px}.print-alert-heading button{flex-shrink:0;font-size:12px}.print-alert-actions button{flex:1 1 140px}}
+
+@media(max-width:480px){.staff-print-alert-notice.is-compact:not(.is-dedicated) .print-alert-heading{display:grid;grid-template-columns:minmax(0,1fr) auto}.staff-print-alert-notice.is-compact:not(.is-dedicated) .print-alert-heading>span{grid-column:1/-1;min-width:0}.staff-print-alert-notice.is-compact:not(.is-dedicated) .print-alert-heading>button{justify-self:start}}

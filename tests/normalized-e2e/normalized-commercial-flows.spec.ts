@@ -718,6 +718,8 @@ test('mobile manager can initiate but cannot review cashier refund work', async 
 })
 
 test('mobile cashier can review but cannot initiate manager refund work', async ({ page }, testInfo) => {
+  // Keep the global print fault visible through 200% text and short-viewport checks.
+  await page.route('**/api/hardware/print-alerts',route=>route.fulfill({json:{data:{manager:true,asOf:new Date().toISOString(),alerts:[{station:'generation',failed:0,stalled:88,oldestAt:new Date().toISOString(),newestKey:'12345678-1234-4234-8234-123456789012',escalated:false}]}}}))
   const data = await fixture()
   await page.setViewportSize({ width: 320, height: 800 })
   await page.route('**/api/payments/workbench?*', (route) => route.fulfill({

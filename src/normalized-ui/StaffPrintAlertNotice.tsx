@@ -109,6 +109,7 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact
   }
   if (!showing) return null
   const alerts = snapshot?.alerts ?? [], active = alerts.length > 0
+  const compactNotice = compact || active || stale
   const urgent = snapshot?.manager && alerts.some(alert => alert.escalated)
   const details = <div className="print-alert-content">
       {alerts.map(alert => <p key={alert.station}><strong>{names[alert.station]}</strong>：{alert.failed > 0 && (alert.station === 'diagnostics' ? `${alert.failed} 项待处理或待核验` : `${alert.failed} 张失败或结果不确定`)}{alert.failed > 0 && alert.stalled > 0 && '；'}{alert.stalled > 0 && `${alert.stalled} 张等待超过 90 秒`}{alert.escalated && ' · 已持续至少 3 分钟'}{stale && '（上次读取）'}</p>)}
@@ -124,17 +125,16 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact
       </div>
       {mutedUntil > 0 && <small>声音已暂缓，新故障仍会提醒。</small>}
     </div>
-  return <aside ref={notice} className={`staff-print-alert-notice${active || stale ? ' needs-attention' : ''}${compact ? ' is-compact' : ''}`} aria-label="打印故障主动提醒">
+  return <aside ref={notice} className={`staff-print-alert-notice${active || stale ? ' needs-attention' : ''}${compactNotice ? ' is-compact' : ''}${compact ? ' is-dedicated' : ''}`} aria-label="打印故障主动提醒">
     <div className="print-alert-heading">
       <span role={active || stale ? 'alert' : 'status'}>
         <strong>{stale ? '打印监测连接中断' : urgent ? '管理员请处理：打印异常持续未恢复' : active ? '打印异常，请核对出纸' : snapshot ? '打印监测中' : '正在连接打印监测'}</strong>
-        {stale && !compact && <small>当前状态无法确认；请现场核对打印机和电子出品单。</small>}
+        {stale && !compactNotice && <small>当前状态无法确认；请现场核对打印机和电子出品单。</small>}
       </span>
-      <button type="button" aria-label={sound ? '关闭打印提醒声音' : '开启打印提醒声音'} aria-pressed={sound} onClick={() => void toggleSound()}>{compact ? sound ? '声音已开' : '开启声音' : sound ? '关闭打印提醒声音' : '开启打印提醒声音'}</button>
-      {compact && (active || stale) && <details className="print-alert-compact"><summary aria-label="查看异常与处理方法">查看异常</summary>{details}</details>}
+      <button type="button" aria-label={sound ? '关闭打印提醒声音' : '开启打印提醒声音'} aria-pressed={sound} onClick={() => void toggleSound()}>{compactNotice ? sound ? '声音已开' : '开启声音' : sound ? '关闭打印提醒声音' : '开启打印提醒声音'}</button>
+      {(active || stale) && <details className="print-alert-compact"><summary aria-label="查看异常与处理方法">查看异常</summary>{details}</details>}
     </div>
-    {(active || stale) && !compact && details}
     {soundError && <p role="status">{soundError}</p>}
-    {sound && !compact && <small>新异常会响铃，同一未恢复异常每分钟提醒。本页须保持可见；切换应用或锁屏可能暂停，请确认电脑未静音。</small>}
+    {sound && !compactNotice && <small>新异常会响铃，同一未恢复异常每分钟提醒。本页须保持可见；切换应用或锁屏可能暂停，请确认电脑未静音。</small>}
   </aside>
 }

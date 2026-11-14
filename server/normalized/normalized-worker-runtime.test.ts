@@ -138,7 +138,14 @@ describe('NormalizedWorkerRuntime', () => {
     expect(sql.some((statement) => statement.includes('FROM mbox.sop_step_executions'))).toBe(false)
     expect(sql.some((statement) => statement.includes('FROM mbox.outbox_messages'))).toBe(false)
     expect(sql.some((statement) => statement.includes('FROM mbox.notifications'))).toBe(false)
-    expect(sql.some((statement) => statement.includes('FROM mbox.print_jobs'))).toBe(false)
+    // Database-only diagnostics may observe pending jobs, but cannot claim or mutate them.
+    const printReads=sql.filter(statement=>statement.includes('FROM mbox.print_jobs'))
+    expect(printReads.length).toBeGreaterThan(0)
+    for(const statement of printReads){
+      expect(statement).toContain('INSERT INTO mbox.print_incidents')
+      expect(statement).not.toMatch(/(?:UPDATE|DELETE FROM) mbox\.print_jobs/)
+      expect(statement).not.toContain('FOR UPDATE')
+    }
   })
 
   it('assembles the loyalty subscription-message worker only with explicit formal adapters', async () => {

@@ -40,6 +40,7 @@ import {
 import { paymentPolicyPresentation } from './payment-policy-presentation'
 import { shortPublicReference } from './public-reference'
 import { PrintSourceRecoveryPanel } from './PrintSourceRecoveryPanel'
+import { PrintIncidentPanel } from './PrintIncidentPanel'
 import {
   formatInventoryQuantity,
   formatInventoryQuantityWithUnit,
@@ -1591,7 +1592,8 @@ function DevicesModule({ api, auth, devices, jobs, bridges, routes, onChanged }:
   }
 
   return <div className="staff-module-body">
-    <div className={`staff-module-summary${attention > 0 ? ' has-attention' : ''}`}><span><Printer size={18} /></span><div><strong>{devices.length} 台设备 · {jobs.length} 项打印待办</strong><small>{attention > 0 ? `${attention} 项需要管理员检查` : '当前没有设备或打印异常'}</small></div></div>
+    <div className={`staff-module-summary${attention > 0 ? ' has-attention' : ''}`}><span><Printer size={18} /></span><div><strong>{devices.length} 台设备 · {jobs.length} 项打印待办</strong><small>{attention > 0 ? `${attention} 项需要管理员检查` : '设备与任务状态如下；故障仍需核对下方列表'}</small></div></div>
+    <PrintIncidentPanel api={api} auth={auth} />
     {(canCommand || canRetry) && <label className="staff-device-reason">本次操作原因<input value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} /></label>}
     {notice !== '' && <p className="staff-module-notice" role="status">{notice}</p>}
     {canManagePrinter && <section className="staff-print-setup-flow">

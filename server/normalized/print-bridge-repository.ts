@@ -1,3 +1,4 @@
+import { PrintDiagnosticsRepository, type DiagnosticEvent } from './print-diagnostics.js'
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { appendAuditEvent, type JsonObject } from './command-executor.js'
 import { normalizeHardwareFailureCode, type HardwareStation, type PrintProfile } from './hardware-repository.js'
@@ -70,6 +71,10 @@ export class PrintBridgeRequestError extends Error {
 
 export class PrintBridgeRepository {
   constructor(private readonly transaction: ScopedTransaction, private readonly hashSecret: string) {}
+
+  async ingestDiagnostics(bridgeId:string,events:DiagnosticEvent[]){return new PrintDiagnosticsRepository(this.transaction).ingest(bridgeId,events)}
+  async listPrintIncidents(){return new PrintDiagnosticsRepository(this.transaction).list()}
+  async actOnPrintIncident(id:string,employeeId:string,businessDate:string,action:'claim'|'resolve',expectedEpisodeAt:string,resolution?:string){return new PrintDiagnosticsRepository(this.transaction).act(id,employeeId,businessDate,action,expectedEpisodeAt,resolution)}
 
   async createPairingCode(createdByEmployeeId: string, reason: string, ttlSeconds = 600) {
     assertUuid(createdByEmployeeId, 'createdByEmployeeId')

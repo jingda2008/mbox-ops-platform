@@ -4,14 +4,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import { createDiagnosticQueue, atomicState } from './diagnostic-events.mjs'
 
-const VERSION = '1.0.5'
+const VERSION = '1.0.13-candidate'
 const execFileAsync = promisify(execFile)
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const dataDirectory = process.env.MBOX_PRINT_BRIDGE_DATA
   || join(process.env.ProgramData || 'C:\\ProgramData', 'MBOX', 'PrintBridge')
 const configPath = join(dataDirectory, 'config.json')
 const journalPath = join(dataDirectory, 'journal.json')
+const diagnosticQueue = createDiagnosticQueue(join(dataDirectory, 'diagnostic-events.json'))
+const progressPath = join(dataDirectory, 'progress.json')
 const printScriptPath = join(scriptDirectory, 'print-ticket.ps1')
 const listScriptPath = join(scriptDirectory, 'list-printers.ps1')
 
@@ -41,6 +44,8 @@ async function main(args) {
     return
   }
   if (args.length !== 0 && args[0] !== 'run') throw new Error('仅支持 pair、once 或 run')
+  await emitDiagnostic({ kind: 'bridge_started' })
+  await reportSupervisorRecovery()
   await serviceLoop(await readConfig(true))
 }
 
@@ -48,6 +53,8 @@ async function serviceLoop(config) {
   let lastHeartbeat = 0
   let failureDelayMs = 2_000
   for (;;) {
+    await atomicState(progressPath, { updatedAt: new Date().toISOString() })
+    let waitMs = 2_000
     try {
       if (Date.now() - lastHeartbeat >= 30_000) {
         await heartbeat(config)
@@ -55,12 +62,16 @@ async function serviceLoop(config) {
       }
       await runCycle(config)
       failureDelayMs = 2_000
-      await delay(2_000)
-    } catch (error) {
-      process.stderr.write(`${new Date().toISOString()} ${safeError(error)}\n`)
-      await delay(failureDelayMs)
+    } catch {
+      process.stderr.write(`${new Date().toISOString()} bridge_cycle_failed\n`)
+      waitMs = failureDelayMs
       failureDelayMs = Math.min(60_000, failureDelayMs * 2)
     }
+    // Diagnostics may still reach the server when local printer enumeration fails.
+    await atomicState(progressPath, { updatedAt: new Date().toISOString() })
+    await flushDiagnostics(config)
+    await atomicState(progressPath, { updatedAt: new Date().toISOString() })
+    await delay(waitMs)
   }
 }
 
@@ -75,16 +86,50 @@ async function runCycle(config) {
 
 async function heartbeat(config) {
   assertPaired(config)
-  const queues = await listQueues()
+  let queues
+  try { queues = await listQueues() }
+  catch (error) {
+    await emitDiagnostic({ kind: 'queue_unavailable', failureCode: normalizeFailure(error) })
+    throw error
+  }
   await authenticatedRequest(config, '/api/print-bridge/heartbeat', {
     hostname: hostname(), softwareVersion: VERSION, queues,
   })
 }
 
+async function reportSupervisorRecovery() {
+  try {
+    const status = JSON.parse(await readFile(join(dataDirectory, 'supervisor-status.json'), 'utf8'))
+    if (['bridge_recovery', 'recovery_exhausted'].includes(status?.kind)) await emitDiagnostic({ kind: status.kind })
+  } catch (error) {
+    if (error?.code !== 'ENOENT') process.stderr.write(`${new Date().toISOString()} supervisor_status_unavailable\n`)
+  }
+}
+
+async function emitDiagnostic(event) {
+  try { await diagnosticQueue.append(event) }
+  catch { process.stderr.write(`${new Date().toISOString()} diagnostic_cache_unavailable\n`) }
+}
+
+async function flushDiagnostics(config) {
+  try {
+    await diagnosticQueue.flush(async events => {
+      const response = await authenticatedRequest(config, '/api/print-bridge/diagnostics', { events })
+      return response.data
+    })
+  } catch { process.stderr.write(`${new Date().toISOString()} diagnostic_upload_pending\n`) }
+}
+
 async function processJob(config, job) {
   const id = requiredUuid(job.id, 'job.id')
   const businessKey = requiredText(job.businessKey, 'job.businessKey')
-  const journal = await readJournal()
+  let journal
+  try { journal = await readJournal() }
+  catch {
+    await emitDiagnostic({ kind: 'print_ambiguous', jobId: id, failureCode: 'ambiguous_previous_attempt' })
+    await reportJob(config, id, 'failed', 'ambiguous_previous_attempt')
+    return
+  }
   const previous = journal.entries[businessKey]
   if (previous?.state === 'printed') {
     await reportJob(config, id, 'printed')
@@ -93,38 +138,41 @@ async function processJob(config, job) {
   if (previous?.state === 'printing' || previous?.state === 'ambiguous') {
     journal.entries[businessKey] = { state: 'ambiguous', updatedAt: new Date().toISOString(), jobId: id }
     await saveJournal(journal)
+    await emitDiagnostic({ kind: 'print_ambiguous', jobId: id, failureCode: 'ambiguous_previous_attempt' })
     await reportJob(config, id, 'failed', 'ambiguous_previous_attempt')
     return
   }
   journal.entries[businessKey] = { state: 'printing', updatedAt: new Date().toISOString(), jobId: id }
   await saveJournal(journal)
+  await emitDiagnostic({ kind: 'submission_started', jobId: id })
+  const started = Date.now()
+  let failureCode
   try {
     const content = renderTicket(job.printSnapshot)
     await printText({
       queue: requiredText(job.windowsQueueName, 'job.windowsQueueName'),
       documentName: `MBOX-${businessKey}`.slice(0, 120),
-      profile: readProfile(job.printProfile),
-      copies: readCopies(job.copies),
-      content,
+      profile: readProfile(job.printProfile), copies: readCopies(job.copies), content,
     })
-    journal.entries[businessKey] = { state: 'printed', updatedAt: new Date().toISOString(), jobId: id }
-    trimJournal(journal)
-    await saveJournal(journal)
-    await reportJob(config, id, 'printed')
   } catch (error) {
     const definitelyNotSubmitted = isDefinitelyNotSubmitted(error)
     if (definitelyNotSubmitted) delete journal.entries[businessKey]
-    else journal.entries[businessKey] = {
-      state: 'ambiguous', updatedAt: new Date().toISOString(), jobId: id,
-    }
+    else journal.entries[businessKey] = { state: 'ambiguous', updatedAt: new Date().toISOString(), jobId: id }
+    failureCode = definitelyNotSubmitted ? normalizeFailure(error) : 'ambiguous_print_result'
     await saveJournal(journal)
-    await reportJob(
-      config,
-      id,
-      'failed',
-      definitelyNotSubmitted ? normalizeFailure(error) : 'ambiguous_print_result',
-    )
+    await emitDiagnostic({ kind: definitelyNotSubmitted ? 'submission_failed' : 'print_ambiguous', jobId: id, failureCode })
   }
+  if (failureCode) {
+    await reportJob(config, id, 'failed', failureCode)
+    return
+  }
+  // Transport acceptance is not physical-paper proof. Preserve the durable result
+  // before network reporting; a lost HTTP acknowledgement must never reprint.
+  journal.entries[businessKey] = { state: 'printed', updatedAt: new Date().toISOString(), jobId: id }
+  trimJournal(journal)
+  await saveJournal(journal)
+  await emitDiagnostic({ kind: 'spool_accepted', jobId: id, durationMs: Math.max(0, Math.min(86400000, Date.now() - started)) })
+  await reportJob(config, id, 'printed')
 }
 
 async function processCommand(config, command) {
@@ -254,6 +302,7 @@ function paymentLabel(payment) {
 
 async function authenticatedRequest(config, path, body) {
   assertPaired(config)
+  await atomicState(progressPath, { updatedAt: new Date().toISOString() })
   return request(config.serverUrl, path, body, {
     'x-mbox-print-bridge-id': config.publicId,
     authorization: `Bearer ${config.credential}`,
@@ -286,8 +335,12 @@ async function readConfig(requireCredential) {
 async function readJournal() {
   try {
     const value = JSON.parse(await readFile(journalPath, 'utf8'))
-    return value && typeof value === 'object' && value.entries && typeof value.entries === 'object'
-      ? value : { version: 1, entries: {} }
+    if (value?.version !== 1 || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries)) throw new Error('print_journal_invalid')
+    for (const entry of Object.values(value.entries)) {
+      if (!entry || !['printing', 'printed', 'ambiguous'].includes(entry.state) || !Number.isFinite(Date.parse(entry.updatedAt))) throw new Error('print_journal_invalid')
+      requiredUuid(entry.jobId, 'journal.jobId')
+    }
+    return value
   } catch (error) {
     if (error?.code === 'ENOENT') return { version: 1, entries: {} }
     throw error

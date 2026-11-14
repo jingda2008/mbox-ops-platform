@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+throw '候选源代码禁止直接安装：须基于门店已验证1.0.11制作专用升级包并完成现场验收。'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -32,6 +33,7 @@ $installDir = Join-Path $env:ProgramFiles 'MBOX\PrintBridge'
 $dataDir = Join-Path $env:ProgramData 'MBOX\PrintBridge'
 New-Item -ItemType Directory -Force -Path $installDir, $dataDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'bridge.mjs') -Destination $installDir -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'diagnostic-events.mjs') -Destination $installDir -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'print-ticket.ps1') -Destination $installDir -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'list-printers.ps1') -Destination $installDir -Force
 Copy-Item -LiteralPath $WinSwExecutable -Destination (Join-Path $installDir 'MBoxPrintBridge.exe') -Force

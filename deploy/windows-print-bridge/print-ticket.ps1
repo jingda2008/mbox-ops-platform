@@ -72,10 +72,12 @@ public static class MboxRawPrinter {
       if (StartDocPrinter(hPrinter, 1, di) <= 0) {
         throw new InvalidOperationException("start_doc_failed:" + Marshal.GetLastWin32Error());
       }
+      bool documentReady = false;
       try {
         if (!StartPagePrinter(hPrinter)) {
           throw new InvalidOperationException("start_page_failed:" + Marshal.GetLastWin32Error());
         }
+        bool pageReady = false;
         try {
           IntPtr unmanaged = Marshal.AllocHGlobal(payload.Length);
           try {
@@ -87,11 +89,21 @@ public static class MboxRawPrinter {
           } finally {
             Marshal.FreeHGlobal(unmanaged);
           }
+          pageReady = true;
         } finally {
-          EndPagePrinter(hPrinter);
+          // Preserve an earlier write error, but never report successful
+          // submission when the spooler rejects page/document completion.
+          bool pageEnded = EndPagePrinter(hPrinter);
+          if (!pageEnded && pageReady) {
+            throw new InvalidOperationException("end_page_failed:" + Marshal.GetLastWin32Error());
+          }
         }
+        documentReady = true;
       } finally {
-        EndDocPrinter(hPrinter);
+        bool documentEnded = EndDocPrinter(hPrinter);
+        if (!documentEnded && documentReady) {
+          throw new InvalidOperationException("end_doc_failed:" + Marshal.GetLastWin32Error());
+        }
       }
     } finally {
       ClosePrinter(hPrinter);

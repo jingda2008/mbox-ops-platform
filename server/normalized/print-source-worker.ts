@@ -1,3 +1,4 @@
+import { PrintDiagnosticsRepository } from './print-diagnostics.js'
 import { PrintTicketSourceRepository,ActivityPrintHeldError } from './print-ticket-source.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -22,6 +23,20 @@ export class PrintSourceWorker {
     for (const row of rows) {
       const outcome = await this.transactions.run(scope, tx => materialize(tx, row.id))
       if (outcome !== null) { result.examined++; result[outcome]++ }
+    }
+    try {
+      await this.transactions.run(scope,async tx=>{
+        await tx.query("SET LOCAL lock_timeout='100ms'")
+        await tx.query("SET LOCAL statement_timeout='2s'")
+        const diagnostics=new PrintDiagnosticsRepository(tx)
+        await diagnostics.reconcileHealth()
+        await diagnostics.pruneEvents()
+      })
+    } catch {
+      // Source work above already committed. Surface a fixed diagnostic code;
+      // the coordinator records print-source errors without failing business readiness.
+      // A bounded failure cannot hold this cycle or prevent the next source batch.
+      throw new Error('print_diagnostics_maintenance_failed')
     }
     return result
   }

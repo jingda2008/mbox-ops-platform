@@ -1,3 +1,4 @@
+import { readDiagnosticEvents, PrintDiagnosticInputError } from './print-diagnostics.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import { appendAuditEvent, NativeCommandNotCommittedError, IdempotencyConflictError, IdempotencyInProgressError, type NormalizedCommandExecutor, type JsonObject } from './command-executor.js'
 import {createHash} from 'node:crypto'
@@ -127,6 +128,27 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
     return data
   }))
 
+  app.post('/print-bridge/diagnostics', async(request,reply)=>bridgeRoute(request,reply,options,repository,async(store,bridge)=>{
+    const body=readObject(request.body)
+    if(Object.keys(body).some(k=>k!=='events'))throw new PrintBridgeRequestError('诊断请求字段无效')
+    return store.ingestDiagnostics(bridge.id,readDiagnosticEvents(body.events))
+  }))
+  app.get('/hardware/print-incidents',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolveStaffContext(request);requireIncidentPermission(context,false)
+    const data=await options.transactions.run(context.scope,tx=>repository(tx).listPrintIncidents(),{readOnly:true})
+    return reply.send({data})
+  }))
+  for(const action of ['claim','resolve'] as const){
+    app.post<{Params:{incidentId:string}}>(`/hardware/print-incidents/:incidentId/${action}`,async(request,reply)=>handle(reply,async()=>{
+      const context=await options.resolveStaffContext(request);requireIncidentPermission(context,true)
+      const body=readObject(request.body??{})
+      if(Object.keys(body).some(k=>!['expectedEpisodeAt',...(action==='resolve'?['resolution']:[])].includes(k)))throw new PrintBridgeRequestError('故障操作字段无效')
+      const resolution=action==='resolve'?readEnum(body.resolution,['paper_confirmed','not_printed','device_restored']):undefined
+      const data=await options.transactions.run(context.scope,tx=>repository(tx).actOnPrintIncident(readUuid(request.params.incidentId,'incidentId'),context.employeeId,context.businessDate,action,readString(body.expectedEpisodeAt,'expectedEpisodeAt',64),resolution))
+      return reply.send({data})
+    }))
+  }
+
   app.post('/print-bridge/work/claim', async (request, reply) => bridgeRoute(request, reply, options, repository, async (store, bridge) => {
     const body = readObject(request.body)
     const data = await store.claim(bridge, optionalInteger(body.limit, 1, 25) ?? 10)
@@ -185,6 +207,11 @@ function readBridgeCredentials(request: FastifyRequest) {
 
 function assertSecureTransport(request: FastifyRequest, required: boolean) {
   if (required && request.protocol !== 'https') throw new PrintBridgeAuthenticationError()
+}
+
+function requireIncidentPermission(context:NormalizedOperationsRequestContext,resolve:boolean){
+ const allowed=resolve?['print.reprint','printer.manage','hardware.manage']:['print.retry','print.reprint','printer.manage','hardware.manage']
+ if(!context.capabilities.some(p=>allowed.includes(p)))throw new PrintBridgeAccessDeniedError()
 }
 
 function requirePrinterManager(context: NormalizedOperationsRequestContext) {
@@ -256,7 +283,7 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
     if (error instanceof PrintBridgeAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'PRINT_BRIDGE_ACCESS_DENIED', message: error.message } })
     }
-    if (error instanceof PrintBridgeRequestError) {
+    if (error instanceof PrintBridgeRequestError || error instanceof PrintDiagnosticInputError) {
       return reply.code(400).send({ error: { code: 'PRINT_BRIDGE_REQUEST_INVALID', message: error.message } })
     }
     throw error

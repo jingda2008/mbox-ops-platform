@@ -29,7 +29,7 @@ async function phoneLayout(page:Page){
     }
     const history=document.querySelector('[aria-label="共用取餐屏送达记录"]'),viewport=window.visualViewport
     return {scrollX:window.scrollX,scrollY:window.scrollY,scrollCalls:[...(window as unknown as ScrollDebugWindow).__threeScreenScrollCalls],innerWidth:window.innerWidth,innerHeight:window.innerHeight,devicePixelRatio:window.devicePixelRatio,visibility:document.visibilityState,documentHeight:document.documentElement.scrollHeight,visualViewport:viewport?{offsetLeft:viewport.offsetLeft,offsetTop:viewport.offsetTop,pageLeft:viewport.pageLeft,pageTop:viewport.pageTop,width:viewport.width,height:viewport.height,scale:viewport.scale}:null,
-      html:describe(document.documentElement),body:describe(document.body),root:describe(document.getElementById('root')),shell:describe(document.querySelector('.normalized-staff-action-shell')),header:describe(document.querySelector('.normalized-staff-action-shell > header')),notice:describe(document.querySelector('.staff-ready-notice')),history:describe(history),historyHeading:describe(history?.querySelector('h3')??null),firstRecord:describe(history?.querySelector('article')??null),
+      html:describe(document.documentElement),body:describe(document.body),root:describe(document.getElementById('root')),shell:describe(document.querySelector('.normalized-staff-action-shell')),header:describe(document.querySelector('.normalized-staff-action-shell > header')),notice:describe(document.querySelector('.staff-ready-notice')),printNotice:describe(document.querySelector('.staff-print-alert-notice')),history:describe(history),historyHeading:describe(history?.querySelector('h3')??null),firstRecord:describe(history?.querySelector('article')??null),
       hitTests:[40,160,Math.floor(window.innerHeight/2),window.innerHeight-80].map(y=>({x:Math.floor(window.innerWidth/2),y,element:describe(document.elementFromPoint(Math.floor(window.innerWidth/2),y))}))}
   })
 }
@@ -179,7 +179,7 @@ test('正式三屏20桌80份：制作、共同取走、撤回、手机自动同�
     await historyHeadingUncovered(phone)
     await sharedHistory.getByRole('heading',{name:'共用取餐屏',exact:true}).evaluate(element=>{
       const header=document.querySelector('.normalized-staff-action-shell > header')?.getBoundingClientRect()
-      window.scrollTo({top:window.scrollY+element.getBoundingClientRect().top-(header?.height??0)-12,behavior:'instant'})
+      window.scrollTo({top:window.scrollY+element.getBoundingClientRect().top-(header?.bottom??0)-12,behavior:'instant'})
     })
     await phoneScrollSettled(phone)
     const historyPositioned=await phoneLayout(phone)
@@ -187,8 +187,8 @@ test('正式三屏20桌80份：制作、共同取走、撤回、手机自动同�
     await historyHeadingUncovered(phone)
     await expect(sharedHistory.locator('article').first()).toBeInViewport({ratio:0.25})
     for(const layout of [afterForeground,historyPositioned]){
-      expect(layout.header?.rect.top,'The real mobile header must stay at the viewport top, not below an empty screen').toBeGreaterThanOrEqual(0)
-      expect(layout.header?.rect.top).toBeLessThanOrEqual(1)
+      expect(layout.header?.rect.top,'The real mobile header must stay directly below the print notice, not below empty space').toBeGreaterThanOrEqual(0)
+      expect(Math.abs((layout.header?.rect.top??0)-(layout.printNotice?.rect.bottom??0))).toBeLessThanOrEqual(1)
       expect(layout.visualViewport?.offsetTop??0).toBe(0)
       expect(layout.visualViewport?.scale??1).toBe(1)
     }

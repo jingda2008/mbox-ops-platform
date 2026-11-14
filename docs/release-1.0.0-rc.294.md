@@ -16,4 +16,21 @@
 
 本地完整check通过2951项，2646项因环境跳过；隔离PG打印相关38项通过，现行角色修复后提醒7项复验通过；最终专用屏与全局提示20项浏览器无重试通过。音频使用模拟AudioContext，不冒充实际出声。
 
-准确CI、合并SHA、镜像、备份及部署后只读结果在发布完成后追加；本段不宣称已上线。
+准确CI与部署结果见下方生产记录。前述本地测试保留原执行范围，不替代现场验收。
+
+## 生产部署结果
+
+2026-11-14 20:07:55 CST，标准 `deploy/aliyun/deploy-release.sh` 完成生产激活；随后 `release:verify` 的正式入口健康检查和四路浏览器验证全部通过，部署命令退出0。
+
+- [PR448](https://github.com/jingda2008/mbox-ops-platform/pull/448) 已合并；提交 `9c563ded71c31b879723ee1495bc4df497105404`，标签 [v1.0.0-rc.294](https://github.com/jingda2008/mbox-ops-platform/releases/tag/v1.0.0-rc.294)。PR CI `43587316974`、主干 CI `43589687881`、标签 CI `43589695088`、Release `43589695085` 均成功。
+- 镜像摘要 `sha256:d391c1414094bbf1442c8a8e55d4bcc734a6a0508f28853e69eb1080f4876327`；平台摘要 `sha256:4cbdf7c7b72bc4c7d120f461c2ed7a49a494654be250189c554314f6c3c1333a`。正式 `/api/ready` 返回同一提交、镜像和 schema315。
+- 从生产 rc292／schema314 增量执行 `315_print_diagnostics.sql`，包含此前已合入的 rc293 打印诊断和开台竞态修复。保留现行员工授权与门店配置，没有重置凭证、重放打印任务或安装现场桥候选。
+- 发布证据29对象、镜像4对象、部署前数据库备份4对象均完成OSS上传及回读验证；部署和完成证据亦按标准流程核验。备份 `/opt/mbox/backups/mbox-20261114T120047Z-5BG2r8.dump`，回滚容器 `mbox-app-rollback-9c563de-20261114-200752`，前版本提交 `2b144c49e6ccfbe6d8e30587b8eb7bff17ac42f5`。应用回滚保留schema315增量表，不降库。
+- 正式域名 `/`、`/guest?table=W01`、`/reserve`、`/staff/live` 浏览器验证通过。未登录访问新提醒API返回401。
+- 切换前后只读比对确认员工权限、配置指纹、历史业务指纹、已关闭营业日汇总和历史订单应收均一致。当日业务存在并发新增：审计确认顾客撤销未来共享授权、新预付请求、支付渠道成功回调和员工开台，均为当日业务；与数据时间对应，另存 `evidence/concurrent-business.json`。不把整库指纹变化冒充历史账务变化。
+- 实际17个在职账号按当前权限只读核验：13个获准、4个被拒，包含3个管理员；获准查询26–39ms。按岗位裁剪结果符合当前权限。该核验未创建员工登录会话，也未发送打印命令。
+- 现场1.0.11桥心跳仍在线。当前仅有2026-10-02后厨历史dead任务1条，无待领取/打印中/失败重试任务；相关岗位可看见该历史提醒。未自动补打或消除记录，需现场核对实体票。
+
+证据根目录：`/Users/jingda/mbox/outputs/print-active-alerts-20261114/deployment/`，包括 `deploy.log`、`bundle/deployment/deployment-manifest.json`、`evidence/production-comparison.json`、`evidence/print-after.json`、`evidence/bridge-after.json` 和正式入口回读。
+
+员工端使用：刷新已登录员工网页；需要声音时点击“开启打印提醒声音”并现场确认可听见。保持收银电脑页面可见。真实扬声器、实体出纸、休眠/隐藏页面提醒仍按原边界处理，PRINT-ALERT-WEB-20261114-01保留现场验收项。

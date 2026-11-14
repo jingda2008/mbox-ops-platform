@@ -5,6 +5,9 @@ import {pickupFixtureBoard,pickupFixtureUnit,pickupFixtureId as id} from '../../
 
 test.use({viewport:{width:1024,height:552},isMobile:false,hasTouch:true})
 async function login(page:Page){
+  // This suite explicitly measures the healthy-screen layout. Fault layout is
+  // covered separately; other real workflow tests can leave pending print jobs.
+  await page.route('**/api/hardware/print-alerts',r=>r.fulfill({json:{data:{manager:true,asOf:new Date().toISOString(),alerts:[]}}}))
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
   await page.goto(f.staffUrl);await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill('wuya');await page.getByLabel('四位 PIN').fill(f.employeePin);await page.getByRole('button',{name:/进入工作台/}).click()

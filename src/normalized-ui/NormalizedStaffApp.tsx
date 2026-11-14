@@ -1,5 +1,6 @@
 import { TableServiceLauncher, TableServiceDirectory } from './staff-actions/TableServicePanel'
 import {StaffReservationNotice} from './staff-actions/StaffReservationNotice'
+import { StaffPrintAlertNotice } from './StaffPrintAlertNotice'
 import {StaffReadyNotice} from './staff-actions/StaffReadyNotice'
 import {threeScreenMode,pickupOnlyEntry} from './staff-actions/three-screen-route'
 import { ownerDashboardEntry } from './staff-navigation-model'
@@ -264,6 +265,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     </>)
   return <StaffViewStateProvider key={staffWorkspaceIdentityKey(auth)}>
     <StaffRouteRestoration route={staffLocation} />
+    <StaffPrintAlertNotice key={staffWorkspaceIdentityKey(auth)} api={api} permissions={auth.permissions} compact={dedicatedScreen !== null} canOpenDevices={staffNavigation?.some(item => item.code === 'devices') === true} onNavigate={navigate}/>
     {!dedicatedScreen&&<StaffReadyNotice key={staffWorkspaceIdentityKey(auth)} employeeId={auth.employee.id} sessionId={auth.session.id} canDeliver={initialBootstrap?.access.permissions.includes('kds.deliver')===true} usesActionQueue={staffRoute!==null&&isStaffActionsTab(staffRoute)} onNavigate={navigate}/>}
     {!dedicatedScreen&&<StaffReservationNotice key={staffWorkspaceIdentityKey(auth)} sessionId={auth.session.id} enabled={auth.permissions.includes('reservation.view')} onNavigate={navigate}/>}
     {dedicatedScreen&&<TableServiceLauncher onOpen={() => setServiceHistorySessionId(auth.session.id)}/>}

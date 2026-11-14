@@ -2,6 +2,11 @@ name: print-bridge-windows
 on:
   push:
     branches: ['codex/print-bridge-113-installable-20261114']
+    paths:
+      - 'deploy/windows-print-bridge/**'
+      - 'scripts/*print-bridge-113*'
+      - 'scripts/emit-checkout-print-preview.ps1'
+      - '.github/workflows/print-bridge-windows.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,7 +29,11 @@ jobs:
         run: |
           python scripts/verify-print-bridge-113-package.py --package artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1 --pwsh powershell.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          powershell.exe -NoProfile -File deploy/windows-print-bridge/upgrade-core.tests.ps1
+          $policy = Join-Path $env:RUNNER_TEMP 'mbox-packaged-upgrade-policy'
+          New-Item -ItemType Directory -Force $policy | Out-Null
+          Copy-Item artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1/*.ps1 $policy
+          Copy-Item deploy/windows-print-bridge/upgrade-core.tests.ps1 $policy
+          powershell.exe -NoProfile -File (Join-Path $policy 'upgrade-core.tests.ps1')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -File deploy/windows-print-bridge/release-1.0.13/finalization.tests.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

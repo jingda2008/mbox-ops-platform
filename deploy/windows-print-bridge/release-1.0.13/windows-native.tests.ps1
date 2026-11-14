@@ -45,7 +45,7 @@ try {
  Expand-Archive -LiteralPath (Join-Path $PSScriptRoot 'baseline-1.0.11.zip') -DestinationPath $baseline
  Invoke-WebRequest -UseBasicParsing 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe' -OutFile $exe
  Assert ((Get-FileHash -LiteralPath $exe).Hash -eq '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da') 'WinSW digest mismatch'
- $xml='<service><id>MBoxPrintBridge</id><name>MBOX isolated upgrade test</name><executable>'+[Security.SecurityElement]::Escape($node)+'</executable><arguments>&quot;%BASE%\bridge.mjs&quot; run</arguments><workingdirectory>%BASE%</workingdirectory><env name="MBOX_PRINT_BRIDGE_DATA" value="'+[Security.SecurityElement]::Escape($data)+'"/><log mode="roll"/><stoptimeout>20 sec</stoptimeout><startmode>Manual</startmode></service>'
+ $xml='<service><id>MBoxPrintBridge</id><name>MBOX isolated upgrade test</name><description>Isolated CI service; no venue access</description><executable>'+[Security.SecurityElement]::Escape($node)+'</executable><arguments>&quot;%BASE%\bridge.mjs&quot; run</arguments><workingdirectory>%BASE%</workingdirectory><env name="MBOX_PRINT_BRIDGE_DATA" value="'+[Security.SecurityElement]::Escape($data)+'"/><log mode="roll"/><stoptimeout>20 sec</stoptimeout><startmode>Manual</startmode></service>'
  [IO.File]::WriteAllText([IO.Path]::ChangeExtension($exe,'.xml'),$xml,(New-Object Text.UTF8Encoding($false)))
  Write-Config '{"serverUrl":"http://127.0.0.1:19130","publicId":"fixture","credential":"fixture-only"}'
  $script:configHash=(Get-FileHash -LiteralPath (Join-Path $data 'config.json')).Hash

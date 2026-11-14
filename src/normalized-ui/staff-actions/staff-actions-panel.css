@@ -754,3 +754,7 @@
 
 .staff-table-action-dialog > header .staff-table-sheet-close { color:#fff; background:#172019; border-color:#596159; }
 .staff-session-primary .is-observation { grid-column:auto; }
+
+/* Keep confirmed-table controls anchored while asynchronous detail panels expand. */
+.staff-table-action-dialog.is-confirmed-session { height: min(92dvh, 760px); }
+@media (max-width: 720px) { .staff-table-action-dialog.is-confirmed-session { height: 96dvh; } }

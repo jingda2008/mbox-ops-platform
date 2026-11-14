@@ -12,6 +12,7 @@ async function targets(page:Page,height:number){
 }
 for(const size of [{width:768,height:1024},{width:600,height:960},{width:390,height:844}])test(`后厨 ${size.width}×${size.height} 竖屏开做、旋转保留份数、部分完成`,async({page},info)=>{
   await page.setViewportSize(size)
+  await page.route('**/api/hardware/print-alerts',r=>r.fulfill({json:{data:{manager:false,asOf:new Date().toISOString(),alerts:[]}}}))
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'));test.skip(!f.threeScreenFixture,'requires three-screen fixture')
   await page.goto('/');await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill('shenliangliang');await page.getByLabel('四位 PIN').fill(f.employeePin);await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()

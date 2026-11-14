@@ -87,10 +87,11 @@ test('equivalent heartbeats preserve a real stock-count selection; access change
 
     mode = 'permissions'; await heartbeat(page)
     await expect(panel).toHaveCount(0)
+    expect(await page.locator('.normalized-route-notice').evaluate(node => node.getBoundingClientRect().top >= (document.querySelector('.staff-print-alert-notice')?.getBoundingClientRect().bottom ?? 0))).toBe(true)
     mode = 'same'; await heartbeat(page)
     await expect(row).toBeVisible()
     mode = 'navigation'; await heartbeat(page)
-    await expect(page.getByRole('alert')).toContainText('当前账号没有这个页面的有效权限')
+    await expect(page.getByRole('alert').filter({hasText:'当前账号没有这个页面的有效权限'})).toContainText('当前账号没有这个页面的有效权限')
     await expect(panel).toHaveCount(0)
     mode = 'same'; await heartbeat(page)
     await expect(row).toBeVisible()

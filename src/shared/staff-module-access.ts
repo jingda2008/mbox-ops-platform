@@ -108,6 +108,7 @@ export const staffModuleAccessDefinitions: readonly StaffModuleAccessDefinition[
     code: 'member-accounts', label: '会员账户查询', route: '/staff/member-accounts', sortOrder: 292,
     permissionCodes: ['loyalty.account.view'],
   },
+  { code: 'channel-partners', label: '周边店合作', route: '/staff/channel-partners', sortOrder: 284, permissionCodes: ['channel.view'] },
   {
     code: 'member-management', label: '其他会员经营配置', route: '/staff/member-management', sortOrder: 293,
     permissionCodes: [

@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
@@ -15,12 +17,12 @@ async function harness(platform, read, write = async () => ({}), readGifts = asy
   vm.runInNewContext(await readFile(new URL('../' + platform + '/pages/profile-cards/index.js', import.meta.url), 'utf8'), {
     wx: runtime,
     Page(value) { page = value; page.setData = value => Object.assign(page.data, value) },
-    require(name) {
+    require(name) { if (name === './format') return actualMiniFormat;
       if (memberGuards[name.split('/').pop()]) return memberGuards[name.split('/').pop()]
       if (name.endsWith('/platform')) return runtime
       if (name.endsWith('/api')) return { getMemberCards: read, submitMemberCardAction: write, getMemberGiftJobs:readGifts }
       if (name.endsWith('/membership-gate')) return { redirectToMembershipLogin: destination => redirects.push(destination) }
-      if (name.endsWith('/format')) return { dateInput: value => value }
+      if (name.endsWith('/format')) return { ...actualMiniFormat, dateInput: value => value }
       return { customerErrorMessage: (_, fallback) => fallback }
     },
   })

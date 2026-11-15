@@ -50,6 +50,7 @@ import { TableObservationSheet } from './TableObservationSheet'
 import { TableRecommendationSheet } from './TableRecommendationSheet'
 import { TableOrderStatusPanel } from './TableOrderStatusPanel'
 import { ParticipantMovementSheet } from './ParticipantMovementSheet'
+import {ParticipantMovementHistoryPanel} from './ParticipantMovementHistoryPanel'
 import { InventoryBarcodeScanner } from '../InventoryBarcodeScanner'
 import { useConfirmationDialog } from '../ConfirmationDialog'
 import {
@@ -1139,6 +1140,7 @@ export function StaffActionsPanel({
 
       {tab === 'tables' && operations !== null && (
         <div className="staff-table-workspace">
+          {permissions.includes('table.participation.manage')&&<ParticipantMovementHistoryPanel api={api} ownerKey={operations.actor.id}/>}
           {permissions.includes('table.assignment.manage') && (
             <ResponsibilityAssignmentPanel api={api} tables={operations.tables} />
           )}

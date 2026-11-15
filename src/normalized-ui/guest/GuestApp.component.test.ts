@@ -210,3 +210,12 @@ it('uses the authoritative zero balance instead of an old pending payment snapsh
   const html=renderToStaticMarkup(createElement(CheckoutPanel,{result,tableOrder,onClose(){},onRetryPayment(){}}))
   expect(html).toContain('本单无需付款');expect(html).not.toContain('316');expect(html).not.toContain('guest-primary')
 })
+
+it.each([9000, 1234, 0])('guest payment uses the latest discounted payable %s rather than the original snapshot', payableAmountMinor => {
+  const result = { order: { publicId: 'discounted-order' }, settlement: { payableAmountMinor: 10000, currency: 'CNY' }, payment: { status: 'pending', simulated: false, providerAction: { status: 'pending', payload: {} } } } as GuestOrderResult
+  const tableOrder = { status: 'submitted', paymentStatus: 'unpaid', paymentAccess: payableAmountMinor ? 'available' : 'not_required', payableAmountMinor } as GuestTableOrder
+  const html = renderToStaticMarkup(createElement(CheckoutPanel, { result, tableOrder, onClose() {}, onRetryPayment() {} }))
+  expect(html).not.toContain('<strong>¥100')
+  if (payableAmountMinor) expect(html).toContain('<strong>¥' + String(payableAmountMinor / 100) + '</strong>')
+  else { expect(html).toContain('本单无需付款'); expect(html).not.toContain('guest-primary') }
+})

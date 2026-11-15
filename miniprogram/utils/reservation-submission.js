@@ -1,3 +1,4 @@
+const { parseInstant } = require('./format')
 const { getRuntimeConfig } = require('../config/index')
 const { request } = require('./request')
 const { ensureCustomerSession, isCustomerSessionInvalid, renewReservationSessionOnly } = require('./auth')
@@ -64,7 +65,7 @@ function readAttempt(context) {
     || typeof attempt.payload.customerName !== 'string' || typeof attempt.payload.contact !== 'string'
     || !Number.isSafeInteger(attempt.payload.guestCount) || attempt.payload.guestCount < 1
     || !Number.isSafeInteger(attempt.payload.reservationPolicyVersion)
-    || typeof attempt.payload.arrivalAt !== 'string' || !Number.isFinite(Date.parse(attempt.payload.arrivalAt))
+    || typeof attempt.payload.arrivalAt !== 'string' || !Number.isFinite(parseInstant(attempt.payload.arrivalAt))
     || typeof attempt.payload.seatPreference !== 'string'
     || !(attempt.payload.note === null || typeof attempt.payload.note === 'string')
     || !(attempt.payload.preferredScheduleId === null || typeof attempt.payload.preferredScheduleId === 'string')) {

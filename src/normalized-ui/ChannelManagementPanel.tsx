@@ -82,13 +82,13 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
   }
   if (!auth.permissions.includes('channel.view')) return null
   const disabled = busy || pending || !canManage
-  return <section key={auth.session.id} className="member-gift-panel" aria-label="渠道合作与推广"><h3>渠道合作与推广</h3>
+  return <section key={auth.session.id} className="member-gift-panel" aria-label="周边店合作"><h3>周边店合作</h3>
     <>{data&&<ChannelOperationsPanel api={api} auth={auth} data={data} onRefresh={reload}/>}</>
     <ChannelReportPanel api={api} sessionId={auth.session.id}/>
     <ChannelFinancePanel api={api} auth={auth} partners={data?.partners??[]}/>
     <p>每个推广批次共用二维码和优惠号码。图片可由店长自行下载，也可下载后逐一发给对方并记录跟进。</p>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    <button type="button" disabled={busy} onClick={() => void reload().catch(e => setError(message(e)))}>刷新渠道记录</button>
+    <button type="button" disabled={busy} onClick={() => void reload().catch(e => setError(message(e)))}>刷新周边店合作记录</button>
     {pending && <button type="button" disabled={busy} onClick={() => void mutate()}>恢复上次操作并核对</button>}
     {invitation && <p>官网合作账号邀请链接（请单独交给对应店长，72 小时有效；再次开通将重置原账号并退出旧登录）：<a href={`https://www.shmbox.com/cooperation/#invite=${encodeURIComponent(invitation)}`} target="_blank" rel="noreferrer">{`https://www.shmbox.com/cooperation/#invite=${invitation}`}</a></p>}
     {canManage && <>

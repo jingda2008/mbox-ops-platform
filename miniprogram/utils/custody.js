@@ -1,17 +1,13 @@
-const { dateInput } = require('./format')
+const { parseInstant, beijingDateTime } = require('./format')
 const states = { stored: '存放中', collected: '已取出', archived: '已归档', voided: '已作废' }
 const events = { stored: '存酒登记', restored: '余酒再存', collected: '取酒交接', collection_closed: '取酒处理完成', archived: '存酒归档', expiry_changed: '有效期调整', code_requested: '申请取酒核验', code_verified: '取酒核验通过', code_rejected: '取酒核验未通过', printed: '生成存酒凭证' }
-function time(value) {
-  if (!value) return '未登记'
-  const date = new Date(dateInput(value))
-  return Number.isNaN(date.getTime()) ? '待核实' : new Date(date.getTime() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ')
-}
+function time(value) { return value == null || value === '' ? '未登记' : beijingDateTime(value, '待核实') }
 function quantity(value) {
   if (value === null || value === undefined || value === '') return '未登记'
   return String(value).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
 }
 function presentOrder(order) {
-  const expired = order.status === 'stored' && new Date(dateInput(order.expires_at)).getTime() <= Date.now()
+  const expired = order.status === 'stored' && parseInstant(order.expires_at) <= Date.now()
   return Object.assign({}, order, { statusText: expired ? '已到期 · 待门店处理' : states[order.status] || '状态待核实', tone: expired ? 'warning' : order.status === 'stored' ? 'active' : 'muted', remainingText: quantity(order.remaining_quantity), originalText: quantity(order.original_quantity), storedText: time(order.stored_at), expiryText: time(order.expires_at) })
 }
 function presentDetail(data) {

@@ -1,3 +1,4 @@
+import { channelPermissionPresentation, staffPermissionCategory, matchesStaffPermissionSearch } from '../shared/channel-permissions'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BadgeDollarSign,
@@ -107,11 +108,11 @@ function StaffAccessManagementContent({ api, currentEmployeeId }: { api: Normali
     try { refundReviewChanges(selectedRole, refundValue.enabled, refundReviewAmount(refundValue.amount)) }
     catch (error) { refundError = message(error) }
   }
-  const categories = [...new Set((overview?.permissions ?? []).map((permission) => permission.category))]
+  const categories = [...new Set((overview?.permissions ?? []).map(staffPermissionCategory))]
   const visiblePermissions = useMemo(() => (overview?.permissions ?? []).filter((permission) => {
     const normalizedQuery = query.trim().toLowerCase()
-    return (category === 'all' || permission.category === category)
-      && (normalizedQuery === '' || `${permissionLabel(permission.code, permission.name)} ${permissionDescription(permission.code, permission.description)}`.toLowerCase().includes(normalizedQuery))
+    return (category === 'all' || staffPermissionCategory(permission) === category)
+      && matchesStaffPermissionSearch(permission, normalizedQuery, permissionLabel(permission.code, permission.name), permissionDescription(permission.code, permission.description))
   }), [category, overview, query])
 
   const pendingChanges = useMemo<StaffPermissionDeploymentChange[]>(() => {
@@ -601,7 +602,7 @@ function modeHint(mode: EditorMode) { return ({ role: '先选岗位，再勾选�
 
 function categoryLabel(category: string): string {
   const labels: Record<string, string> = {
-    operations: '现场运营', table: '桌台', service: '服务', order: '订单与出品', reservation: '预约',
+    channel: '周边店合作', marketing: '营销', operations: '现场运营', table: '桌台', service: '服务', order: '订单与出品', reservation: '预约',
     payment: '收银退款', inventory: '库存', hardware: '设备', staff: '人员权限', ai: 'AI执行', commercial: '经营数据',
   }
   return labels[category] ?? category
@@ -648,10 +649,11 @@ const permissionDescriptions: Record<string, string> = {
 }
 
 function permissionLabel(code: string, configuredName: string): string {
-  return permissionLabels[code] ?? (containsChinese(configuredName) ? configuredName : generatedPermissionLabel(code))
+  return channelPermissionPresentation[code]?.name ?? permissionLabels[code] ?? (containsChinese(configuredName) ? configuredName : generatedPermissionLabel(code))
 }
 
 function permissionDescription(code: string, configuredDescription: string | null): string {
+  if (channelPermissionPresentation[code]) return channelPermissionPresentation[code].description
   if (permissionDescriptions[code] !== undefined) return permissionDescriptions[code]
   if (configuredDescription !== null && containsChinese(configuredDescription)) return configuredDescription
   return '按岗位配置此项操作权限。'

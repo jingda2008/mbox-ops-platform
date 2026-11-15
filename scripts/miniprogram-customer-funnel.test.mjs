@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -307,7 +309,7 @@ test('activity-list dates use the shared iOS-safe time parser', async () => {
 
   assert.equal(dateInput('2026-08-30 19:30:00+08'), '2026-08-30T19:30:00+08:00')
   assert.match(communityLogic, /dateText: activityTimeText\(item\)/)
-  assert.match(activityDisplay, /new Date\(dateInput\(item.startsAt\)\)/)
+  assert.match(activityDisplay, /parseInstant\(item.startsAt\)/)
 })
 
 test('activity registration distinguishes confirmed, payment-pending, and waitlist states', async () => {
@@ -413,7 +415,7 @@ test('a required paid activity opens WeChat payment as part of one registration 
     if (path === '../../utils/api') return api
     if (path === '../../utils/auth') return { ensureCustomerSession: async () => ({}) }
     if (path === '../../utils/id') return { randomId: (prefix) => `${prefix}-unit-test-key-0001` }
-    if (path === '../../utils/format') return { money: (minor) => `¥${(Number(minor) / 100).toFixed(2)}`, dateTime: (value) => String(value || '') }
+    if (path === '../../utils/format') return { ...actualMiniFormat, money: (minor) => `¥${(Number(minor) / 100).toFixed(2)}`, dateTime: (value) => String(value || '') }
     if (path === '../../utils/media') return { publicImageUrl: (value) => value || '' }
     if (path === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
     if (path === '../../utils/customer-error') return { customerErrorMessage: (_error, fallback) => fallback, isWechatCancellation: () => false }
@@ -1216,7 +1218,7 @@ test('WeChat community loads actual activities without Intl or a performance dep
   const activity={publicId:'community-test',title:'城市漫游',kind:'city_walk',status:'published',startsAt:'2099-01-01T10:00:00+08:00',endsAt:'2099-01-01T12:00:00+08:00',feeAmountMinor:0,assemblyLocation:'集合点'}
   const context=vm.createContext({
     Page(value){page=value;page.setData=patch=>Object.assign(page.data,patch)},
-    require(name){
+    require(name){ if (name === './format') return actualMiniFormat;
       if(name.endsWith('/api'))return {
         getActivities:async()=>{if(fail)throw new Error('Intl is not defined');return [activity]},
         getActivityRegistrations:async()=>[{activityPublicId:'community-test',status:'confirmed'}],

@@ -1,6 +1,8 @@
-import { useEffect,useMemo,useState } from 'react'
+import { useEffect,useMemo,useRef,useState } from 'react'
 import { ArrowRightLeft,Check,LoaderCircle,X } from 'lucide-react'
 import type { StaffActionsApiPort } from './staff-actions-api'
+import type {MovementRecoverySummary} from './participant-movement-recovery'
+import {ParticipantMovementHistoryPanel} from './ParticipantMovementHistoryPanel'
 import type {
   StaffActionTable,StaffParticipantMovementPreview,StaffTableParticipant,
 } from './types'
@@ -24,15 +26,29 @@ export function ParticipantMovementSheet(props:Readonly<{
   const [reloadKey,setReloadKey]=useState(0)
   const [phase,setPhase]=useState<'loading'|'edit'|'preview'|'saving'|'error'>('loading')
   const [error,setError]=useState<string|null>(null)
+  const [recovery,setRecovery]=useState<MovementRecoverySummary|null>(null)
+  const [historyLoaded,setHistoryLoaded]=useState(false),[historyConfirmed,setHistoryConfirmed]=useState(false)
+  const historyReview=useRef({loaded:false,confirmed:false})
+  const scope=JSON.stringify([session.id,props.table.id,session.locationVersion,session.guestCount])
+  const currentScope=useRef({scope,api:props.api});currentScope.current={scope,api:props.api}
+  const flight=useRef<object|null>(null),confirmedSnapshot=useRef<string|null>(null)
+  const recoveryNotice=useRef<string|null>(null)
+  const mounted=useRef(true)
+  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false}},[])
   useEffect(() => {
     const controller=new AbortController()
+    setParticipants([]);setSelected([]);setPreview(null);setPhase('loading');setError(recoveryNotice.current);recoveryNotice.current=null
+    confirmedSnapshot.current=null
+    setHistoryLoaded(false);setHistoryConfirmed(false)
+    historyReview.current={loaded:false,confirmed:false}
+    setRecovery(props.api.pendingParticipantMovement?.()??null)
     props.api.loadTableParticipants(session.id,controller.signal).then((items) => {
-      setParticipants(items); setPhase('edit')
+      if (!controller.signal.aborted && currentScope.current.scope===scope && currentScope.current.api===props.api) { setParticipants(items); setPhase('edit') }
     }).catch((cause:unknown) => {
-      if (!controller.signal.aborted) { setError(message(cause));setPhase('error') }
+      if (!controller.signal.aborted && currentScope.current.scope===scope && currentScope.current.api===props.api) { setError(message(cause));setPhase('error') }
     })
     return () => controller.abort()
-  },[props.api,reloadKey,session.id])
+  },[props.api,reloadKey,session.id,scope])
   const targets=useMemo(() => props.allTables.filter((candidate) => candidate.id!==props.table.id
     && (kind==='participant_split'
       ? candidate.status==='available' && candidate.activeSession===null
@@ -49,7 +65,13 @@ export function ParticipantMovementSheet(props:Readonly<{
     movedGuestCount:Number(guestCount),participantPublicIds:selected,
     ...(needsCapacityReason?{ capacityOverrideReason:capacityReason.trim() }:{}),
   })
+  const snapshot=JSON.stringify([scope,input(),target?.activeSession,target?.capacity,target?.status,reason])
+  const currentSnapshot=useRef(snapshot);currentSnapshot.current=snapshot
+  const sameScope=()=>mounted.current && currentScope.current.scope===scope && currentScope.current.api===props.api
+  const current=()=>sameScope() && currentSnapshot.current===snapshot
   const previewAction=async () => {
+    if (flight.current || !current()) return
+    const pending=props.api.pendingParticipantMovement?.();if(pending){setRecovery(pending);return}
     if (!target || !Number.isInteger(Number(guestCount)) || Number(guestCount)<1) {
       setError('请选择目标桌并填写实际移动人数');return
     }
@@ -74,29 +96,73 @@ export function ParticipantMovementSheet(props:Readonly<{
       && selected.length!==participants.length) {
       setError('全员并桌必须选择源桌全部已识别顾客');return
     }
-    setPhase('loading');setError(null)
-    try { setPreview(await props.api.previewParticipantMovement(input()));setPhase('preview') }
-    catch (cause) { setError(message(cause));setPhase('edit') }
+    const token={};flight.current=token;confirmedSnapshot.current=null
+    setPhase('loading');setError(recoveryNotice.current);recoveryNotice.current=null;setPreview(null);setHistoryLoaded(false);setHistoryConfirmed(false)
+    historyReview.current={loaded:false,confirmed:false}
+    try {
+      const result=await props.api.previewParticipantMovement(input())
+      if (!result.movementGuard || !/^\d+$/.test(result.movementGuard.movementRevision??'')) throw new Error('预检结果缺少桌位信息，请刷新后重新预检')
+      if (current()) { confirmedSnapshot.current=snapshot;setPreview(result);setPhase('preview') }
+    }
+    catch (cause) { if (current()) { setError(message(cause));setPhase('edit') } }
+    finally {
+      if (flight.current===token) flight.current=null
+      if (sameScope() && !current()) { setPreview(null);setError('桌次或人数已变化，请重新预检');setPhase('edit') }
+    }
   }
   const execute=async () => {
+    if (flight.current || !current()) return
+    const pending=props.api.pendingParticipantMovement?.();if(pending){setRecovery(pending);return}
+    if (confirmedSnapshot.current!==snapshot || !preview || preview.blockers.length>0) {
+      setPreview(null);setError('桌次或人数已变化，请重新预检');setPhase('edit');return
+    }
+    if(preview.movementGuard.movementRevision!=='0'&&(!historyReview.current.loaded||!historyReview.current.confirmed)){setError('请先查询历史记录，并确认这是新的拆并桌');return}
+    const token={};flight.current=token
     setPhase('saving');setError(null)
     try {
-      await props.api.moveParticipants({ ...input(),reason:reason.trim() })
-      props.onDone(kind==='participant_split' ? '人员拆桌已完成，请让被移动顾客扫描新桌二维码' : '人员并桌已完成，请让被移动顾客扫描目标桌二维码')
-    } catch (cause) { setError(message(cause));setPhase('preview') }
+      await props.api.moveParticipants({ ...input(),reason:reason.trim(),movementGuard:preview.movementGuard,movementHistoryConfirmed:historyConfirmed })
+      if (current()) props.onDone(kind==='participant_split' ? '人员拆桌已完成，请让被移动顾客扫描新桌二维码' : '人员并桌已完成，请让被移动顾客扫描目标桌二维码')
+    } catch (cause) { if (sameScope()) { setRecovery(props.api.pendingParticipantMovement?.()??null);setPreview(null);setError(message(cause));setPhase('edit') } }
+    finally {
+      if (flight.current===token) flight.current=null
+      if (sameScope() && !current()) { setPreview(null);setError('桌次状态已变化，请刷新名单核对原操作结果');setPhase('edit') }
+    }
   }
   const resetSelection=() => {
     setTargetId('');setPreview(null);setSelected([]);setGuestCount('1');setCapacityReason('');setPhase('edit');setError(null)
   }
+  const recover=async(seal=false)=>{
+    const operation=seal?props.api.sealParticipantMovement:props.api.recoverParticipantMovement
+    if(flight.current||!operation)return
+    const token={};flight.current=token;recoveryNotice.current=null;setPhase('saving');setError(null)
+    try{await operation.call(props.api);if(sameScope())props.onDone('原拆并桌结果已核对，请以刷新后的桌号和名单为准')}
+    catch(cause){if(sameScope()){
+      const error=cause as {code?:string;commitDisposition?:string}
+      if(error.code==='TABLE_MOVEMENT_REQUEST_SEALED'&&error.commitDisposition==='not_committed'&&!props.api.pendingParticipantMovement?.()){
+        props.onDone('原请求已撤回，迟到请求不会执行；需要继续操作时，请核对现场并重新预检')
+      }else{recoveryNotice.current=message(cause);setError(recoveryNotice.current)}
+    }}
+    finally{if(flight.current===token)flight.current=null;if(sameScope()){
+      const pending=props.api.pendingParticipantMovement?.()??null
+      setRecovery(pending);setPreview(null);setPhase('edit');if(!pending)setReloadKey(value=>value+1)
+    }}
+  }
+  if(recovery)return <div className="staff-participant-mask" role="dialog" aria-modal="true" aria-label="核对原拆并桌"><section className="staff-participant-sheet">
+    <header><strong>核对原拆并桌</strong><button disabled={phase==='saving'} onClick={props.onClose}>关闭</button></header>
+    <p>{recovery.message}</p><p>保留原桌次、原名单和原请求编号；恢复只核对原回执，不执行新的拆并桌。</p>
+    <button type="button" disabled={phase==='saving'||!recovery.canRecover} onClick={()=>void recover()}>核对原拆并桌结果</button>
+    {recovery.canSeal&&props.api.sealParticipantMovement&&<><p>撤回仅封存未执行的原编号，阻止迟到请求；若已经执行，只核对回执，不撤销移动。</p><button type="button" disabled={phase==='saving'} onClick={()=>void recover(true)}>撤回未确认的原请求</button></>}
+    {error&&<p role="alert">{error}</p>}
+  </section></div>
   return <div className="staff-participant-mask" role="dialog" aria-modal="true" aria-label="人员拆并桌">
     <section className="staff-participant-sheet">
       <header><div><strong>人员拆并桌</strong><small>{props.table.code} · 登记{session.guestCount}人</small></div>
-        <button type="button" onClick={props.onClose} aria-label="关闭"><X size={19}/></button></header>
+        <button type="button" disabled={phase==='saving'} onClick={props.onClose} aria-label="关闭"><X size={19}/></button></header>
       {phase==='loading' ? <p className="staff-participant-loading"><LoaderCircle className="is-spinning"/>正在核对当前位置…</p> : <>
         {participants.length>session.guestCount&&<p>关联账号数不等于现场人数。全员并桌请选择全部账号，人数按两桌登记人数合计。</p>}
         <div className="staff-participant-kinds">
-          <button className={kind==='participant_split'?'is-active':''} onClick={() => {setKind('participant_split');resetSelection()}}>人员拆桌</button>
-          <button className={kind==='participant_merge'?'is-active':''} onClick={() => {setKind('participant_merge');resetSelection()}}>人员并桌</button>
+          <button disabled={phase==='saving'} className={kind==='participant_split'?'is-active':''} onClick={() => {if(flight.current)return;setKind('participant_split');resetSelection()}}>人员拆桌</button>
+          <button disabled={phase==='saving'} className={kind==='participant_merge'?'is-active':''} onClick={() => {if(flight.current)return;setKind('participant_merge');resetSelection()}}>人员并桌</button>
         </div>
         {phase!=='preview' && phase!=='saving' ? <>
           <p className="staff-participant-help">只移动明确选中的顾客位置；历史订单、付款、任务和观察不复制。</p>
@@ -131,7 +197,13 @@ export function ParticipantMovementSheet(props:Readonly<{
             {preview?.roleAdjustments.map((adjustment) => <li key={adjustment.participantPublicId}>角色调整：{adjustment.reason}</li>)}
             <li>现场原因：{reason.trim()}</li>{needsCapacityReason && <li>加座说明：{capacityReason.trim()}</li>}
             <li>转桌后请让顾客扫描新桌二维码</li></ul>
-          <button className="staff-primary-action" type="button" disabled={phase==='saving' || (preview?.blockers.length ?? 0)>0} onClick={() => void execute()}>
+          {confirmedSnapshot.current!==snapshot && <p>桌次或人数已变化，请返回修改并重新预检。</p>}
+          {preview&&preview.movementGuard.movementRevision!=='0'&&<>
+            <p>源桌或目标桌已有移动记录。丢失本地记录不能证明原操作未执行。</p>
+            <ParticipantMovementHistoryPanel key={snapshot} api={props.api} ownerKey={scope} onVerified={()=>{if(current()){historyReview.current.loaded=true;setHistoryLoaded(true)}}} onInvalidated={()=>{if(current()){historyReview.current={loaded:false,confirmed:false};setHistoryLoaded(false);setHistoryConfirmed(false)}}}/>
+            <label><input type="checkbox" disabled={!historyLoaded||phase==='saving'} checked={historyConfirmed} onChange={e=>{historyReview.current.confirmed=e.target.checked;setHistoryConfirmed(e.target.checked)}}/>已核对服务端记录及现场名单，本次是新的拆并桌</label>
+          </>}
+          <button className="staff-primary-action" type="button" disabled={phase==='saving' || confirmedSnapshot.current!==snapshot || (preview?.blockers.length ?? 0)>0 || !!preview&&preview.movementGuard.movementRevision!=='0'&&(!historyLoaded||!historyConfirmed)} onClick={() => void execute()}>
             {phase==='saving'?<LoaderCircle className="is-spinning" size={17}/>:<Check size={17}/>}确认执行</button>
           <button type="button" disabled={phase==='saving'} onClick={() => setPhase('edit')}>返回修改</button>
         </div>}

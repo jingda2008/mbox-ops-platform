@@ -318,6 +318,7 @@ describe('table management API', () => {
       } })
     expect(response.statusCode).toBe(200)
     expect(commands.moveParticipants).toHaveBeenCalledWith(expect.objectContaining({
+      requireGuard:true,receiptOnly:false,
       movementKind:'participant_split',movedGuestCount:1,
       participantPublicIds:['participant-public-0001'],reason:'顾客确认拆桌',
     }))

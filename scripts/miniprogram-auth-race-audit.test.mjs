@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import nodeTest from 'node:test'
 const test = (name, fn) => nodeTest(name, { timeout: 2000 }, fn)
@@ -9,7 +11,7 @@ for(const phase of ['challenge','authenticate','reservation'])test(`logout durin
  const module={exports:{}}
  const response=path=>path.endsWith('challenges')?{state:'state',nonce:'nonce'}:path.endsWith('code-authentication')?{accessToken:'old-identity-token'.repeat(3),principal:{principalId:'old-user'},expiresAt:'2030-01-01T00:00:00Z'}:{data:{expiresAt:'2030-01-01T00:00:00Z'}}
  const wx={getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k),login:o=>o.success({code:'login-code'})}
- vm.runInNewContext(readFileSync('miniprogram/utils/auth.js','utf8'),{module,wx,require:name=>{
+ vm.runInNewContext(readFileSync('miniprogram/utils/auth.js','utf8'),{module,wx,require:name=>{ if (name === './format') return actualMiniFormat;
   if(name==='../config/index')return {getRuntimeConfig:()=>({wechatIdentityEnabled:true,identityTenantId:'tenant',identityStoreId:'store',wechatAppId:'app'})}
   if(name==='./id')return {randomId:()=> 'audit-random-key'}
   return {deviceKey:()=> 'audit-device',storeWechatIdentityToken:t=>storage.set('token',t),clearWechatIdentityToken:()=>storage.delete('token'),clearReservationCookie:()=>{},request:(path,options)=>{

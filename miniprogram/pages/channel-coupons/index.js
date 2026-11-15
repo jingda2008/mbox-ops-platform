@@ -1,16 +1,14 @@
-const { getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon } = require('../../utils/api')
+const { beijingDateTime, parseInstant } = require('../../utils/format')
+const { getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon, recoverChannelClaim, recoverChannelCoupon } = require('../../utils/api')
 const { ensureCustomerSession, isMembershipLoggedOut } = require('../../utils/auth')
 const { redirectToMembershipLogin } = require('../../utils/membership-gate')
 const { channelCode, channelScanCode } = require('../../utils/channel-entry')
-const { commandIdentityScope } = require('../../utils/recoverable-command')
+const { commandIdentityScope, pendingGuestCommandMatches } = require('../../utils/recoverable-command')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const { getTableSession } = require('../../utils/session')
 const FILTERS = [{value:'all',label:'全部'}, {value:'available',label:'待使用'}, {value:'active',label:'本次消费已绑定'}, {value:'fulfilled',label:'已兑现'}, {value:'expired',label:'已过期'}, {value:'revoked',label:'已撤销'}]
 const STATES = { available: '待使用', active: '已绑定本次消费', fulfilled: '已兑现', expired: '已过期', revoked: '已撤销' }
-function time(value) {
-  const date = new Date(value)
-  return Number.isFinite(date.getTime()) ? new Date(date.getTime() + 28800000).toISOString().slice(0, 16).replace('T', ' ') : '待核对'
-}
+function time(value) { return beijingDateTime(value, '待核对') }
 function present(item) {
   return Object.assign({}, item, {
     stateText: STATES[item.status] || '待核对', timeText: time(item.useFrom) + ' 至 ' + time(item.useUntil),
@@ -22,7 +20,7 @@ function present(item) {
   })
 }
 Page({
-  data: { filters:FILTERS, filterIndex:0, nextCursor:null, loadingMore:false, code: '', coupons: [], offer: null, loading: false, busy: false, needsLogin: false, error: '', notice: '' },
+  data: { pendingClaim:false, filters:FILTERS, filterIndex:0, nextCursor:null, loadingMore:false, code: '', coupons: [], offer: null, loading: false, busy: false, needsLogin: false, error: '', notice: '' },
   onLoad(options) {
     if (options && (options.scene || options.code)) {
       try { this.entryError = ''; this.setData({ code: channelCode(options.scene || options.code), offer: null, error: '', notice: '' }) }
@@ -30,6 +28,8 @@ Page({
     }
   },
   onShow() {
+    this.visible = true
+    this.setData({ notice: '' })
     const app = typeof getApp === 'function' ? getApp() : null
     if (app && app.globalData.channelOfferLaunch) {
       const entry = app.globalData.channelOfferLaunch
@@ -40,9 +40,25 @@ Page({
   },
   onReachBottom() { return this.loadMore() },
   filterChanged(event) { const index=Number(event.detail.value); if(!FILTERS[index]||this.data.busy)return; this.setData({filterIndex:index}); return this.load() },
-  onHide() { this.generation = (this.generation || 0) + 1 },
-  onUnload() { this.generation = (this.generation || 0) + 1 },
-  inputCode(event) { this.entryError = ''; this.generation = (this.generation || 0) + 1; this.setData({ code: event.detail.value, offer: null, nextCursor:null, loadingMore:false, loading: false, notice: '', error: '' }) },
+  onHide() { this.visible = false; this.clearValidityRefresh(); this.generation = (this.generation || 0) + 1 },
+  onUnload() { this.onHide() },
+  clearValidityRefresh() { clearTimeout(this.validityTimer); this.validityTimer = null },
+  scheduleValidityRefresh() {
+    this.clearValidityRefresh()
+    if (this.visible === false) return
+    const now = Date.now(), boundaries = []
+    const add = value => { const instant = parseInstant(value); if (instant > now) boundaries.push(instant) }
+    const addCoupon = item => { if (item && item.status === 'available') { add(item.useFrom); add(item.useUntil) } }
+    this.data.coupons.forEach(addCoupon)
+    if (this.data.offer) {
+      add(this.data.offer.claimFrom); add(this.data.offer.claimUntil)
+      addCoupon(this.data.offer.existingCoupon)
+    }
+    // Device time only schedules a read; the server decides expiry and useability.
+    // Active/fulfilled promises must not expire locally during the same visit.
+    if (boundaries.length) this.validityTimer = setTimeout(() => this.load(), Math.min(2147483647, Math.min(...boundaries) - now + 1))
+  },
+  inputCode(event) { this.clearValidityRefresh(); this.entryError = ''; this.generation = (this.generation || 0) + 1; this.setData({ code: event.detail.value, offer: null, nextCursor:null, loadingMore:false, loading: false, notice: '', error: '' }) },
   scan() {
     const generation=this.generation,owner=commandIdentityScope(),code=this.data.code
     const request=this.scanRequest=(this.scanRequest||0)+1
@@ -61,10 +77,12 @@ Page({
     try { if (this.data.code) destination += '?code=' + channelCode(this.data.code) } catch (_) { /* Keep invalid input out of login return paths. */ }
     redirectToMembershipLogin(destination)
   },
+  presentCoupon(item) { return Object.assign(present(item), { canRecover: pendingGuestCommandMatches('channel.activate', { claimId:item.id }) }) },
   async load() {
+    this.clearValidityRefresh()
     const generation = this.generation = (this.generation || 0) + 1
     this.walletOwner=null
-    this.setData({ loading: true, loadingMore:false, nextCursor:null, coupons: [], offer: null, needsLogin: false })
+    this.setData({ loading: true, loadingMore:false, nextCursor:null, coupons: [], offer: null, pendingClaim:false, needsLogin: false })
     let owner
     try {
       if (isMembershipLoggedOut()) { this.setData({ needsLogin: true }); return }
@@ -77,13 +95,13 @@ Page({
       if (generation !== this.generation || owner !== commandIdentityScope()) return
       this.walletOwner=owner
       const viewed=offer?present(offer):null
-      if(viewed)viewed.existingCoupon=offer.existingCoupon?present(offer.existingCoupon):null
-      this.setData({ coupons: page.items.map(present), nextCursor:page.nextCursor, offer:viewed, error: this.entryError || '' })
+      if(viewed)viewed.existingCoupon=offer.existingCoupon?this.presentCoupon(offer.existingCoupon):null
+      this.setData({ coupons: page.items.map(item=>this.presentCoupon(item)), pendingClaim:Boolean(code && pendingGuestCommandMatches('channel.claim', {code:this.data.code.trim()}, {customerOnly:true})), nextCursor:page.nextCursor, offer:viewed, error: this.entryError || '' })
     } catch (error) {
       if (generation === this.generation && (!owner || owner === commandIdentityScope())) this.setData({
         needsLogin: error.code === 'AUTH_REQUIRED', error: customerErrorMessage(error, '优惠暂时无法读取，请重试'),
       })
-    } finally { if (generation === this.generation) this.setData({ loading: false }) }
+    } finally { if (generation === this.generation) { this.setData({ loading: false }); this.scheduleValidityRefresh() } }
   },
   async loadMore() {
     if(this.data.loading||this.data.loadingMore||this.data.busy||!this.data.nextCursor)return
@@ -95,9 +113,9 @@ Page({
       if(generation!==this.generation||owner!==commandIdentityScope())return
       if(page.nextCursor===cursor)throw new Error('券包分页未前进，请刷新后重试')
       const known=new Set(this.data.coupons.map(item=>item.id))
-      this.setData({coupons:this.data.coupons.concat(page.items.filter(item=>!known.has(item.id)).map(present)),nextCursor:page.nextCursor})
+      this.setData({coupons:this.data.coupons.concat(page.items.filter(item=>!known.has(item.id)).map(item=>this.presentCoupon(item))),nextCursor:page.nextCursor})
     } catch(error) {if(generation===this.generation&&owner===commandIdentityScope())this.setData({error:customerErrorMessage(error,'更多优惠读取失败，请重试')})}
-    finally {if(generation===this.generation)this.setData({loadingMore:false})}
+    finally {if(generation===this.generation){this.setData({loadingMore:false});this.scheduleValidityRefresh()}}
   },
   async claim() {
     if (this.data.needsLogin) { this.login(); return }
@@ -106,6 +124,8 @@ Page({
     if (this.data.offer.unavailable || this.data.loading) return
     await this.write('claim', this.data.code.trim())
   },
+  async recoverClaim() { await this.write('recover-claim', this.data.code.trim()) },
+  async recoverCoupon(event) { await this.write('recover-activate', event.currentTarget.dataset.id) },
   async useCoupon(event) {
     if (!getTableSession().tableToken) { this.setData({ error: '请先扫描当前桌码确认入座，再使用本人的优惠券' }); return }
     await this.write('activate', event.currentTarget.dataset.id)
@@ -113,16 +133,39 @@ Page({
   async write(action, value) {
     if (this.writing || !value) return
     this.writing = true
+    const isClaim = action === 'claim' || action === 'recover-claim'
     const generation = this.generation, owner = commandIdentityScope()
+    const table = Object.assign({}, getTableSession())
+    const sameTable = () => {
+      const current = getTableSession()
+      return table.tableToken === current.tableToken && table.scanNonce === current.scanNonce
+        && (!table.cartScope || table.cartScope === current.cartScope)
+    }
+    const sameView = () => generation === this.generation && owner === commandIdentityScope()
+      && this.visible !== false && (isClaim || sameTable())
     this.setData({ busy: true, error: '', notice: '' })
+    let failure = ''
     try {
-      if (action === 'claim') await claimChannelCoupon(value)
+      if (action === 'recover-claim') await recoverChannelClaim(value)
+      else if (action === 'recover-activate') await recoverChannelCoupon(value)
+      else if (action === 'claim') await claimChannelCoupon(value)
       else await activateChannelCoupon(value)
-      if (generation !== this.generation || owner !== commandIdentityScope()) return
-      this.setData({ notice: action === 'claim' ? '已领到本人账户，可在「我的优惠券 → 推荐优惠」查看。到店扫描桌码后使用。' : '已绑定本次消费，最终优惠以订单确认结果为准。' })
-      await this.load()
+      if (sameView()) this.setData({ notice: action.startsWith('recover-') ? '原操作回执已核对，请以下方最新券状态为准。' : isClaim ? '已领到本人账户，可在「我的优惠券 → 推荐优惠」查看。到店扫描桌码后使用。' : '已绑定本次消费，最终优惠以订单确认结果为准。' })
     } catch (error) {
-      if (generation === this.generation && owner === commandIdentityScope()) this.setData({ error: customerErrorMessage(error, '结果待核对，请用相同内容恢复原操作') })
-    } finally { this.writing = false; this.setData({ busy: false }) }
+      if (sameView()) failure = customerErrorMessage(error, '结果待核对，请用相同内容恢复原操作')
+    } finally {
+      // A foreground read may have completed before this write committed. Read
+      // again even after hide/show or a filter change, but never retry the write.
+      if (owner === commandIdentityScope() && this.visible !== false) {
+        const refresh = this.load(), refreshGeneration = this.generation
+        await refresh
+        if (refreshGeneration === this.generation && owner === commandIdentityScope() && this.visible !== false) {
+          if (!isClaim && !sameTable()) this.setData({ notice: '' })
+          else if (failure) this.setData({ error: failure })
+        }
+      }
+      this.writing = false
+      this.setData({ busy: false })
+    }
   },
 })

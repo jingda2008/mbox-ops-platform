@@ -1,3 +1,4 @@
+const { parseInstant } = require('./format')
 const initialCheckoutUpgrade = { checkoutUpgrade: null, checkoutUpgradeLoading: false, checkoutUpgradeMessage: '', checkoutUpgradeNeedsRefresh: false, checkoutUpgradeChoicesOpen: false, checkoutUpgradeVariantIndex: 0, checkoutUpgradeVariantLabel: '请选择具体菜品' }
 function checkoutUpgradeMethods({ prepare, decide, randomId, scope, money }) {
   const matches = (page, identity, generation, version) => identity === scope()
@@ -32,7 +33,7 @@ function checkoutUpgradeMethods({ prepare, decide, randomId, scope, money }) {
         if (result.status !== 'offered' || result.generation !== generation || result.version !== version
           || result.currency !== 'CNY' || !Number.isSafeInteger(result.originalPayableMinor)
           || !Number.isSafeInteger(result.upgradedPayableMinor) || result.upgradedPayableMinor <= result.originalPayableMinor
-          || !(Date.parse(result.expiresAt) > Date.now())) return
+          || !(parseInstant(result.expiresAt) > Date.now())) return
         const source = this.data.cart.find(line => (line.portionIds || []).includes(result.sourcePortionId))
         const sourceIndex = source ? source.portionIds.indexOf(result.sourcePortionId) : -1
         const selectedUnit = source && source.selectionUnits && source.selectionUnits[sourceIndex]
@@ -72,7 +73,7 @@ function checkoutUpgradeMethods({ prepare, decide, randomId, scope, money }) {
       }
       const identity = scope(), request = this.currentTableRequest()
       if (!request || !this.isCurrentTableRequest(request)) return
-      if (!(Date.parse(offer.expiresAt) > Date.now())) {
+      if (!(parseInstant(offer.expiresAt) > Date.now())) {
         this.invalidateCheckoutUpgrade()
         this.setData({ checkoutUpgradeMessage: '建议已过期，原购物车仍可提交。' })
         return

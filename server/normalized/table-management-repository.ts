@@ -141,6 +141,8 @@ export interface TableParticipantMovementResult {
   capacityOverrideReason: string | null
   movementStoreReplayed?: boolean
 }
+type ParticipantMovementSeal={eventId:string;movementSealed:true}
+const movementSealTrace=(key:string)=>`participant-movement-seal:${hashRequestFingerprint(key)}`
 
 export interface TableTransferOwnershipPort {
   capture(transaction: ScopedTransaction, tableSessionId: string): Promise<JsonObject>
@@ -239,7 +241,11 @@ export interface TransferTableCommand extends TableManagementCommandBase {
 }
 
 export interface MoveTableParticipantsCommand extends TableManagementCommandBase {
-  nativeGuard?: { sourceTableId:string;sourceLocationVersion:number;sourceGuestCount:number;targetGuestCount:number;targetCapacity:number }
+  movementHistoryConfirmed?:boolean
+  requireGuard?: boolean
+  receiptOnly?: boolean
+  sealOnly?: boolean
+  nativeGuard?: { sourceTableId:string;sourceLocationVersion:number;sourceGuestCount:number;targetGuestCount:number;targetCapacity:number;movementRevision?:string }
   movementKind: 'participant_split'|'participant_merge'
   sourceTableSessionId: string
   targetTableId: string
@@ -385,6 +391,13 @@ export class TableManagementConflictError extends Error {
 // Idempotency conflicts, permissions, transport failures and commit uncertainty stay unknown.
 export class ParticipantMovementNotCommittedError extends TableManagementConflictError {
   constructor(message:string) { super(message);this.name='ParticipantMovementNotCommittedError' }
+}
+
+export class ParticipantMovementReceiptMissingError extends TableManagementConflictError {
+  constructor(){super('暂未找到原拆并桌回执，原请求仍可能延迟到达；请继续核对，或明确撤回未确认的原请求');this.name='ParticipantMovementReceiptMissingError'}
+}
+export class ParticipantMovementSealedError extends TableManagementConflictError {
+  constructor(){super('原请求已封存，迟到请求不会执行；请核对当前桌次后重新预检');this.name='ParticipantMovementSealedError'}
 }
 
 export class AssignmentNotCommittedError extends TableManagementConflictError {
@@ -773,6 +786,7 @@ export class TableManagementRepository {
     const movementFingerprint=hashRequestFingerprint(input.requestFingerprint)
     const stored=await this.loadStoredMovement(movementKey,movementFingerprint)
     if (stored!==null) {
+      await new StaffAccessRepository(this.transaction).assertPermission(input.transferredByEmployeeId,TABLE_TRANSFER_PERMISSION)
       const value={ eventId:stored.id,tableSessionId:stored.target_table_session_id,
         sourceTableId:stored.source_table_id,sourceTableCode:stored.source_table_code,
         targetTableId:stored.target_table_id,targetTableCode:stored.target_table_code,
@@ -917,14 +931,16 @@ export class TableManagementRepository {
     }))
   }
 
-  async moveParticipants(input:ManagedParticipantMovementInput):Promise<TableParticipantMovementResult> {
+  async moveParticipants(input:ManagedParticipantMovementInput):Promise<TableParticipantMovementResult|ParticipantMovementSeal> {
     await this.transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended(
       'table-customer-movement:'||$1::text||':'||$2::text,0
     ))`,[this.transaction.scope.tenantId,this.transaction.scope.storeId])
     const movementKey=`${input.movementKind}:${input.idempotencyKey}`
     const movementFingerprint=hashRequestFingerprint(input.requestFingerprint)
     const stored=await this.loadStoredMovement(movementKey,movementFingerprint)
+      ?? await this.loadStoredMovement(`${input.movementKind==='participant_split'?'participant_merge':'participant_split'}:${input.idempotencyKey}`,movementFingerprint)
     if (stored!==null) {
+      await new StaffAccessRepository(this.transaction).assertPermission(input.movedByEmployeeId,TABLE_PARTICIPATION_MANAGE_PERMISSION)
       const value:TableParticipantMovementResult={ eventId:stored.id,
         targetTableSessionId:stored.target_table_session_id,
         movedParticipantCount:Number(stored.moved_participant_count),
@@ -937,6 +953,28 @@ export class TableManagementRepository {
       Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
       return value
     }
+    const seal=(await this.transaction.query<{after_snapshot:ParticipantMovementSeal;actor_employee_id:string;metadata:{movementFingerprint:string}}>(`
+      SELECT after_snapshot,actor_employee_id,metadata FROM mbox.audit_events
+      WHERE tenant_id=$1 AND store_id=$2 AND action='table.participation.sealed' AND trace_id=$3
+      ORDER BY occurred_at,id LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,movementSealTrace(input.idempotencyKey)])).rows[0]
+    if(seal){
+      await new StaffAccessRepository(this.transaction).assertPermission(input.movedByEmployeeId,TABLE_PARTICIPATION_MANAGE_PERMISSION)
+      if(seal.actor_employee_id!==input.movedByEmployeeId||seal.metadata.movementFingerprint!==movementFingerprint)throw new TableManagementConflictError('原请求编号与员工或参数不匹配')
+      const value:ParticipantMovementSeal={...seal.after_snapshot}
+      Object.defineProperty(value,'movementStoreReplayed',{value:true,enumerable:false});return value
+    }
+    if(input.sealOnly){
+      await new StaffAccessRepository(this.transaction).assertPermission(input.movedByEmployeeId,TABLE_PARTICIPATION_MANAGE_PERMISSION)
+      return{eventId:randomUUID(),movementSealed:true}
+    }
+    // Permanent movement evidence is checked before enforcing the new protocol:
+    // old committed commands remain recoverable, but never become new writes.
+    if(input.receiptOnly){
+      await new StaffAccessRepository(this.transaction).assertPermission(input.movedByEmployeeId,TABLE_PARTICIPATION_MANAGE_PERMISSION)
+      throw new ParticipantMovementReceiptMissingError()
+    }
+    if(input.requireGuard && (!input.nativeGuard || !/^\d+$/.test(input.nativeGuard.movementRevision??'')))throw new ParticipantMovementNotCommittedError('当前页面缺少完整桌位和移动记录快照，请刷新页面并重新预检；本次未执行')
+    if(input.requireGuard && input.nativeGuard!.movementRevision!=='0' && !input.movementHistoryConfirmed)throw new ParticipantMovementNotCommittedError('本桌已有移动记录，请先核对历史与现场，再确认这是新的拆并桌；本次未执行')
     try { return await this.applyParticipantMovement(input,movementKey,movementFingerprint) }
     catch(error) {
       if(input.nativeGuard && (error instanceof TableManagementConflictError || error instanceof TableManagementNotFoundError || error instanceof CapacityOverrideReasonRequiredError))
@@ -951,17 +989,20 @@ export class TableManagementRepository {
       await this.transaction.query(`SELECT id FROM mbox.table_sessions
         WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,[input.sourceTableSessionId,...(input.targetTableSessionId?[input.targetTableSessionId]:[])]])
-      const current=(await this.transaction.query<{source_table_id:string;source_location_version:number;source_guest_count:number;target_guest_count:number;target_capacity:number;target_session_id:string|null}>(`
+      const current=(await this.transaction.query<{source_table_id:string;source_location_version:number;source_guest_count:number;target_guest_count:number;target_capacity:number;target_session_id:string|null;movement_revision:string}>(`
         SELECT source.table_id AS source_table_id,source.location_version AS source_location_version,
           source.guest_count AS source_guest_count,COALESCE(target_session.guest_count,0) AS target_guest_count,
-          COALESCE(target_session.capacity_at_open,target.capacity) AS target_capacity,target_session.id AS target_session_id
+          COALESCE(target_session.capacity_at_open,target.capacity) AS target_capacity,target_session.id AS target_session_id,
+          (SELECT count(*)::text FROM mbox.table_customer_movement_events e WHERE e.tenant_id=source.tenant_id AND e.store_id=source.store_id
+            AND (e.source_table_session_id IN(source.id,target_session.id) OR e.target_table_session_id IN(source.id,target_session.id))) AS movement_revision
         FROM mbox.table_sessions source JOIN mbox.tables target ON target.tenant_id=source.tenant_id AND target.store_id=source.store_id AND target.id=$4
         LEFT JOIN mbox.table_sessions target_session ON target_session.tenant_id=target.tenant_id AND target_session.store_id=target.store_id AND target_session.table_id=target.id AND target_session.status IN ('open','closing')
         WHERE source.tenant_id=$1 AND source.store_id=$2 AND source.id=$3 AND source.status='open' FOR UPDATE OF source,target`,
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.sourceTableSessionId,input.targetTableId])).rows[0]
       if(!current || current.source_table_id!==expected.sourceTableId || Number(current.source_location_version)!==expected.sourceLocationVersion
         || current.source_guest_count!==expected.sourceGuestCount || current.target_guest_count!==expected.targetGuestCount
-        || current.target_capacity!==expected.targetCapacity || current.target_session_id!==input.targetTableSessionId)
+        || current.target_capacity!==expected.targetCapacity || current.target_session_id!==input.targetTableSessionId
+        || expected.movementRevision!==undefined && current.movement_revision!==expected.movementRevision)
         throw new TableManagementConflictError('源桌或目标桌位置、人数、容量已变化，请重新预检')
     }
     // The scoped movement lock above and the definer command below serialize
@@ -1156,7 +1197,12 @@ export class TableManagementCommandService {
     return this.execute(command,'table.participation.move',TABLE_PARTICIPATION_MANAGE_PERMISSION,
       async (repository) => repository.moveParticipants({
         ...command,movedByEmployeeId:command.actor.employeeId,
-      }),'table_customer_movement','table.participation.moved.v1')
+      }),'table_customer_movement','table.participation.moved.v1').then(execution=>{
+        // Throw only AFTER the seal audit and receipt have committed. Throwing
+        // inside the transaction would let a delayed original request execute.
+        if('movementSealed' in execution.value)throw new ParticipantMovementSealedError()
+        return{...execution,value:execution.value}
+      })
   }
 
   private execute<Result extends { id?: string; eventId?: string; tableSessionId?: string }>(
@@ -1183,6 +1229,10 @@ export class TableManagementCommandService {
       idempotencyKey: command.idempotencyKey,
       requestFingerprint: command.requestFingerprint,
       resultCodec: jsonResultCodec<Result>(),
+      // A replay can wait on an in-flight original after beforeClaim authorized it.
+      ...(guardedAssignment||tableMovement?{authorizeReplay:async(transaction:ScopedTransaction)=>{
+        await new StaffAccessRepository(transaction).assertPermission(command.actor.employeeId,permission)
+      }}:{}),
     }, async (transaction) => {
       await new StaffAccessRepository(transaction).assertPermission(command.actor.employeeId, permission)
       if (guardedAssignment) {
@@ -1219,6 +1269,14 @@ export class TableManagementCommandService {
       const payload = asJsonObject(result)
       const movementStoreReplayed=(result as { movementStoreReplayed?:boolean }).movementStoreReplayed===true
       if(tableMovement && movementStoreReplayed)durableReplayed=true
+      if('movementSealed' in result && result.movementSealed===true){
+        return{result,auditEvents:movementStoreReplayed?[]:[{
+          actor:command.actor,action:'table.participation.sealed',objectType:'table_movement_seal',objectId,
+          businessDate:command.businessDate,reason:'员工明确撤回尚未确认的原拆并桌请求',afterData:payload,
+          traceId:movementSealTrace(command.idempotencyKey),
+          metadata:{movementFingerprint:hashRequestFingerprint(command.requestFingerprint)},
+        }],outboxMessages:[]}
+      }
       return {
         result,
         auditEvents: movementStoreReplayed ? [] : [{

@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -15,7 +17,7 @@ function authFixture({ loggedOut = false, cached = false, enabled = true, fail =
   vm.runInNewContext(read('miniprogram/utils/auth.js'), { module, wx: {
     getStorageSync: k => storage.get(k), setStorageSync: (k,v) => storage.set(k,v), removeStorageSync: k => storage.delete(k),
     login: ({ success, fail: reject }) => { calls.push('login'); fail ? reject({errMsg:'offline'}) : success({code:'fresh-code'}) },
-  }, require: name => {
+  }, require: name => { if (name === './format') return actualMiniFormat;
     if (name === '../config/index') return { getRuntimeConfig: () => ({ wechatIdentityEnabled: enabled, identityTenantId:'tenant', identityStoreId:'store', wechatAppId:'app' }) }
     if (name === './id') return { randomId: () => 'random-id' }
     if (name === './request') return { request: async path => { calls.push(path); return path.endsWith('challenges') ? {state:'state',nonce:'nonce'} : {accessToken:token,expiresAt:new Date(Date.now()+3600000).toISOString()} }, storeWechatIdentityToken: v => storage.set('mbox.wechat.identity.accessToken.v1',v), clearWechatIdentityToken: () => {}, clearReservationCookie: () => {} }
@@ -39,7 +41,7 @@ function apiFixture(identity = token) {
   const wx={getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),removeStorageSync:k=>storage.delete(k)}
   const recovery={exports:{}}
   vm.runInNewContext(read('miniprogram/utils/recoverable-command.js'),{module:recovery,wx,require:name=>name==='./id'?{randomId:()=> 'stable-attempt-id'}:name==='../config/index'?{getRuntimeConfig:()=>({apiBaseUrl:'https://audit.example.test',storeId:'audit'})}:{getTableSession:()=>({})}})
-  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx, require:name=> {
+  vm.runInNewContext(read('miniprogram/utils/api.js'), { module, wx, require:name=> { if (name === './format') return actualMiniFormat;
     if(name==='./recoverable-command')return recovery.exports
     if(name==='./auth') return { obtainWechatIdentityForMembership:async()=>identity, ensureCustomerSession:async()=>{}, isCustomerSessionInvalid:()=>false, clearMembershipLoggedOut:()=>{clears++} }
     if(name==='./request') return { request:async(path,options)=> { requests.push({path,...options}); if(fail) throw Object.assign(Error('offline'),{code:'NETWORK_ERROR'}); return {data:{memberNo:'100001'}} } }

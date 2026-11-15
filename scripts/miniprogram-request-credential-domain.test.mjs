@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -18,7 +20,7 @@ async function loadRequestModule() {
   const context = {
     module: { exports: {} },
     exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../config/index') {
         return { getRuntimeConfig: () => ({
           apiBaseUrl: 'https://mini.example.test',
@@ -57,7 +59,7 @@ async function loadApiModule() {
   const context = {
     module: { exports: {} },
     exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === './request') {
         return {
           deviceKey: () => 'device-contract',

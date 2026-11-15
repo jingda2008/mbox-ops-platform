@@ -138,7 +138,8 @@ const wechatPolicyTemplateDivergences = {
   // 2026-10-23: same supply explanation and stale-menu retry added on both platforms; prior consent differences retained.
   // 2026-10-31: both platforms show prepaid balance and consent at the top; checkout names balance deduction.
   // 2026-11-08: both platforms show concise selling windows and flexible card footers; existing platform-specific policy blocks remain reviewed.
-  'pages/order/index': {"wechat": "be6e012c1736b79c64d3e2e2ac4fc0f29cef82b55ba812caf602b9757b040340", "alipay": "c9ff0661784d515dbbe80ff45f593d62949b9d95e97dfa862270a4c0df1879a5"},
+  // 2026-11-16: both platforms retain review-required amounts and show zero-due order confirmation; prior policy differences remain.
+  'pages/order/index': {"wechat": "4ccbb82d0c8adfe841ac48fbedb223393e34ed819682585940fa6fbded1917f4", "alipay": "bdf6e09103154d227ebc7d59403be0a85a8a4c412381a49bfd94261bf6750ef5"},
   'pages/profile/index': {"wechat": "b0ff38b0e715accef87b1a788c4ae2536417bc16692d2c39f0ff8dda602590b3", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},

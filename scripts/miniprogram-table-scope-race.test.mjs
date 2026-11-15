@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
@@ -94,7 +96,7 @@ function deferred() {
 async function loadSessionModule(storage) {
   const source = await readFile(new URL('../miniprogram/utils/session.js', import.meta.url), 'utf8')
   const app = { globalData: {} }
-  const context = {
+  const context = { require: name => { if (name === './format') return actualMiniFormat; throw new Error(name) },
     module: { exports: {} }, exports: {}, getApp: () => app,
     wx: {
       getStorageSync: (key) => storage.get(key), setStorageSync: (key, value) => storage.set(key, value),
@@ -118,7 +120,7 @@ async function loadApiRaceModule(state) {
   const remembered = []
   const context = {
     module: { exports: {} }, exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === './request') return {
@@ -165,7 +167,7 @@ async function loadRequestRaceModule(state) {
   const calls = []
   const context = {
     module: { exports: {} }, exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../config/index') return { getRuntimeConfig: () => ({
@@ -209,7 +211,7 @@ async function loadHomePage(state) {
   const app = { refreshRuntime: () => state.session }
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value }, getApp: () => app,
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
       if (specifier === '../../utils/api') return api
@@ -224,7 +226,7 @@ async function loadHomePage(state) {
           invalidate: () => guard.invalidate(),
         }),
       }
-      if (specifier === '../../utils/format') return { dateTime: (value) => String(value || '') }
+      if (specifier === '../../utils/format') return { ...actualMiniFormat, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/activity-display') return loadMiniModule(new URL('../miniprogram/utils/activity-display.js', import.meta.url))
       if (specifier === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: '' }) }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
@@ -252,7 +254,7 @@ async function loadOrderPage(state) {
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
     getApp: () => ({ refreshRuntime: () => state.session }),
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../../utils/wechat-phone') return loadMiniModule(new URL('../miniprogram/utils/wechat-phone.js', import.meta.url))
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
       if (specifier === '../../utils/checkout-upgrade') return loadMiniModule(new URL('../miniprogram/utils/checkout-upgrade.js', import.meta.url))
@@ -318,7 +320,7 @@ async function loadOrderPage(state) {
       }
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-scope-test` }
       if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule()
-      if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
+      if (specifier === '../../utils/format') return { ...actualMiniFormat, money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/recommendation-attribution') return { checkoutRecommendationAttribution: () => null }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/public-share') return { enablePublicShareMenu: () => undefined, publicSharePayload: (value) => value, publicTimelinePayload: (value) => value }
@@ -389,7 +391,7 @@ async function loadAccountPage(state, platform = 'miniprogram') {
   const guard = requestGuard()
   const context = {
     module: { exports: {} }, exports: {}, Page: (value) => { definition = value },
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (memberGuards[specifier.split('/').pop()]) return memberGuards[specifier.split('/').pop()]
       if (specifier === '../../utils/platform') return context.wx
       if (specifier === '../../utils/checkout-coupons') return loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js', import.meta.url))
@@ -418,7 +420,7 @@ async function loadAccountPage(state, platform = 'miniprogram') {
       }
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-scope-test` }
       if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule()
-      if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
+      if (specifier === '../../utils/format') return { ...actualMiniFormat, money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/customer-error') return {
         customerErrorMessage: (error, fallback) => error && error.code === 'GUEST_ORDER_ACCESS_FORBIDDEN'
           ? '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码' : fallback,

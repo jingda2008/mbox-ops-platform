@@ -6,6 +6,17 @@ import {
 } from './staff-module-access.js'
 
 describe('permission-derived staff modules', () => {
+  it('offers a dedicated cooperation entry only with read authority, independent of membership permissions', () => {
+    for (const permissions of [['channel.view'], ['channel.view', 'channel.manage'], ['channel.view', 'channel.correct'], ['channel.view', 'channel.settle']]) {
+      expect(effectiveStaffNavigation(permissions, [])).toEqual([expect.objectContaining({ code: 'channel-partners', label: '周边店合作', route: '/staff/channel-partners' })])
+    }
+    for (const permissions of [[], ['channel.manage'], ['channel.activate'], ['channel.correct'], ['channel.settle'], ['loyalty.operations.view']]) {
+      expect(effectiveStaffNavigation(permissions, []).some(n => n.code === 'channel-partners')).toBe(false)
+    }
+    expect(staffModuleForRoute('/staff/channel-partners')?.permissionCodes).toEqual(['channel.view'])
+    expect(effectiveStaffNavigation([], [{code:'channel-partners',label:'周边店合作',route:'/staff/channel-partners',sortOrder:1,icon:null,displayConfig:{}}])).toEqual([])
+  })
+
   it('shows a parent module from an effective personal grant even without role navigation', () => {
     expect(effectiveStaffNavigation(['printer.manage'], [])).toEqual([
       expect.objectContaining({ code: 'devices', label: '设备与打印', route: '/staff/devices' }),

@@ -4,7 +4,9 @@ import { staffModuleForRoute } from '../shared/staff-module-access'
 
 export type NormalizedStaffRoute = StaffActionsTab | StaffModule | 'scan'
 
-export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null {
+export function normalizedStaffRoute(path: string, hash = ''): NormalizedStaffRoute | null {
+  path = canonicalStaffPath(path, hash)
+  if (path === '/staff/channel-partners') return 'channel-partners'
   if (path === '/staff/scan') return 'scan'
   if (path === '/staff/orders') return 'orders'
   if (path === '/staff/live') return 'tables'
@@ -30,6 +32,10 @@ export function normalizedStaffRoute(path: string): NormalizedStaffRoute | null 
   return null
 }
 
-export function normalizedStaffNavigationCode(path: string): string | null {
-  return staffModuleForRoute(path)?.code ?? null
+export function normalizedStaffNavigationCode(path: string, hash = ''): string | null {
+  return staffModuleForRoute(canonicalStaffPath(path, hash))?.code ?? null
+}
+
+function canonicalStaffPath(path: string, hash: string): string {
+  return path === '/staff/member-management' && new URLSearchParams(hash.replace(/^#/, '')).get('work') === 'channel-partners' ? '/staff/channel-partners' : path
 }

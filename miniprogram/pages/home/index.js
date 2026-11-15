@@ -1,3 +1,4 @@
+const { parseInstant, dateTime } = require('../../utils/format')
 const {
   getGuestSession,
   getMiniBootstrap,
@@ -9,7 +10,6 @@ const {
 const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
-const { dateTime } = require('../../utils/format')
 const { currentActivities, activityTimeText } = require('../../utils/activity-display')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { publicImageUrl } = require('../../utils/media')
@@ -219,7 +219,7 @@ Page({
     this.waitingTimer = setTimeout(() => {
       if (!this.isCurrentTableRequest(request)) return
       this.loadTableState(true, request)
-    }, Math.max(15000, (Date.parse(retryAt) || 0) - Date.now() + 250))
+    }, Math.max(15000, (parseInstant(retryAt) || 0) - Date.now() + 250))
     if (this.waitingTimer && typeof this.waitingTimer.unref === 'function') this.waitingTimer.unref()
   },
 

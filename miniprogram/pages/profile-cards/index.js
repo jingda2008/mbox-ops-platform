@@ -4,9 +4,9 @@ const runtime = wx
 const { getMemberCards, submitMemberCardAction, getMemberGiftJobs } = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const { redirectToMembershipLogin } = require('../../utils/membership-gate')
-const { dateInput } = require('../../utils/format')
+const { beijingDateTime } = require('../../utils/format')
 const labels = { active: '有效', suspended: '已冻结', withdrawn: '已退出', revoked: '已撤销', pending: '待审核', approved: '已通过', rejected: '未通过' }
-function time(value) { if (value === null) return '长期有效'; const date = new Date(dateInput(value)); return Number.isFinite(date.getTime()) ? new Date(date.getTime() + 28800000).toISOString().slice(0, 16).replace('T', ' ') : '时间待核实' }
+function time(value) { return value === null ? '长期有效' : beijingDateTime(value, '时间待核实') }
 Page({
   data: { loading: true, loaded: false, busy: false, error: '', message: '', projects: [], cards: [], applications: [], nextCursors: {}, selectedProject: null, acknowledged: false, activeMember: false, giftJobs: [], giftLoaded: false, giftLoading: false, giftError: '', giftCursor: null },
   onLoad(options) { this.resumeProjectId = options && typeof options.projectId === 'string' && /^[0-9a-f-]{36}$/i.test(options.projectId) ? options.projectId : null },

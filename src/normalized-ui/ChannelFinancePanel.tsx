@@ -27,7 +27,7 @@ export function ChannelFinancePanel({api,auth,partners}:{api:NormalizedApiClient
  if(!auth.permissions.includes('channel.settle'))return null
  const label=(id:unknown)=>partners.find(p=>p.promoterId===id)?.promoterName??String(id).slice(-8),disabled=busy||pending
  const ids=action==='verify-account'?data?.accounts:action==='confirm-payment'||action==='return-payment'?data?.payouts:data?.statements
- return <details><summary>渠道财务 · 退款计佣、对账及付款登记</summary>
+ return <details><summary>周边店合作财务 · 退款计佣、对账及付款登记</summary>
   <p>按实际净消费累计计佣；退款处理中冻结。原银行付款状态不明时先查原回单。账户及付款必须由另一位有权限的员工复核。</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   <button type="button" disabled={busy} onClick={()=>void reload().catch(()=>{})}>刷新核算记录</button>{pending&&<button type="button" disabled={busy} onClick={()=>void submit()}>恢复原财务操作</button>}

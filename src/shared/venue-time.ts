@@ -1,3 +1,5 @@
+import { parseInstant } from './instant-time.js'
+
 export const DEFAULT_VENUE_TIME_ZONE = 'Asia/Shanghai'
 export const DEFAULT_BUSINESS_DAY_ROLLOVER_HOUR = 6
 
@@ -21,7 +23,9 @@ type VenueDateTimeParts = {
 const partsFormatters = new Map<string, Intl.DateTimeFormat>()
 
 function dateValue(value: TimeInput) {
-  const date = value instanceof Date ? value : new Date(value)
+  // Date-only inputs are calendar keys; timestamp inputs must declare a zone.
+  const input = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value + 'T00:00:00Z' : value
+  const date = value instanceof Date ? value : new Date(parseInstant(input))
   if (Number.isNaN(date.getTime())) throw new Error('时间格式无效')
   return date
 }

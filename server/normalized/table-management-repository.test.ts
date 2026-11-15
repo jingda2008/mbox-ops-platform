@@ -36,6 +36,7 @@ describe('table management authorization rules', () => {
       if (sql.includes('FROM mbox.table_customer_movement_events event')) {
         return { rows:[] as Row[],rowCount:0 }
       }
+      if (sql.includes("action='table.participation.sealed'")) return { rows:[] as Row[],rowCount:0 }
       if (sql.includes('participation.public_id=ANY')) return { rows:[{
         id:randomUUID(),public_id:participantPublicId,participation_role:'companion',
         confirmation_state:'confirmed',

@@ -1,3 +1,5 @@
+import { loadMiniModule } from './load-miniprogram-test-module.mjs'
+const { parseInstant } = loadMiniModule(new URL('../miniprogram/utils/format.js',import.meta.url))
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { liveMiniHarness } from './miniprogram-live-contract-harness.mjs'
@@ -113,7 +115,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     const f = fixture(platform); await assert.rejects(f.api.createCustomerReservation(input))
     const p = f.page('reservations', ['loadData', 'startNewReservation'], {
       STATUS_NAMES: { pending: '等待门店确认' }, EXECUTABLE_RESERVATION_STATUSES: new Set(['pending', 'confirmed']),
-      impactView: v => v, dateTime: String,
+      impactView: v => v, dateTime: String, parseInstant,
     })
     p.data = { seatOptions: [{ code: 'quiet_chat', name: '聊天' }], reservations: [], showForm: true }
     p.preloadWechatSubscriptionPresentationOptions = p.preloadAlipaySubscriptionPresentationOptions = async () => []

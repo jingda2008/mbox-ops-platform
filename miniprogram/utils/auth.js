@@ -1,3 +1,4 @@
+const { parseInstant } = require('./format')
 const { getRuntimeConfig } = require('../config/index')
 const {
   request, deviceKey, storeWechatIdentityToken, clearWechatIdentityToken, clearReservationCookie,
@@ -129,7 +130,7 @@ function ensureWechatIdentity(force) {
   const config = getRuntimeConfig()
   if (!config.wechatIdentityEnabled || isMembershipLoggedOut()) return Promise.resolve(null)
   if (inFlightIdentity && !force) return inFlightIdentity
-  const expiry = Date.parse(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
+  const expiry = parseInstant(wx.getStorageSync(WECHAT_EXPIRY_KEY) || '')
   const token = wx.getStorageSync('mbox.wechat.identity.accessToken.v1')
   if (!force && expiry > Date.now() + 60_000 && typeof token === 'string' && token.length >= 32) return Promise.resolve(token)
   const pending = authenticateWechat(config)
@@ -179,7 +180,7 @@ async function issueReservationSession(provider, providerAssertion) {
 async function openReservationSession(force) {
   const generation = identityGeneration
   const config = getRuntimeConfig()
-  const expiry = Date.parse(wx.getStorageSync(EXPIRY_KEY) || '')
+  const expiry = parseInstant(wx.getStorageSync(EXPIRY_KEY) || '')
   if (!force && expiry > Date.now() + 60_000) return true
 
   let provider = 'anonymous'

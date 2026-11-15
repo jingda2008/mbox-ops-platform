@@ -14,7 +14,7 @@ export function liveMiniHarness(platform, respond, options = {}) {
   const table = { tableCode: 'A1', tableToken: 'table-a', cartScope: 'cart-a' }
   const state = { customerPublicId: 'customer-a', storageFailure: false, modalConfirm: true }
   function nativeRequest(input) {
-    const call = { path: new URL(input.url).pathname, method: input.method || 'GET', data: input.data,
+    const call = { path: new URL(input.url).pathname, query: new URL(input.url).search, method: input.method || 'GET', data: input.data,
       headers: input.header || input.headers || {} }
     calls.push(call)
     Promise.resolve().then(() => respond(call, { state, calls, storage })).then(result => {

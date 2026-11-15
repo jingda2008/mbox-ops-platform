@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
@@ -16,7 +18,7 @@ function fixture() {
   const authModule = { exports: {} }
   const wx = { getStorageSync: key => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), removeStorageSync: key => storage.delete(key), login: options => { login=options } }
   vm.runInNewContext(readFileSync(new URL('../miniprogram/utils/auth.js',import.meta.url),'utf8'), {
-    module: authModule, wx, require: name => {
+    module: authModule, wx, require: name => { if (name === './format') return actualMiniFormat;
       if(name==='../config/index')return {getRuntimeConfig:()=>config}
       if(name==='./id')return {randomId:()=>`test-${++id}`}
       if(name==='./request')return {request, deviceKey:()=> 'test-device', storeWechatIdentityToken:value=>storage.set('mbox.wechat.identity.accessToken.v1',value), clearWechatIdentityToken:()=>storage.delete('mbox.wechat.identity.accessToken.v1'), clearReservationCookie:()=>undefined}
@@ -26,7 +28,7 @@ function fixture() {
   const auth = authModule.exports, apiModule={exports:{}}
   const session={tableToken:'test-table-token',scanNonce:'test-scan'}
   vm.runInNewContext(readFileSync(new URL('../miniprogram/utils/api.js',import.meta.url),'utf8'), {
-    module:apiModule, wx, setTimeout, require:name=>{
+    module:apiModule, wx, setTimeout, require:name=>{ if (name === './format') return actualMiniFormat;
       if(name==='./auth')return auth
       if(name==='./request')return {request,deviceKey:()=> 'test-device'}
       if(name==='./session')return {getTableSession:()=>session, rememberTableConnection:()=>undefined}

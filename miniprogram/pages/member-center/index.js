@@ -1,7 +1,7 @@
+const { beijingDate, parseInstant, money, dateTime } = require('../../utils/format')
 const { beginMemberAction, invalidateMemberActions } = require('../../utils/member-page-action')
 const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const { getMiniBootstrap, claimAnnualDailySnack } = require('../../utils/api')
-const { money, dateTime, dateInput } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const { getRuntimeConfig } = require('../../config/index')
 
@@ -88,7 +88,7 @@ function membershipView(item) {
     qualificationProgressText: threshold && qualificationGrowth !== null
       ? `升级进度 ${qualificationGrowth} / ${threshold}` : '',
     progressPercent,
-    periodText: periodAt ? `当前等级有效期至 ${String(periodAt).slice(0, 10)}` : '等级有效期以会员说明为准',
+    periodText: periodAt ? `当前等级有效期至 ${beijingDate(periodAt)}` : '等级有效期以会员说明为准',
     nextText,
     estimatedSpendText: item.estimatedSpendToNextTierMinor !== null
       && item.estimatedSpendToNextTierMinor !== undefined
@@ -103,8 +103,8 @@ function membershipView(item) {
 function benefitView(item) {
   const display = item.display || {}
   const quantity = number(item.remainingQuantity === undefined ? item.quantityAvailable : item.remainingQuantity)
-  const starts = item.validFrom ? String(item.validFrom).slice(0, 10) : ''
-  const ends = item.validUntil ? String(item.validUntil).slice(0, 10) : ''
+  const starts = item.validFrom ? beijingDate(item.validFrom) : ''
+  const ends = item.validUntil ? beijingDate(item.validUntil) : ''
   return {
     id: item.id,
     title: display.title || display.name || (typeof item.name === 'string' && !/^[A-Z][A-Z0-9_]+$/.test(item.name) ? item.name : '') || BENEFIT_NAMES[item.type] || '会员权益',
@@ -260,7 +260,7 @@ Page({
     try {
       const claim = await claimAnnualDailySnack()
       if (!action.current()) return
-      const expiresAt = Date.parse(dateInput(claim && claim.expiresAt))
+      const expiresAt = parseInstant(claim && claim.expiresAt)
       if (!claim || typeof claim.claimCode !== 'string' || !claim.claimCode.trim() || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error('核销码尚未确认，请刷新核对后重试')
       const expires = dateTime(claim.expiresAt)
       this.setData({ dailySnackClaim: {

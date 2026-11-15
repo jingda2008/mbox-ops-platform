@@ -1,3 +1,6 @@
+import {ParticipantMovementRecovery,type ParticipantMovementInput,type MovementRecoverySummary} from './participant-movement-recovery'
+import type {ParticipantMovementHistory} from '../../shared/participant-movement-history'
+import {parseInstant} from '../../shared/instant-time'
 import type { MemberGiftWallet, MemberGiftCommand, MemberGiftReceipt } from '../../shared/member-gift-redemption'
 import {ReservationReception} from './reservation-reception'
 import { AssignmentRecovery, stableAssignmentIntent, validateAssignmentReceipt, type AssignmentRecoverySummary } from './assignment-recovery'
@@ -5,7 +8,7 @@ import type {KitchenBoardData,KitchenCommand,KitchenCommandResult,KitchenHandoff
 import type { ActivityProductionCommand, ActivityProductionResult } from '../../shared/activity-service'
 import type {ActivityProductionBoard,ActivityProductionRecovery} from '../../shared/activity-production-recovery'
 import { staffErrorMessage, staffUnavailableMessage } from '../../shared/staff-error-message'
-import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
+import { STAFF_SESSION_BINDING_HEADER, STAFF_EMPLOYEE_BINDING_HEADER } from '../../shared/staff-session-binding'
 import type {OperatingHistory} from '../../shared/operating-history'
 import type {
   StaffFulfillmentData,
@@ -328,16 +331,11 @@ export interface StaffActionsApiPort {
     participantPublicIds:string[]
     capacityOverrideReason?:string
   }>):Promise<StaffParticipantMovementPreview>
-  moveParticipants(input:Readonly<{
-    sourceTableSessionId:string
-    movementKind:'participant_split'|'participant_merge'
-    targetTableId:string
-    targetTableSessionId:string|null
-    movedGuestCount:number
-    participantPublicIds:string[]
-    reason:string
-    capacityOverrideReason?:string
-  }>):Promise<void>
+  moveParticipants(input:Readonly<ParticipantMovementInput>):Promise<void>
+  pendingParticipantMovement?():MovementRecoverySummary|null
+  loadParticipantMovementHistory?(cursor?:string):Promise<ParticipantMovementHistory>
+  sealParticipantMovement?():Promise<void>
+  recoverParticipantMovement?():Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void>
   loadItemAfterSalesAccess?():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>
@@ -498,6 +496,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
   private readonly commandStorage:StaffActionsApiOptions['commandStorage']
   private employeeId = 'current-session'
   private guardedAssignments = false
+  private readonly participantMovementRecovery: ParticipantMovementRecovery
   private readonly assignmentRecovery: AssignmentRecovery
   readonly reservationReception: ReservationReception
   private readonly staffSessionId: string | undefined
@@ -511,6 +510,15 @@ export class StaffActionsApi implements StaffActionsApiPort {
     this.send = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.timeoutMs = options.timeoutMs ?? 8_000
     this.createIdempotencyKey = options.createIdempotencyKey ?? (() => crypto.randomUUID())
+    this.participantMovementRecovery=new ParticipantMovementRecovery(
+      ()=>this.employeeId==='current-session'?this.staffSessionId??null:this.employeeId,this.commandStorage,
+      async(body,key,recovery,seal)=>{
+        const headers=new Headers({'content-type':'application/json','x-idempotency-key':key})
+        if(recovery)headers.set('x-table-movement-recovery','1')
+        if(seal)headers.set('x-table-movement-seal','1')
+        return readJson(await this.request(`/api/table-management/sessions/${encodeURIComponent(body.sourceTableSessionId)}/participant-movements`,{method:'POST',headers,body:JSON.stringify(body)}))
+      },async(body,receipt)=>{await Promise.all([this.loadTableParticipants(body.sourceTableSessionId),this.loadTableParticipants(receipt.targetTableSessionId)])},
+      ()=>`web-participants-${this.createIdempotencyKey()}`)
     this.reservationReception = new ReservationReception(async (path, init) => {
       const response = await this.request(path, {
         method: init?.method ?? 'GET', body: init?.body,
@@ -785,10 +793,12 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  loadTableParticipants(tableSessionId:string,signal?:AbortSignal):Promise<StaffTableParticipant[]> {
-    return this.getData(
+  async loadTableParticipants(tableSessionId:string,signal?:AbortSignal):Promise<StaffTableParticipant[]> {
+    const data=await this.getData<StaffTableParticipant[]>(
       `/api/table-management/sessions/${encodeURIComponent(tableSessionId)}/participants`,signal,
     )
+    if(!Array.isArray(data)||data.some(row=>!isObject(row)||typeof row.publicId!=='string'||!row.publicId.trim()))throw new StaffActionsApiError('桌次名单不完整，请刷新核对原操作','INVALID_PARTICIPANT_LIST',200)
+    return data
   }
 
   previewParticipantMovement(input:Readonly<{
@@ -806,21 +816,18 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
-  async moveParticipants(input:Readonly<{
-    sourceTableSessionId:string
-    movementKind:'participant_split'|'participant_merge'
-    targetTableId:string
-    targetTableSessionId:string|null
-    movedGuestCount:number
-    participantPublicIds:string[]
-    reason:string
-    capacityOverrideReason?:string
-  }>):Promise<void> {
-    await this.command(
-      `/api/table-management/sessions/${encodeURIComponent(input.sourceTableSessionId)}/participant-movements`,
-      input,'x-idempotency-key',
-    )
+  moveParticipants(input:Readonly<ParticipantMovementInput>):Promise<void> { return this.participantMovementRecovery.run(input) }
+  pendingParticipantMovement():MovementRecoverySummary|null { return this.participantMovementRecovery.summary() }
+  async loadParticipantMovementHistory(cursor?:string):Promise<ParticipantMovementHistory>{
+    const data=await this.getData<ParticipantMovementHistory>(`/api/table-management/participant-movements/history${cursor?`?cursor=${encodeURIComponent(cursor)}`:''}`)
+    if(!isObject(data)||!Array.isArray(data.items)||!(data.nextCursor===null||typeof data.nextCursor==='string'&&data.nextCursor.length>0)
+      ||data.items.some(row=>!isObject(row)||typeof row.id!=='string'||!row.id||!['whole_table_transfer','participant_split','participant_merge'].includes(row.kind)
+        ||!['open','closing','closed'].includes(row.targetSessionStatus)||!Number.isInteger(row.movedGuestCount)||row.movedGuestCount<1||!Number.isFinite(parseInstant(row.occurredAt))
+        ||(['sourceTableCode','targetTableCode','employeeName','targetCurrentTableCode'] as const).some(key=>typeof row[key]!=='string'||!row[key])))throw new StaffActionsApiError('历史移动记录不完整，请重新读取；不能据此认定未执行','INVALID_MOVEMENT_HISTORY',200)
+    return data
   }
+  sealParticipantMovement():Promise<void> { return this.participantMovementRecovery.seal() }
+  recoverParticipantMovement():Promise<void> { return this.participantMovementRecovery.recover() }
 
   async completeServiceTask(taskId: string, note?: string): Promise<void> {
     await this.command(
@@ -1316,6 +1323,7 @@ export class StaffActionsApi implements StaffActionsApiPort {
     const timer = globalThis.setTimeout(() => controller.abort(), this.timeoutMs)
     const headers = new Headers(init.headers)
     if (this.staffSessionId !== undefined) headers.set(STAFF_SESSION_BINDING_HEADER, this.staffSessionId)
+    if (this.employeeId !== 'current-session') headers.set(STAFF_EMPLOYEE_BINDING_HEADER, this.employeeId)
     try {
       const response = await this.send(url, { ...init, headers, signal: controller.signal, credentials: 'include' })
       if (!response.ok) throw await apiError(response, readOnly ? 'GET' : init.method ?? 'GET')

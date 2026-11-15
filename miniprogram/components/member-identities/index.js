@@ -1,10 +1,10 @@
+const { parseInstant } = require('../../utils/format')
 const { getMemberCards } = require('../../utils/api')
-const { dateInput } = require('../../utils/format')
 
 function activeIdentities(cards, now) {
   return Array.from(new Map((cards || []).filter(card => {
-    const from = new Date(dateInput(card.valid_from)).getTime()
-    const until = new Date(dateInput(card.valid_until)).getTime()
+    const from = parseInstant(card.valid_from)
+    const until = parseInstant(card.valid_until)
     return card.status === 'active' && card.expired === false && from <= now && until > now && String(card.name || '').trim()
   }).map(card => [card.project_id || card.id, { id: card.id, name: card.name }])).values())
 }

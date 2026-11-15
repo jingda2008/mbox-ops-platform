@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizedStaffRoute } from './normalized-staff-routes'
+import { normalizedStaffRoute, normalizedStaffNavigationCode } from './normalized-staff-routes'
 import { businessDayBlockerFactFromHistory } from './NormalizedStaffApp'
 
 describe('normalized staff route coverage', () => {
@@ -17,7 +17,16 @@ describe('normalized staff route coverage', () => {
       '/staff/member-fulfillment', '/staff/member-exceptions', '/staff/member-overview',
       '/staff/member-rule-drafts', '/staff/member-rule-approvals', '/staff/member-rule-publish',
       '/staff/member-accounts', '/staff/member-management',
-    ].map(normalizedStaffRoute)).not.toContain(null)
+    ].map(path => normalizedStaffRoute(path))).not.toContain(null)
+  })
+
+  it('uses the same permission guard for the standalone route and the old bookmarked section', () => {
+    expect(normalizedStaffRoute('/staff/channel-partners')).toBe('channel-partners')
+    expect(normalizedStaffNavigationCode('/staff/channel-partners')).toBe('channel-partners')
+    expect(normalizedStaffRoute('/staff/member-management', '#work=channel-partners')).toBe('channel-partners')
+    expect(normalizedStaffNavigationCode('/staff/member-management', '#work=channel-partners')).toBe('channel-partners')
+    expect(normalizedStaffRoute('/staff/member-management', '#work=member-cards')).toBe('member-management')
+    expect(normalizedStaffNavigationCode('/staff/settings', '#work=channel-partners')).toBe('settings')
   })
 
   it('does not reopen a legacy or unknown staff route', () => {

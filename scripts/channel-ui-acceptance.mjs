@@ -42,7 +42,7 @@ const server = await createServer({configFile:false,root:resolve(import.meta.dir
 let browser;
 try {
  await server.listen();const port=server.httpServer.address().port;browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(`http://127.0.0.1:${port}/__channel-fixture`);await page.getByText('渠道财务 · 退款计佣、对账及付款登记',{exact:true}).click();
+ await page.goto(`http://127.0.0.1:${port}/__channel-fixture`);await page.getByText('周边店合作财务 · 退款计佣、对账及付款登记',{exact:true}).click();
  await page.getByText('未付余额',{exact:false}).waitFor();assert.match(await page.locator('body').innerText(),/¥-2.00/);
  await page.getByRole('button',{name:'核对原消费和退款明细'}).first().click();await page.getByText('原订单 order-original',{exact:false}).waitFor();assert.match(await page.locator('body').innerText(),/退款 ¥20.00/);
  const financeForm=page.locator('form').first();await financeForm.getByLabel('办理事项').selectOption('start-payment');await financeForm.getByLabel('金额（元）').fill('4.00');await financeForm.getByLabel('银行流水或查账凭据编号（全店唯一）').fill('bank-fixture-0001');await financeForm.getByLabel('办理依据').fill('隔离样例核验');await financeForm.getByRole('button',{name:'确认办理并留痕'}).click();await page.getByText('已保存并核对最新记录；付款登记不会发起银行转账。').waitFor();
@@ -50,8 +50,8 @@ try {
  await financeForm.getByLabel('办理事项').selectOption('confirm-payment');await financeForm.getByLabel('核实结果').selectOption('false');await financeForm.getByLabel('银行流水或查账凭据编号（全店唯一）').fill('bank-failed-0001');await financeForm.getByRole('button',{name:'确认办理并留痕'}).click();await page.waitForFunction(()=>window.calls.length===2);calls=await page.evaluate(()=>window.calls);assert.equal(calls[1].body.success,false);
  const summaries=await page.locator('summary').all();await summaries[1].click();const opsForm=page.locator('form').nth(1);await opsForm.getByRole('combobox').first().selectOption('replace-gift');await opsForm.locator('input[name="quantity"]').fill('1');await opsForm.locator('input[name="consent"]').fill('顾客同意换薯条');await opsForm.locator('input[name="reason"]').fill('原赠品缺货');await opsForm.getByRole('button').click();await page.waitForFunction(()=>window.calls.length===3);calls=await page.evaluate(()=>window.calls);assert.equal(calls[2].body.action,'replace-gift');assert.equal(calls[2].body.consent,'顾客同意换薯条');assert.equal(calls[2].body.productId,'gift');assert.equal(calls[2].body.quantity,1);
  await financeForm.getByLabel('办理事项').selectOption('reissue-account');await financeForm.getByLabel('已核实账户').selectOption('account');await financeForm.getByRole('button',{name:'确认办理并留痕'}).click();await page.waitForFunction(()=>window.calls.length===4);calls=await page.evaluate(()=>window.calls);assert.equal(calls[3].body.action,'reissue-account');assert.equal(calls[3].body.accountId,'account');assert.equal(calls[3].body.id,'statement');
- await page.getByText('渠道优惠 · 核验绑定本桌',{exact:true}).click();
- const activation=page.locator('details').filter({has:page.getByText('渠道优惠 · 核验绑定本桌',{exact:true})});
+ await page.getByText('周边店合作 · 核验绑定本桌',{exact:true}).click();
+ const activation=page.locator('details').filter({has:page.getByText('周边店合作 · 核验绑定本桌',{exact:true})});
  await activation.getByLabel('推广图上的优惠号码',{exact:true}).fill('ABCDEFGH2345');
  await activation.locator('select').first().selectOption('customer-a');
  await activation.getByRole('button',{name:'查看优惠与顾客已有券'}).click();await activation.getByRole('button',{name:'确认顾客与本桌并绑定'}).click();
@@ -129,7 +129,7 @@ try {
  await activation.getByRole('button',{name:'核对门槛并下赠品单',exact:true}).nth(0).click();
  await activation.getByRole('button',{name:'恢复原操作',exact:true}).waitFor();
  const lostGift=await page.evaluate(()=>window.giftCalls[0]);
- await page.reload();await page.getByText('渠道优惠 · 核验绑定本桌',{exact:true}).click();
+ await page.reload();await page.getByText('周边店合作 · 核验绑定本桌',{exact:true}).click();
  await page.evaluate(()=>{window.giftMode=true;window.giftUsed='2000';window.changeActivationSession('gift-offline')});
  await activation.getByRole('button',{name:'恢复原操作',exact:true}).click();
  await page.waitForFunction(()=>window.giftCalls.length===1&&!document.body.innerText.includes('恢复原操作'));

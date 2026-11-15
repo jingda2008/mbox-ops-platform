@@ -1,4 +1,5 @@
 import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
+import {participantMovementHistory} from './participant-movement-history.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
 import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
@@ -20,6 +21,8 @@ import {
 import {
   AssignmentNotCommittedError,
   ParticipantMovementNotCommittedError,
+  ParticipantMovementReceiptMissingError,
+  ParticipantMovementSealedError,
   CapacityOverrideReasonRequiredError,
   TableManagementCommandService,
   TableManagementConflictError,
@@ -321,11 +324,14 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       if (participantPublicIds.some((id) => !active.some((item) => item.publicId===id))) {
         throw new TableManagementConflictError('所选顾客位置已变化，请刷新后重新选择')
       }
-      const result=await transaction.query<{ capacity:number; target_guest_count:number; target_session_id:string|null; source_guest_count:number; source_table_id:string; target_has_organizer:boolean }>(`
+      const result=await transaction.query<{ capacity:number; target_guest_count:number; target_session_id:string|null; source_guest_count:number; source_table_id:string; source_location_version:number; movement_revision:string; target_has_organizer:boolean }>(`
         SELECT CASE WHEN $5::text='participant_merge' THEN target_session.capacity_at_open
             ELSE venue_table.capacity END AS capacity,
           source_session.guest_count AS source_guest_count,
           source_session.table_id AS source_table_id,
+          source_session.location_version AS source_location_version,
+          (SELECT count(*)::text FROM mbox.table_customer_movement_events e WHERE e.tenant_id=source_session.tenant_id AND e.store_id=source_session.store_id
+            AND (e.source_table_session_id IN(source_session.id,target_session.id) OR e.target_table_session_id IN(source_session.id,target_session.id))) AS movement_revision,
           COALESCE(target_session.guest_count,0)::integer AS target_guest_count,
           target_session.id AS target_session_id,
           EXISTS (
@@ -545,6 +551,7 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       return count>0 ? [{ code,count,label,resolution }] : []
     })
     return reply.send({ data:{ supportsNativeParticipantRecovery:true,movementKind,movedGuestCount,
+      movementGuard:{sourceTableId:targetState.source_table_id,sourceLocationVersion:Number(targetState.source_location_version),sourceGuestCount:targetState.source_guest_count,targetGuestCount:targetState.target_guest_count,targetCapacity:targetState.capacity,movementRevision:targetState.movement_revision},
       selectedParticipantCount:participantPublicIds.length,
       targetTableId,targetTableSessionId,targetCapacity:targetState.capacity,
       projectedGuestCount,requiresCapacityOverride,
@@ -555,6 +562,12 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     } })
   }))
 
+  app.get('/table-management/participant-movements/history',async(request,reply)=>handle(reply,async()=>{
+    const context=await authorizedContext(options,request),query=readObject(request.query)
+    const cursor=query.cursor===undefined?null:readUuid(query.cursor,'cursor')
+    const data=await options.transactions.run(context.scope,tx=>participantMovementHistory(tx,context.employeeId,cursor),{readOnly:true})
+    reply.header('cache-control','no-store');return reply.send({data})
+  }))
   for(const movementRoute of ['participant-movements','native-participant-movements']) app.post(`/table-management/sessions/:tableSessionId/${movementRoute}`, async (request, reply) => handle(reply, async () => {
     const context=await authorizedContext(options,request)
     const body=readObject(request.body)
@@ -562,13 +575,14 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     if(native && (body.employeeId!==context.employeeId || !readIdempotencyKey(request).startsWith('native-participants-'))) {
       throw new TableManagementRequestError('原员工或原生拆并桌请求号不匹配')
     }
-    const guard=native?readObject(body.nativeGuard):null
+    const guard=native?readObject(body.nativeGuard):body.movementGuard===undefined?null:readObject(body.movementGuard)
     const nativeGuard=guard?{
       sourceTableId:readUuid(guard.sourceTableId,'sourceTableId'),
       sourceLocationVersion:readInteger(guard.sourceLocationVersion,'sourceLocationVersion',0,Number.MAX_SAFE_INTEGER),
       sourceGuestCount:readInteger(guard.sourceGuestCount,'sourceGuestCount',1,200),
       targetGuestCount:readInteger(guard.targetGuestCount,'targetGuestCount',0,200),
       targetCapacity:readInteger(guard.targetCapacity,'targetCapacity',1,200),
+      ...(guard.movementRevision===undefined?{}:{movementRevision:requiredString(guard.movementRevision,'移动记录版本',30)}),
     }:undefined
     const movementKind=readEnum(body.movementKind,'movementKind',['participant_split','participant_merge'] as const)
     const participantPublicIds=readPublicIdArray(body.participantPublicIds,'participantPublicIds',200,true)
@@ -582,6 +596,9 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       throw new TableManagementRequestError('部分移动人数不能少于已选择的顾客账号数')
     }
     const execution=await options.commands.moveParticipants(commandBase(request,context,body,'调整顾客所在桌次',{
+      requireGuard:!native,receiptOnly:request.headers['x-table-movement-recovery']==='1',
+      sealOnly:request.headers['x-table-movement-seal']==='1',
+      movementHistoryConfirmed:body.movementHistoryConfirmed===true,
       ...(nativeGuard?{nativeGuard}:{}),movementKind,sourceTableSessionId:readUuid(readParams(request).tableSessionId,'tableSessionId'),
       targetTableId:readUuid(body.targetTableId,'targetTableId'),
       targetTableSessionId:body.targetTableSessionId===null || body.targetTableSessionId===undefined
@@ -789,6 +806,8 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  if(error instanceof ParticipantMovementReceiptMissingError)return{status:409,code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE',message:error.message}
+  if(error instanceof ParticipantMovementSealedError)return{status:409,code:'TABLE_MOVEMENT_REQUEST_SEALED',message:error.message,commitDisposition:'not_committed'}
   if(error instanceof TablePrepaymentError)return{status:409,code:error.code,message:error.message}
   if (typeof error === 'object' && error !== null && 'code' in error && ['P2701','P2702'].includes(String(error.code))) return { status:409,code:'TABLE_SERVICE_CONFLICT',message:(error instanceof Error ? error.message : '请确认本次主服务员') }
   if (error instanceof ParticipantMovementNotCommittedError) return { status:409,code:'TABLE_PARTICIPANT_NOT_COMMITTED',message:error.message,commitDisposition:'not_committed' }

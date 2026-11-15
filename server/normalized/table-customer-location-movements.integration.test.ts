@@ -82,7 +82,7 @@ integration('table customer location movements', () => {
     const runner=new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool),app=Fastify()
     await app.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),resolveContext:()=>({scope:{tenantId,storeId},employeeId,businessDate:'2026-08-16'})})
     const key=native?`native-participants-${randomUUID()}`:randomUUID()
-    const body={employeeId,movementKind:'participant_merge',targetTableId:tables[offset+1],targetTableSessionId:target,movedGuestCount:2,participantPublicIds:participants,reason:'全员确认并桌',...(native?{nativeGuard:{sourceTableId:tables[offset],sourceLocationVersion:0,sourceGuestCount:2,targetGuestCount:1,targetCapacity:3}}:{})}
+    const body={employeeId,movementKind:'participant_merge',targetTableId:tables[offset+1],targetTableSessionId:target,movedGuestCount:2,participantPublicIds:participants,reason:'全员确认并桌',...(native?{nativeGuard:{sourceTableId:tables[offset],sourceLocationVersion:0,sourceGuestCount:2,targetGuestCount:1,targetCapacity:3}}:{movementGuard:{movementRevision:'0',sourceTableId:tables[offset],sourceLocationVersion:0,sourceGuestCount:2,targetGuestCount:1,targetCapacity:3}})}
     const request={method:'POST' as const,url:`/table-management/sessions/${source}/${native?'native-participant-movements':'participant-movements'}`,headers:{'idempotency-key':key},payload:body}
     const snapshot=async()=>(await pool.query('SELECT to_jsonb(s) fact FROM mbox.table_sessions s WHERE id=ANY($1::uuid[]) ORDER BY id',[[source,target]])).rows
     try {
@@ -134,7 +134,7 @@ integration('table customer location movements', () => {
       expect(preview.statusCode,preview.body).toBe(200)
       if(change==='headcount')await pool.query('UPDATE mbox.table_sessions SET guest_count=3 WHERE id=$1',[source])
       else await ensurePosition(credential,source,await createCustomer('merge-late-scan'))
-      const response=await app.inject({method:'POST',url:`/table-management/sessions/${source}/participant-movements`,headers:{'idempotency-key':randomUUID()},payload})
+      const response=await app.inject({method:'POST',url:`/table-management/sessions/${source}/participant-movements`,headers:{'idempotency-key':randomUUID()},payload:{...payload,movementGuard:preview.json().data.movementGuard}})
       expect(response.statusCode,response.body).toBe(409)
       expect((await pool.query('SELECT status FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].status).toBe('open')
       expect((await pool.query('SELECT guest_count FROM mbox.table_sessions WHERE id=$1',[target])).rows[0].guest_count).toBe(1)
@@ -150,7 +150,7 @@ integration('table customer location movements', () => {
     const key=randomUUID()
     const permissionCode=kind==='transfer'?'table.transfer':'table.participation.manage'
     const operationScope=kind==='transfer'?'table.transfer':'table.participation.move'
-    const payload=kind==='transfer'?{targetTableId:tables[offset+1],expectedSourceTableId:tables[offset],expectedLocationVersion:0}:{movementKind:'participant_merge',targetTableId:tables[offset+1],targetTableSessionId:await createSession(tables[offset+1]!,1),movedGuestCount:2,participantPublicIds:[],reason:'顾客确认并桌'}
+    const payload=kind==='transfer'?{targetTableId:tables[offset+1],expectedSourceTableId:tables[offset],expectedLocationVersion:0}:{movementKind:'participant_merge',targetTableId:tables[offset+1],targetTableSessionId:await createSession(tables[offset+1]!,1),movedGuestCount:2,participantPublicIds:[],reason:'顾客确认并桌',movementGuard:{movementRevision:'0',sourceTableId:tables[offset],sourceLocationVersion:0,sourceGuestCount:2,targetGuestCount:1,targetCapacity:8}}
     const send=()=>app.inject({method:'POST',url:`/table-management/sessions/${source}/${kind==='transfer'?'transfer':'participant-movements'}`,headers:{'idempotency-key':key},payload})
     const deny=randomUUID()
     try {

@@ -1,3 +1,4 @@
+const { parseInstant, money, dateTime } = require('../../utils/format')
 const {
   getActivity,
   getActivityPreview,
@@ -20,7 +21,6 @@ const {
 const { ensureCustomerSession } = require('../../utils/auth')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
-const { money, dateTime } = require('../../utils/format')
 const { publicImageUrl } = require('../../utils/media')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { customerErrorMessage, isWechatCancellation } = require('../../utils/customer-error')
@@ -107,7 +107,7 @@ function checkedActivityAttempt(stored, id, expected, timed) {
   if (!attempt || !validCommandKey(attempt.idempotencyKey)
     || Object.keys(expected).some(key => attempt[key] !== expected[key])) throw new Error('原操作记录或内容无法核对，请先恢复原请求，不会另建请求。')
   if (timed) {
-    const time = Date.parse(attempt.createdAt)
+    const time = parseInstant(attempt.createdAt)
     if (!Number.isFinite(time) || Date.now() < time || Date.now() - time > 23 * 3600000) throw new Error('原操作已超过安全重试时间，请先查单或联系门店核对。')
   }
   return attempt
@@ -192,7 +192,7 @@ function registrationAttemptPayload(value) {
 }
 
 function registrationAttemptExpired(attempt) {
-  const createdAt = attempt && typeof attempt.createdAt === 'string' ? Date.parse(attempt.createdAt) : Number.NaN
+  const createdAt = attempt && typeof attempt.createdAt === 'string' ? parseInstant(attempt.createdAt) : Number.NaN
   return !Number.isFinite(createdAt) || Date.now() < createdAt || Date.now() - createdAt > REGISTRATION_ATTEMPT_MAX_AGE_MS
 }
 
@@ -393,7 +393,7 @@ function viewActivity(raw) {
   const clientPaymentBlocked = requiresOnlinePayment && !availablePaymentMethods.includes('jsapi')
   const registrationStopped = Boolean(raw.registrationClosedAt)
   const registrationBlocked = !isSharePreview && (registrationStopped || providerBlocked || clientPaymentBlocked || !safetyPolicyVersion || !refundPolicyVersion)
-  const addonCutoffs = [raw.addonEndsAt, raw.mealServiceEndsAt, raw.endsAt].filter(Boolean).map(value => Date.parse(value)).filter(Number.isFinite)
+  const addonCutoffs = [raw.addonEndsAt, raw.mealServiceEndsAt, raw.endsAt].filter(Boolean).map(value => parseInstant(value)).filter(Number.isFinite)
   const addonCutoffAt = addonCutoffs.length ? Math.min(...addonCutoffs) : null
   const safetyFacts = []
   if (safety.difficulty) safetyFacts.push(`难度：${safety.difficulty}`)

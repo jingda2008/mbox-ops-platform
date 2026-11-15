@@ -1,3 +1,5 @@
+import { parseChannelActivationReceipt } from '../../shared/channel-receipt'
+import { formatChinaDateTime } from '../../shared/china-time'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import { DurableStaffCommand } from '../durable-staff-command'
@@ -28,8 +30,7 @@ export function ChannelActivationPanel({ sessionId, staffSessionId }: { sessionI
     const response = await fetch('/api/staff/channel/activate', { method: 'POST', credentials: 'include', headers, body: JSON.stringify(input), signal: AbortSignal.timeout(15000) })
     const body = await response.json()
     if (!response.ok) throw Object.assign(new Error(body.error?.message ?? '绑定未确认，请恢复原操作'), { status: response.status, code: body.error?.code, commitDisposition: body.error?.commitDisposition })
-    if (!body.data?.claimId || !body.data?.activationId) throw new Error('未取得完整回执，请恢复原操作')
-    return body.data
+    return parseChannelActivationReceipt(body.data, input.claimId)
   }, undefined, true), [staffSessionId, sessionId])
   async function readCustomers(signal?: AbortSignal) {
     if(currentScope.current!==identityScope) throw new SupersededChannelRead()
@@ -41,6 +42,7 @@ export function ChannelActivationPanel({ sessionId, staffSessionId }: { sessionI
     const body = await response.json()
     if (!current()) throw new SupersededChannelRead()
     if (!response.ok) throw new Error(body.error?.message ?? '本桌顾客暂时无法读取')
+    if (!Array.isArray(body.data?.customers) || !Array.isArray(body.data?.activations)) throw new Error('本桌绑定记录不完整，请刷新核对')
     return body.data as { customers: { id: string; label: string }[]; activations: { id: string; claimId: string; title: string; sourceLabel: string; status: string;offer:ChannelOffer;giftOrderId:string|null;arrivalConfirmed:boolean;allowStacking?:boolean;visitDiscountCapMinor?:number|null;usedDiscountMinor?:string }[] }
     } catch(e) { if(!current()) throw new SupersededChannelRead(); throw e }
   }
@@ -53,6 +55,18 @@ export function ChannelActivationPanel({ sessionId, staffSessionId }: { sessionI
     // Identity and table scope are the complete read boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, staffSessionId, command])
+  async function refreshBindings() {
+    if (writing.current) return
+    writing.current = true
+    const requested = generation.current
+    const current = () => requested === generation.current && currentScope.current === identityScope
+    setBusy(true); setError(''); setNotice(''); setCustomers([]); setCustomerId(''); setActivations([]); setPreview(null)
+    try {
+      const rows = await readCustomers()
+      if (current()) { setCustomers(rows.customers); setActivations(rows.activations) }
+    } catch (e) { if (current()) setError(e instanceof Error ? e.message : '本桌绑定记录暂时无法读取') }
+    finally { writing.current = false; if (current()) setBusy(false) }
+  }
   async function loadPreview() {
     if (writing.current) return
     writing.current = true; setBusy(true); setError(''); setPreview(null)
@@ -78,8 +92,10 @@ export function ChannelActivationPanel({ sessionId, staffSessionId }: { sessionI
     } catch (e) { if (current === generation.current) setError(e instanceof Error ? e.message : '请核对原操作') }
     finally { writing.current = false; if (current === generation.current) { setBusy(false); try { setPending(command.pending() !== null) } catch { setPending(true) } } }
   }
-  return <details className="table-service-panel"><summary>渠道优惠 · 核验绑定本桌</summary>
+  return <details className="table-service-panel"><summary>周边店合作 · 核验绑定本桌</summary>
     <p>新版推广图请输入图上的优惠号码；官方小程序码由顾客用微信识别。先确认顾客已入座当前桌。已有券自动复用；同一批客人换桌、拆单不增加可用次数。</p>
+    <button type="button" disabled={busy} onClick={() => void refreshBindings()}>刷新本桌绑定记录</button>
+    <p>多人操作或拆桌后请刷新核对；仅更新当前记录，不会重新领券或清除待恢复的原请求。</p>
     {activations[0]?.usedDiscountMinor!==undefined&&<p>本次客组：{activations[0].allowStacking?'允许叠加':'不叠加'} · 已占用优惠 ¥{(Number(activations[0].usedDiscountMinor)/100).toFixed(2)} · {activations[0].visitDiscountCapMinor==null?'未设客组总上限':`总上限 ¥${(activations[0].visitDiscountCapMinor/100).toFixed(2)}`}，换桌不重置。</p>}
     {activations.map(a => <p key={a.id}>当前绑定：{a.sourceLabel} · {a.title} · {a.status === 'fulfilled' ? '已兑现' : '待兑现'}{a.offer?.kind==='gift'&&<ChannelGiftAction claimId={a.claimId} sessionId={sessionId} staffSessionId={staffSessionId} orderId={a.giftOrderId} onRefresh={async()=>{if(currentScope.current!==identityScope)throw new Error('请返回原桌次核对回执');const rows=await readCustomers();if(currentScope.current!==identityScope)throw new Error('请返回原桌次核对回执');setActivations(rows.activations)}}/>}</p>)}
     {activations.some(a=>!a.arrivalConfirmed)&&<ChannelGiftAction arrival claimId={sessionId} sessionId={sessionId} staffSessionId={staffSessionId} orderId={null} onRefresh={async()=>{if(currentScope.current!==identityScope)throw new Error('请返回原桌次核对回执');const rows=await readCustomers();if(currentScope.current!==identityScope)throw new Error('请返回原桌次核对回执');setActivations(rows.activations)}}/>}
@@ -93,7 +109,7 @@ export function ChannelActivationPanel({ sessionId, staffSessionId }: { sessionI
       <p>{validPreview.rule.title} · 每人限领 {validPreview.rule.perCustomerClaims} 次 · 本次客组限用 {validPreview.rule.perVisitUses} 次 · 满 ¥{(validPreview.rule.minimumMinor / 100).toFixed(2)}</p>
       <p>{validPreview.rule.offer.kind === 'gift' ? `${validPreview.rule.offer.productName ?? '指定赠品'} ${validPreview.rule.offer.quantity} 份` : validPreview.rule.offer.kind === 'credit' ? `优惠 ¥${(validPreview.rule.offer.amountMinor / 100).toFixed(2)}` : `减免 ${validPreview.rule.offer.discountBps / 100}%，最多 ¥${(validPreview.rule.offer.maximumMinor / 100).toFixed(2)}`}</p>
       <p>{validPreview.rule.allowStacking ? `允许渠道券叠加 · ${validPreview.rule.visitDiscountCapMinor == null ? '未设置客组总上限' : `客组总优惠最高 ¥${(validPreview.rule.visitDiscountCapMinor/100).toFixed(2)}`}（含赠品售价；不同批次取更严限制，转桌不重置）` : '不允许叠加，本次客组只能使用一张渠道券'}</p>
-      <p>适用：{validPreview.rule.eligibleProductNames?.map(p => p.name).join('、') ?? '请核对适用商品'}。截止：{new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(new Date(validPreview.rule.useUntil))}（北京时间）。</p>
+      <p>适用：{validPreview.rule.eligibleProductNames?.map(p => p.name).join('、') ?? '请核对适用商品'}。截止：{channelExpiryText(validPreview.rule.useUntil)}（北京时间）。</p>
       <label>本次使用方式<select value={selection} disabled={busy || pending} onChange={e => setSelection(e.target.value)}>
         <option value="auto">自动复用已有券，无有效券时领取</option>
         {validPreview.claims.map(c => <option key={c.id} value={c.id} disabled={c.status !== 'available' && !c.currentTable}>券 {c.id.slice(-8)} · {c.currentTable ? '已绑定本次消费' : c.status === 'available' ? '待使用' : '不可用于本桌'}</option>)}
@@ -120,4 +136,8 @@ function ChannelGiftAction({claimId,sessionId,staffSessionId,orderId,onRefresh,a
  useEffect(()=>{try{setPending(command.pending()!==null)}catch(e){setError(e instanceof Error?e.message:'回执异常')}},[command])
  async function run(){if(busy)return;setBusy(true);setError('');try{if(pending)await command.recover();else await command.submit(arrival?{tableSessionId:sessionId,action:'arrival',reason:'员工现场核对本人已入座'}:{claimId,tableSessionId:sessionId});await command.refresh(onRefresh)}catch(e){setError(e instanceof Error?e.message:'请恢复原出品操作')}finally{setBusy(false);try{setPending(command.pending()!==null)}catch{setPending(true)}}}
  return <span>{orderId?` · 已生成赠品订单 ${orderId.slice(-8)}，制作状态见出品单`:''}{(!orderId||pending)&&<button type="button" disabled={busy} onClick={()=>void run()}>{pending?'恢复原操作':arrival?'现场确认顾客已到店':'核对门槛并下赠品单'}</button>}{error&&<span role="alert">{error}</span>}</span>
+}
+
+function channelExpiryText(value: string) {
+  try { return formatChinaDateTime(value) } catch { return '时间待核对' }
 }

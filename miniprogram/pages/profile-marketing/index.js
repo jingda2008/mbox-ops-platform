@@ -1,11 +1,8 @@
+const { beijingDateTime } = require('../../utils/format')
 const { getMarketingPreferences, updateMarketingPreferences } = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const names = { wechat: '微信活动信息', sms: '短信优惠活动', phone: '电话活动邀请' }
-function localTime(value) {
-  const instant = Date.parse(value)
-  if (!Number.isFinite(instant)) return '待核对'
-  return new Date(instant + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ')
-}
+function localTime(value) { return beijingDateTime(value, '待核对') }
 function view(data) {
   const channels = ['wechat', 'sms', 'phone'].map(channel => {
     const grants = data.decisions.filter(item => item.channel === channel && item.decision === 'granted')

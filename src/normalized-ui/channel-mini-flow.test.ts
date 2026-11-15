@@ -2,10 +2,15 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
+const dateModule = {exports:{}}
+vm.runInNewContext(readFileSync(new URL('../../miniprogram/utils/format.js', import.meta.url), 'utf8'), {module:dateModule,Date})
+
 function harness(name: string) {
   let definition: any, owner = 'customer-a', loggedOut = false
-  const table: { tableToken?: string } = {}
-  const api = { getChannelStatement:vi.fn(async (_id:string)=>({statement:{id:_id},lines:[]})), respondChannelStatement:vi.fn(async (_id:string,_dispute:boolean,_reason:string)=>({})), getChannelWalletPage:vi.fn(async (_options?:unknown)=>({items:[] as any[],nextCursor:null as string|null})), getChannelHistory:vi.fn(async (_kind:string,_cursor?:string)=>({items:[] as any[],nextCursor:null as string|null})), getChannelOffer: vi.fn(async (_code: string) => ({ title: '餐后小聚', offer: {kind: 'credit', amountMinor: 1000}, minimumMinor:10000, useFrom:'2026-11-12T00:00:00Z', useUntil:'2026-11-13T00:00:00Z', claimedCount:0, unavailable:null })), getChannelWallet: vi.fn(async () => []), claimChannelCoupon: vi.fn(async (_code: string) => ({ claimId: 'claim-a' })),
+  const pending = new Set<string>()
+  const table: { tableToken?: string; scanNonce?: string; cartScope?: string } = {}
+  const timers = new Map<number, () => void>(); let timerId = 0
+  const api = { recoverChannelClaim:vi.fn(async (_code:string)=>({claimId:'claim-a'})), recoverChannelCoupon:vi.fn(async (_id:string)=>({activationId:'active-a'})), getChannelStatement:vi.fn(async (_id:string)=>({statement:{id:_id},lines:[]})), respondChannelStatement:vi.fn(async (_id:string,_dispute:boolean,_reason:string)=>({})), getChannelWalletPage:vi.fn(async (_options?:unknown)=>({items:[] as any[],nextCursor:null as string|null})), getChannelHistory:vi.fn(async (_kind:string,_cursor?:string)=>({items:[] as any[],nextCursor:null as string|null})), getChannelOffer: vi.fn(async (_code: string) => ({ title: '餐后小聚', offer: {kind: 'credit', amountMinor: 1000}, minimumMinor:10000, useFrom:'2026-11-12T00:00:00Z', useUntil:'2026-11-13T00:00:00Z', claimedCount:0, unavailable:null })), getChannelWallet: vi.fn(async () => []), claimChannelCoupon: vi.fn(async (_code: string) => ({ claimId: 'claim-a' })),
     activateChannelCoupon: vi.fn(async (_id: string) => ({ activationId: 'active-a' })), getChannelPartner: vi.fn(async () => ({ promoter: { name: '店长' }, batches: [], visits: [] })),
     acceptChannelInvitation: vi.fn(async (_token: string) => ({})), getChannelPoster: vi.fn(async (_id: string) => ({ filename: 'poster.png', base64: 'PNG' })) }
   api.getChannelWalletPage.mockImplementation(async()=>({items:await api.getChannelWallet(),nextCursor:null}))
@@ -17,19 +22,105 @@ function harness(name: string) {
   const entryModule = {exports:{}}
   vm.runInNewContext(readFileSync(new URL('../../miniprogram/utils/channel-entry.js', import.meta.url), 'utf8'), {module:entryModule})
   const dependencies: Record<string, unknown> = {
-    '../../utils/auth':auth, '../../utils/membership-gate':gate, '../../utils/channel-entry':entryModule.exports,
-    '../../utils/api': api, '../../utils/recoverable-command': { commandIdentityScope: () => owner },
+    '../../utils/format':dateModule.exports, '../../utils/auth':auth, '../../utils/membership-gate':gate, '../../utils/channel-entry':entryModule.exports,
+    '../../utils/api': api, '../../utils/recoverable-command': { commandIdentityScope: () => owner, pendingGuestCommandMatches:(op:string,body:any)=>pending.has(owner+':'+op+':'+(body.claimId||body.code)) },
     '../../utils/customer-error': { customerErrorMessage: (e: any, fallback: string) => e.message || fallback }, '../../utils/session': { getTableSession: () => table },
   }
   vm.runInNewContext(readFileSync(new URL(`../../miniprogram/pages/${name}/index.js`, import.meta.url), 'utf8'), {
     require: (path: string) => { if (!(path in dependencies)) throw new Error(`Unexpected dependency ${path}`); return dependencies[path] },
-    Page: (value: unknown) => { definition = value }, wx, getApp:()=>app,
+    Page: (value: unknown) => { definition = value }, wx, getApp:()=>app, Date,
+    setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId }, clearTimeout: (id: number) => timers.delete(id),
   })
   const page = { ...definition, data: structuredClone(definition.data), setData(value: object) { Object.assign(this.data, value) } }
-  return { page, api, wx, fs, table, auth, gate, app, logout: () => {loggedOut=true}, changeOwner: () => { owner = 'customer-b' } }
+  return { page, api, wx, fs, table, pending, auth, gate, app, timers, logout: () => {loggedOut=true}, changeOwner: () => { owner = 'customer-b' } }
 }
 
 describe('channel mini program identity and action boundaries', () => {
+  it('refreshes a foreground wallet when a claim finishes after hide/show read an older snapshot', async () => {
+    const {page,api}=harness('channel-coupons')
+    let finish!: () => void
+    api.claimChannelCoupon.mockImplementation(() => new Promise(resolve => {finish=()=>resolve({claimId:'late'})}))
+    page.onLoad({scene:'CH_ABCDEFGH2345'});await page.onShow()
+    const write=page.claim();page.onHide();await page.onShow()
+    api.getChannelWallet.mockResolvedValue([{id:'late',status:'available',offer:{kind:'credit',amountMinor:1000}}] as never)
+    finish();await write
+    expect(page.data.coupons.map((c:any)=>c.id)).toEqual(['late'])
+    expect(api.claimChannelCoupon).toHaveBeenCalledTimes(1)
+    expect(page.data.notice).toBe('')
+  })
+  it('refreshes a stale expired coupon after the server rejects activation without silently retrying', async () => {
+    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a'
+    api.getChannelWallet.mockResolvedValue([{id:'expired',status:'expired',offer:{kind:'credit',amountMinor:1000}}] as never)
+    api.activateChannelCoupon.mockRejectedValue(new Error('优惠已过期'))
+    await page.useCoupon({currentTarget:{dataset:{id:'expired'}}})
+    expect(page.data.coupons[0]?.status).toBe('expired')
+    expect(page.data.error).toBe('优惠已过期')
+    expect(api.activateChannelCoupon).toHaveBeenCalledTimes(1)
+  })
+  it('never presents an old-table activation as success on the newly scanned table', async () => {
+    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a'
+    let finish!:()=>void
+    api.activateChannelCoupon.mockImplementation(()=>new Promise(resolve=>{finish=()=>resolve({activationId:'old'})}))
+    const write=page.useCoupon({currentTarget:{dataset:{id:'coupon'}}})
+    table.tableToken='table-b';table.cartScope='visit-b';finish();await write
+    expect(page.data.notice).toBe('')
+    expect(api.getChannelWalletPage).toHaveBeenCalledTimes(1)
+    expect(api.activateChannelCoupon).toHaveBeenCalledTimes(1)
+  })
+  it('schedules a read at a validity boundary and removes it while hidden', async () => {
+    const {page,api,timers}=harness('channel-coupons')
+    api.getChannelWallet.mockResolvedValue([{id:'ending',status:'available',useUntil:new Date(Date.now()+1000).toISOString(),offer:{kind:'credit',amountMinor:1000}}] as never)
+    await page.onShow();expect(timers.size).toBe(1)
+    const refresh=[...timers.values()][0]!
+    api.getChannelWallet.mockResolvedValue([{id:'ending',status:'expired',offer:{kind:'credit',amountMinor:1000}}] as never)
+    await refresh();expect(page.data.coupons[0].status).toBe('expired')
+    page.onHide();expect(timers.size).toBe(0)
+  })
+  it.each(['hidden','account'])('does not refresh or display a late write result after %s',async change=>{
+    const {page,api,changeOwner}=harness('channel-coupons')
+    let finish!:()=>void
+    api.claimChannelCoupon.mockImplementation(()=>new Promise(resolve=>{finish=()=>resolve({claimId:'old'})}))
+    const write=page.write('claim','ABCDEFGH2345')
+    if(change==='hidden')page.onHide();else changeOwner()
+    finish();await write
+    expect(api.getChannelWalletPage).not.toHaveBeenCalled()
+    expect(page.data.notice).toBe('');expect(page.data.busy).toBe(false)
+  })
+  it('keeps an unknown write recoverable and performs only a read after a lost response',async()=>{
+    const {page,api}=harness('channel-coupons')
+    api.claimChannelCoupon.mockRejectedValue(new Error('网络中断，结果待核对'))
+    api.getChannelWallet.mockResolvedValue([{id:'committed',status:'available',offer:{kind:'credit',amountMinor:1000}}] as never)
+    await page.write('claim','ABCDEFGH2345')
+    expect(page.data.coupons[0].id).toBe('committed');expect(page.data.error).toContain('待核对')
+    expect(api.claimChannelCoupon).toHaveBeenCalledTimes(1)
+  })
+  it('does not expire active or fulfilled promises locally at their original use deadline',async()=>{
+    const {page,api,timers}=harness('channel-coupons')
+    api.getChannelWallet.mockResolvedValue(['active','fulfilled'].map(status=>({id:status,status,useUntil:new Date(Date.now()+1000).toISOString(),offer:{kind:'credit',amountMinor:1000}})) as never)
+    await page.onShow();expect(timers.size).toBe(0)
+    expect(page.data.coupons.map((c:any)=>c.status)).toEqual(['active','fulfilled'])
+  })
+  it('clears old-table success if the table changes during the post-write wallet refresh',async()=>{
+    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a'
+    let finish!:(value:never[])=>void
+    api.getChannelWallet.mockImplementation(()=>new Promise(resolve=>{finish=resolve}))
+    const write=page.useCoupon({currentTarget:{dataset:{id:'coupon'}}})
+    await vi.waitFor(()=>expect(finish).toBeTypeOf('function'))
+    table.tableToken='table-b';table.cartScope='visit-b';finish([]);await write
+    expect(page.data.notice).toBe('')
+  })
+  it.each(['active','fulfilled','expired','revoked'])('offers receipt recovery on a reopened %s coupon without reviving or issuing it',async status=>{
+    const {page,api,pending}=harness('channel-coupons')
+    pending.add('customer-a:channel.claim:ABCDEFGH2345');pending.add('customer-a:channel.activate:claim-a')
+    api.getChannelOffer.mockResolvedValue({offer:{kind:'credit',amountMinor:1000},unavailable:'领取已满'} as never)
+    api.getChannelWallet.mockResolvedValue([{id:'claim-a',status,offer:{kind:'credit',amountMinor:1000}}] as never)
+    page.onLoad({code:'ABCDEFGH2345'});await page.onShow()
+    expect(page.data.pendingClaim).toBe(true);expect(page.data.coupons[0].canRecover).toBe(true)
+    await page.recoverClaim();await page.recoverCoupon({currentTarget:{dataset:{id:'claim-a'}}})
+    expect(api.recoverChannelClaim).toHaveBeenCalledOnce();expect(api.recoverChannelCoupon).toHaveBeenCalledOnce()
+    expect(api.claimChannelCoupon).not.toHaveBeenCalled();expect(api.activateChannelCoupon).not.toHaveBeenCalled()
+    expect(page.data.coupons[0].status).toBe(status);expect(page.data.notice).toContain('最新券状态')
+  })
   it('opens a WeChat poster scene directly and claims with one tap without invoking in-app scanning',async()=>{
     const {page,api,wx,auth}=harness('channel-coupons')
     page.onLoad({scene:'CH_ABCDEFGH2345'});await page.onShow()
@@ -228,7 +319,7 @@ describe('channel mini program identity and action boundaries', () => {
 
 function checkoutHarness() {
   const module = { exports: {} as any }
-  vm.runInNewContext(readFileSync(new URL('../../miniprogram/utils/checkout-coupons.js', import.meta.url), 'utf8'), { module, Date })
+  vm.runInNewContext(readFileSync(new URL('../../miniprogram/utils/checkout-coupons.js', import.meta.url), 'utf8'), { module, Date, require: (name: string) => { if (name === './format') return dateModule.exports; throw new Error(name) } })
   let owner = 'guest-a'
   const quoteChannel = vi.fn(), getPoints = vi.fn(async () => ({ availablePoints: 20, minorPerPoint: 100, allowCoupons: false }))
   const page = { data: { ...structuredClone(module.exports.initialCheckoutCoupons), cart: [], cartGeneration: 1, cartVersion: 2, checkoutConfirmVisible: true, busy: false },

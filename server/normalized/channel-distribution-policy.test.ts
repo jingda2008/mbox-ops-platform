@@ -131,3 +131,19 @@ describe('channel shared authority policy',()=>{
   })
 
 })
+
+describe('Beijing coupon validity boundaries',()=>{
+  it.each([
+    ['2026-12-31T23:59:59+08:00','2027-01-01T00:00:00+08:00'],
+    ['2024-02-28T23:59:59+08:00','2024-02-29T00:00:00+08:00'],
+    ['2024-02-29T23:59:59+08:00','2024-03-01T00:00:00+08:00'],
+  ])('claim and use gates preserve [start,end) across %s → %s',(from,until)=>{
+    const windowRule={...rule,claimFrom:from,claimUntil:until,useFrom:from,useUntil:until}
+    for(const [at,valid] of [[Date.parse(from)-1,false],[Date.parse(from),true],[Date.parse(until)-1,true],[Date.parse(until),false],[Date.parse(until)+1,false]] as const){
+      const claim=()=>assertChannelClaimCapacity({rule:windowRule,now:new Date(at),issued:0,customerIssued:0,poolRemaining:3,capacityRemaining:3,paused:false})
+      const use=()=>assertChannelActivation({...activation,rule:windowRule,now:new Date(at)})
+      if(valid){expect(claim).not.toThrow();expect(use).not.toThrow()}
+      else {expect(claim).toThrow();expect(use).toThrow()}
+    }
+  })
+})

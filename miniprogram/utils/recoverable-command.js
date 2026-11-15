@@ -45,6 +45,7 @@ function recoverableGuestCommand(operation, body, send, options) {
       if (exists(wx.getStorageSync(key)) || hasKey(key)) throw failure('COMMAND_RECOVERY_REVIEW_REQUIRED', '旧版请求结果待核对，请查看当前状态或联系门店，暂不重复提交。')
     }
     const recovery = stored !== undefined && stored !== null && (stored !== '' || hasKey(storageKey))
+    if (options && options.recoveryOnly && !recovery) throw failure('COMMAND_RECOVERY_NOT_FOUND', '当前账号或桌次没有可恢复的原操作，请联系服务员核对；本次不会重新核销。')
     if (recovery && (!stored || stored.version !== 2 || typeof stored.key !== 'string' || stored.key.length < 8
       || !Number.isFinite(stored.createdAt) || typeof stored.bodyHash !== 'string')) {
       throw failure('COMMAND_RECOVERY_RECORD_INVALID', '本机原请求记录无法核对，请联系门店确认，避免重复操作。')
@@ -88,4 +89,11 @@ function recoverableGuestCommand(operation, body, send, options) {
 }
 // Digest is only a local ownership boundary; never an authorization credential.
 function commandIdentityScope() { return checksum(recoveryScope({ customerOnly: true })) }
-module.exports = { recoverableGuestCommand, commandIdentityScope }
+function pendingGuestCommandMatches(operation, body, options) {
+  try {
+    const key = `mbox.command.v2:${checksum(recoveryScope(options))}:${checksum(operation)}`
+    const stored = wx.getStorageSync(key)
+    return Boolean(stored && stored.bodyHash === checksum(JSON.stringify(body)))
+  } catch (_) { return false }
+}
+module.exports = { recoverableGuestCommand, commandIdentityScope, pendingGuestCommandMatches }

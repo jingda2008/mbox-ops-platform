@@ -38,8 +38,8 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   const [phase, setPhase] = useState<'checking' | 'credential' | 'login' | 'ready'>('checking')
   const [message, setMessage] = useState<string | null>(null)
   const [initialBootstrap, setInitialBootstrap] = useState<StaffBootstrapView | null>(null)
-  const [staffLocation, setStaffLocation] = useState(() => window.location.pathname + window.location.search)
-  const staffRoute = normalizedStaffRoute(new URL(staffLocation, window.location.origin).pathname)
+  const [staffLocation, setStaffLocation] = useState(() => window.location.pathname + window.location.search + window.location.hash)
+  const staffRoute = normalizedStaffRoute(new URL(staffLocation, window.location.origin).pathname, new URL(staffLocation, window.location.origin).hash)
   const locationUrl=new URL(staffLocation,window.location.origin)
   const dedicatedScreen=threeScreenMode(locationUrl.pathname,locationUrl.search)??pickupOnlyEntry(locationUrl.pathname,locationUrl.search,auth?.permissions??[])
   const [navigationError, setNavigationError] = useState<string | null>(null)
@@ -137,7 +137,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     }
   }, [api, authenticatedSessionId, phase])
   useEffect(() => {
-    const syncRoute = () => { window.dispatchEvent(new Event('mbox:before-staff-navigation')); setStaffLocation(window.location.pathname + window.location.search) }
+    const syncRoute = () => { window.dispatchEvent(new Event('mbox:before-staff-navigation')); setStaffLocation(window.location.pathname + window.location.search + window.location.hash) }
     window.addEventListener('popstate', syncRoute)
     return () => window.removeEventListener('popstate', syncRoute)
   }, [])
@@ -201,7 +201,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
   }
   const navigate = (route: string, context?: BusinessDayNavigationContext) => {
     const target = new URL(route, window.location.origin)
-    const next = normalizedStaffRoute(target.pathname)
+    const next = normalizedStaffRoute(target.pathname, target.hash)
     if (target.origin !== window.location.origin || (next === null && target.pathname !== '/')) {
       setMessage('当前入口不可用，请从工作台选择已授权的功能。')
       return
@@ -209,7 +209,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
     window.dispatchEvent(new Event('mbox:before-staff-navigation'))
     window.history.pushState({ ...context, staffReturnTo: window.location.pathname + window.location.search + window.location.hash, staffSession: auth.session.id }, '', `${target.pathname}${target.search}${target.hash}`)
     setMessage(null)
-    setStaffLocation(target.pathname + target.search)
+    setStaffLocation(target.pathname + target.search + target.hash)
     window.dispatchEvent(new Event('hashchange'))
   }
   const sessionControls = <><TableServiceLauncher onOpen={() => setServiceHistorySessionId(auth.session.id)} /><StaffSessionMenu
@@ -229,7 +229,7 @@ export function NormalizedStaffApp({ api: suppliedApi }: { api?: NormalizedApiCl
       </header>}
       {!dedicatedScreen&&<StaffObjectFocus route={staffLocation} />}
       {staffNavigation !== null && window.location.pathname.startsWith('/staff/member-') && <StaffMemberNavigation entries={staffNavigation} activeRoute={window.location.pathname} onNavigate={navigate} />}
-      {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname))
+      {staffNavigation === null ? navigationError === null ? <StaffGateLoading /> : <div className="normalized-route-notice" role="alert"><p>{navigationError}</p><button type="button" onClick={() => setNavigationAttempt(value => value + 1)}>重新读取工作台</button></div> : !staffNavigation.some((item) => item.code === normalizedStaffNavigationCode(window.location.pathname, window.location.hash))
         ? <div className="normalized-route-notice" role="alert">当前账号没有这个页面的有效权限。请由管理员授权后刷新；</div>
         : dedicatedScreen
         ? <Suspense fallback={<StaffGateLoading/>}><ThreeScreenWorkspace key={`${staffWorkspaceIdentityKey(auth)}:${dedicatedScreen}`} mode={dedicatedScreen} employeeId={auth.employee.id} staffSessionId={auth.session.id} canViewOriginalTasks={auth.permissions.includes('dashboard.view')} onExit={()=>navigate(auth.permissions.includes('dashboard.view')?'/staff/fulfillment?view=all':'/')} onLoginRequired={loginRequired}/></Suspense>

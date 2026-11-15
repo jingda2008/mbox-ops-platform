@@ -19,7 +19,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     const { page } = setup('order', { checkoutSharedCart: (body, key) => { calls.push({ body, key }); return post.promise } })
     page.checkoutLineNotes = { 'portion-1': '少冰' }
     page.setData({ checkoutConfirmVisible: true, checkoutNote: '一起上', couponSelections: [{ portionId: 'portion-1', benefitId: 'coupon-1' }],
-      couponQuote: { id: 'quote-1', generation: 1, version: 1, expiresAt: new Date(Date.now() + 60000).toISOString() } })
+      couponQuote: { id: 'quote-1', current: true, generation: 1, version: 1, expiresAt: new Date(Date.now() + 60000).toISOString() } })
     const first = page.confirmCheckout(), second = page.confirmCheckout()
     await tick()
     assert.equal(calls.length, 1)

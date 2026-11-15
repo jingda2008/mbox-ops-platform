@@ -176,7 +176,7 @@ for(const [method,original,changed] of [
 })
 test('channel activation allows a corrected coupon after a first confirmed rollback',async()=>{
  let sent=0
- const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{status:409,data:{error:{code:'VERSION_CONFLICT',commitDisposition:'not_committed'}}}:{data:{data:{activationId:'valid-activation'}}})
+ const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{status:409,data:{error:{code:'VERSION_CONFLICT',commitDisposition:'not_committed'}}}:{data:{data:{claimId:'valid-coupon',activationId:'valid-activation',visitId:'visit'}}})
  await assert.rejects(f.api.activateChannelCoupon('old-coupon'));await f.api.activateChannelCoupon('valid-coupon')
  const calls=f.calls.filter(c=>c.path.includes('/channel/activate'))
  assert.equal(calls.length,2);assert.notEqual(calls[0].headers['idempotency-key'],calls[1].headers['idempotency-key'])
@@ -193,13 +193,13 @@ for(const outcome of ['success','network-error'])test(`channel activation ${outc
  const f=fixture(async call=>{
    if(!call.path.includes('/channel/activate'))return{data:{data:{status:'active'}}}
    if(hold)return new Promise(resolve=>{finish=resolve})
-   return{data:{data:{activationId:'original-activation'}}}
+   return{data:{data:{claimId:'claim-original',activationId:'original-activation',visitId:'visit'}}}
  })
  const table=f.load(f.root+'/utils/session.js').getTableSession(),original={...table}
  const action=f.api.activateChannelCoupon('claim-original'),denied=assert.rejects(action)
  await new Promise(setImmediate)
  table.tableToken='table-b';table.cartScope='cart-b'
- finish(outcome==='success'?{data:{data:{activationId:'original-activation'}}}:{networkError:true});await denied
+ finish(outcome==='success'?{data:{data:{claimId:'claim-original',activationId:'original-activation',visitId:'visit'}}}:{networkError:true});await denied
  assert.ok([...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
  Object.assign(table,original);hold=false
  await f.api.activateChannelCoupon('claim-original')
@@ -215,7 +215,7 @@ for(const [method,args] of [['claimChannelCoupon',['ABCDEFGH2345']]])test(`${met
  assert.equal(f.calls[1].headers['x-channel-recovery'],'1')
 })
 test('coupon activation recovery also requests receipt-only lookup',async()=>{
- let sent=0;const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{networkError:true}:{data:{data:{activationId:'original'}}})
+ let sent=0;const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:++sent===1?{networkError:true}:{data:{data:{claimId:'claim',activationId:'original',visitId:'visit'}}})
  await assert.rejects(f.api.activateChannelCoupon('claim'));await f.api.activateChannelCoupon('claim')
  const calls=f.calls.filter(c=>c.path.includes('/channel/activate'))
  assert.equal(calls[0].headers['x-channel-recovery'],undefined);assert.equal(calls[1].headers['x-channel-recovery'],'1')
@@ -232,4 +232,53 @@ test('missing channel receipt leaves the original journal blocked for manual ver
 test('Mini Program no longer exports partner account or settlement operations',()=>{
  const f=fixture(async()=>({data:{data:{}}}))
  for(const name of ['getChannelPartner','getChannelHistory','getChannelPoster','acceptChannelInvitation','respondChannelStatement','getChannelStatement'])assert.equal(f.api[name],undefined)
+})
+
+for(const result of [{},{claimId:''},{claimId:7}])test(`channel claim malformed success ${JSON.stringify(result)} keeps the original receipt recovery`,async()=>{
+ let sends=0
+ const f=fixture(async()=>({data:{data:++sends===1?result:{claimId:'real-claim'}}}))
+ await assert.rejects(f.api.claimChannelCoupon('ABCDEFGH2345'),{code:'CHANNEL_RECEIPT_INVALID'})
+ await f.api.claimChannelCoupon('ABCDEFGH2345')
+ assert.equal(f.calls[0].headers['idempotency-key'],f.calls[1].headers['idempotency-key'])
+ assert.equal(f.calls[1].headers['x-channel-recovery'],'1')
+})
+for(const result of [{},{activationId:'id'},{claimId:'foreign',activationId:'id',visitId:'visit'},{claimId:'claim',activationId:'',visitId:'visit'},{claimId:'claim',activationId:'id',visitId:null}])test(`channel activation rejects incomplete or foreign receipt ${JSON.stringify(result)}`,async()=>{
+ let sends=0
+ const f=fixture(async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:{data:{data:++sends===1?result:{claimId:'claim',activationId:'id',visitId:'visit'}}})
+ await assert.rejects(f.api.activateChannelCoupon('claim'),{code:'CHANNEL_RECEIPT_INVALID'})
+ await f.api.activateChannelCoupon('claim')
+ const calls=f.calls.filter(c=>c.path.includes('/channel/activate'))
+ assert.equal(calls[0].headers['idempotency-key'],calls[1].headers['idempotency-key'])
+ assert.equal(calls[1].headers['x-channel-recovery'],'1')
+ assert.ok(![...f.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+
+test('channel recovery after restart is explicit, account scoped and never creates a request on a split table',async()=>{
+ const respond=async call=>!call.path.includes('/channel/activate')?{data:{data:{status:'active'}}}:{networkError:true}
+ const first=fixture(respond)
+ await assert.rejects(first.api.activateChannelCoupon('claim'))
+ const restored=fixture(respond,{storage:first.storage})
+ const commands=restored.load(restored.root+'/utils/recoverable-command.js')
+ assert.equal(commands.pendingGuestCommandMatches('channel.activate',{claimId:'claim'}),true)
+ restored.storage.set(principal,{principalId:'account-b'})
+ assert.equal(commands.pendingGuestCommandMatches('channel.activate',{claimId:'claim'}),false)
+ await assert.rejects(restored.api.recoverChannelCoupon('claim'),{code:'COMMAND_RECOVERY_NOT_FOUND'})
+ restored.storage.set(principal,{principalId:'audit-a'})
+ restored.load(restored.root+'/utils/session.js').getTableSession().cartScope='split-session'
+ assert.equal(commands.pendingGuestCommandMatches('channel.activate',{claimId:'claim'}),false)
+ await assert.rejects(restored.api.recoverChannelCoupon('claim'),{code:'COMMAND_RECOVERY_NOT_FOUND'})
+ assert.equal(restored.calls.filter(c=>c.path.includes('/channel/activate')).length,0)
+ assert.ok([...restored.storage.keys()].some(k=>k.startsWith('mbox.command.v2:')))
+})
+
+test('explicit claim recovery survives restart and cannot issue again after its receipt is cleared',async()=>{
+ const first=fixture(async()=>({networkError:true}))
+ await assert.rejects(first.api.claimChannelCoupon('ABCDEFGH2345'))
+ const restarted=fixture(async()=>({data:{data:{claimId:'original-claim'}}}),{storage:first.storage})
+ assert.equal(restarted.load(restarted.root+'/utils/recoverable-command.js').pendingGuestCommandMatches('channel.claim',{code:'ABCDEFGH2345'},{customerOnly:true}),true)
+ await restarted.api.recoverChannelClaim('ABCDEFGH2345')
+ assert.equal(first.calls[0].headers['idempotency-key'],restarted.calls[0].headers['idempotency-key'])
+ assert.equal(restarted.calls[0].headers['x-channel-recovery'],'1')
+ await assert.rejects(restarted.api.recoverChannelClaim('ABCDEFGH2345'),{code:'COMMAND_RECOVERY_NOT_FOUND'})
+ assert.equal(restarted.calls.length,1)
 })

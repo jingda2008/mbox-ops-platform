@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import test from 'node:test'
@@ -6,7 +8,7 @@ const notice={id:'notice',code:'MBOX',version:1,rule:{operatorName:'测试主体
 const data=()=>({revision:'none',notices:[notice],channels:[{channel:'wechat',ready:false},{channel:'sms',ready:false},{channel:'phone',ready:false}],decisions:[]})
 async function harness(platform,read=async()=>data(),write=async()=>({})){
   let page
-  vm.runInNewContext(await readFile(new URL('../'+platform+'/pages/profile-marketing/index.js',import.meta.url),'utf8'),{Page(value){page=value;page.setData=value=>Object.assign(page.data,value)},require(name){return name.endsWith('/api')?{getMarketingPreferences:read,updateMarketingPreferences:write}:{customerErrorMessage:(_,fallback)=>fallback}}})
+  vm.runInNewContext(await readFile(new URL('../'+platform+'/pages/profile-marketing/index.js',import.meta.url),'utf8'),{Page(value){page=value;page.setData=value=>Object.assign(page.data,value)},require(name){ if (name.endsWith('/format')) return actualMiniFormat;return name.endsWith('/api')?{getMarketingPreferences:read,updateMarketingPreferences:write}:{customerErrorMessage:(_,fallback)=>fallback}}})
   return page
 }
 for(const platform of ['miniprogram','alipay-miniprogram']){

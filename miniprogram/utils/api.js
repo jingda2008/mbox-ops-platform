@@ -139,7 +139,7 @@ async function recoverableMemberWrite(operation, path, method, data, legacyKeys,
   await ensureBoundCustomerSession()
   return (await recoverableGuestCommand(operation, data, (key, context) => publicRequest(path, {
     ...(extra || {}), method, headers: { ...((extra || {}).headers || {}), 'idempotency-key': key, ...(extra && extra.channelRecovery && context.recovery ? { 'x-channel-recovery': '1' } : {}) }, data,
-  }), { customerOnly: true, legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey, clearOnNotCommitted: Boolean(extra && extra.clearOnNotCommitted) })).data
+  }).then(response => extra && extra.channelRecovery ? validateChannelReceipt(response) : response), { customerOnly: true, recoveryOnly: Boolean(extra && extra.recoveryOnly), legacyKeys: legacyKeys || [], initialKey: extra && extra.initialKey, clearOnNotCommitted: Boolean(extra && extra.clearOnNotCommitted) })).data
 }
 
 async function getMiniBootstrap() { return (await publicRequest('/api/public/mini/bootstrap')).data }
@@ -803,15 +803,29 @@ async function getChannelWallet() { return (await getChannelWalletPage()).items 
 
 async function getChannelOffer(code) { return (await publicRequest('/api/public/mini/channel/offer?code=' + encodeURIComponent(code))).data }
 
-async function claimChannelCoupon(code) {
-  return recoverableMemberWrite('channel.claim', '/api/public/mini/channel/claim', 'POST', { code }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true })
+// Validate before the durable command clears its journal. An HTTP 200 alone
+// cannot prove which coupon/visit was committed, especially after response loss.
+function validateChannelReceipt(response, expectedClaimId) {
+  const value = response && response.data
+  const id = input => typeof input === 'string' && input.trim().length > 0
+  if (!value || !id(value.claimId) || (expectedClaimId !== undefined
+    && (value.claimId !== expectedClaimId || !id(value.activationId) || !id(value.visitId)))) {
+    throw Object.assign(new Error('优惠操作回执不完整，结果待核对，请恢复原操作或联系门店'), { code: 'CHANNEL_RECEIPT_INVALID' })
+  }
+  return response
 }
-async function activateChannelCoupon(claimId) {
+
+async function claimChannelCoupon(code, recoveryOnly = false) {
+  return recoverableMemberWrite('channel.claim', '/api/public/mini/channel/claim', 'POST', { code }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true, recoveryOnly })
+}
+async function activateChannelCoupon(claimId, recoveryOnly = false) {
   await getGuestSession()
   return (await recoverableGuestCommand('channel.activate', { claimId }, (key, context) => request('/api/guest/channel/activate', {
     method: 'POST', headers: { 'idempotency-key': key, ...(context.recovery ? { 'x-channel-recovery': '1' } : {}) }, data: { claimId },
-  }), { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true })).data
+  }).then(response => validateChannelReceipt(response, claimId)), { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true, recoveryOnly })).data
 }
+function recoverChannelClaim(code) { return claimChannelCoupon(code, true) }
+function recoverChannelCoupon(claimId) { return activateChannelCoupon(claimId, true) }
 async function getCustomerBottles(cursor) {
   return (await publicRequest('/api/public/mini/customer/bottle-custody' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''))).data
 }
@@ -925,6 +939,6 @@ module.exports = {
   revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, quoteSharedCartChannel, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
-  getChannelWallet, getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon,
+  getChannelWallet, getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon, recoverChannelClaim, recoverChannelCoupon,
   logoutWechatIdentity,
 }

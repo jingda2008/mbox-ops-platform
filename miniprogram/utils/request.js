@@ -1,3 +1,4 @@
+const { parseInstant } = require('./format')
 const { getRuntimeConfig } = require('../config/index')
 const { getTableSession, clearTableConnection } = require('./session')
 const { tableRequestScope } = require('./table-request-scope')
@@ -207,7 +208,7 @@ function attachErrorDetails(error, detail) {
   if (typeof id !== 'string' || id.length < 8 || id.length > 128 || /[\s\x00-\x1f]/.test(id)) return
   error.details = { conflictingOrderId: id }
   if (typeof details.conflictingOrderCreatedAt === 'string'
-    && details.conflictingOrderCreatedAt.length <= 64 && Number.isFinite(Date.parse(details.conflictingOrderCreatedAt))) {
+    && details.conflictingOrderCreatedAt.length <= 64 && Number.isFinite(parseInstant(details.conflictingOrderCreatedAt))) {
     error.details.conflictingOrderCreatedAt = details.conflictingOrderCreatedAt
   }
 }

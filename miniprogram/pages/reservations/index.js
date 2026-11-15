@@ -1,3 +1,4 @@
+const { parseInstant, money, dateTime } = require('../../utils/format')
 const {
   getReservations,
   getReservationAvailability,
@@ -15,7 +16,6 @@ const {
 } = require('../../utils/api')
 const { randomId } = require('../../utils/id')
 const { getRuntimeConfig } = require('../../config/index')
-const { money, dateTime } = require('../../utils/format')
 const { customerErrorCode, customerErrorMessage } = require('../../utils/customer-error')
 const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
 const {
@@ -165,7 +165,7 @@ Page({
       const now = Date.now()
       const reservations = (data.reservations || []).filter((item) => {
         if (!EXECUTABLE_RESERVATION_STATUSES.has(item.status)) return false
-        const arrivalMs = Date.parse(item.arrivalAt)
+        const arrivalMs = parseInstant(item.arrivalAt)
         // 已过到店时间较久的预约视为不可执行，不再占用“我的预约”。
         if (Number.isFinite(arrivalMs) && arrivalMs < now - 12 * 60 * 60 * 1000) return false
         return true
@@ -184,8 +184,8 @@ Page({
           && EXECUTABLE_RESERVATION_STATUSES.has(item.status)
           && (
             !item.customerCancelUntil
-            || (Number.isFinite(Date.parse(item.customerCancelUntil))
-              && Date.parse(item.customerCancelUntil) > now)
+            || (Number.isFinite(parseInstant(item.customerCancelUntil))
+              && parseInstant(item.customerCancelUntil) > now)
           ),
         performanceImpact: pendingByReservation.get(item.publicId) || null,
         performanceNotificationOption: notificationByReservation.get(item.publicId) || null,

@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -61,11 +63,11 @@ async function loadDetailPage(state) {
   }
   const context = {
     module: { exports: {} }, exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === '../../config/index') return { getRuntimeConfig: () => ({ apiBaseUrl: 'https://audit.example.test', storeId: 'audit' }) }
       if (specifier === '../../utils/api') return api
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-contract` }
-      if (specifier === '../../utils/format') return { money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
+      if (specifier === '../../utils/format') return { ...actualMiniFormat, money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/media') return { publicImageUrl: (value) => value || '' }
       if (specifier === '../../utils/wechat-phone') return { readWechatPhoneAuthorization: () => ({ code: 'wechat-phone-authorization-code' }) }
       if (specifier === '../../utils/auth') return {
@@ -106,7 +108,7 @@ async function loadMiniProgramApp() {
   let definition = null
   const context = {
     module: { exports: {} }, exports: {},
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === './config/index') return { getRuntimeConfig: () => ({ isDevelopment: false }) }
       if (specifier === './utils/session') return { applyLaunchSession: () => ({}) }
       if (specifier === './utils/auth') return {

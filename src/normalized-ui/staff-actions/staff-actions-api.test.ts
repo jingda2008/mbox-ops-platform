@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { StaffActionsApi, StaffActionsApiError } from './staff-actions-api'
 
 describe('StaffActionsApi', () => {
+  it('passes the server preview guard unchanged when submitting participant movement',async()=>{
+    const guard={movementRevision:'0',sourceTableId:'table-a',sourceLocationVersion:7,sourceGuestCount:2,targetGuestCount:0,targetCapacity:8}
+    const send=vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({data:{movementGuard:guard}})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({data:{eventId:'event',targetTableSessionId:'new-target',movedParticipantCount:1,revokedGuestSessionCount:0,occurredAt:'2026-11-15T01:00:00Z',targetCapacityAtMovement:8,targetGuestCountBefore:0,targetGuestCountAfter:1},meta:{replayed:false}})))
+      .mockImplementation(async()=>new Response(JSON.stringify({data:[]})))
+    const stored=new Map<string,string>(),commandStorage={getItem:(k:string)=>stored.get(k)??null,setItem:(k:string,v:string)=>{stored.set(k,v)},removeItem:(k:string)=>{stored.delete(k)}}
+    const api=new StaffActionsApi({fetch:send,staffSessionId:'bound-movement-session',commandStorage})
+    const input={sourceTableSessionId:'source',movementKind:'participant_split' as const,targetTableId:'target',targetTableSessionId:null,movedGuestCount:1,participantPublicIds:['person']}
+    const preview=await api.previewParticipantMovement(input)
+    await api.moveParticipants({...input,reason:'现场核对',movementGuard:preview.movementGuard})
+    expect(JSON.parse(String(send.mock.calls[1]![1]?.body))).toEqual({...input,reason:'现场核对',movementGuard:guard})
+  })
   it('retries an uncertain member attendance with the original key and binds cancellation to its visit',async()=>{
     const visit={id:'visit-original',businessDate:'2026-09-26',checkedInAt:'2026-09-26T03:00:00Z',employeeName:'员工',status:'checked_in'}
     const send=vi.fn<typeof fetch>()

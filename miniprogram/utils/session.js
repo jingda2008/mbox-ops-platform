@@ -1,3 +1,4 @@
+const { parseInstant } = require('./format')
 function decodeScene(scene) {
   if (!scene) return {}
   try {
@@ -40,7 +41,7 @@ function applyLaunchSession(options, config) {
   const tableCodeInput = consistentAlias(sceneTable, explicitTable, 'scene与query桌号')
   const previous = wx.getStorageSync('mbox.table.session') || {}
   const connection = wx.getStorageSync('mbox.table.connection.state') || {}
-  const connectionAge = Date.now() - Date.parse(connection.updatedAt || '')
+  const connectionAge = Date.now() - parseInstant(connection.updatedAt || '')
   const recoverWaiting = connection.status === 'waiting_for_table' && connectionAge >= 0 && connectionAge <= 30 * 60 * 1000
   const mayReusePrevious = config.isDevelopment || recoverWaiting
   const tableCode = normalizeTableCode(tableCodeInput || (mayReusePrevious ? previous.tableCode : '') || config.defaultTableCode)

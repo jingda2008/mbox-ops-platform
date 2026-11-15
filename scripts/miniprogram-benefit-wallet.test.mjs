@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import { memberGuardFixture } from './miniprogram-member-guard-fixture.mjs'
 const memberGuards = memberGuardFixture()
 import assert from 'node:assert/strict'
@@ -12,15 +14,18 @@ const row = (id, state = 'upcoming') => ({
 })
 async function harness(platform, api) {
   let page
+  const timers = new Map(); let timerId = 0
   vm.runInNewContext(await readFile(new URL('../' + platform + '/pages/profile-coupons/index.js', import.meta.url), 'utf8'), {
+    setTimeout: callback => { timers.set(++timerId, callback); return timerId }, clearTimeout: id => timers.delete(id),
     Page(value) { page = value; page.setData = next => Object.assign(page.data, next) },
-    require(name) {
+    require(name) { if (name === './format') return actualMiniFormat;
       if (memberGuards[name.split('/').pop()]) return memberGuards[name.split('/').pop()]
       if (name.endsWith('/api')) return { getCustomerBenefitWallet: api }
-      if (name.endsWith('/format')) return { money: n => '¥' + n / 100, dateInput: value => value }
+      if (name.endsWith('/format')) return { ...actualMiniFormat, money: n => '¥' + n / 100, dateInput: value => value }
       return { customerErrorMessage: (_, fallback) => fallback }
     },
   })
+  page.testTimers = timers
   return page
 }
 for (const platform of ['miniprogram', 'alipay-miniprogram']) {
@@ -82,3 +87,26 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(page.data.coupons[0].id, 'new-account')
   })
 }
+
+test('WeChat member wallet rechecks expiry with the server and clears the timer on hide', async () => {
+  let reads = 0
+  const page = await harness('miniprogram', async () => ({items:[{
+    ...row('ending', ++reads === 1 ? 'available' : 'expired'), validUntil:new Date(Date.now()+1000).toISOString(),
+    pricePromise:{kind:'fixed_price',fixedPriceMinor:990,products:[{id:'snack',name:'薯条'}]},
+  }],nextCursor:null}))
+  await page.onShow()
+  assert.equal(page.data.coupons[0].canUsePriceCoupon,true)
+  assert.equal(page.testTimers.size,1)
+  await [...page.testTimers.values()][0]()
+  assert.equal(page.data.coupons[0].stateText,'已过期')
+  assert.equal(page.data.coupons[0].canUsePriceCoupon,false)
+  assert.equal(page.testTimers.size,0)
+  page.onHide();assert.equal(page.testTimers.size,0)
+})
+test('WeChat member wallet never restores redeemed or reserved state from local dates', async () => {
+  const page = await harness('miniprogram', async () => ({items:['redeemed','reserved'].map(state=>({
+    ...row(state,state), validUntil:new Date(Date.now()+1000).toISOString(),
+  })),nextCursor:null}))
+  await page.onShow();assert.equal(page.testTimers.size,0)
+  assert.deepEqual(Array.from(page.data.coupons,c=>c.stateText),['已使用','使用处理中'])
+})

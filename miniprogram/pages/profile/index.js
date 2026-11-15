@@ -1,3 +1,4 @@
+const { beijingDate, parseInstant, dateTime, money } = require('../../utils/format')
 const { beginMemberAction, invalidateMemberActions } = require('../../utils/member-page-action')
 const { memberCardProgress: buildMemberCardProgress, progressNumber } = require('../../utils/member-card-progress')
 const {
@@ -28,7 +29,6 @@ const {
 const { restartAnonymousCustomerSession } = require('../../utils/auth')
 const { consumeMembershipLoginRedirect, consumeMembershipLoginDestination } = require('../../utils/membership-gate')
 const { getTableConnection } = require('../../utils/session')
-const { dateTime, money } = require('../../utils/format')
 const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
 const { publicImageUrl } = require('../../utils/media')
@@ -166,8 +166,8 @@ function membershipView(item) {
   const periodText = !periodAt
     ? ''
     : progress.periodStatus === 'grace'
-      ? `保级宽限至 ${String(periodAt).slice(0, 10)}`
-      : `本级周期至 ${String(periodAt).slice(0, 10)}`
+      ? `保级宽限至 ${beijingDate(periodAt)}`
+      : `本级周期至 ${beijingDate(periodAt)}`
   const expiry = item.pointsExpiry
   return Object.assign({}, item, {
     level: displayLevel,
@@ -182,7 +182,7 @@ function membershipView(item) {
     retainText,
     periodText,
     expiryText: expiry
-      ? `近30天有 ${expiry.expiringWithin30Days} 积分将到期，最近 ${String(expiry.nextExpiryAt).slice(0, 10)}`
+      ? `近30天有 ${expiry.expiringWithin30Days} 积分将到期，最近 ${beijingDate(expiry.nextExpiryAt)}`
       : '',
   }, memberCardProgress(displayLevel, progress, previewLevel, item.tierProgressStatus,
     item.lifetimeGrowth === undefined ? item.growthValue : item.lifetimeGrowth))
@@ -198,7 +198,7 @@ function benefitView(item) {
     quantityAvailable,
     quantityText: `×${quantityAvailable}`,
     valueText: item.valueAmountMinor > 0 ? money(item.valueAmountMinor) : '',
-    validText: item.validUntil ? String(item.validUntil).slice(0, 10) : '长期有效',
+    validText: item.validUntil === null ? '长期有效' : beijingDate(item.validUntil, '有效期待核对'),
   })
 }
 
@@ -258,7 +258,7 @@ function customerPreferenceView(snapshot) {
     isActive: fact.status === 'active',
     statusText: fact.status === 'active' ? '当前有效' : '依据不足',
     evidenceText: `支持${Number(fact.supportingEvidenceCount || 0)}条${Number(fact.contraryEvidenceCount || 0) > 0 ? ` · 相反${Number(fact.contraryEvidenceCount)}条` : ''}`,
-    lastEvidenceText: fact.lastEvidenceAt ? String(fact.lastEvidenceAt).slice(0, 10) : '',
+    lastEvidenceText: fact.lastEvidenceAt ? beijingDate(fact.lastEvidenceAt) : '',
   }))
   const sources = ((snapshot && snapshot.sources) || []).slice(0, 8).map((source) => ({
     publicId: source.publicId,
@@ -266,7 +266,7 @@ function customerPreferenceView(snapshot) {
     valueText: preferenceValueName(source.key, source.value),
     sourceText: source.sourceKind === 'customer_declaration' ? '本人填写' : '到店确认',
     relationText: source.polarity === 'contradicts' ? '已标记不符合' : '支持此偏好',
-    createdAtText: source.createdAt ? String(source.createdAt).slice(0, 10) : '',
+    createdAtText: source.createdAt ? beijingDate(source.createdAt) : '',
     withdrawn: source.withdrawn === true,
   }))
   return {
@@ -366,7 +366,7 @@ Page({
       const benefits = (results[1] || []).map(benefitView)
       const reservations = (results[2].reservations || []).filter((item) => {
         if (!['pending', 'confirmed'].includes(item.status)) return false
-        const arrivalMs = Date.parse(item.arrivalAt)
+        const arrivalMs = parseInstant(item.arrivalAt)
         if (Number.isFinite(arrivalMs) && arrivalMs < Date.now() - 12 * 60 * 60 * 1000) return false
         return true
       }).map((item) => ({
@@ -394,7 +394,7 @@ Page({
         return Object.assign({}, item, {
           description: display.description || display.subtitle || '积分兑换指定商品或权益；结账抵扣以门店已发布规则为准',
           inventoryText,
-          availableUntilText: item.availableUntil ? String(item.availableUntil).slice(0, 10) : '',
+          availableUntilText: item.availableUntil ? beijingDate(item.availableUntil) : '',
           actionText: item.eligible ? `${item.pointsRequired}积分兑换` : (item.ineligibleReason || '暂不可兑换'),
         })
       })

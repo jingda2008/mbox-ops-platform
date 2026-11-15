@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -61,13 +63,13 @@ async function identityFixture(responses) {
   let definition
   vm.runInNewContext(await read('miniprogram/components/member-identities/index.js'), {
     Component: value => { definition = value },
-    require: path => path.endsWith('/api') ? { getMemberCards: () => { const value = responses.shift(); if (value instanceof Error) throw value; return value } } : { dateInput: value => value },
+    require: path => path.endsWith('/api') ? { getMemberCards: () => { const value = responses.shift(); if (value instanceof Error) throw value; return value } } : actualMiniFormat,
     Date,
   })
   const instance = { ...definition.methods, data: { ...definition.data }, setData(patch) { Object.assign(this.data, patch) } }
   return { instance, definition }
 }
-const identity = { id: 'one', project_id: 'music', name: '五迷卡', status: 'active', expired: false, valid_from: '2020-01-01', valid_until: '2099-01-01' }
+const identity = { id: 'one', project_id: 'music', name: '五迷卡', status: 'active', expired: false, valid_from: '2020-01-01T00:00:00+08:00', valid_until: '2099-01-01T00:00:00+08:00' }
 test('menu taste indicators use supported backend tags, deduplicate and tolerate legacy data', async () => {
   const source = await read('miniprogram/pages/order/index.js')
   const fn = source.slice(source.indexOf('function salesTimeText('), source.indexOf('function menuRecommendations('))
@@ -78,7 +80,7 @@ test('menu taste indicators use supported backend tags, deduplicate and tolerate
 })
 test('only current approved active identities appear, with actual configured names and pagination', async () => {
   const { instance } = await identityFixture([
-    { activeMember: true, cards: [identity, { ...identity, id: 'pending', status: 'pending' }, { ...identity, id: 'suspended', status: 'suspended' }, { ...identity, id: 'expired', expired: true }, { ...identity, id: 'future', valid_from: '2098-01-01' }], nextCursors: { cards: 'next' } },
+    { activeMember: true, cards: [identity, { ...identity, id: 'pending', status: 'pending' }, { ...identity, id: 'suspended', status: 'suspended' }, { ...identity, id: 'expired', expired: true }, { ...identity, id: 'future', valid_from: '2098-01-01T00:00:00+08:00' }], nextCursors: { cards: 'next' } },
     { activeMember: true, cards: [{ ...identity, id: 'two', project_id: 'other', name: '音乐卡' }], nextCursors: {} },
   ])
   await instance.reload()

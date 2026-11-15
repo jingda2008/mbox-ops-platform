@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -14,7 +16,7 @@ async function loadSessionModule() {
   const source = await readFile(new URL('../miniprogram/utils/session.js', import.meta.url), 'utf8')
   const storage = new Map()
   const app = { globalData: {} }
-  const context = {
+  const context = { require: name => { if (name === './format') return actualMiniFormat; throw new Error(name) },
     module: { exports: {} },
     exports: {},
     getApp: () => app,
@@ -38,7 +40,7 @@ async function loadTableRequestScopeModule() {
 async function loadAppModule(storage, options = {}) {
   const sessionSource = await readFile(new URL('../miniprogram/utils/session.js', import.meta.url), 'utf8')
   const app = { globalData: {} }
-  const sessionContext = {
+  const sessionContext = { require: name => { if (name === './format') return actualMiniFormat; throw new Error(name) },
     module: { exports: {} }, exports: {}, getApp: () => app,
     wx: {
       getStorageSync: (key) => storage.get(key),
@@ -54,7 +56,7 @@ async function loadAppModule(storage, options = {}) {
       Object.assign(app, definition)
       app.globalData = Object.assign({}, definition.globalData)
     },
-    require(specifier) {
+    require(specifier) { if (specifier === './format') return actualMiniFormat;
       if (specifier === './config/index') return { getRuntimeConfig: () => production }
       if (specifier === './utils/session') return sessionContext.module.exports
       if (specifier === './utils/auth') return {

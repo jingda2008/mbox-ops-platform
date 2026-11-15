@@ -163,6 +163,7 @@ export interface StaffTableParticipant {
 }
 
 export interface StaffParticipantMovementPreview {
+  movementGuard:{sourceTableId:string;sourceLocationVersion:number;sourceGuestCount:number;targetGuestCount:number;targetCapacity:number;movementRevision?:string}
   movementKind:'participant_split'|'participant_merge'
   movedGuestCount:number
   selectedParticipantCount:number

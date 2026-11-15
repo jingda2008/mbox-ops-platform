@@ -1,3 +1,7 @@
+import { menuCheckoutPricing } from '../../src/components/menu-channel-pricing.js'
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
 import { inviteChannelWeb, hashChannelWebToken } from './channel-web-auth.js'
 import { channelAnonymousVisit } from './channel-partner-repository.js'
 import { PostgresOrderCancellationRepository } from './order-cancellation-repository.js'
@@ -7,7 +11,7 @@ import { PaymentCommandService } from './payment-command-service.js'
 import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
 import { VerifiedProviderObservationService, NormalizedProviderObservationAuthority } from './provider-verification-observation.js'
 import { PaymentRepository } from './payment-repository.js'
-import { NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
+import { assertStaffSessionBinding, NormalizedAuthenticationRequiredError } from './normalized-request-context.js'
 import { readChannelReport } from './channel-report.js'
 import { guestCommerceServiceApiPlugin } from './guest-commerce-service-api.js'
 import { GuestSharedCartRepository } from './guest-shared-cart-repository.js'
@@ -23,7 +27,8 @@ import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import { PricingAuthorizationPolicy } from './pricing-authorization-policy.js'
 import { PostgresPricingAuthority } from './postgres-pricing-authority.js'
 import { OrderRepository } from './order-repository.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import {StaffActionsApi} from '../../src/normalized-ui/staff-actions/staff-actions-api.js'
 import { Pool } from 'pg'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -114,6 +119,14 @@ integration('channel distribution real PostgreSQL authority', () => {
     const id=randomUUID()
     await admin.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($3::uuid,$1,$2,$4,left($3::text,30),'转桌目标',8)`,[...args,id,area]);return id
   }
+  async function movementPeer(){
+    const actor=randomUUID()
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3::uuid,$1,$2,$3::text,'第二名转桌员工')",[...args,actor])
+    await grantFixtureStaffPermissions(admin,scope,[actor],['table.transfer','table.participation.manage'])
+    const peer=Fastify()
+    await peer.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),resolveContext:()=>({scope,employeeId:actor,businessDate:'2026-11-12'})})
+    return peer
+  }
   async function settleMovementOrder(o:{id:string;totalAmountMinor:number}){
     await admin.query("UPDATE mbox.order_items SET status='delivered' WHERE order_id=$1",[o.id])
     const pay=randomUUID()
@@ -122,9 +135,12 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query("UPDATE mbox.orders SET status='completed',payment_status='paid',completed_at=clock_timestamp() WHERE id=$1",[o.id]);return pay
   }
   async function moveRequest(source:string,targetTable:string,kind:'whole_table_transfer'|'participant_split'|'participant_merge',target:string|null=null,customers:string[]=[],count=1){
-    const row=(await admin.query('SELECT table_id,location_version FROM mbox.table_sessions WHERE id=$1',[source])).rows[0]
+    const row=(await admin.query('SELECT table_id,location_version,guest_count FROM mbox.table_sessions WHERE id=$1',[source])).rows[0]
+    const destination=(await admin.query('SELECT t.capacity,s.guest_count,s.capacity_at_open FROM mbox.tables t LEFT JOIN mbox.table_sessions s ON s.table_id=t.id AND s.status=\'open\' WHERE t.id=$1',[targetTable])).rows[0]
+    const revision=(await admin.query('SELECT count(*)::text AS revision FROM mbox.table_customer_movement_events WHERE tenant_id=$1 AND store_id=$2 AND (source_table_session_id=ANY($3::uuid[]) OR target_table_session_id=ANY($3::uuid[]))',[...args,[source,...(target?[target]:[])]] )).rows[0].revision
+    const movementGuard={movementRevision:revision,sourceTableId:row.table_id,sourceLocationVersion:Number(row.location_version),sourceGuestCount:row.guest_count,targetGuestCount:destination.guest_count??0,targetCapacity:destination.capacity_at_open??destination.capacity}
     const ids=(await admin.query('SELECT public_id FROM mbox.table_session_customer_participations WHERE table_session_id=$1 AND customer_id=ANY($2::uuid[]) AND left_at IS NULL',[source,customers])).rows.map(r=>r.public_id)
-    return{method:'POST' as const,url:`/table-management/sessions/${source}/${kind==='whole_table_transfer'?'transfer':'participant-movements'}`,headers:{'idempotency-key':randomUUID()},payload:kind==='whole_table_transfer'?{targetTableId:targetTable,expectedSourceTableId:row.table_id,expectedLocationVersion:Number(row.location_version)}:{movementKind:kind,targetTableId:targetTable,targetTableSessionId:target,movedGuestCount:count,participantPublicIds:ids,reason:'渠道转桌联动隔离验证'}}
+    return{method:'POST' as const,url:`/table-management/sessions/${source}/${kind==='whole_table_transfer'?'transfer':'participant-movements'}`,headers:{'idempotency-key':randomUUID()},payload:kind==='whole_table_transfer'?{targetTableId:targetTable,expectedSourceTableId:row.table_id,expectedLocationVersion:Number(row.location_version)}:{movementHistoryConfirmed:true,movementGuard,movementKind:kind,targetTableId:targetTable,targetTableSessionId:target,movedGuestCount:count,participantPublicIds:ids,reason:'渠道转桌联动隔离验证'}}
   }
   it('does not let query text select a different authentication context',async()=>{
     const b=await batch();selfCustomer=await customer()
@@ -448,12 +464,13 @@ integration('channel distribution real PostgreSQL authority', () => {
   })
   const priceInput = (session:string, quantity=1) => ({tableSessionId:session,channel:'staff_assisted' as const,actorRef:`employee:${employee}`,lines:[{productId:product,quantity}]})
   const prepare = (session:string,quantity=1) => runner.run(scope,tx=>new ChannelPricingRepository(tx).prepare(priceInput(session,quantity)))
-  const consumePrice = (session:string,quoteId:string,quantity=1) => runner.run(scope,async tx=>{
+  const consumePrice = (session:string,quoteId:string,quantity=1,beforeCommit?:(pid:number)=>Promise<void>) => runner.run(scope,async tx=>{
     await new ChannelDistributionRepository(tx).lockIdentity()
     const input=priceInput(session,quantity),policy=new PricingAuthorizationPolicy(new PostgresPricingAuthority())
     const authorization=await policy.authorize(tx,{scope,actor:{type:'employee',employeeId:employee},tableSessionId:session,channel:'staff_assisted',lines:input.lines},{sourceType:'channel_quote',sourceId:quoteId})
     const order=await new OrderRepository(tx).createSubmitted({tableSessionId:session,publicId:randomUUID(),channel:'staff_assisted',lines:input.lines,createdByEmployeeId:employee},authorization)
     await policy.consume(tx,authorization!,order.id)
+    if(beforeCommit)await beforeCommit(Number((await tx.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid))
     return order
   })
   it('prices real submitted orders using one cumulative credit and rejects stale, changed or repeated quotes',async()=>{
@@ -680,6 +697,243 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query(`INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,'CNY')`,[...args,id,f.order.items[0]!.id,value])
     return id
   }
+  it('keeps wallet redemption history and spent capacity after failed, partial and full refunds',async()=>{
+    const f=await financeFixture()
+    const claim=(await admin.query(`SELECT q.id,q.customer_id,a.id AS activation_id FROM mbox.channel_claims q JOIN mbox.channel_activations a ON a.claim_id=q.id WHERE a.visit_id=$1`,[f.visitId])).rows[0]
+    const worker=new ChannelReconciliationWorker(runner)
+    await worker.runBatch(scope,'wallet-before-refund')
+    const wallet=()=>runner.run(scope,tx=>new ChannelDistributionRepository(tx).walletPage(claim.customer_id,{claimId:claim.id}))
+    expect((await wallet()).items[0]).toMatchObject({id:claim.id,status:'fulfilled'})
+    const reconcile=()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(f.visitId))
+    const pending=await financeRefund(f,2000,'processing')
+    expect(await reconcile()).toMatchObject({frozen:true})
+    await admin.query("UPDATE mbox.refunds SET status='failed',completed_at=clock_timestamp() WHERE id=$1",[pending])
+    expect(await reconcile()).toMatchObject({basis:9000,target:900,frozen:false})
+    await financeRefund(f,2000);expect(await reconcile()).toMatchObject({basis:7000,target:700})
+    await financeRefund(f,7000)
+    await worker.runBatch(scope,'wallet-after-refund');await worker.runBatch(scope,'wallet-after-refund-retry')
+    expect(await reconcile()).toMatchObject({basis:0,target:0,deltaMinor:0,frozen:false})
+    expect((await wallet()).items[0]).toMatchObject({id:claim.id,status:'fulfilled'})
+    expect((await admin.query('SELECT applied_discount_minor::text AS used FROM mbox.channel_activations WHERE id=$1',[claim.activation_id])).rows[0].used).toBe('1000')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_price_releases WHERE activation_id=$1',[claim.activation_id])).rows[0].n).toBe(0)
+    await admin.query('UPDATE mbox.table_session_customer_participations SET left_at=clock_timestamp() WHERE customer_id=$1 AND left_at IS NULL',[claim.customer_id])
+    const another=await table([claim.customer_id])
+    await expect(activate(claim.id,claim.customer_id,another)).rejects.toMatchObject({code:'VERSION_CONFLICT'})
+    expect((await admin.query('SELECT sum(commission_delta_minor)::text AS net FROM mbox.channel_ledger WHERE visit_id=$1',[f.visitId])).rows[0].net).toBe('0')
+  })
+  it('expires unused wallet coupons before the worker, preserves active transfer promises, and never revives an expired cancellation',async()=>{
+    const b=await batch({totalClaims:2,perCustomerClaims:2}),cid=await customer(),session=await table([cid])
+    const used=await issue(b.code,cid),unused=await issue(b.code,cid),a=await activate(used.claimId,cid,session)
+    await admin.query("UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 second' WHERE id=ANY($1::uuid[])",[[used.claimId,unused.claimId]])
+    const wallet=()=>runner.run(scope,tx=>new ChannelDistributionRepository(tx).walletPage(cid))
+    const before=(await wallet()).items
+    expect(before.find(q=>q.id===unused.claimId)?.status).toBe('expired')
+    expect(before.find(q=>q.id===used.claimId)?.status).toBe('active')
+    const moved=await app.inject(await moveRequest(session,await emptyMovementTable(),'whole_table_transfer'))
+    expect(moved.statusCode,moved.body).toBe(200)
+    expect(await activate(used.claimId,cid,session)).toMatchObject({reused:true,activationId:a.activationId})
+    expect((await prepare(session)).discountMinor).toBe(1000)
+    await runner.run(scope,tx=>new ChannelDistributionRepository(tx).cancelActivation(a.activationId!,session,employee,'过期后取消未使用绑定'))
+    expect((await wallet()).items.every(q=>q.status==='expired')).toBe(true)
+    await expect(activate(used.claimId,cid,session)).rejects.toMatchObject({code:'VERSION_CONFLICT'})
+    await expect(activate(unused.claimId,cid,session)).rejects.toThrow()
+    await expect(issue(b.code,cid)).rejects.toThrow()
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(2)
+  })
+  it.each(['response-lost','receipt-truncated'])('runs real mini page and HTTP concurrent activation, refund lock, transfer and recovery: %s',async fault=>{
+    const {liveMiniHarness}=createRequire(import.meta.url)('../../scripts/miniprogram-live-contract-harness.mjs')
+    const cid=await customer(),session=await table([cid]),b=await batch({minimumMinor:0,observationDays:0,allowStacking:true,visitDiscountCapMinor:3000,offer:{kind:'discount',discountBps:1000,maximumMinor:3000}})
+    await admin.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[...args,session,cid])
+    const actorRef=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:cid})
+    const guest=Fastify()
+    await guest.register(channelDistributionApiPlugin,{prefix:'/api',transactions:runner,commands:new NormalizedCommandExecutor(runner),
+      resolveSelfContext:async()=>({scope,customerId:cid,tableSessionId:null,businessDate:'2026-11-12',actorRef:`customer:${cid}`}),
+      resolveGuestContext:async()=>({scope,customerId:cid,tableSessionId:session,businessDate:'2026-11-12',actorRef}),
+      resolveStaffContext:async()=>({scope,employeeId:employee,businessDate:'2026-11-12'})})
+    let activationResponses=0
+    const transport=async(call:any)=>{
+      if(call.path.startsWith('/api/guest/session'))return{data:{data:{status:'active'}}}
+      const reply=await guest.inject({method:call.method,url:call.path+call.query,headers:call.headers,...(call.method==='GET'?{}:{payload:call.data})})
+      if(call.path==='/api/guest/channel/activate'&&++activationResponses===1&&reply.statusCode===200)
+        return fault==='response-lost'?{networkError:true}:{data:{data:{}}}
+      return{status:reply.statusCode,data:reply.json()}
+    }
+    let client=liveMiniHarness('miniprogram',transport)
+    let page:any
+    const openPage=()=>{
+    vm.runInNewContext(readFileSync(new URL('../../miniprogram/pages/channel-coupons/index.js',import.meta.url),'utf8'),{
+      Page:(value:unknown)=>{page=value},wx:client.runtime,Date,getApp:()=>({globalData:{}}),setTimeout:()=>1,clearTimeout:()=>{},
+      require:(path:string)=>client.load(client.root+'/'+path.replace('../../','')),
+    })
+    page.data=structuredClone(page.data);page.setData=(patch:object)=>Object.assign(page.data,patch)
+    }
+    openPage()
+    const refundConnection=await admin.connect()
+    try{
+      page.onLoad({code:b.code});await page.onShow();await page.claim()
+      const claimId=page.data.coupons[0].id
+      const staff={method:'POST' as const,url:'/staff/channel/activate',payload:{code:b.code,claimId,customerId:cid,tableSessionId:session}}
+      const first=await Promise.all([page.useCoupon({currentTarget:{dataset:{id:claimId}}}),app.inject({...staff,headers:{'idempotency-key':'channel-'+randomUUID()}}),app.inject({...staff,headers:{'idempotency-key':'channel-'+randomUUID()}})])
+      for(const response of first.slice(1))expect(response.statusCode,response.body).toBe(200)
+      expect(page.data.error).toBeTruthy();expect(page.data.notice).toBe('')
+      expect([...client.storage.keys()].filter((k:any)=>k.startsWith('mbox.command.v2:'))).toHaveLength(1)
+      const firstCalls=client.calls.slice(),savedStorage=client.storage
+      page.onUnload();client=liveMiniHarness('miniprogram',transport,{storage:savedStorage});openPage()
+      client.storage.set('mbox.wechat.identity.principal.v1',{principalId:'other-account'})
+      await expect(client.api.recoverChannelCoupon(claimId)).rejects.toMatchObject({code:'COMMAND_RECOVERY_NOT_FOUND'})
+      expect(client.calls.filter((c:any)=>c.path==='/api/guest/channel/activate')).toHaveLength(0)
+      client.storage.delete('mbox.wechat.identity.principal.v1')
+      page.onLoad({code:b.code});await page.onShow()
+      expect(page.data.coupons[0].canRecover).toBe(true)
+      const activation=(await admin.query('SELECT id,visit_id FROM mbox.channel_activations WHERE claim_id=$1',[claimId])).rows
+      expect(activation).toHaveLength(1)
+      const visit=activation[0].visit_id,order=await consumePrice(session,(await prepare(session)).id),payment=await settleMovementOrder(order)
+      await new ChannelReconciliationWorker(runner).runBatch(scope,'cross-before-refund')
+      const staleQuote=await prepare(session)
+      await refundConnection.query('BEGIN')
+      const refundId=randomUUID(),pid=(await refundConnection.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      await refundConnection.query(`INSERT INTO mbox.refunds(id,tenant_id,store_id,payment_id,public_id,provider_refund_id,amount_minor,status,reason,requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at) VALUES($3::uuid,$1,$2,$4,$3::text,$3::text,9000,'succeeded','并发全退',$5,$6,'独立复核',clock_timestamp())`,[...args,refundId,payment,employee,reviewer])
+      await refundConnection.query(`INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,9000,'CNY')`,[...args,refundId,order.items[0]!.id])
+      const reconcile=runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visit))
+      // Prove a real lock wait, rather than relying on request timing or sleep.
+      await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
+      const movement=app.inject(await moveRequest(session,await emptyMovementTable(),'whole_table_transfer'))
+      const checkout=Promise.allSettled([consumePrice(session,staleQuote.id),consumePrice(session,staleQuote.id)])
+      const recovery=page.recoverCoupon({currentTarget:{dataset:{id:claimId}}})
+      await refundConnection.query('COMMIT')
+      expect(await reconcile).toMatchObject({basis:0,target:0})
+      const moved=await movement;expect(moved.statusCode,moved.body).toBe(200)
+      expect((await checkout).map(r=>r.status)).toEqual(['rejected','rejected'])
+      await recovery
+      expect(page.data.error).toBe('');expect(page.data.coupons[0].status).toBe('fulfilled')
+      const writes=[...firstCalls,...client.calls].filter((c:any)=>c.path==='/api/guest/channel/activate')
+      expect(writes).toHaveLength(2);expect(writes[1].headers['idempotency-key']).toBe(writes[0].headers['idempotency-key']);expect(writes[1].headers['x-channel-recovery']).toBe('1')
+      expect([...client.storage.keys()].filter((k:any)=>k.startsWith('mbox.command.v2:'))).toHaveLength(0)
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(1)
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(1)
+      expect((await admin.query('SELECT applied_discount_minor::text AS used FROM mbox.channel_activations WHERE claim_id=$1',[claimId])).rows[0].used).toBe('1000')
+      const positions=await Promise.all([1,2,3].map(()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visit))))
+      for(const position of positions)expect(position).toMatchObject({basis:0,target:0,deltaMinor:0})
+    }finally{page.onUnload();await refundConnection.query('ROLLBACK');refundConnection.release();await guest.close()}
+  },30_000)
+  it('deduplicates partial refund callbacks across table split, transfer and commission reconciliation',async()=>{
+    const f=await financeFixture(0,'postar'),payment=(await admin.query('SELECT provider_transaction_id FROM mbox.payments WHERE id=$1',[f.payment])).rows[0]
+    const source=f.order.tableSessionId!,claim=(await admin.query('SELECT q.id,q.customer_id,a.id AS activation_id FROM mbox.channel_claims q JOIN mbox.channel_activations a ON a.claim_id=q.id WHERE a.visit_id=$1',[f.visitId])).rows[0]
+    // This fixture's finance helper closes the referral visit; reopen only this
+    // synthetic party for a real split, then close it for final reconciliation.
+    await admin.query('UPDATE mbox.channel_visits SET closed_at=NULL WHERE id=$1',[f.visitId])
+    await admin.query("UPDATE mbox.orders SET status='completed',payment_status='paid',completed_at=clock_timestamp() WHERE id=$1",[f.order.id])
+    await admin.query("UPDATE mbox.kds_tasks SET status='ready',ready_at=clock_timestamp() WHERE order_item_id IN(SELECT id FROM mbox.order_items WHERE order_id=$1)",[f.order.id])
+    const companion=await customer(),sourceTable=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].table_id
+    await admin.query(`INSERT INTO mbox.table_session_customer_participations(tenant_id,store_id,public_id,table_session_id,table_id,customer_id,join_source,identity_level,confirmation_state,location_started_at) VALUES($1,$2,$3,$4,$5,$6,'employee_assisted','wechat','confirmed',clock_timestamp())`,[...args,randomUUID(),source,sourceTable,companion])
+    const code=(await admin.query('SELECT b.offer_code FROM mbox.channel_claims q JOIN mbox.channel_batches b ON b.id=q.batch_id WHERE q.id=$1',[claim.id])).rows[0].offer_code
+    const original={method:'POST' as const,url:'/staff/channel/activate',headers:{'idempotency-key':'channel-'+randomUUID()},payload:{code,claimId:claim.id,customerId:claim.customer_id,tableSessionId:source}}
+    const initial=await app.inject(original);expect(initial.statusCode,initial.body).toBe(200)
+    const split=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[claim.customer_id],1))
+    expect(split.statusCode,split.body).toBe(200)
+    const target=split.json().data.targetTableSessionId
+    const oldClaimCount=(await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE customer_id=$1',[claim.customer_id])).rows[0].n
+    const recovery=await app.inject({...original,headers:{...original.headers,'x-channel-recovery':'1'}})
+    expect(recovery.statusCode,recovery.body).toBe(200);expect(recovery.json().meta.replayed).toBe(true)
+    const rewritten=await app.inject({...original,headers:{...original.headers,'x-channel-recovery':'1'},payload:{...original.payload,tableSessionId:target}})
+    expect(rewritten.statusCode,rewritten.body).toBe(409)
+    const reused=await activate(claim.id,claim.customer_id,target)
+    expect(reused).toMatchObject({reused:true,activationId:claim.activation_id,visitId:f.visitId})
+    const payments=new PaymentCommandService(new NormalizedCommandExecutor(runner),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
+    const observation=new VerifiedProviderObservationService(runner),integrationRef='channel-partial-refund-test'
+    async function callback(refundId:string,amount:number,succeeded=true){
+      const occurredAt=new Date().toISOString(),verifiedObservationId=await observation.recordRefund({scope,provider:'postar',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef,refundPublicId:refundId,providerTransactionId:refundId,originalProviderTransactionId:payment.provider_transaction_id,reportedAmountMinor:amount,reportedCurrency:'CNY',status:succeeded?'succeeded':'failed',occurredAt,evidence:{fixture:true}})
+      return{scope,actor:{type:'integration' as const,ref:integrationRef},businessDate:'2026-11-12',idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),verifiedObservationId,refundPublicId:refundId,provider:'postar' as const,providerRefundId:refundId,originalProviderTransactionId:payment.provider_transaction_id,reportedAmountMinor:amount,reportedCurrency:'CNY',succeeded,occurredAt}
+    }
+    const first=await financeRefund(f,2000,'processing'),command=await callback(first,2000)
+    const moved=app.inject(await moveRequest(target,await emptyMovementTable(),'whole_table_transfer'))
+    const copies=await Promise.all([1,2,3,4].map(()=>payments.recordProviderRefundResult(command)))
+    expect(copies.filter(row=>!row.replayed)).toHaveLength(1)
+    expect((await moved).statusCode).toBe(200)
+    const redelivery=await callback(first,2000)
+    await payments.recordProviderRefundResult(redelivery)
+    await expect(callback(first,2000,false).then(input=>payments.recordProviderRefundResult(input))).rejects.toThrow()
+    await expect(callback(first,2001).then(input=>payments.recordProviderRefundResult(input))).rejects.toThrow()
+    const second=await financeRefund(f,1000,'processing')
+    await payments.recordProviderRefundResult(await callback(second,1000))
+    await payments.recordProviderRefundResult(await callback(second,1000))
+    await admin.query('UPDATE mbox.channel_visits SET closed_at=clock_timestamp() WHERE id=$1',[f.visitId])
+    const reconciled=await Promise.all([1,2,3].map(()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(f.visitId))))
+    for(const row of reconciled)expect(row).toMatchObject({basis:6000,target:600,frozen:false})
+    expect((await admin.query("SELECT count(*)::int AS n,sum(amount_minor)::text AS amount FROM mbox.refunds WHERE payment_id=$1 AND status='succeeded'",[f.payment])).rows[0]).toEqual({n:2,amount:'3000'})
+    expect((await admin.query("SELECT count(*)::int AS n,sum(amount_minor)::text AS amount FROM mbox.reconciliation_entries WHERE refund_id=ANY($1::uuid[]) AND entry_type='refund'",[[first,second]])).rows[0]).toEqual({n:2,amount:'-3000'})
+    expect((await admin.query('SELECT sum(commission_delta_minor)::text AS amount FROM mbox.channel_ledger WHERE visit_id=$1',[f.visitId])).rows[0].amount).toBe('600')
+    expect((await admin.query('SELECT applied_discount_minor::text AS used FROM mbox.channel_activations WHERE id=$1',[claim.activation_id])).rows[0].used).toBe('1000')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE customer_id=$1',[claim.customer_id])).rows[0].n).toBe(oldClaimCount)
+  },30_000)
+  it.each([4500,9000])('reprices new consumption after refund %i across two split tables without restoring spent capacity',async refundMinor=>{
+    const b=await batch({minimumMinor:0,allowStacking:true,visitDiscountCapMinor:2500,observationDays:0,offer:{kind:'discount',discountBps:1000,maximumMinor:5000}})
+    const owner=await customer(),companion=await customer(),source=await table([owner,companion]),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const original=await consumePrice(source,(await prepare(source)).id),payment=await settleMovementOrder(original)
+    const split=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1))
+    expect(split.statusCode,split.body).toBe(200);const target=split.json().data.targetTableSessionId
+    const stale=await prepare(source)
+    await financeRefund({payment,order:original},refundMinor)
+    await expect(consumePrice(source,stale.id)).rejects.toThrow()
+    for(const tableId of [source,target]){
+      const rows=await app.inject({method:'GET',url:`/staff/channel/table/${tableId}`})
+      expect(rows.statusCode,rows.body).toBe(200)
+      expect(rows.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId,usedDiscountMinor:'1000',visitDiscountCapMinor:2500})])
+    }
+    if(refundMinor===9000){
+      // A full refund cannot recreate the already spent first ten yuan. The
+      // next ordinary order builds new eligible spend, with the same source.
+      await expect(prepare(target)).rejects.toThrow('尚无可抵扣')
+      const ordinary=await runner.run(scope,tx=>new OrderRepository(tx).createSubmitted({tableSessionId:target,publicId:randomUUID(),channel:'staff_assisted',lines:[{productId:product,quantity:1}],createdByEmployeeId:employee}))
+      expect(ordinary.totalAmountMinor).toBe(10000);await settleMovementOrder(ordinary)
+    }
+    const {loadMiniModule}=createRequire(import.meta.url)('../../scripts/load-miniprogram-test-module.mjs')
+    const utils=loadMiniModule(new URL('../../miniprogram/utils/checkout-coupons.js',import.meta.url))
+    const page:any={...utils.checkoutCouponMethods({quoteChannel:async()=>({...await prepare(target),current:true,sourceType:'channel_quote',generation:1,version:1}),money:(n:number)=>(n/100).toFixed(2),randomId:()=>randomUUID(),scope:()=>target,errorMessage:(e:Error)=>e.message}),data:{...structuredClone(utils.initialCheckoutCoupons),busy:false,cart:[],cartGeneration:1,cartVersion:1,checkoutConfirmVisible:true},setData(patch:object){Object.assign(this.data,patch)}}
+    const nextDiscount=refundMinor===4500?500:1000
+    await page.quoteCheckoutChannel()
+    expect(page.data.couponQuoteTotal).toBe(((10000-nextDiscount)/100).toFixed(2));expect(page.couponCheckoutReady()).toBe(true)
+    const q=page.data.couponQuote
+    expect(menuCheckoutPricing({originalMinor:10000,quote:{...q,fingerprint:'target-cart'},fingerprint:'target-cart',now:Date.now()})).toMatchObject({amountMinor:10000-nextDiscount,discountMinor:nextDiscount})
+    const quotes=await Promise.all([prepare(source),prepare(target)])
+    expect(quotes.map(q=>q.discountMinor)).toEqual([nextDiscount,nextDiscount])
+    const attempts=await Promise.allSettled([consumePrice(source,quotes[0]!.id),consumePrice(target,quotes[1]!.id)])
+    const winners=attempts.filter((r):r is PromiseFulfilledResult<Awaited<ReturnType<typeof consumePrice>>>=>r.status==='fulfilled')
+    expect(winners).toHaveLength(1);await settleMovementOrder(winners[0]!.value)
+    await expect(runner.run(scope,tx=>new ChannelDistributionRepository(tx).cancelActivation(active.activationId!,target,employee,'已消费后不能撤销恢复额度'))).rejects.toMatchObject({code:'NOT_REVERSIBLE'})
+    const lastDiscount=2500-1000-nextDiscount
+    await page.quoteCheckoutChannel();expect(page.data.couponQuote.discountMinor).toBe(lastDiscount)
+    const last=await consumePrice(target,page.data.couponQuote.id);expect(last.totalAmountMinor).toBe(10000-lastDiscount);await settleMovementOrder(last)
+    await page.quoteCheckoutChannel();expect(page.data.couponQuote).toBeNull();expect(page.couponCheckoutReady()).toBe(false)
+    expect(menuCheckoutPricing({originalMinor:10000,quote:null,fingerprint:'target-cart',now:Date.now(),needsReview:page.data.couponNeedsReview})).toMatchObject({amountMinor:null,needsReview:true})
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=ANY($1::uuid[])",[[source,target]])
+    const amounts=await Promise.all([1,2,3].map(()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(active.visitId!))))
+    for(const amount of amounts)expect(amount).toMatchObject({basis:refundMinor===4500?23000:28500,target:refundMinor===4500?2300:2850,frozen:false})
+    expect((await admin.query('SELECT applied_discount_minor::text AS used FROM mbox.channel_activations WHERE id=$1',[active.activationId])).rows[0].used).toBe('2500')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE claim_id=$1',[coupon.claimId])).rows[0].n).toBe(1)
+  },30_000)
+  it('isolates two staff actors sharing a mistaken command number, then reuses the same split-party binding',async()=>{
+    const otherEmployee=randomUUID()
+    await admin.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3::uuid,$1,$2,$3::text,'并发员工')`,[...args,otherEmployee])
+    await grantFixtureStaffPermissions(admin,scope,[otherEmployee],['channel.activate','table.view_all'])
+    const otherApp=Fastify()
+    await otherApp.register(channelDistributionApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),resolveSelfContext:async()=>{throw new Error('not a customer')},resolveGuestContext:async()=>{throw new Error('not a guest')},resolveStaffContext:async()=>({scope,employeeId:otherEmployee,businessDate:'2026-11-12'})})
+    try{
+      const b=await batch(),owner=await customer(),companion=await customer(),source=await table([owner,companion]),coupon=await issue(b.code,owner)
+      const request={method:'POST' as const,url:'/staff/channel/activate',headers:{'idempotency-key':'channel-'+randomUUID()},payload:{code:b.code,claimId:coupon.claimId,customerId:owner,tableSessionId:source}}
+      const results=await Promise.all([app.inject(request),otherApp.inject(request)])
+      expect(results.map(r=>r.statusCode).sort()).toEqual([200,409])
+      const winner=results[0]!.statusCode===200?app:otherApp,loser=winner===app?otherApp:app
+      const denied=await loser.inject({...request,headers:{...request.headers,'x-channel-recovery':'1'}});expect(denied.statusCode).toBe(409)
+      const move=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1));expect(move.statusCode,move.body).toBe(200)
+      const target=move.json().data.targetTableSessionId
+      const recovered=await winner.inject({...request,headers:{...request.headers,'x-channel-recovery':'1'}});expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json().meta.replayed).toBe(true)
+      const confirmed=await loser.inject({...request,headers:{'idempotency-key':'channel-'+randomUUID()},payload:{...request.payload,tableSessionId:target}})
+      expect(confirmed.statusCode,confirmed.body).toBe(200);expect(confirmed.json().data.activationId).toBe(recovered.json().data.activationId);expect(confirmed.json().data.reused).toBe(true)
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(1)
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE claim_id=$1',[coupon.claimId])).rows[0].n).toBe(1)
+    }finally{await otherApp.close()}
+  })
   it('accrues net paid eligible goods once and appends partial/full refund deltas without rounding drift',async()=>{
     const f=await financeFixture(),reconcile=()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(f.visitId))
     expect(await reconcile()).toMatchObject({basis:9000,target:900,deltaMinor:900,frozen:false})
@@ -1087,6 +1341,522 @@ integration('channel distribution real PostgreSQL authority', () => {
     await expect(activate(another.claimId,other,session)).rejects.toMatchObject({code:'VISIT_LIMIT'})
     expect((await admin.query('SELECT sum(applied_discount_minor)::text AS amount FROM mbox.channel_activations WHERE visit_id=$1',[active.visitId])).rows[0].amount).toBe('1500')
   })
+  it.each(['participant_split','participant_merge'] as const)('rejects new legacy requests without a snapshot, including receipt-only probes: %s',async kind=>{
+    const owner=await customer(),source=await table(kind==='participant_split'?[owner,await customer()]:[])
+    const target=kind==='participant_merge'?await table([]):null,targetTable=target?(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[target])).rows[0].table_id:await emptyMovementTable()
+    const request=await moveRequest(source,targetTable,kind,target,kind==='participant_split'?[owner]:[],kind==='participant_split'?1:2)
+    const {movementGuard:_,...legacy}=request.payload
+    const original=await app.inject({...request,payload:legacy})
+    expect(original.statusCode,original.body).toBe(409);expect(original.json().error).toMatchObject({code:'TABLE_PARTICIPANT_NOT_COMMITTED',commitDisposition:'not_committed'})
+    const forged=await app.inject({...request,payload:{...legacy,requireGuard:false,receiptOnly:false,nativeGuard:request.payload.movementGuard}})
+    expect(forged.statusCode,forged.body).toBe(409);expect(forged.json().error.code).toBe('TABLE_PARTICIPANT_NOT_COMMITTED')
+    const receiptOnly=await app.inject({...request,headers:{...request.headers,'x-table-movement-recovery':'1'}})
+    expect(receiptOnly.statusCode,receiptOnly.body).toBe(409);expect(receiptOnly.json().error.code).toBe('TABLE_MOVEMENT_RECEIPT_UNAVAILABLE')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(0)
+    const valid=await app.inject(request);expect(valid.statusCode,valid.body).toBe(200)
+  })
+  it('recovers a historical unguarded receipt after transfer, merge and another split without executing it again',async()=>{
+    const owner=await customer(),other=await customer(),source=await table([owner,other]),b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1),{movementGuard:_,...body}=request.payload
+    // Seed a genuinely old committed command through the repository service,
+    // not through the now guarded HTTP route. Its original fingerprint is kept.
+    const original=await new TableManagementCommandService(new NormalizedCommandExecutor(runner)).moveParticipants({
+      ...body,sourceTableSessionId:source,movementKind:'participant_split',targetTableSessionId:null,movedGuestCount:1,participantPublicIds:body.participantPublicIds!,
+      scope,actor:{type:'employee',employeeId:employee},businessDate:'2026-11-12',reason:body.reason!,idempotencyKey:request.headers['idempotency-key'],
+      requestFingerprint:createHash('sha256').update(JSON.stringify({method:'POST',url:request.url,employeeId:employee,body})).digest('hex'),
+    })
+    const split=original.value.targetTableSessionId
+    expect((await app.inject(await moveRequest(split,await emptyMovementTable(),'whole_table_transfer'))).statusCode).toBe(200)
+    const sourceTable=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].table_id
+    const merge=await app.inject(await moveRequest(split,sourceTable,'participant_merge',source,[owner],1));expect(merge.statusCode,merge.body).toBe(200)
+    expect((await app.inject(await moveRequest(source,await emptyMovementTable(),'whole_table_transfer'))).statusCode).toBe(200)
+    const splitAgain=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1));expect(splitAgain.statusCode,splitAgain.body).toBe(200)
+    const before=(await admin.query('SELECT id,table_id,status,guest_count,location_version FROM mbox.table_sessions WHERE id=ANY($1::uuid[]) ORDER BY id',[[source,split,splitAgain.json().data.targetTableSessionId]])).rows
+    const eventCounts=async()=>(await admin.query(`SELECT
+      (SELECT count(*)::int FROM mbox.table_customer_movement_events WHERE tenant_id=$1 AND store_id=$2) AS movements,
+      (SELECT count(*)::int FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2) AS audits,
+      (SELECT count(*)::int FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2) AS outbox`,args)).rows[0]
+    const counts=await eventCounts()
+    const replayRequest={...request,payload:body,headers:{...request.headers,'x-table-movement-recovery':'1'}}
+    for(const durable of [false,true]){
+      if(durable)await admin.query("DELETE FROM mbox.idempotency_records WHERE tenant_id=$1 AND store_id=$2 AND operation_scope='table.participation.move' AND idempotency_key=$3",[...args,request.headers['idempotency-key']])
+      const results=await Promise.all([app.inject(replayRequest),app.inject(replayRequest)])
+      for(const response of results){expect(response.statusCode,response.body).toBe(200);expect(response.json().meta.replayed).toBe(true);expect(response.json().data.eventId).toBe(original.value.eventId)}
+    }
+    const tampered=await app.inject({...replayRequest,payload:{...body,targetTableId:await emptyMovementTable()}});expect(tampered.statusCode).toBe(409)
+    const peer=await movementPeer();try{expect((await peer.inject(replayRequest)).statusCode).toBe(409)}finally{await peer.close()}
+    expect((await admin.query('SELECT id,table_id,status,guest_count,location_version FROM mbox.table_sessions WHERE id=ANY($1::uuid[]) ORDER BY id',[[source,split,splitAgain.json().data.targetTableSessionId]])).rows).toEqual(before)
+    const binding=await app.inject({method:'GET',url:`/staff/channel/table/${splitAgain.json().data.targetTableSessionId}`})
+    expect(binding.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId})])
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE visit_id=$1',[active.visitId])).rows[0].n).toBe(1)
+    expect(await eventCounts()).toEqual(counts)
+  })
+  it.each(['after-commit','before-dispatch','bad-receipt'])('runs real web API recovery against HTTP and PostgreSQL without rewriting the split: %s',async fault=>{
+    const owner=await customer(),source=await table([owner,await customer()]),b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const body={...request.payload,sourceTableSessionId:source} as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const journal=new Map<string,string>(),storage={getItem:(k:string)=>journal.get(k)??null,setItem:(k:string,v:string)=>{journal.set(k,v)},removeItem:(k:string)=>{journal.delete(k)}}
+    let first=true;const calls:{body:string;key:string;recovery:boolean}[]=[]
+    const send:typeof fetch=async(url,init)=>{
+      const headers=Object.fromEntries(new Headers(init?.headers).entries()),write=init?.method==='POST'
+      if(write)calls.push({body:String(init?.body),key:headers['x-idempotency-key']!,recovery:headers['x-table-movement-recovery']==='1'})
+      const fail=write&&first;if(write)first=false
+      if(fail&&fault==='before-dispatch')throw new TypeError('isolated network loss before dispatch')
+      const response=await app.inject({method:(init?.method??'GET') as 'POST'|'GET',url:String(url).replace(/^\/api/,''),headers,...(init?.body?{payload:JSON.parse(String(init.body))}:{})})
+      if(fail&&fault==='after-commit')throw new TypeError('isolated response loss after commit')
+      if(fail&&fault==='bad-receipt')return new Response(JSON.stringify({data:{},meta:{replayed:false}}))
+      return new Response(response.body,{status:response.statusCode})
+    }
+    const client=()=>new StaffActionsApi({fetch:send,staffSessionId:'isolated-staff',commandStorage:storage})
+    await expect(client().moveParticipants(body)).rejects.toThrow();expect(journal.size).toBe(1)
+    if(fault==='before-dispatch'){
+      await expect(client().recoverParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE'})
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(0)
+      expect(journal.size).toBe(1)
+      await expect(client().sealParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_REQUEST_SEALED'})
+      expect(journal.size).toBe(0);await client().moveParticipants(body)
+    }else{
+      const destination=(await admin.query("SELECT target_table_session_id FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1 AND movement_kind='participant_split'",[source])).rows[0].target_table_session_id
+      expect((await app.inject(await moveRequest(destination,await emptyMovementTable(),'whole_table_transfer'))).statusCode).toBe(200)
+      await client().recoverParticipantMovement()
+      const rows=await app.inject({method:'GET',url:`/staff/channel/table/${destination}`})
+      expect(rows.json().data.activations).toEqual([expect.objectContaining({id:active.activationId})])
+    }
+    expect(calls[1]).toEqual({...calls[0]!,recovery:true});expect(journal.size).toBe(0)
+    expect((await admin.query("SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1 AND movement_kind='participant_split'",[source])).rows[0].n).toBe(1)
+  })
+  it('rejects an old preview after the headcount returns to the original value and requires historical review for the next intent',async()=>{
+    const owner=await customer(),companion=await customer(),source=await table([owner,companion]),target=await emptyMovementTable()
+    const stale=await moveRequest(source,target,'participant_split',null,[owner],1)
+    const split=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[companion],1));expect(split.statusCode,split.body).toBe(200)
+    const splitSession=split.json().data.targetTableSessionId,sourceTable=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].table_id
+    const merged=await app.inject(await moveRequest(splitSession,sourceTable,'participant_merge',source,[companion],1));expect(merged.statusCode,merged.body).toBe(200)
+    const current=(await admin.query('SELECT table_id,guest_count,location_version FROM mbox.table_sessions WHERE id=$1',[source])).rows[0]
+    expect(current).toMatchObject({table_id:stale.payload.movementGuard!.sourceTableId,guest_count:2})
+    expect(Number(current.location_version)).toBe(stale.payload.movementGuard!.sourceLocationVersion)
+    const blocked=await app.inject(stale);expect(blocked.statusCode,blocked.body).toBe(409)
+    const fresh=await moveRequest(source,target,'participant_split',null,[owner],1)
+    expect(fresh.payload.movementGuard!.movementRevision).toBe('2')
+    const unreviewed=await app.inject({...fresh,payload:{...fresh.payload,movementHistoryConfirmed:false}})
+    expect(unreviewed.statusCode,unreviewed.body).toBe(409);expect(unreviewed.json().error.message).toContain('历史')
+    const valid=await app.inject(fresh);expect(valid.statusCode,valid.body).toBe(200)
+  })
+  it.each(['participant_split','participant_merge'] as const)('fences delayed original and two fresh devices after empty history: %s',async kind=>{
+   for(const order of ['original-first','new-first','simultaneous']){
+    const peer=await movementPeer(),owner=await customer(),companion=await customer(),source=await table([owner,companion])
+    const target=kind==='participant_merge'?await table([]):null
+    const targetTable=target?(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[target])).rows[0].table_id:await emptyMovementTable()
+    const request=await moveRequest(source,targetTable,kind,target,kind==='participant_split'?[owner]:[owner,companion],kind==='participant_split'?1:2)
+    const body={...request.payload,sourceTableSessionId:source} as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve})
+    const client=(delayed=false)=>{
+      const journal=new Map<string,string>()
+      return new StaffActionsApi({staffSessionId:'same-employee',commandStorage:{getItem:k=>journal.get(k)??null,setItem:(k,v)=>{journal.set(k,v)},removeItem:k=>{journal.delete(k)}},fetch:async(url,init)=>{
+        if(delayed&&init?.method==='POST')await gate
+        const r=await peer.inject({method:(init?.method??'GET') as 'GET'|'POST',url:String(url).replace(/^\/api/,''),headers:Object.fromEntries(new Headers(init?.headers)),...(init?.body?{payload:JSON.parse(String(init.body))}:{})})
+        return new Response(r.body,{status:r.statusCode})
+      }})
+    }
+    try{
+      const a=client(true),b=client(),c=client(),first=a.moveParticipants(body).then(()=>true,()=>false)
+      expect((await b.loadParticipantMovementHistory()).items).toEqual([])
+      expect((await c.loadParticipantMovementHistory()).items).toEqual([])
+      let results:boolean[]
+      if(order==='original-first'){release();results=[await first,...await Promise.all([b,c].map(x=>x.moveParticipants(body).then(()=>true,()=>false)))]}
+      else if(order==='new-first'){const next=await b.moveParticipants(body).then(()=>true,()=>false);release();results=[next,await first,await c.moveParticipants(body).then(()=>true,()=>false)]}
+      else{const next=[b,c].map(x=>x.moveParticipants(body).then(()=>true,()=>false));release();results=await Promise.all([first,...next])}
+      expect(results.filter(Boolean)).toHaveLength(1)
+      const rows=(await admin.query('SELECT target_table_session_id FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows
+      expect(rows).toHaveLength(1)
+      const binding=await app.inject({method:'GET',url:`/staff/channel/table/${rows[0].target_table_session_id}`})
+      expect(binding.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId})])
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE claim_id=$1',[coupon.claimId])).rows[0].n).toBe(1)
+      const state=(await admin.query('SELECT guest_count,status FROM mbox.table_sessions WHERE id=$1',[source])).rows[0]
+      if(kind==='participant_split')expect(state).toMatchObject({guest_count:1,status:'open'});else expect(state.status).toBe('closed')
+    }finally{release();await peer.close()}
+   }
+  })
+  it.each([false,true])('keeps a missing receipt unknown until original arrives or explicit withdrawal commits: seal=%s',async withdraw=>{
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const body={...request.payload,sourceTableSessionId:source} as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const journal=new Map<string,string>(),storage={getItem:(k:string)=>journal.get(k)??null,setItem:(k:string,v:string)=>{journal.set(k,v)},removeItem:(k:string)=>{journal.delete(k)}}
+    let release!:()=>void;const gate=new Promise<void>(r=>{release=r});let original=true,loseSeal=withdraw
+    const calls:{key:string;seal:boolean}[]=[]
+    const client=()=>new StaffActionsApi({staffSessionId:'same-employee',commandStorage:storage,fetch:async(url,init)=>{
+      const headers=Object.fromEntries(new Headers(init?.headers)),write=init?.method==='POST'
+      if(write){calls.push({key:headers['x-idempotency-key'],seal:headers['x-table-movement-seal']==='1'});if(original){original=false;await gate}}
+      const r=await app.inject({method:(init?.method??'GET') as 'GET'|'POST',url:String(url).replace(/^\/api/,''),headers,...(init?.body?{payload:JSON.parse(String(init.body))}:{})})
+      if(loseSeal&&headers['x-table-movement-seal']==='1'){loseSeal=false;throw new TypeError('withdrawal committed but response lost')}
+      return new Response(r.body,{status:r.statusCode})
+    }})
+    const pending=client().moveParticipants(body).then(()=>null,e=>e)
+    try{
+      await expect(client().recoverParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE'})
+      expect(journal.size).toBe(1)
+      await expect(client().moveParticipants({...body,reason:'different'})).rejects.toThrow('不能更改')
+      if(withdraw){
+        await expect(client().sealParticipantMovement()).rejects.toMatchObject({code:'NETWORK_ERROR'});expect(journal.size).toBe(1)
+        await expect(client().sealParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_REQUEST_SEALED'});expect(journal.size).toBe(0)
+      }
+      release();const result=await pending
+      if(withdraw)expect(result).toMatchObject({code:'TABLE_MOVEMENT_REQUEST_SEALED'});else expect(result).toBeNull()
+      expect(journal.size).toBe(0);expect(new Set(calls.map(c=>c.key)).size).toBe(1)
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(withdraw?0:1)
+    }finally{release();await pending}
+  })
+  it.each(['seal-first','original-first','concurrent'])('persists a withdrawal fence across cache cleanup without undoing committed movement: %s',async order=>{
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const sealed={...request,headers:{...request.headers,'x-table-movement-seal':'1'}}
+    const missing=await app.inject({...request,headers:{...request.headers,'x-table-movement-recovery':'1'}})
+    expect(missing.json().error).toMatchObject({code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE'})
+    expect(missing.json().error.commitDisposition).toBeUndefined()
+    let responses
+    if(order==='seal-first')responses=[await app.inject(sealed),await app.inject(request)]
+    else if(order==='original-first')responses=[await app.inject(request),await app.inject(sealed)]
+    else responses=await Promise.all([app.inject(request),app.inject(sealed)])
+    const committed=responses[0].statusCode===200
+    for(const r of responses){expect(r.statusCode,r.body).toBe(committed?200:409);if(!committed)expect(r.json().error.code).toBe('TABLE_MOVEMENT_REQUEST_SEALED')}
+    await admin.query('DELETE FROM mbox.idempotency_records WHERE idempotency_key=$1',[request.headers['idempotency-key']])
+    const mutated=await app.inject({...sealed,payload:{...request.payload,movementKind:'participant_merge'}})
+    expect(mutated.statusCode,mutated.body).toBe(409);expect(mutated.json().error.code).toBe('TABLE_OPERATION_CONFLICT')
+    const replay=await app.inject(request);expect(replay.statusCode,replay.body).toBe(committed?200:409)
+    if(committed)expect(replay.json().data.eventId).toBe(responses[0].json().data.eventId)
+    else expect(replay.json().error.code).toBe('TABLE_MOVEMENT_REQUEST_SEALED')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(committed?1:0)
+    const peer=await movementPeer();try{expect((await peer.inject(sealed)).statusCode).toBe(409)}finally{await peer.close()}
+    expect((await app.inject({...sealed,payload:{...request.payload,reason:'different original'}})).statusCode).toBe(409)
+    const seals=(await admin.query("SELECT object_id FROM mbox.audit_events WHERE tenant_id=$1 AND store_id=$2 AND action='table.participation.sealed' AND trace_id=$3",[...args,'participant-movement-seal:'+createHash('sha256').update(request.headers['idempotency-key']).digest('hex')])).rows
+    expect(seals).toHaveLength(committed?0:1)
+    if(!committed){
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.outbox_messages WHERE aggregate_id=$1',[seals[0].object_id])).rows[0].n).toBe(0)
+      const fresh=await app.inject({...request,headers:{'idempotency-key':randomUUID()}});expect(fresh.statusCode,fresh.body).toBe(200)
+    }
+  })
+  it('uses server history on fresh devices after local storage loss without creating a second split',async()=>{
+    const owner=await customer(),source=await table([owner,await customer()]),b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1),body={...request.payload,sourceTableSessionId:source} as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const calls:{method:string;url:string}[]=[]
+    const send:typeof fetch=async(url,init)=>{
+      calls.push({method:init?.method??'GET',url:String(url)})
+      const result=await app.inject({method:(init?.method??'GET') as 'GET'|'POST',url:String(url).replace(/^\/api/,''),headers:Object.fromEntries(new Headers(init?.headers)),...(init?.body?{payload:JSON.parse(String(init.body))}:{})})
+      return new Response(result.body,{status:result.statusCode})
+    }
+    const client=(session:string)=>{const map=new Map<string,string>();return new StaffActionsApi({fetch:send,staffSessionId:session,commandStorage:{getItem:k=>map.get(k)??null,setItem:(k,v)=>{map.set(k,v)},removeItem:k=>{map.delete(k)}}})}
+    const first=client('device-a'),second=client('device-b')
+    const outcomes=await Promise.allSettled([first.moveParticipants(body),second.moveParticipants(body)])
+    expect(outcomes.map(r=>r.status).sort()).toEqual(['fulfilled','rejected'])
+    const committed=(await admin.query("SELECT id,target_table_session_id FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1 AND movement_kind='participant_split'",[source])).rows
+    expect(committed).toHaveLength(1)
+    const destination=committed[0].target_table_session_id
+    expect((await app.inject(await moveRequest(destination,await emptyMovementTable(),'whole_table_transfer'))).statusCode).toBe(200)
+    await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=ANY($1::uuid[])",[[source,destination]])
+    for(const session of ['relogin-same-employee','third-device']){
+      const fresh=client(session),before=calls.filter(c=>c.method==='POST').length
+      expect(fresh.pendingParticipantMovement()).toBeNull()
+      const history=await fresh.loadParticipantMovementHistory()
+      const row=history.items.find(r=>r.id===committed[0].id)
+      expect(row).toMatchObject({kind:'participant_split',movedGuestCount:1,targetSessionStatus:'closed'})
+      expect(calls.filter(c=>c.method==='POST')).toHaveLength(before)
+      expect(JSON.stringify(history)).not.toContain(coupon.claimId);expect(JSON.stringify(history)).not.toContain(owner)
+      expect(Object.keys(row!).sort()).toEqual(['id','kind','sourceTableCode','targetTableCode','movedGuestCount','employeeName','occurredAt','targetCurrentTableCode','targetSessionStatus'].sort())
+    }
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE visit_id=$1',[active.visitId])).rows[0].n).toBe(1)
+  })
+  it('paginates own server movement history, ignores requested actor overrides and rechecks revoked permission',async()=>{
+    const peer=await movementPeer(),other=await movementPeer(),source=await table([])
+    try{
+      for(let i=0;i<22;i++){const moved=await peer.inject(await moveRequest(source,await emptyMovementTable(),'whole_table_transfer'));expect(moved.statusCode,moved.body).toBe(200)}
+      const first=await peer.inject({method:'GET',url:'/table-management/participant-movements/history'})
+      expect(first.statusCode,first.body).toBe(200);expect(first.headers['cache-control']).toBe('no-store')
+      expect(first.json().data.items).toHaveLength(20)
+      const cursor=first.json().data.nextCursor,last=await peer.inject({method:'GET',url:`/table-management/participant-movements/history?cursor=${cursor}`})
+      expect(last.json().data.items).toHaveLength(2);expect(last.json().data.nextCursor).toBeNull()
+      expect(new Set([...first.json().data.items,...last.json().data.items].map(row=>row.id)).size).toBe(22)
+      const actor=(await admin.query('SELECT moved_by_employee_id FROM mbox.table_customer_movement_events WHERE id=$1',[cursor])).rows[0].moved_by_employee_id
+      const empty=await other.inject({method:'GET',url:`/table-management/participant-movements/history?employeeId=${actor}`})
+      expect(empty.statusCode).toBe(200);expect(empty.json().data.items).toEqual([])
+      expect((await other.inject({method:'GET',url:`/table-management/participant-movements/history?cursor=${cursor}`})).statusCode).toBe(409)
+      await admin.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1',[actor])
+      expect((await peer.inject({method:'GET',url:'/table-management/participant-movements/history'})).statusCode).toBe(403)
+    }finally{await peer.close();await other.close()}
+  })
+  it('waits behind an in-flight movement before listing its committed history',async()=>{
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const blocker=await admin.connect();let move:ReturnType<typeof app.inject>|undefined,history:ReturnType<typeof app.inject>|undefined
+    try{
+      await blocker.query('BEGIN');const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))",args)
+      move=app.inject(request);const moving=Promise.resolve(move)
+      const waiting=async()=>Number((await admin.query('SELECT count(*) AS n FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))',[pid])).rows[0].n)
+      await vi.waitFor(async()=>expect(await waiting()).toBeGreaterThanOrEqual(1))
+      history=app.inject({method:'GET',url:'/table-management/participant-movements/history'});const reading=Promise.resolve(history)
+      await vi.waitFor(async()=>expect(await waiting()).toBeGreaterThanOrEqual(2))
+      await blocker.query('COMMIT')
+      const result=await moving;expect(result.statusCode,result.body).toBe(200)
+      const records=await reading;expect(records.statusCode,records.body).toBe(200)
+      expect(records.json().data.items.some(row=>row.id===result.json().data.eventId)).toBe(true)
+    }finally{await blocker.query('ROLLBACK');blocker.release();await Promise.allSettled([...(move?[move]:[]),...(history?[history]:[])])}
+  })
+  it.each(['before-auth','after-seal'])('keeps withdrawal identity through account switching, restored permissions and old-device replay: %s',async phase=>{
+    const actor=randomUUID()
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3::uuid,$1,$2,$3::text,'隔离恢复员工')",[...args,actor])
+    const permissions=['table.transfer','table.participation.manage'];await grantFixtureStaffPermissions(admin,scope,[actor],permissions)
+    let currentActor=actor
+    const authApp=Fastify();await authApp.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),resolveContext:request=>{
+      assertStaffSessionBinding(request,{id:'isolated-session',employeeId:currentActor});return{scope,employeeId:currentActor,businessDate:'2026-11-16'}
+    }})
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const body={...request.payload,sourceTableSessionId:source} as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const journal=new Map<string,string>(),storage={getItem:(k:string)=>journal.get(k)??null,setItem:(k:string,v:string)=>{journal.set(k,v)},removeItem:(k:string)=>{journal.delete(k)}}
+    let original:Parameters<typeof authApp.inject>[0]|undefined,first=true,release!:()=>void,entered!:()=>void
+    const gate=new Promise<void>(r=>{release=r}),started=new Promise<void>(r=>{entered=r})
+    let delaySeal=true
+    const transport:typeof fetch=async(url,init)=>{
+      if(String(url)==='/api/operations')return new Response(JSON.stringify({data:{actor:{id:currentActor}}}))
+      const headers=Object.fromEntries(new Headers(init?.headers)),r={method:(init?.method??'GET') as 'POST'|'GET',url:String(url).replace(/^\/api/,''),headers,...(init?.body?{payload:JSON.parse(String(init.body))}:{})}
+      if(first&&init?.method==='POST'){first=false;original=r;throw new TypeError('original offline')}
+      const delayed=headers['x-table-movement-seal']==='1'&&delaySeal
+      if(delayed&&phase==='before-auth'){entered();await gate}
+      const response=await authApp.inject(r)
+      if(delayed&&phase==='after-seal'){entered();await gate;throw new TypeError('seal committed response lost')}
+      return new Response(response.body,{status:response.statusCode})
+    }
+    const client=()=>new StaffActionsApi({fetch:transport,commandStorage:storage})
+    let withdrawal:Promise<unknown>|undefined
+    try{
+      const a=client();await a.loadOperations();await expect(a.moveParticipants(body)).rejects.toMatchObject({code:'NETWORK_ERROR'})
+      withdrawal=a.sealParticipantMovement().then(()=>null,e=>e);await started
+      currentActor=employee
+      const b=client();await b.loadOperations();expect(b.pendingParticipantMovement()?.canRecover).toBe(false)
+      await expect(b.recoverParticipantMovement()).rejects.toThrow('原员工');await expect(b.sealParticipantMovement()).rejects.toThrow('原员工')
+      release();expect(await withdrawal).toMatchObject({code:phase==='before-auth'?'AUTH_REQUIRED':'NETWORK_ERROR'})
+      expect(journal.size).toBe(1);delaySeal=false;currentActor=actor
+      const restored=client();await restored.loadOperations()
+      await admin.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1',[actor])
+      await expect(restored.recoverParticipantMovement()).rejects.toMatchObject({code:'TABLE_PERMISSION_DENIED'});expect(journal.size).toBe(1)
+      await grantFixtureStaffPermissions(admin,scope,[actor],permissions)
+      if(phase==='before-auth'){
+        await expect(restored.recoverParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE'});expect(journal.size).toBe(1)
+        await expect(restored.sealParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_REQUEST_SEALED'})
+      }else await expect(restored.recoverParticipantMovement()).rejects.toMatchObject({code:'TABLE_MOVEMENT_REQUEST_SEALED'})
+      expect(journal.size).toBe(0)
+      currentActor=employee;expect((await authApp.inject(original!)).statusCode).toBe(401)
+      currentActor=actor
+      for(const result of await Promise.all([authApp.inject(original!),authApp.inject(original!)]))expect(result.json().error.code).toBe('TABLE_MOVEMENT_REQUEST_SEALED')
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(0)
+      await restored.moveParticipants(body)
+      expect((await authApp.inject(original!)).json().error.code).toBe('TABLE_MOVEMENT_REQUEST_SEALED')
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(1)
+    }finally{release();if(withdrawal)await withdrawal;await authApp.close()}
+  })
+  it.each(['before-dispatch','after-commit'])('does not duplicate a move after withdrawal disconnect, journal loss and two fresh devices: %s',async fault=>{
+    const peer=await movementPeer(),owner=await customer(),source=await table([owner,await customer()])
+    const originalRequest=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const nextRequest=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const body=(request:typeof originalRequest)=>({...request.payload,sourceTableSessionId:source}) as Parameters<StaffActionsApi['moveParticipants']>[0]
+    const b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const journal=new Map<string,string>(),storage=(map:Map<string,string>)=>({getItem:(k:string)=>map.get(k)??null,setItem:(k:string,v:string)=>{map.set(k,v)},removeItem:(k:string)=>{map.delete(k)}})
+    let release!:()=>void;const gate=new Promise<void>(r=>{release=r});let holdFirst=true
+    const send:typeof fetch=async(url,init)=>{
+      const headers=Object.fromEntries(new Headers(init?.headers)),seal=headers['x-table-movement-seal']==='1'
+      if(init?.method==='POST'&&holdFirst){holdFirst=false;await gate}
+      if(seal&&fault==='before-dispatch')throw new TypeError('withdrawal did not reach server')
+      const r=await peer.inject({method:(init?.method??'GET') as 'GET'|'POST',url:String(url).replace(/^\/api/,''),headers,...(init?.body?{payload:JSON.parse(String(init.body))}:{})})
+      if(seal)throw new TypeError('withdrawal response lost')
+      return new Response(r.body,{status:r.statusCode})
+    }
+    const client=(map:Map<string,string>)=>new StaffActionsApi({fetch:send,staffSessionId:'same-employee',commandStorage:storage(map)})
+    const pending=client(journal).moveParticipants(body(originalRequest)).then(()=>null,e=>e)
+    try{
+      await expect(client(journal).sealParticipantMovement()).rejects.toMatchObject({code:'NETWORK_ERROR'})
+      expect(client(journal).pendingParticipantMovement()?.message).toContain('不代表撤回成功')
+      journal.clear()
+      const second=client(new Map()),third=client(new Map())
+      for(const device of [second,third]){
+        expect(device.pendingParticipantMovement()).toBeNull()
+        await expect(device.sealParticipantMovement()).rejects.toThrow('没有待恢复')
+        expect((await device.loadParticipantMovementHistory()).items).toEqual([])
+      }
+      const results=await Promise.allSettled([second.moveParticipants(body(nextRequest)),third.moveParticipants(body(nextRequest))])
+      expect(results.map(r=>r.status).sort()).toEqual(['fulfilled','rejected'])
+      release();const late=await pending
+      expect(late).toMatchObject({code:fault==='after-commit'?'TABLE_MOVEMENT_REQUEST_SEALED':'TABLE_PARTICIPANT_NOT_COMMITTED'})
+      const moves=(await admin.query('SELECT target_table_session_id FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows
+      expect(moves).toHaveLength(1)
+      const current=await app.inject({method:'GET',url:`/staff/channel/table/${moves[0].target_table_session_id}`})
+      expect(current.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId})])
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE claim_id=$1',[coupon.claimId])).rows[0].n).toBe(1)
+      expect((await admin.query('SELECT guest_count FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].guest_count).toBe(1)
+      expect((await second.loadParticipantMovementHistory()).items).toHaveLength(1)
+    }finally{release();await pending;await peer.close()}
+  })
+  it.each(['cached-move','cached-seal','durable-move','durable-seal','new-seal'])('rechecks authorization after waiting to recover or withdraw an original request: %s',async mode=>{
+    const peer=await movementPeer(),seed=await table([])
+    const bootstrap=await peer.inject(await moveRequest(seed,await emptyMovementTable(),'whole_table_transfer'))
+    expect(bootstrap.statusCode,bootstrap.body).toBe(200)
+    const actor=(await admin.query('SELECT moved_by_employee_id FROM mbox.table_customer_movement_events WHERE id=$1',[bootstrap.json().data.eventId])).rows[0].moved_by_employee_id
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    if(mode!=='new-seal'){
+      const first=await peer.inject({...request,headers:{...request.headers,...(mode.endsWith('seal')?{'x-table-movement-seal':'1'}:{})}})
+      expect(first.statusCode,first.body).toBe(mode.endsWith('seal')?409:200)
+    }
+    if(mode.startsWith('durable'))await admin.query('DELETE FROM mbox.idempotency_records WHERE idempotency_key=$1',[request.headers['idempotency-key']])
+    const blocker=await admin.connect();let pending:Promise<Awaited<ReturnType<typeof peer.inject>>>|undefined
+    try{
+      await blocker.query('BEGIN');const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      if(mode.startsWith('cached'))await blocker.query('SELECT id FROM mbox.idempotency_records WHERE idempotency_key=$1 FOR UPDATE',[request.headers['idempotency-key']])
+      else await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))",args)
+      pending=Promise.resolve(peer.inject({...request,headers:{...request.headers,'x-table-movement-recovery':'1','x-table-movement-seal':'1'}}))
+      await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
+      await admin.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1',[actor]);await blocker.query('COMMIT')
+      const denied=await pending;expect(denied.statusCode,denied.body).toBe(403);expect(denied.json().error.commitDisposition).toBeUndefined();expect(denied.json().data).toBeUndefined()
+      if(mode==='new-seal'){
+        expect((await admin.query("SELECT count(*)::int AS n FROM mbox.audit_events WHERE actor_employee_id=$1 AND action='table.participation.sealed'",[actor])).rows[0].n).toBe(0)
+        expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(0)
+      }
+    }finally{await blocker.query('ROLLBACK');blocker.release();if(pending)await pending;await peer.close()}
+  })
+  it.each(['seal','original'])('serializes two truly blocked requests when the first arriving request is %s',async first=>{
+    const owner=await customer(),source=await table([owner,await customer()]),request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const seal={...request,headers:{...request.headers,'x-table-movement-seal':'1'}}
+    const blocker=await admin.connect();const pending:Promise<Awaited<ReturnType<typeof app.inject>>>[]=[]
+    try{
+      await blocker.query('BEGIN');const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))",args)
+      pending.push(Promise.resolve(app.inject(first==='seal'?seal:request)))
+      let firstPid=0
+      await vi.waitFor(async()=>{const row=(await admin.query('SELECT pid FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))',[pid])).rows[0];expect(row).toBeTruthy();firstPid=row?.pid})
+      pending.push(Promise.resolve(app.inject(first==='seal'?request:seal)))
+      await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[firstPid])).rows[0].blocked).toBe(true))
+      await blocker.query('COMMIT')
+      for(const r of await Promise.all(pending)){expect(r.statusCode,r.body).toBe(first==='seal'?409:200);if(first==='seal')expect(r.json().error.code).toBe('TABLE_MOVEMENT_REQUEST_SEALED')}
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1',[source])).rows[0].n).toBe(first==='seal'?0:1)
+    }finally{await blocker.query('ROLLBACK');blocker.release();await Promise.allSettled(pending)}
+  })
+  it('denies historical records when the original employee loses permission while waiting for a movement lock',async()=>{
+    const peer=await movementPeer(),source=await table([]),moved=await peer.inject(await moveRequest(source,await emptyMovementTable(),'whole_table_transfer'))
+    expect(moved.statusCode,moved.body).toBe(200)
+    const actor=(await admin.query('SELECT moved_by_employee_id FROM mbox.table_customer_movement_events WHERE id=$1',[moved.json().data.eventId])).rows[0].moved_by_employee_id
+    const blocker=await admin.connect();let pending:Promise<Awaited<ReturnType<typeof peer.inject>>>|undefined
+    try{
+      await blocker.query('BEGIN');const pid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))",args)
+      pending=Promise.resolve(peer.inject({method:'GET',url:'/table-management/participant-movements/history'}))
+      await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
+      await admin.query('DELETE FROM mbox.employee_roles WHERE employee_id=$1',[actor])
+      await blocker.query('COMMIT')
+      const denied=await pending;expect(denied.statusCode,denied.body).toBe(403);expect(denied.json().data).toBeUndefined()
+    }finally{await blocker.query('ROLLBACK');blocker.release();if(pending)await pending;await peer.close()}
+  })
+  it.each(['same-source','same-target'])('serializes competing whole-table transfers: %s',async mode=>{
+    const owner=await customer(),source=await table([owner]),b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const other=mode==='same-source'?source:await table([await customer()]),target=await emptyMovementTable()
+    const requests=await Promise.all([moveRequest(source,target,'whole_table_transfer'),moveRequest(other,mode==='same-source'?await emptyMovementTable():target,'whole_table_transfer')])
+    const peer=await movementPeer()
+    let responses
+    try{responses=await Promise.all([app.inject(requests[0]!),peer.inject(requests[1]!)])
+      const winner=responses.findIndex(r=>r.statusCode===200),replay=await (winner===0?app:peer).inject(requests[winner]!)
+      expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)
+    }finally{await peer.close()}
+    expect(responses.map(r=>r.statusCode).sort(),responses.map(r=>r.body).join('\n')).toEqual([200,409])
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=ANY($1::uuid[])',[[source,other]])).rows[0].n).toBe(1)
+    const rows=await app.inject({method:'GET',url:`/staff/channel/table/${source}`})
+    expect(rows.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId})])
+    const location=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].table_id
+    expect((await admin.query('SELECT table_id FROM mbox.table_session_customer_participations WHERE customer_id=$1 AND left_at IS NULL',[owner])).rows.map(r=>r.table_id)).toEqual([location])
+  })
+  it('rejects a web split preview taken before another employee transfers the source',async()=>{
+    const owner=await customer(),source=await table([owner,await customer()]),b=await batch(),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const request=await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1)
+    const row=(await admin.query('SELECT table_id,location_version FROM mbox.table_sessions WHERE id=$1',[source])).rows[0]
+    const guard={movementRevision:'0',sourceTableId:row.table_id,sourceLocationVersion:Number(row.location_version),sourceGuestCount:2,targetGuestCount:0,targetCapacity:8}
+    const preview=await app.inject({...request,url:request.url+'/preview'})
+    expect(preview.statusCode,preview.body).toBe(200)
+    const moved=await app.inject(await moveRequest(source,await emptyMovementTable(),'whole_table_transfer'));expect(moved.statusCode,moved.body).toBe(200)
+    const stale=await app.inject({...request,payload:{...request.payload,movementGuard:guard}})
+    expect(stale.statusCode,stale.body).toBe(409)
+    expect(preview.json().data.movementGuard).toEqual(guard)
+    expect((await admin.query("SELECT count(*)::int AS n FROM mbox.table_customer_movement_events WHERE source_table_session_id=$1 AND movement_kind='participant_split'",[source])).rows[0].n).toBe(0)
+    const refreshedRequest=await moveRequest(source,request.payload.targetTableId,'participant_split',null,[owner],1)
+    const fresh=await app.inject({...refreshedRequest,url:refreshedRequest.url+'/preview'});expect(fresh.statusCode,fresh.body).toBe(200)
+    const retried=await app.inject({...refreshedRequest,payload:{...refreshedRequest.payload,movementGuard:fresh.json().data.movementGuard}})
+    expect(retried.statusCode,retried.body).toBe(200)
+    const binding=await app.inject({method:'GET',url:`/staff/channel/table/${retried.json().data.targetTableSessionId}`})
+    expect(binding.json().data.activations).toEqual([expect.objectContaining({id:active.activationId})])
+  })
+  it('rejects a stale anonymous full-merge even when no participant identity can detect the move',async()=>{
+    const source=await table([]),target=await table([]),targetTable=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[target])).rows[0].table_id
+    const request=await moveRequest(source,targetTable,'participant_merge',target,[],2)
+    const preview=await app.inject({...request,url:request.url+'/preview'});expect(preview.statusCode,preview.body).toBe(200)
+    const moved=await app.inject(await moveRequest(source,await emptyMovementTable(),'whole_table_transfer'));expect(moved.statusCode,moved.body).toBe(200)
+    const stale=await app.inject({...request,payload:{...request.payload,movementGuard:preview.json().data.movementGuard}})
+    expect(stale.statusCode,stale.body).toBe(409)
+    expect(stale.json().error.message).toContain('重新预检')
+    expect((await admin.query("SELECT count(*)::int AS n FROM mbox.table_sessions WHERE id=ANY($1::uuid[]) AND status='open'",[[source,target]])).rows[0].n).toBe(2)
+  })
+  it('merges a split party back once under competing requests without resetting attribution or discount',async()=>{
+    const owner=await customer(),other=await customer(),source=await table([owner,other]),b=await batch({allowStacking:true,visitDiscountCapMinor:1500,minimumMinor:0,offer:{kind:'discount',discountBps:1000,maximumMinor:5000}}),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,source)
+    const original=await consumePrice(source,(await prepare(source)).id);await settleMovementOrder(original)
+    const split=await app.inject(await moveRequest(source,await emptyMovementTable(),'participant_split',null,[owner],1))
+    expect(split.statusCode,split.body).toBe(200);const splitSession=split.json().data.targetTableSessionId
+    const stale=await prepare(splitSession),sourceTable=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[source])).rows[0].table_id
+    const request=await moveRequest(splitSession,sourceTable,'participant_merge',source,[owner],1)
+    const peer=await movementPeer()
+    let results
+    try{results=await Promise.all([app.inject(request),peer.inject({...request,headers:{'idempotency-key':randomUUID()}})])}finally{await peer.close()}
+    expect(results.map(r=>r.statusCode).sort(),results.map(r=>r.body).join('\n')).toEqual([200,409])
+    await expect(consumePrice(splitSession,stale.id)).rejects.toThrow()
+    const originalRow=(await admin.query('SELECT table_session_id FROM mbox.orders WHERE id=$1',[original.id])).rows[0]
+    expect(originalRow.table_session_id).toBe(source)
+    expect((await admin.query('SELECT closed_at FROM mbox.channel_visits WHERE id=$1',[active.visitId])).rows[0].closed_at).toBeNull()
+    const bindings=await app.inject({method:'GET',url:`/staff/channel/table/${source}`})
+    expect(bindings.json().data.activations).toEqual([expect.objectContaining({id:active.activationId,claimId:coupon.claimId,usedDiscountMinor:'1000',visitDiscountCapMinor:1500})])
+    const quote=await prepare(source);expect(quote.discountMinor).toBe(500)
+    expect(menuCheckoutPricing({originalMinor:10000,quote:{...quote,fingerprint:'merged'},fingerprint:'merged',now:Date.now()})).toMatchObject({amountMinor:9500,discountMinor:500})
+    const next=await consumePrice(source,quote.id);await settleMovementOrder(next)
+    await expect(prepare(source)).rejects.toThrow()
+    expect((await admin.query('SELECT visit_id FROM mbox.channel_order_attributions WHERE order_id=ANY($1::uuid[])',[[original.id,next.id]])).rows.map(r=>r.visit_id)).toEqual([active.visitId,active.visitId])
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_activations WHERE visit_id=$1',[active.visitId])).rows[0].n).toBe(1)
+  })
+  it.each(['refund-first','order-first'])('serializes a refund with a new discounted order through real lock waits: %s',async ordering=>{
+    const owner=await customer(),session=await table([owner]),b=await batch({minimumMinor:0,observationDays:0,allowStacking:true,visitDiscountCapMinor:2500,offer:{kind:'discount',discountBps:1000,maximumMinor:5000}}),coupon=await issue(b.code,owner),active=await activate(coupon.claimId,owner,session)
+    const original=await consumePrice(session,(await prepare(session)).id),payment=await settleMovementOrder(original),quote=await prepare(session)
+    const refund=await financeRefund({payment,order:original},4500,'processing'),connection=await admin.connect()
+    let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve})
+    let pendingOrder:ReturnType<typeof consumePrice>|undefined,pendingRefund:ReturnType<typeof connection.query>|undefined
+    try{
+      if(ordering==='refund-first'){
+        await connection.query('BEGIN')
+        const pid=Number((await connection.query('SELECT pg_backend_pid() AS pid')).rows[0].pid)
+        await connection.query("UPDATE mbox.refunds SET status='succeeded',completed_at=clock_timestamp() WHERE id=$1",[refund])
+        const attempt=consumePrice(session,quote.id).then(value=>({value,error:null}),error=>({value:null,error}))
+        await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
+        await connection.query('COMMIT');expect((await attempt).error).toBeTruthy()
+        const fresh=await prepare(session);expect(fresh.discountMinor).toBe(500);pendingOrder=consumePrice(session,fresh.id)
+      }else{
+        let locked!:(pid:number)=>void;const entered=new Promise<number>(resolve=>{locked=resolve})
+        pendingOrder=consumePrice(session,quote.id,1,async pid=>{locked(pid);await gate})
+        const pid=await entered
+        pendingRefund=connection.query("UPDATE mbox.refunds SET status='succeeded',completed_at=clock_timestamp() WHERE id=$1",[refund])
+        await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
+        release();await pendingRefund
+      }
+      const added=await pendingOrder!;await settleMovementOrder(added)
+      expect(added.totalAmountMinor).toBe(ordering==='refund-first'?9500:9000)
+      const {loadMiniModule}=createRequire(import.meta.url)('../../scripts/load-miniprogram-test-module.mjs'),utils=loadMiniModule(new URL('../../miniprogram/utils/checkout-coupons.js',import.meta.url))
+      const page:any={...utils.checkoutCouponMethods({quoteChannel:async()=>({...await prepare(session),current:true,sourceType:'channel_quote',generation:1,version:1}),money:(n:number)=>(n/100).toFixed(2),randomId:()=>randomUUID(),scope:()=>session,errorMessage:(e:Error)=>e.message}),data:{...structuredClone(utils.initialCheckoutCoupons),busy:false,cart:[],cartGeneration:1,cartVersion:1,checkoutConfirmVisible:true},setData(patch:object){Object.assign(this.data,patch)}}
+      await page.quoteCheckoutChannel()
+      const remaining=ordering==='refund-first'?1000:500
+      expect(page.data.couponQuote.discountMinor).toBe(remaining);expect(page.couponCheckoutReady()).toBe(true)
+      expect(menuCheckoutPricing({originalMinor:10000,quote:{...page.data.couponQuote,fingerprint:'after-refund'},fingerprint:'after-refund',now:Date.now()})).toMatchObject({amountMinor:10000-remaining,discountMinor:remaining})
+      const last=await consumePrice(session,page.data.couponQuote.id);await settleMovementOrder(last)
+      await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[session])
+      const reconciled=await Promise.all([1,2,3].map(()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(active.visitId!))))
+      for(const row of reconciled)expect(row).toMatchObject({basis:23000,target:2300,frozen:false})
+      expect((await admin.query('SELECT applied_discount_minor::text AS used FROM mbox.channel_activations WHERE id=$1',[active.activationId])).rows[0].used).toBe('2500')
+    }finally{release();await connection.query('ROLLBACK');await Promise.allSettled([...(pendingOrder?[pendingOrder]:[]),...(pendingRefund?[pendingRefund]:[])]);connection.release()}
+  },30_000)
   it('full merge into an empty-consumption table preserves an open referral visit and coupon use',async()=>{
     const cid=await customer(),source=await table([cid]),target=await table([]),b=await batch(),coupon=await issue(b.code,cid),active=await activate(coupon.claimId,cid,source)
     const targetId=(await admin.query('SELECT table_id FROM mbox.table_sessions WHERE id=$1',[target])).rows[0].table_id

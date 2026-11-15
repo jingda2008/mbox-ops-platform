@@ -1,3 +1,5 @@
+import { loadMiniModule as loadActualDateModule } from './load-miniprogram-test-module.mjs'
+const actualMiniFormat = loadActualDateModule(new URL('../miniprogram/utils/format.js', import.meta.url))
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import test from 'node:test'
@@ -16,12 +18,12 @@ async function fixture(platform,overrides={}){
  const storage=new Map(),calls=[],timers=new Map()
  const runtime={getStorageSync:k=>storage.get(k),setStorageSync:(k,v)=>storage.set(k,v),showModal:o=>{calls.push(['modal',o]);o.success?.({confirm:true})},showToast(){},showShareMenu(){},switchTab(){}}
  const api=new Proxy({getActivity:async()=>rawActivity,getMiniBootstrap:async()=>({membership:{}}),getActivityRegistrations:async()=>[confirmed],getActivityLoyaltyBenefits:async()=>[],getActivityRegistrationPayment:async()=>({registrationStatus:'confirmed',resolutionState:'confirmed',allowedActions:[],paidAmountMinor:5000,canRequestFullRefund:true}),getActivityRegistrationServiceCode:async id=>code(id),getWechatNotificationPrompt:async()=>({authorizations:[]}),getAlipayNotificationPrompt:async()=>({authorizations:[]}),...overrides},{get:(o,k)=>o[k]||(async()=>{throw Error('unexpected '+String(k))})})
- const context={wx:runtime,Date,console,Page:p=>{page=p},setTimeout:(callback,delay)=>{const id=++timerSerial;timers.set(id,{callback,delay});return id},clearTimeout:id=>timers.delete(id),require:name=>{
+ const context={wx:runtime,Date,console,Page:p=>{page=p},setTimeout:(callback,delay)=>{const id=++timerSerial;timers.set(id,{callback,delay});return id},clearTimeout:id=>timers.delete(id),require:name=>{ if (name === './format') return actualMiniFormat;
   if(name.endsWith('/platform'))return runtime
   if(name.endsWith('/api'))return api
   if(name.endsWith('/config/index'))return {getRuntimeConfig:()=>({alipayPaymentEnabled:true})}
   if(name.endsWith('/id'))return {randomId:prefix=>prefix+'-test-'+(++serial)}
-  if(name.endsWith('/format'))return {money:n=>'¥'+(n/100).toFixed(2),dateTime:v=>v}
+  if(name.endsWith('/format'))return { ...actualMiniFormat,money:n=>'¥'+(n/100).toFixed(2),dateTime:v=>v}
   if(name.endsWith('/media'))return {publicImageUrl:v=>v}
   if(name.endsWith('/customer-error'))return {customerErrorMessage:(e,f)=>e.message||f,isWechatCancellation:()=>false,isAlipayCancellation:()=>false}
   if(name.endsWith('/public-share'))return {enablePublicShareMenu(){}}

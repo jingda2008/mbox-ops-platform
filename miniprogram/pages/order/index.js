@@ -712,7 +712,7 @@ Page({
   onHide() {
     this.selectionNotificationPending = null
     this.setData({ membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
-    this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput)
+    this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview || !!(this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote'))
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()

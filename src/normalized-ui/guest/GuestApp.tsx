@@ -1,3 +1,5 @@
+import { parseInstant } from '../../shared/instant-time'
+import { formatChinaTime } from '../../shared/china-time'
 import {GuestPrepaymentPanel} from './GuestPrepaymentPanel'
 import {GuestCartState,GuestReadSequence} from './guest-cart-state'
 import { sameGuestTableCode } from './table-code-alias'
@@ -418,7 +420,7 @@ export function GuestApp({ apiFactory }: GuestAppProps) {
       acceptSession(session, expectedTable)
     } catch (error) {
       if (quiet && error instanceof GuestApiError && error.retryable) {
-        const retryAt = error.retryAt === null ? NaN : Date.parse(error.retryAt)
+        const retryAt = error.retryAt === null ? NaN : parseInstant(error.retryAt)
         if (Number.isFinite(retryAt) && retryAt > Date.now()) nextTableRetryRef.current = retryAt
         setGateMessage('网络刚才有点慢，我们会继续自动更新。')
         return
@@ -939,12 +941,7 @@ function GuestPerformanceCard({
 }
 
 function formatShanghaiClock(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(value))
+  try { return formatChinaTime(value) } catch { return '时间待核对' }
 }
 
 function findRecentDuplicateOrder(
@@ -954,7 +951,7 @@ function findRecentDuplicateOrder(
   const cutoff = Date.now() - guestOrderSafety.duplicateWindowSeconds * 1_000
   const requested = basketFingerprint(items)
   for (const order of orders) {
-    if (Date.parse(order.createdAt) < cutoff) continue
+    if (parseInstant(order.createdAt) < cutoff) continue
     const activeItems = order.items.filter((item) => item.status !== 'cancelled')
     const ordered = basketFingerprint(activeItems)
     if (ordered !== requested) continue

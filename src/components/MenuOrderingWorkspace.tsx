@@ -1,5 +1,7 @@
+import { parseInstant } from '../shared/instant-time'
 import { AlertTriangle, Check, CheckCircle2, ChevronRight, Clock3, Gift, MessageSquareWarning, Minus, Plus, Search, ShoppingCart, Sparkles, ThumbsUp, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { menuCheckoutPricing, type MenuChannelQuote } from './menu-channel-pricing'
 import { ApiError } from '../shared/api-error'
 import type { OrderSafetyConfig } from '../shared/commercial-ops-contracts'
 import type { MenuBundleUnitSelection, MenuProduct, MenuRecommendationScene } from '../shared/contracts'
@@ -272,7 +274,7 @@ export function MenuOrderingWorkspace({
   const [cartMutating, setCartMutating] = useState(false)
   const checkoutBusy = busy || cartMutating
   const [cartAdjustmentError, setCartAdjustmentError] = useState('')
-  const [channelQuote,setChannelQuote]=useState<{id:string;expiresAt:string;payableMinor:number;fingerprint:string}|null>(null)
+  const [channelQuote,setChannelQuote]=useState<(MenuChannelQuote & {provider: typeof onQuoteChannel})|null>(null)
   const [channelQuoteBusy,setChannelQuoteBusy]=useState(false),[channelReview,setChannelReview]=useState(false)
   const channelQuoteGeneration=useRef(0)
   useEffect(()=>{channelQuoteGeneration.current++;setChannelQuoteBusy(false);return()=>{channelQuoteGeneration.current++}},[onQuoteChannel,tableLabel,draftStorageKey])
@@ -739,8 +741,25 @@ export function MenuOrderingWorkspace({
     }).finally(() => setCartMutating(false))
   }
 
-  function channelFingerprint(){return JSON.stringify({tableLabel,draftStorageKey,items:buildMenuCartItems(cartProducts,cart,cartBundleSelections,itemNotes)})}
+  function channelFingerprint(){return JSON.stringify({tableLabel,draftStorageKey,total,items:buildMenuCartItems(cartProducts,cart,cartBundleSelections,itemNotes)})}
   const latestChannelFingerprint=useRef(''); latestChannelFingerprint.current=channelFingerprint()
+  const checkoutPricing = menuCheckoutPricing({originalMinor: total, quote: channelQuote,
+    fingerprint: latestChannelFingerprint.current, now: Date.now(), loading: channelQuoteBusy,
+    needsReview: channelReview, sameSource: channelQuote?.provider === onQuoteChannel})
+  const checkoutAmountText = checkoutPricing.amountMinor === null ? '待核对报价' : `¥${formatMenuAmount(checkoutPricing.amountMinor)}`
+  useEffect(() => {
+    if (!channelQuote) return
+    const timer = window.setTimeout(() => setChannelReview(true), Math.max(0, parseInstant(channelQuote.expiresAt) - Date.now() + 1))
+    return () => window.clearTimeout(timer)
+  }, [channelQuote])
+  function channelSubmitReady() {
+    const latest = menuCheckoutPricing({originalMinor: total, quote: channelQuote, fingerprint: channelFingerprint(),
+      now: Date.now(), loading: channelQuoteBusy, needsReview: channelReview, sameSource: channelQuote?.provider === onQuoteChannel})
+    if (!latest.needsReview) return true
+    const message = '请重新核对渠道优惠，或明确选择不用券'
+    setChannelReview(true); setCartAdjustmentError(message); setConfirmationError(message)
+    return false
+  }
   async function quoteChannel(){
     if(!onQuoteChannel||busy||channelQuoteBusy||cartMutating)return
     const generation=++channelQuoteGeneration.current, fingerprint=channelFingerprint()
@@ -748,18 +767,19 @@ export function MenuOrderingWorkspace({
     try{
       const q=await onQuoteChannel(buildMenuCartItems(cartProducts,cart,cartBundleSelections,itemNotes))
       if(generation!==channelQuoteGeneration.current||fingerprint!==latestChannelFingerprint.current)return
-      if(q.currency!=='CNY'||!Number.isSafeInteger(q.payableMinor)||q.payableMinor<0||!q.id||!(Date.parse(q.expiresAt)>Date.now()))throw new Error('报价已失效，请重新核对')
-      setChannelQuote({...q,fingerprint});setChannelReview(false)
+      if(q.currency!=='CNY'||!Number.isSafeInteger(q.payableMinor)||q.payableMinor<0||!Number.isSafeInteger(q.discountMinor)||q.discountMinor<0||!q.id||!(parseInstant(q.expiresAt)>Date.now()))throw new Error('报价已失效，请重新核对')
+      setChannelQuote({...q,fingerprint,provider:onQuoteChannel});setChannelReview(false)
     }catch(e){if(generation===channelQuoteGeneration.current)setCartAdjustmentError(e instanceof Error?e.message:'渠道优惠核对失败')}
     finally{if(generation===channelQuoteGeneration.current)setChannelQuoteBusy(false)}
   }
   const channelQuotePanel=onQuoteChannel&&<div>
     <button type="button" disabled={busy||cartMutating||channelQuoteBusy||!cartProducts.length} onClick={()=>void quoteChannel()}>核对本桌渠道优惠</button>
-    {channelQuote&&<p>渠道优惠后应付 ¥{formatMenuAmount(channelQuote.payableMinor)}，与其他价格券不叠加。</p>}
-    {(channelQuote||channelReview)&&<button type="button" disabled={busy||channelQuoteBusy} onClick={()=>{setChannelQuote(null);setChannelReview(false);setCartAdjustmentError('')}}>不用渠道券，按当前价格提交</button>}
+    {checkoutPricing.quoteId&&<p>渠道优惠后应付 {checkoutAmountText} · 本单优惠 ¥{formatMenuAmount(checkoutPricing.discountMinor!)}，与其他价格券不叠加。</p>}
+    {checkoutPricing.needsReview&&<p role="status">{channelQuoteBusy?'正在核对优惠金额…':'优惠报价待核对，请重新核对或明确选择不用券。'}</p>}
+    {(channelQuote||channelReview)&&<button type="button" disabled={busy||channelQuoteBusy} onClick={()=>{channelQuoteGeneration.current++;setChannelQuote(null);setChannelReview(false);setCartAdjustmentError('');setConfirmationError('')}}>不用渠道券，按当前价格提交</button>}
   </div>
   async function submit() {
-    if(channelQuoteBusy||channelReview||channelQuote&&(channelQuote.fingerprint!==channelFingerprint()||Date.parse(channelQuote.expiresAt)<=Date.now())){setCartAdjustmentError('请重新核对渠道优惠，或明确选择不用券');return}
+    if (!channelSubmitReady()) return
     if (cartProducts.length === 0 || checkoutBusy || submitDisabled) return
     if (confirmRepeatedQuantities && cartProducts.some(product => (cart[product.id] ?? 0) > 1)) {
       confirmedQuantity.current = null
@@ -798,6 +818,7 @@ export function MenuOrderingWorkspace({
   }
 
   async function executeSubmit(duplicateOrderId?: string) {
+    if (!channelSubmitReady()) return
     if (cartProducts.length === 0 || checkoutBusy || submitDisabled || submitInFlight.current) return
     const repeated = cartProducts.filter(product => (cart[product.id] ?? 0) > 1)
       .map(product => ({ id: product.id, name: product.name, quantity: cart[product.id]! }))
@@ -1186,8 +1207,8 @@ export function MenuOrderingWorkspace({
               <div className="menu-cart-lines">{cartLines}</div>
               {fulfillmentNoteField}{channelQuotePanel}
               <footer className="menu-cart-drawer-footer">
-                <div><span>{deemphasizeCollapsedTotal ? '核对后收款' : '合计'}</span><strong>¥{formatMenuAmount(total)}</strong></div>
-                <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => void submit()}>
+                <div><span>{checkoutPricing.label}</span><strong>{checkoutAmountText}</strong></div>
+                <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled || checkoutPricing.needsReview} onClick={() => void submit()}>
                   <Check size={18} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : submitLabel}
                 </button>
               </footer>
@@ -1199,13 +1220,13 @@ export function MenuOrderingWorkspace({
               type="button"
               disabled={itemCount === 0}
               aria-expanded={cartOpen}
-              aria-label={`查看本次购物车，待提交${itemCount}件，合计${formatMenuAmount(total)}元`}
+              aria-label={`查看本次购物车，待提交${itemCount}件，${checkoutPricing.label}${checkoutAmountText}`}
               onClick={() => setCartOpen((open) => !open)}
             >
               <span className="menu-cart-summary-icon"><ShoppingCart size={20} /><b>{itemCount}</b></span>
               <span className="menu-cart-summary-copy">
                 <strong>{itemCount > 0 ? `本次待提交 ${itemCount} 件` : '本次还未选择'}</strong>
-                <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? `打开核对 · 合计 ¥${formatMenuAmount(total)}` : `查看明细 · 合计 ¥${formatMenuAmount(total)}`) : '与右上角历史订单相互独立'}</small>
+                <small>{itemCount > 0 ? (deemphasizeCollapsedTotal ? `打开核对 · ${checkoutPricing.label} ${checkoutAmountText}` : `查看明细 · ${checkoutPricing.label} ${checkoutAmountText}`) : '与右上角历史订单相互独立'}</small>
               </span>
             </button>
             <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => setCartOpen(true)}>
@@ -1217,8 +1238,8 @@ export function MenuOrderingWorkspace({
             <div className="menu-cart-heading"><ShoppingCart size={20} /><strong>已选商品</strong><span>{itemCount} 件</span></div>
             <div className="menu-cart-lines">{cartLines}</div>
             {fulfillmentNoteField}{channelQuotePanel}
-            <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · 合计</span><strong>¥{(total / 100).toFixed(2)}</strong></div>
-            <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled} onClick={() => void submit()}>
+            <div className="menu-cart-total"><span><ShoppingCart size={16} /><b>{itemCount}</b>件 · {checkoutPricing.label}</span><strong>{checkoutAmountText}</strong></div>
+            <button className="menu-submit-button" disabled={cartProducts.length === 0 || checkoutBusy || submitDisabled || checkoutPricing.needsReview} onClick={() => void submit()}>
               <Check size={19} />{cartMutating ? '正在同步选择' : busy ? '正在提交' : submitLabel}
             </button>
             <p className="menu-submit-hint">{submitHint}</p>
@@ -1339,17 +1360,18 @@ export function MenuOrderingWorkspace({
             <p>请核对本次购物车中的商品数量。</p>
             <div className="menu-confirm-lines">{quantityLines.map(line => <div key={line.id}><span>{line.name}</span><strong>× {line.quantity}</strong></div>)}</div>
           </> : confirmation === 'continue' ? <p>您刚完成一次下单。确认是新一轮加单后再继续，避免手滑重复上单。</p> : <>
-            <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}</span><strong>¥{((cartUnitAmount(product) * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
-            <div className="menu-confirm-total"><span>{complimentaryMode ? `赠送价值 · 共 ${itemCount} 件` : `共 ${itemCount} 件`}</span><strong>{complimentaryMode ? '客人零应付' : `¥${(total / 100).toFixed(2)}`}</strong></div>
+            <div className="menu-confirm-lines">{cartProducts.map((product) => <div key={product.id}><span>{product.name} × {cart[product.id]}{channelQuote ? ' · 优惠前' : ''}</span><strong>¥{((cartUnitAmount(product) * cart[product.id]!) / 100).toFixed(2)}</strong></div>)}</div>
+            <div className="menu-confirm-total"><span>{complimentaryMode ? `赠送价值 · 共 ${itemCount} 件` : `共 ${itemCount} 件 · ${checkoutPricing.label}`}</span><strong>{complimentaryMode ? '客人零应付' : checkoutAmountText}</strong></div>
             {fulfillmentNoteField}{channelQuotePanel}
             <p>{confirmation === 'duplicate' ? '请先查看订单记录。只有确定需要再上一份相同商品时，才继续加单。' : complimentaryMode ? '确认后按当前登录员工本人的赠送权限校验，零应付并直接送往吧台或厨房。' : '确认后订单会送到吧台或厨房，请勿连续点击或重复提交。'}</p>
           </>}
+          {confirmation === 'quantity' && channelQuotePanel}
           {confirmationError && <div className="menu-confirm-error" role="alert">{confirmationError}</div>}
           <footer>
             <button className="secondary-button" disabled={checkoutBusy} onClick={returnToCart}>{confirmation === 'quantity' ? '否，返回购物车' : '再看看'}</button>
             <button className="primary-button" data-haptic="action" disabled={isMenuConfirmationDisabled({
               busy: checkoutBusy,
-              submitDisabled,
+              submitDisabled: submitDisabled || checkoutPricing.needsReview,
               confirmation,
               confirmedDuplicateOrderId,
             })} onClick={() => {

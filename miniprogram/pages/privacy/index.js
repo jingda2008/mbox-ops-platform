@@ -1,3 +1,4 @@
+const { beijingDateTime } = require('../../utils/format')
 const {
   getActivityRegistrations, updateActivityRegistrationContact,
   getVerifiedPhones, replaceVerifiedPhone, revokeVerifiedPhone,
@@ -24,18 +25,7 @@ function policyParagraphs(content) {
   return pieces.map((text, index) => ({ id: `p${index}`, text }))
 }
 
-function formatPolicyTime(value) {
-  const parsed = Date.parse(String(value || ''))
-  if (!Number.isFinite(parsed)) return String(value || '')
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(parsed))
-  const pick = (type) => (parts.find((part) => part.type === type) || {}).value || ''
-  const hour = pick('hour') === '24' ? '00' : pick('hour')
-  return `${pick('year')}-${pick('month')}-${pick('day')} ${hour}:${pick('minute')}`
-}
+function formatPolicyTime(value) { return beijingDateTime(value, '待核对') }
 
 const REGISTRATION_STATUS_TEXT = {
   reserved: '名额已暂留',

@@ -1,3 +1,4 @@
+const { beijingDate, beijingDateTime } = require('../../utils/format')
 const { getMiniBootstrap, getMiniLoyaltyLedger } = require('../../utils/api')
 const { customerErrorMessage } = require('../../utils/customer-error')
 
@@ -17,13 +18,7 @@ const GROWTH_TYPE_NAMES = {
   adjust: '人工调整成长值',
 }
 
-function shortDate(value) {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16).replace('T', ' ')
-  const two = (item) => String(item).padStart(2, '0')
-  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
-}
+function shortDate(value) { return beijingDateTime(value, '') }
 
 function signed(value) {
   const amount = Number(value || 0)
@@ -41,7 +36,7 @@ function ledgerMeta(item) {
   const reference = shortReference(item.sourceReference)
   if (reference) parts.push(`关联单号 ${reference}`)
   if (Number.isInteger(item.policyVersion)) parts.push(`规则V${item.policyVersion}`)
-  if (item.expiresAt) parts.push(`有效至 ${String(item.expiresAt).slice(0, 10)}`)
+  if (item.expiresAt) parts.push(`有效至 ${beijingDate(item.expiresAt)}`)
   return parts.join(' · ')
 }
 
@@ -77,7 +72,7 @@ Page({
           pointsBalance: membership.pointsBalance,
           growthValue: membership.growthValue,
           expiryText: membership.pointsExpiry && membership.pointsExpiry.expiringWithin30Days > 0
-            ? `近30天有 ${membership.pointsExpiry.expiringWithin30Days} 积分将到期，最近到期日 ${String(membership.pointsExpiry.nextExpiryAt).slice(0, 10)}`
+            ? `近30天有 ${membership.pointsExpiry.expiringWithin30Days} 积分将到期，最近到期日 ${beijingDate(membership.pointsExpiry.nextExpiryAt)}`
             : '近30天没有积分到期',
           debtText: Number(membership.pendingRecoveryPoints || 0) > 0
             ? `当前有 ${membership.pendingRecoveryPoints} 积分欠额；新到账积分会优先冲抵，期间暂不可兑换。`

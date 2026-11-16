@@ -1,4 +1,4 @@
-import { parseInstant } from '../shared/instant-time'
+import { parseInstant } from '../shared/instant-time.js'
 export interface MenuChannelQuote {
   id: string
   expiresAt: string

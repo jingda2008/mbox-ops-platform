@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 const dashboard = () => ({accountRef:'fixture-account-a',promoter:{canConfirmStatement:true},balance:{accruedMinor:'900',paidMinor:'400',balanceMinor:'500'},batches:[{id:'batch-a',offerCode:'ABCDEFGH2345',acceptingClaims:true,claims:2,arrivals:1,rule:{title:'餐后小聚',claimFrom:'2026-11-13T00:00:00Z',claimUntil:'2026-11-14T00:00:00Z',offer:{kind:'discount',discountBps:1500,maximumMinor:2000}}}],visits:[{visitNumber:'ANON0001',date:'2026-11-13',arrived:true,closed:false,qualifiedConsumptionMinor:'9000',accruedCommissionMinor:null}],statements:[{id:'statement-a',amountMinor:'900',paidMinor:'400',createdAt:'2026-11-13T00:00:00Z',status:'pending'}],nextCursors:{batches:null,visits:null,statements:'cursor-old'}})
-async function setup(page:Page) {
+async function setup(page:Page,patch?:(data:ReturnType<typeof dashboard>)=>void) {
  let authenticated=true,confirmed=false,dropNext=false,otherAccount=false
  const writes:{key:string|undefined;recovery:string|undefined;body:unknown}[]=[],posters:string[]=[]
  await page.route('**/cooperation/api/**',async route=>{
@@ -8,7 +8,7 @@ async function setup(page:Page) {
   if(path==='login'){authenticated=true;return route.fulfill({json:{data:{authenticated:true}}})}
   if(path==='logout'){authenticated=false;return route.fulfill({json:{data:{authenticated:false}}})}
   if(!authenticated)return route.fulfill({status:401,json:{error:{code:'NOT_AUTHORIZED'}}})
-  if(path==='partner'){const data=dashboard();if(otherAccount)data.accountRef='fixture-account-b';return route.fulfill({json:{data}})}
+  if(path==='partner'){const data=dashboard();patch?.(data);if(otherAccount)data.accountRef='fixture-account-b';return route.fulfill({json:{data}})}
   if(path?.startsWith('poster/')){posters.push(path);return route.fulfill({contentType:'image/png',body:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')})}
   if(path==='history')return route.fulfill({json:{data:[{id:'old-statement',createdAt:'2026-11-12T00:00:00Z',amountMinor:'100',paidMinor:'0',status:'confirmed'}],meta:{nextCursor:null}}})
   if(path?.startsWith('statement/'))return route.fulfill({json:{data:{statement:{id:'statement-a',sourceStatementId:null,amountMinor:'900',status:confirmed?'confirmed':'pending'},lines:[{visitNumber:'ANON0001',date:'2026-11-13',basisMinor:'9000',deltaMinor:'900'}]}}})
@@ -31,6 +31,27 @@ test('official cooperation page shows anonymous totals, correct discount, poster
  await page.screenshot({path:'artifacts/normalized-browser/cooperation-mobile.png',fullPage:true})
  await page.setViewportSize({width:1440,height:1000});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
  await page.screenshot({path:'artifacts/normalized-browser/cooperation-desktop.png',fullPage:true})
+})
+test('cooperation renders database timestamps and malformed dates under a strict native parser',async({page})=>{
+ await page.addInitScript(()=>{
+  const NativeDate=Date
+  window.Date=new Proxy(NativeDate,{construct(target,args){
+   if(typeof args[0]==='string'&&!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(args[0]))return new NativeDate(NaN)
+   return Reflect.construct(target,args)
+  }})
+ })
+ await setup(page,data=>{
+  data.batches[0]!.rule.claimFrom='2026-12-31 15:59:59.999999+00'
+  data.batches[0]!.rule.claimUntil='2026-12-31 16:00:00.123456+00'
+  data.statements[0]!.createdAt='2026-12-31 16:00:00.123456+00'
+  data.statements.push({...data.statements[0]!,id:'invalid-time',createdAt:'2026-02-29T00:00:00Z'})
+ })
+ await page.goto('/cooperation/')
+ await expect(page.locator('#batches')).toContainText('领取 2026-12-31 23:59 至 2027-01-01 00:00')
+ await expect(page.locator('#statements')).toContainText('2027-01-01 00:00')
+ await expect(page.locator('#statements')).toContainText('时间待核对')
+ await expect(page.locator('body')).not.toContainText('Invalid Date')
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
 })
 test('lost settlement response survives reload and recovers the same key without duplicate command',async({page})=>{
  const h=await setup(page);await page.goto('/cooperation/');await page.getByRole('button',{name:'查看汇总'}).click();h.drop()

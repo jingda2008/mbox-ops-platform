@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest'
-import {parseChannelActivationReceipt} from './channel-receipt'
-import {DurableStaffCommand} from '../normalized-ui/durable-staff-command'
+import {parseChannelActivationReceipt} from './channel-receipt.js'
+import {DurableStaffCommand} from '../normalized-ui/durable-staff-command.js'
 
 describe('channel activation receipt recovery',()=>{
   it.each([null,{},[],{claimId:7,activationId:'a',visitId:'v'},{claimId:'claim',activationId:'a'},

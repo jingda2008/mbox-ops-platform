@@ -1,4 +1,10 @@
+import { normalizedOperationsApiPlugin } from './normalized-operations-api.js'
+import { TableSessionRepository, TableSessionCommandService } from './table-session-repository.js'
+import { ServiceTaskRepository } from './service-task-repository.js'
+import { AssistedOrderContextRepository } from './assisted-order-context.js'
 import { menuCheckoutPricing } from '../../src/components/menu-channel-pricing.js'
+import { ItemQuantityFulfillmentRepository } from './item-quantity-fulfillment-repository.js'
+import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
@@ -673,6 +679,111 @@ integration('channel distribution real PostgreSQL authority', () => {
     }finally{await guest.close()}
   }, 30_000)
   const reviewer=randomUUID()
+  it.each([false,true])('closes the original commerce, cash, quantity and refund flow with channel attribution=%s',async withChannel=>{
+    const approver=randomUUID(),cid=await customer(),session=await table([cid])
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3::uuid,$1,$2,$3::text,'闭环独立复核')",[...args,approver])
+    // New roles already receive selected baseline permissions from migrations.
+    const grant=async(actor:string,codes:string[])=>{
+      const role=randomUUID()
+      await admin.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($3::uuid,$1,$2,'CLOSURE_'||upper(replace($3::text,'-','')),'闭环测试岗位')",[...args,role])
+      for(const code of codes){
+        await admin.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING',[...args,code])
+        await admin.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4 ON CONFLICT DO NOTHING',[...args,role,code])
+      }
+      await admin.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 day')",[...args,actor,role])
+      return role
+    }
+    await grant(employee,['payment.manual.cash.record','payment.collect.all_tables','refund.request','refund.execute','table.close'])
+    const approvalRole=await grant(approver,['refund.approve','refund.execute','payment.collect.all_tables','table.view_all'])
+    await admin.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',100000,'CNY')",[...args,approvalRole])
+    await admin.query("UPDATE mbox.products SET inventory_control_mode='not_managed' WHERE id=$1",[product])
+    const meta=(actor=employee)=>({scope,actor:{type:'employee' as const,employeeId:actor},businessDate:'2026-11-12',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
+    let visitId:string|undefined,quoteId:string|undefined
+    if(withChannel){
+      const b=await batch({minimumMinor:0,observationDays:0}),claim=await issue(b.code,cid)
+      visitId=(await activate(claim.claimId,cid,session)).visitId!
+      quoteId=(await prepare(session)).id
+    }
+    const commands=new NormalizedCommandExecutor(runner),commerce=new CommerceCommandService(commands,new PostgresPricingAuthority())
+    const existingCredential=(await admin.query('SELECT id FROM mbox.store_daily_credentials WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL AND business_date=current_date',args)).rows[0]
+    const credentialId=existingCredential?.id??randomUUID(),leaseId=randomUUID(),staffSessionId=randomUUID()
+    if(!existingCredential)await admin.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$closure-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,...args,employee])
+    await admin.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,$5,$6,clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,...args,credentialId,createHash('sha256').update(randomUUID()).digest('hex'),createHash('sha256').update(randomUUID()).digest('hex')])
+    await admin.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,$6,statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,...args,employee,leaseId,createHash('sha256').update(randomUUID()).digest('hex')])
+    const binding={employeeId:employee,staffSessionId,deviceAccessLeaseId:leaseId}
+    const context=await runner.run(scope,tx=>new AssistedOrderContextRepository(tx).issue({...binding,tableSessionId:session}))
+    const submission={...meta(),assistedOrderContext:{...binding,token:context.token},tableSessionId:session,publicId:randomUUID(),channel:'staff_assisted' as const,createdByEmployeeId:employee,lines:[{productId:product,quantity:1}],...(quoteId?{pricingAuthorization:{sourceType:'channel_quote' as const,sourceId:quoteId}}:{})}
+    const submitted=await commerce.submitOrder(submission),order=submitted.value.order,paid=withChannel?9000:10000
+    expect(order.totalAmountMinor).toBe(paid)
+    expect((await commerce.submitOrder(submission)).replayed).toBe(true)
+    const money=new PaymentCommandService(commands,new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())
+    const paymentCommand={...meta(),orderId:order.id,publicId:randomUUID(),provider:'cash' as const,method:'cash' as const,evidence:{receiptReference:randomUUID(),collectedByEmployeeId:employee}}
+    const payment=await money.recordManual(paymentCommand)
+    expect((await money.recordManual(paymentCommand)).replayed).toBe(true)
+    expect(payment.value.amountMinor).toBe(paid)
+    const task=(await admin.query('SELECT id FROM mbox.kds_tasks WHERE order_item_id=$1',[order.items[0]!.id])).rows[0]
+    expect(task).toBeTruthy()
+    const delivery={itemId:order.items[0]!.id,taskId:task.id,employeeId:employee,quantity:1,eventKey:randomUUID()}
+    await runner.run(scope,async tx=>{
+      const production=new ItemQuantityFulfillmentRepository(tx)
+      await production.complete({...delivery,eventKey:randomUUID()})
+      await production.deliver(delivery)
+      expect((await production.deliver(delivery)).replayed).toBe(true)
+    })
+    if(visitId)expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))).toMatchObject({basis:paid,target:paid/10,frozen:true,reasons:expect.arrayContaining(['客组尚未结束'])})
+    const refund=await money.requestRefund({...meta(),paymentId:payment.value.id,publicId:randomUUID(),purpose:'service_compensation',reason:'隔离服务补偿',allocations:[{orderItemId:order.items[0]!.id,amountMinor:2000}]})
+    await money.approveRefund({...meta(approver),refundId:refund.value.id,decisionReason:'隔离独立复核'})
+    await money.beginRefundExecution({...meta(approver),refundId:refund.value.id})
+    const refundCommand={...meta(approver),refundId:refund.value.id,succeeded:true,receiptReference:randomUUID()}
+    expect((await money.recordManualRefundResult(refundCommand)).value.status).toBe('succeeded')
+    expect((await money.recordManualRefundResult(refundCommand)).replayed).toBe(true)
+    const summary=await runner.run(scope,tx=>readCheckoutPrintSummary(tx,[order.id]))
+    expect(summary).toMatchObject({received:paid,refunded:2000,net:paid-2000,due:0,state:'paid'})
+    if(visitId){
+      const finance=()=>runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))
+      expect(await finance()).toMatchObject({basis:paid-2000,target:(paid-2000)/10,deltaMinor:-200})
+      expect(await finance()).toMatchObject({deltaMinor:0})
+      expect((await admin.query('SELECT applied_discount_minor::int AS n FROM mbox.channel_activations WHERE visit_id=$1',[visitId])).rows[0].n).toBe(1000)
+    }else expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_order_attributions WHERE order_id=$1',[order.id])).rows[0].n).toBe(0)
+    const operations=Fastify()
+    await operations.register(normalizedOperationsApiPlugin,{
+      operationsQuery:{getStaffView:async()=>{throw new Error('unused read port')}},
+      tableSessions:new TableSessionCommandService(commands),commandExecutor:commands,
+      resolveContext:()=>({scope,employeeId:employee,businessDate:'2026-11-12',capabilities:['table.close']}),
+      createTableSessionRepository:tx=>new TableSessionRepository(tx),createServiceTaskRepository:tx=>new ServiceTaskRepository(tx),
+    })
+    try{for(const transition of ['begin-closing','close']){
+      const request={method:'POST' as const,url:`/table-sessions/${session}/${transition}`,headers:{'idempotency-key':randomUUID()},payload:{}}
+      const response=await operations.inject(request)
+      expect(response.statusCode,response.body).toBe(200)
+      expect((await operations.inject(request)).statusCode).toBe(200)
+    }}finally{await operations.close()}
+    if(visitId){
+      expect((await new ChannelReconciliationWorker(runner).runBatch(scope,'closure-audit')).failed).toBe(0)
+      expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))).toMatchObject({basis:paid-2000,target:(paid-2000)/10,frozen:false,deltaMinor:0})
+      expect((await admin.query('SELECT closed_at FROM mbox.channel_visits WHERE id=$1',[visitId])).rows[0].closed_at).not.toBeNull()
+    }
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.payments WHERE order_id=$1',[order.id])).rows[0].n).toBe(1)
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.refunds WHERE payment_id=$1',[payment.value.id])).rows[0].n).toBe(1)
+  })
+  it('passes a promised gift through the real quantity production and delivery path without consuming stock or commission twice',async()=>{
+    const gift=await giftProduct(1),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),claim=await issue(b.code,cid)
+    const active=await activate(claim.claimId,cid,session)
+    const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
+    const first=await runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:claim.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'}))
+    const item=(await admin.query('SELECT i.id,t.id AS task FROM mbox.order_items i JOIN mbox.kds_tasks t ON t.order_item_id=i.id WHERE i.order_id=$1',[first.result.orderId])).rows[0]
+    const finish={itemId:item.id,taskId:item.task,employeeId:employee,quantity:1,eventKey:randomUUID()},deliver={...finish,eventKey:randomUUID()}
+    await runner.run(scope,async tx=>{
+      const production=new ItemQuantityFulfillmentRepository(tx)
+      await production.complete(finish);expect((await production.complete(finish)).replayed).toBe(true)
+      await production.deliver(deliver);expect((await production.deliver(deliver)).replayed).toBe(true)
+    })
+    const inventory=(await admin.query('SELECT on_hand_quantity::text AS hand,reserved_quantity::text AS held FROM mbox.inventory_balances WHERE inventory_item_id=$1',[gift.iid])).rows[0]
+    expect(Number(inventory.hand)).toBe(0);expect(Number(inventory.held)).toBe(0)
+    expect(await runner.run(scope,tx=>readCheckoutPrintSummary(tx,[first.result.orderId]))).toMatchObject({received:0,due:0,state:'paid'})
+    expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(active.visitId!))).toMatchObject({basis:0,target:0})
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.payments WHERE order_id=$1',[first.result.orderId])).rows[0].n).toBe(0)
+  })
   async function financeFixture(observationDays=0,provider='cash'){
     await admin.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'CHANNEL_REVIEW','复核员工') ON CONFLICT DO NOTHING`,[...args,reviewer])
     const pid=randomUUID(),rid=randomUUID(),owner=await customer(),campaign=randomUUID()
@@ -697,6 +808,19 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query(`INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,'CNY')`,[...args,id,f.order.items[0]!.id,value])
     return id
   }
+  it('renders an actual partner HTTP settlement timestamp with the shipped cooperation formatter without exposing order identity',async()=>{
+    const f=await financeFixture(),statement=await runner.run(scope,tx=>new ChannelFinanceRepository(tx).statement(f.rid,f.account,employee,'完整记录核对'))
+    const response=await app.inject({method:'GET',url:'/cooperation/partner',headers:await webSession(f.rid)})
+    expect(response.statusCode,response.body).toBe(200)
+    const data=response.json().data,row=data.statements.find((s:{id:string})=>s.id===statement.id)
+    expect(row).toBeTruthy()
+    const source=readFileSync('public/cooperation/app.js','utf8'),format=vm.runInNewContext(source.slice(source.indexOf('const beijing ='),source.indexOf('\nfunction renderRows'))+';beijing',{Date,Intl:undefined})
+    const expected=(await admin.query("SELECT to_char(created_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD HH24:MI') AS value FROM mbox.channel_statements WHERE id=$1",[statement.id])).rows[0].value
+    expect(format(row.createdAt)).toBe(expected)
+    expect(JSON.stringify(data)).not.toContain(f.order.id)
+    expect(JSON.stringify(data)).not.toContain(f.order.items[0]!.id)
+    expect(JSON.stringify(data)).not.toContain(f.owner)
+  })
   it('keeps wallet redemption history and spent capacity after failed, partial and full refunds',async()=>{
     const f=await financeFixture()
     const claim=(await admin.query(`SELECT q.id,q.customer_id,a.id AS activation_id FROM mbox.channel_claims q JOIN mbox.channel_activations a ON a.claim_id=q.id WHERE a.visit_id=$1`,[f.visitId])).rows[0]

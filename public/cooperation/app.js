@@ -49,7 +49,26 @@ async function act(fn) {
 function text(tag, value, className) { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node }
 function button(label, action) { const node = text('button', label); node.type = 'button'; node.addEventListener('click', () => act(action)); return node }
 function offer(rule) { return rule.offer.kind === 'gift' ? `赠 ${rule.offer.productName || '指定商品'} × ${rule.offer.quantity}` : rule.offer.kind === 'credit' ? `减 ${money(rule.offer.amountMinor)}` : `${(10000 - rule.offer.discountBps) / 1000} 折，单券最多优惠 ${money(rule.offer.maximumMinor)}` }
-const beijing = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+// Standalone browser adapter; keep aligned with shared/instant-time and Mini format.
+const beijing = value => {
+  const fallback = '时间待核对'
+  if (typeof value !== 'string') return fallback
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(value.trim())
+  if (!match) return fallback
+  const [, year, month, day, hour, minute, second = '00', fraction, offset] = match
+  const calendar = new Date(0)
+  calendar.setUTCFullYear(Number(year), Number(month) - 1, Number(day))
+  if (calendar.getUTCFullYear() !== Number(year) || calendar.getUTCMonth() + 1 !== Number(month)
+    || calendar.getUTCDate() !== Number(day) || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return fallback
+  const digits = offset.slice(1).replace(':', '')
+  if (offset !== 'Z' && (Number(digits.slice(0, 2)) > 23 || Number(digits.slice(2) || 0) > 59)) return fallback
+  const zone = offset === 'Z' ? 'Z' : offset[0] + digits.slice(0, 2) + ':' + (digits.slice(2) || '00')
+  const millis = fraction ? '.' + (fraction + '00').slice(0, 3) : ''
+  const instant = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}${millis}${zone}`)
+  if (!Number.isFinite(instant)) return fallback
+  const date = new Date(instant + 28800000)
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 16).replace('T', ' ') : fallback
+}
 function renderRows(kind, rows, append = false) {
   const root = $(kind); if (!append) root.replaceChildren()
   for (const row of rows) {

@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
-import { dateInput, parseInstant } from './instant-time'
-import { chinaBusinessDateKey, chinaDateKey, chinaDateTimeLocalValue } from './china-time'
-import { menuCheckoutPricing } from '../components/menu-channel-pricing'
+import { dateInput, parseInstant } from './instant-time.js'
+import { chinaBusinessDateKey, chinaDateKey, chinaDateTimeLocalValue } from './china-time.js'
+import { menuCheckoutPricing } from '../components/menu-channel-pricing.js'
 const module = { exports: {} as { dateInput:(value:unknown)=>string; parseInstant:(value:unknown)=>number } }
 vm.runInNewContext(readFileSync('miniprogram/utils/format.js','utf8'),{module,Date})
 const values:unknown[]=['2026-12-31 16:00:00.123456+00','2027-01-01T00:00:00.123+08:00','2026-12-31T11:00:00.123-0500','2027-01-01 00:00+08','2024-02-29T00:00:00Z','2026-02-29T00:00:00Z','2026-11-15T00:00:00','2026-11-15',null,undefined,'',false,0,NaN,Infinity,'infinity','2026-01-01T00:00:00+08:60']

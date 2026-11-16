@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { channelPermissionPresentation, staffPermissionCategory, matchesStaffPermissionSearch } from './channel-permissions'
+import { channelPermissionPresentation, staffPermissionCategory, matchesStaffPermissionSearch } from './channel-permissions.js'
 
 describe('cooperation permission discovery', () => {
  it('finds all five capabilities by new name, legacy name or code even against old catalog metadata', () => {

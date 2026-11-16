@@ -41,3 +41,7 @@
 ## 证据索引
 
 `check-final-all.log`、`pg-full.log`、`pg-focused-rerun.log`、`pg-prepayment.log`、`browser-final-rerun.log`、`browser-complete.log`及`browser-prepayment-rerun.log`、`audit.log`、`commercial-gate-final.log`；`revision-recording-checks.json`、`revision-takes.json`、`video-manifest.json`、`delivery-manifest.json`、`video-probe.json`、`decode-check.log`、`audio-check.log`、`player-check.json`、`package-check.json`。初次失败日志原样保留，不用后一次结果覆盖。
+
+## 后续发布核对（2026-11-17 01:07 CST）
+
+本地修订阶段的“不部署”记录保留。随后用户授权发布，修复已随rc298上线并完成223项隔离PG与29项浏览器复查，生产业务快照不变。详见[rc298发布记录](release-1.0.0-rc.298.md)。本页录像仍为标注的隔离演示，不变成微信实机或真实资金证明。

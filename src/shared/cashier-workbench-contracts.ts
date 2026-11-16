@@ -253,6 +253,8 @@ export interface CashierWorkbenchView {
     canRecordManualExternal: boolean
     canRequestRefund: boolean
     canApproveRefund: boolean
+    /** Live effective limits, by currency. Missing on older servers: refresh before deciding. */
+    refundApprovalLimits?: Record<string, number>
     canExecuteRefund: boolean
     canAuthorizeRecollection?: boolean
     /** Grants the activity-only cashier surface; it does not grant activity editing or contact access. */

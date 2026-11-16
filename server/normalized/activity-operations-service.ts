@@ -1,3 +1,6 @@
+import {readRefundApprovalLimits} from './refund-approval-limits.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
+import {refundReviewBlockReason} from '../../src/shared/refund-review-availability.js'
 import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import {ActivityServiceRepository} from './activity-service-repository.js'
 import type {ActivityDoorCommand} from '../../src/shared/activity-service.js'
@@ -58,7 +61,15 @@ export class ActivityOperationsService {
   detail(context: ActivityOperationsStaffContext, publicId: string) {
     return this.transactions.run(
       context.scope,
-      (transaction) => new ActivityOperationsRepository(transaction).detail(publicId),
+      async transaction => {
+        const detail=await new ActivityOperationsRepository(transaction).detail(publicId)
+        const access=await new StaffAccessRepository(transaction).resolve(context.employeeId)
+        const canApproveRefund=access.permissions.includes('refund.approve')
+        const refundApprovalLimits=canApproveRefund?await readRefundApprovalLimits(transaction,context.employeeId):{}
+        return {...detail,registrations:detail.registrations.map(registration=>({...registration,refund:registration.refund===null?null:{...registration.refund,
+          reviewBlockReason:refundReviewBlockReason({canApproveRefund,refundApprovalLimits},{...registration.refund,currency:registration.currency},context.employeeId),
+        }}))}
+      },
       { readOnly: true },
     )
   }

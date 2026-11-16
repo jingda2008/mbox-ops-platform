@@ -1,3 +1,4 @@
+import {beijingDisplayTime} from './beijing-display-time'
 import { ChannelReportPanel } from './ChannelReportPanel'
 import { ChannelOperationsPanel } from './ChannelOperationsPanel'
 import { ChannelFinancePanel } from './ChannelFinancePanel'
@@ -117,7 +118,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
     {canManage&&<button type="button" disabled={busy||!data?.batches.length} onClick={()=>void (async()=>{const started=epoch.current;for(const b of data?.batches??[]){if(started!==epoch.current)break;if(b.acceptingClaims)await download(b.id)}})()}>依次下载当前开放批次（同批次不增额度）</button>}
     <p>推荐话术：吃完饭还想再坐一会儿，可以去 M-BOX。到店出示专属图，由服务员核对优惠和当次桌号；赠品、门槛与有效时间见图。</p>
     <div className="gift-records">{data?.batches.map(b => <article key={b.id}><strong>{b.rule.title}</strong><p>{data.partners.find(p => p.promoterId === b.promoterId)?.name} · {b.offerCode}</p><p>{b.acceptingClaims ? '领取状态以活动总开关和核验为准' : '暂停新领取'}</p>{canManage && <button type="button" disabled={busy} onClick={() => void download(b.id)}>下载推广图，单独发送</button>}</article>)}</div>
-    <details><summary>最近跟进</summary>{data?.followups.map(f => <p key={f.id}>{f.createdAt} · {f.note}</p>)}</details>
+    <details><summary>最近跟进</summary>{data?.followups.map(f => <p key={f.id}>{beijingDisplayTime(f.createdAt)}（北京时间） · {f.note}</p>)}</details>
   </section>
 }
 function message(error: unknown) {

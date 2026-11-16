@@ -1,3 +1,4 @@
+import {beijingDisplayTime} from './beijing-display-time'
 import { useCallback,useEffect,useMemo,useRef,useState } from 'react'
 import type { NormalizedApiClient,StaffAuthView } from '../normalized-api'
 import { DurableStaffCommand } from './durable-staff-command'
@@ -28,7 +29,7 @@ export function ChannelFinancePanel({api,auth,partners}:{api:NormalizedApiClient
  const label=(id:unknown)=>partners.find(p=>p.promoterId===id)?.promoterName??String(id).slice(-8),disabled=busy||pending
  const ids=action==='verify-account'?data?.accounts:action==='confirm-payment'||action==='return-payment'?data?.payouts:data?.statements
  return <details><summary>周边店合作财务 · 退款计佣、对账及付款登记</summary>
-  <p>按实际净消费累计计佣；退款处理中冻结。原银行付款状态不明时先查原回单。账户及付款必须由另一位有权限的员工复核。</p>
+  <p>按实际净消费累计计佣；退款处理中冻结。原银行付款状态不明时先查原回单。账户及付款必须由另一位有权限的员工复核。以下时间均为北京时间。</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   <button type="button" disabled={busy} onClick={()=>void reload().catch(()=>{})}>刷新核算记录</button>{pending&&<button type="button" disabled={busy} onClick={()=>void submit()}>恢复原财务操作</button>}
   <form onSubmit={form}><fieldset disabled={disabled} className="gift-form-grid">
@@ -44,9 +45,9 @@ export function ChannelFinancePanel({api,auth,partners}:{api:NormalizedApiClient
   </fieldset></form>
   <h4>推荐人净余额</h4>{data?.balances.map(b=><p key={String(b.promoterId)}>{label(b.promoterId)} · 应计 {yuan(b.accruedMinor)} · 实付净额 {yuan(b.paidMinor)} · 未付余额 {yuan(b.balanceMinor)}（负数抵扣后续佣金）</p>)}
   <h4>结算单</h4><p>账户变更的尾款续结不新增佣金，原单与续结单金额不能相加；总应付以推荐人净余额为准。</p>{data?.statements.map(s=><p key={String(s.id)}>{String(s.id).slice(-8)} · {label(s.promoterId)} · {state(s.status)} · {s.sourceStatementId?`原单 ${String(s.sourceStatementId).slice(-8)} 的尾款续结`:'原结算单'} · 本单 {yuan(s.amountMinor)} · 实付净额 {yuan(s.paidMinor)} <button type="button" disabled={busy} onClick={()=>void inspect(String(s.id))}>核对原消费和退款明细</button></p>)}
-  {detail&&<section><h4>原结算单 {String(detail.statement.id).slice(-8)} 的出单快照</h4><p>收款主体 {String(detail.statement.accountSubject??'待核对')} · 账户资料/脱敏标识 {String(detail.statement.accountReference??'待核对')}</p><p>{detail.statement.sourceStatementId?'本单是关联原结算单的尾款续结，不新增佣金；下列明细来自原单。':'以下是该单生成时的依据。'}审批、付款前仍会重新读取实时交易。累计本金用于核对，实际付款以本单佣金差额为准。</p>{detail.lines.map((line,i)=><div key={i}><p>客组 {String(line.visitId).slice(-8)} · 佣金差额 {yuan(line.deltaMinor)} · {String(line.createdAt)}</p>{((line.evidence as {evidence?:Row[]})?.evidence??[]).map((o,j)=><p key={j}>原订单 {String(o.orderId)} · {o.excluded?`排除：${o.excluded}`:`实收 ${yuan(o.paid)} · 退款 ${yuan(o.refunded)} · 合格本金 ${yuan(o.basis)}`}</p>)}</div>)}</section>}
-  <h4>消费核算与冻结</h4>{data?.positions.map(p=><p key={String(p.visitId)}>{label(p.promoterId)} · 客组 {String(p.visitId).slice(-8)} · 合格净消费 {yuan(p.basisMinor)} · 应计 {yuan(p.commissionMinor)} · {p.frozen?`冻结：${(p.reasons as string[]).join('、')}`:`成熟时间 ${p.maturesAt}`} · 更新 {String(p.checkedAt)}{p.stale?' · 数据待同步':''}</p>)}
-  <h4>退款与佣金差额</h4>{data?.ledger.map(l=><p key={String(l.id)}>{label(l.promoterId)} · 客组 {String(l.visitId).slice(-8)} · 本次差额 {yuan(l.deltaMinor)} · {String(l.createdAt)}</p>)}
+  {detail&&<section><h4>原结算单 {String(detail.statement.id).slice(-8)} 的出单快照</h4><p>收款主体 {String(detail.statement.accountSubject??'待核对')} · 账户资料/脱敏标识 {String(detail.statement.accountReference??'待核对')}</p><p>{detail.statement.sourceStatementId?'本单是关联原结算单的尾款续结，不新增佣金；下列明细来自原单。':'以下是该单生成时的依据。'}审批、付款前仍会重新读取实时交易。累计本金用于核对，实际付款以本单佣金差额为准。</p>{detail.lines.map((line,i)=><div key={i}><p>客组 {String(line.visitId).slice(-8)} · 佣金差额 {yuan(line.deltaMinor)} · {beijingDisplayTime(line.createdAt)}</p>{((line.evidence as {evidence?:Row[]})?.evidence??[]).map((o,j)=><p key={j}>原订单 {String(o.orderId)} · {o.excluded?`排除：${o.excluded}`:`实收 ${yuan(o.paid)} · 退款 ${yuan(o.refunded)} · 合格本金 ${yuan(o.basis)}`}</p>)}</div>)}</section>}
+  <h4>消费核算与冻结</h4>{data?.positions.map(p=><p key={String(p.visitId)}>{label(p.promoterId)} · 客组 {String(p.visitId).slice(-8)} · 合格净消费 {yuan(p.basisMinor)} · 应计 {yuan(p.commissionMinor)} · {p.frozen?`冻结：${(p.reasons as string[]).join('、')}`:`成熟时间 ${beijingDisplayTime(p.maturesAt)}`} · 更新 {beijingDisplayTime(p.checkedAt)}{p.stale?' · 数据待同步':''}</p>)}
+  <h4>退款与佣金差额</h4>{data?.ledger.map(l=><p key={String(l.id)}>{label(l.promoterId)} · 客组 {String(l.visitId).slice(-8)} · 本次差额 {yuan(l.deltaMinor)} · {beijingDisplayTime(l.createdAt)}</p>)}
   <p>列表显示最近 {data?.limit??500} 条；所有出单和付款校验使用完整账本，不以当前列表合计作为应付。</p>
  </details>
 }

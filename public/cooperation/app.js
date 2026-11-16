@@ -3,7 +3,7 @@ const money = value => value === null || value === undefined ? '待核对' : `¥
 const statuses = { pending: '待确认', confirmed: '已确认', approved: '已审批', disputed: '有异议', cancelled: '已取消' }
 let invitation = new URLSearchParams(location.hash.slice(1)).get('invite') || ''
 if (location.hash) history.replaceState(null, '', location.pathname)
-let state = null, busy = false, epoch = 0, detailId = null, posterUrl = null
+let state = null, busy = false, epoch = 0, detailId = null, detailReady = false, detailRequest = 0, posterUrl = null
 const pendingKey = () => state ? `mbox-cooperation-pending:${state.accountRef}` : null
 const message = text => { $('message').textContent = text }
 function pending() { const key = pendingKey(); return key ? JSON.parse(sessionStorage.getItem(key) || 'null') : null }
@@ -13,7 +13,7 @@ function controls() {
     let unresolved = true
     try { unresolved = !!pending() } catch { message('无法读取上次操作记录，请联系管理员核对后处理。') }
     $('pending').hidden = !unresolved
-    $('confirm').disabled = $('dispute').disabled = busy || unresolved
+    $('confirm').disabled = $('dispute').disabled = busy || unresolved || !detailReady
   }
 }
 async function api(path, body, headers = {}, raw = false) {
@@ -34,7 +34,7 @@ function closePoster() {
 }
 function clearPrivate() {
   closePoster()
-  epoch++; state = null; detailId = null
+  epoch++; state = null; detailId = null; detailReady = false; detailRequest++
   for (const id of ['balance', 'batches', 'visits', 'statements', 'detail-body']) $(id).replaceChildren()
   $('reason').value = ''; $('dashboard').hidden = true; $('detail').hidden = true; $('logout').hidden = true; $('auth').hidden = false
 }
@@ -93,7 +93,11 @@ function renderRows(kind, rows, append = false) {
   if (!root.children.length) root.append(text('p', '暂无记录', 'muted'))
   $(`more-${kind}`).hidden = !state.nextCursors[kind]
 }
-async function refresh() {
+function invalidateDetail() {
+  detailReady = false; detailRequest++; $('detail-body').replaceChildren(); $('detail').hidden = true; $('response').hidden = true
+}
+async function refresh(statementId = detailId) {
+  invalidateDetail()
   const version = epoch, data = (await api('partner')).data
   if (version !== epoch) return
   if (state && state.accountRef !== data.accountRef) { clearPrivate(); throw new Error('账号已变化，请重新登录后核对。') }
@@ -103,20 +107,23 @@ async function refresh() {
     const node = document.createElement('div'); node.className = 'card'; node.append(text('span', label), text('strong', money(value), 'amount')); $('balance').append(node)
   }
   for (const kind of ['batches', 'visits', 'statements']) renderRows(kind, data[kind])
+  if (statementId) await showStatement(statementId, { preserveReason: true, scroll: false })
   controls()
 }
-async function showStatement(id) {
-  const version = epoch, data = (await api(`statement/${encodeURIComponent(id)}`)).data
-  if (version !== epoch) return
-  detailId = data.statement.id; $('detail-body').replaceChildren(text('p', `结算金额 ${money(data.statement.amountMinor)} · ${statuses[data.statement.status] || '处理中'}`))
+async function showStatement(id, { preserveReason = false, scroll = true } = {}) {
+  detailId = id; invalidateDetail()
+  const version = epoch, request = detailRequest, data = (await api(`statement/${encodeURIComponent(id)}`)).data
+  if (version !== epoch || request !== detailRequest) return
+  detailId = data.statement.id; detailReady = true; $('detail-body').replaceChildren(text('p', `结算金额 ${money(data.statement.amountMinor)} · ${statuses[data.statement.status] || '处理中'}`))
   for (const line of data.lines) $('detail-body').append(text('p', `${line.date} · 匿名记录 ${line.visitNumber} · 计佣净额 ${money(line.basisMinor)} · 佣金变动 ${money(line.deltaMinor)}`))
-  $('reason').value = ''; $('detail').hidden = false
+  if (!preserveReason) $('reason').value = ''; $('detail').hidden = false
   $('response').hidden = !state.promoter.canConfirmStatement || !['pending', 'confirmed'].includes(data.statement.status)
   $('confirm').hidden = data.statement.status !== 'pending'
-  $('detail').scrollIntoView({ behavior: 'smooth' }); controls()
+  if (scroll) $('detail').scrollIntoView({ behavior: 'smooth' }); controls()
 }
 async function respond(dispute) {
   if (pending()) throw new Error('请先恢复上次操作。')
+  if (!detailReady || !detailId) throw new Error('请先读取最新结算汇总，再确认或提出异议。')
   const reason = $('reason').value.trim() || (dispute ? '' : '已核对汇总金额')
   if (reason.length < 2) throw new Error('请填写至少两个字的异议说明。')
   const command = { key: `channel-${crypto.randomUUID()}`, body: { id: detailId, dispute, reason } }
@@ -134,7 +141,7 @@ async function sendCommand(command, recovery) {
     if (version === epoch && error.notCommitted) sessionStorage.removeItem(key)
     throw error
   }
-  await refresh(); await showStatement(command.body.id); message('已保存并核对最新结算状态。')
+  await refresh(command.body.id); message('已保存并核对最新结算状态。')
 }
 function authMode() {
   $('auth-title').textContent = invitation ? '开通／重置合作账号' : '合作账号登录'

@@ -1,3 +1,5 @@
+import {NormalizedPaymentCapabilityAuthorization} from './payment-security-policy.js'
+import {refundReviewBlockReason} from '../../src/shared/refund-review-availability.js'
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -64,6 +66,7 @@ describe('PostgresCashierWorkbenchQuery', () => {
       canRecordManualExternal: false,
       canRequestRefund: true,
       canApproveRefund: true,
+      refundApprovalLimits:{CNY:200000},
       canExecuteRefund: true,
       canAuthorizeRecollection: false,
       canUseActivityCashier: true,
@@ -456,6 +459,10 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
       VALUES($1,$2,$3,$4,'桌台服务角色')`, [
       integrationServerRoleId, integrationTenantId, integrationStoreId, `CW_SERVER_${suffix.toUpperCase()}`,
     ])
+    await pool.query(`INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)`,[integrationTenantId,integrationStoreId,integrationApproverId,integrationServerRoleId])
+    await pool.query(`INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',200000,'CNY')`,[integrationTenantId,integrationStoreId,integrationServerRoleId])
+    const approvalPermission=(await pool.query(`INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,'refund.approve','Refund review','operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id`,[integrationTenantId,integrationStoreId])).rows[0].id
+    await pool.query(`INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4)`,[integrationTenantId,integrationStoreId,integrationServerRoleId,approvalPermission])
     await pool.query(`INSERT INTO mbox.table_assignments(
       tenant_id,store_id,table_id,employee_id,role_id,assignment_type,reason
     ) VALUES($1,$2,$3,$4,$5,'primary','收银工作台桌台范围测试')`, [
@@ -798,6 +805,39 @@ integration('PostgresCashierWorkbenchQuery PostgreSQL integration', () => {
     } finally { await runtime.end() }
   })
 
+
+  it('matches live review limits across workbench, todo count and write authorization, including limit removal',async()=>{
+    const scope={tenantId:integrationTenantId,storeId:integrationStoreId}
+    const runner=new ScopedPostgresTransactionRunner(asPool(pool))
+    const policy=new NormalizedPaymentCapabilityAuthorization()
+    const read=()=>query.get({scope,employeeId:integrationApproverId,businessDate:'2026-08-13',capabilities:['refund.approve'],query:'VIP1',limit:20})
+    const authorize=()=>runner.run(scope,tx=>policy.assertRefundApproval({transaction:tx,employeeId:integrationApproverId,refundId:integrationRefundId}))
+    try {
+      await pool.query(`UPDATE mbox.role_approval_limits SET amount_minor=1000 WHERE role_id=$1`,[integrationServerRoleId])
+      const exact=await read();expect(exact.actions.refundApprovalLimits).toEqual({CNY:1000})
+      const original=exact.orders.flatMap(o=>o.payments.flatMap(p=>p.refunds)).find(r=>r.id===integrationRefundId)!
+      expect(original.amountMinor).toBe(1000);expect(refundReviewBlockReason(exact.actions,original,integrationApproverId)).toBeNull();await expect(authorize()).resolves.toBeUndefined()
+      await pool.query(`UPDATE mbox.role_approval_limits SET amount_minor=999 WHERE role_id=$1`,[integrationServerRoleId])
+      const low=await read();expect(refundReviewBlockReason(low.actions,original,integrationApproverId)).toContain('超过')
+      await expect(authorize()).rejects.toMatchObject({refundReviewBlock:'limit_exceeded'})
+      await pool.query(`UPDATE mbox.role_approval_limits SET enabled=false WHERE role_id=$1`,[integrationServerRoleId])
+      expect((await read()).actions.refundApprovalLimits).toEqual({})
+      expect((await runner.run(scope,tx=>readCashierTodoSummary(tx,integrationApproverId,['refund.approve']))).refunds.action).toBe(0)
+      await expect(authorize()).rejects.toMatchObject({refundReviewBlock:'limit_missing'})
+      await pool.query(`UPDATE mbox.role_approval_limits SET enabled=true,currency='USD',amount_minor=200000 WHERE role_id=$1`,[integrationServerRoleId])
+      const usd=await read();expect(usd.actions.refundApprovalLimits).toEqual({USD:200000});expect(refundReviewBlockReason(usd.actions,original,integrationApproverId)).toContain('CNY')
+      await expect(authorize()).rejects.toMatchObject({refundReviewBlock:'limit_missing'})
+      await pool.query(`UPDATE mbox.employee_roles SET starts_at=clock_timestamp()-interval '2 days',ends_at=clock_timestamp()-interval '1 day' WHERE employee_id=$1`,[integrationApproverId])
+      expect((await read()).actions.refundApprovalLimits).toEqual({})
+      await expect(authorize()).rejects.toMatchObject({refundReviewBlock:'permission'})
+      const foreign=await new PostgresCashierWorkbenchQuery(runner).get({scope:{tenantId:randomUUID(),storeId:randomUUID()},employeeId:integrationApproverId,businessDate:'2026-08-13',capabilities:['refund.approve'],limit:20})
+      expect(foreign.actions.refundApprovalLimits).toEqual({})
+    } finally {
+      await pool.query(`UPDATE mbox.role_approval_limits SET enabled=true,currency='CNY',amount_minor=200000 WHERE role_id=$1`,[integrationServerRoleId])
+      await pool.query(`UPDATE mbox.employee_roles SET starts_at=clock_timestamp()-interval '1 day',ends_at=NULL WHERE employee_id=$1`,[integrationApproverId])
+    }
+  })
+
 })
 
 class QueryRunner {
@@ -818,6 +858,7 @@ class QueryRunner {
     return handler({
       scope,
       query: async <Row extends Record<string, unknown>>(text: string, values: readonly unknown[] = []) => {
+        if(text.startsWith('SELECT al.currency, MAX(al.amount_minor)'))return {rows:[{currency:'CNY',amount_minor:'200000'}] as unknown as Row[],rowCount:1}
         if (text === 'SET LOCAL jit = off') return {rows:[] as Row[],rowCount:null}
         // Schema capability discovery is independent of the ordered domain rows below.
         if (text.startsWith("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present")) {

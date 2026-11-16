@@ -1,4 +1,7 @@
 import Fastify from 'fastify'
+import {ActivityOperationsService} from './activity-operations-service.js'
+import {NormalizedPaymentCapabilityAuthorization} from './payment-security-policy.js'
+import {StaffAccessRepository} from './staff-access-repository.js'
 import {NormalizedCommandExecutor} from './command-executor.js'
 import {nativeActivityOperationsApiPlugin} from './native-activity-operations-api.js'
 import { randomUUID } from 'node:crypto'
@@ -266,6 +269,27 @@ integration('activity operations PostgreSQL integration', () => {
       const pending=data.rows.find(r=>r.publicId==='activity-ops-registration-pending');const blocked=await send('cancel-registration',{publicId:'activity-ops-published',registrationPublicId:pending.publicId,expectedVersion:pending.nativeVersion,reason:'渠道尚不明确不能释放名额'});expect(blocked.statusCode,blocked.body).toBe(409)
       await pool.query("UPDATE mbox.employees SET status='suspended' WHERE id=$1",[employeeId]);try{expect((await send('refund-request',refundBody,refundKey)).statusCode).toBe(403)}finally{await pool.query("UPDATE mbox.employees SET status='active' WHERE id=$1",[employeeId])}
     }finally{await app.close();await runtime.end()}
+  })
+
+  it.skipIf(!process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL)('preserves activity-only review while returning live currency, amount and self-review restrictions',async()=>{
+    const runtime=new Pool({connectionString:process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL}),txs=new ScopedPostgresTransactionRunner(runtime)
+    const reviewer=randomUUID(),role=randomUUID(),scope={tenantId,storeId}
+    try{
+      await pool.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name,pin_hash)
+        SELECT $1,tenant_id,store_id,'activity-reviewer','仅活动复核',pin_hash FROM mbox.employees WHERE id=$2`,[reviewer,employeeId])
+      await pool.query("INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1,$2,$3,'ACTIVITY_REVIEW_ONLY','活动复核')",[role,tenantId,storeId])
+      await pool.query('INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id) VALUES($1,$2,$3,$4)',[tenantId,storeId,reviewer,role])
+      for(const code of ['community.activity.view','refund.approve'])await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT tenant_id,store_id,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=$4',[tenantId,storeId,role,code])
+      await pool.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,currency,amount_minor) VALUES($1,$2,$3,'refund.approve','CNY',5000)",[tenantId,storeId,role])
+      const service=new ActivityOperationsService(txs,new NormalizedCommandExecutor(txs)),context={scope,employeeId:reviewer,businessDate:'2026-10-01'}
+      const read=async(actor=reviewer)=>(await service.detail({...context,employeeId:actor},'activity-ops-published')).registrations.find(r=>r.publicId==='activity-ops-registration-paid')!.refund!
+      expect((await txs.run(scope,tx=>new StaffAccessRepository(tx).resolve(reviewer),{readOnly:true})).permissions).not.toContain('community.activity.cashier')
+      const current=await read();expect(current.reviewBlockReason).toBeNull()
+      await txs.run(scope,transaction=>new NormalizedPaymentCapabilityAuthorization().assertRefundApproval({transaction,employeeId:reviewer,refundId:current.id}),{readOnly:true})
+      expect((await read(employeeId)).reviewBlockReason).toContain('发起人不能审核')
+      await pool.query('UPDATE mbox.role_approval_limits SET amount_minor=4999 WHERE role_id=$1',[role]);expect((await read()).reviewBlockReason).toContain('超过')
+      await pool.query("UPDATE mbox.role_approval_limits SET currency='USD' WHERE role_id=$1",[role]);expect((await read()).reviewBlockReason).toContain('未配置有效的 CNY')
+    }finally{await runtime.end()}
   })
 
   async function run<Result>(operation: (repository: ActivityOperationsRepository) => Promise<Result>) {

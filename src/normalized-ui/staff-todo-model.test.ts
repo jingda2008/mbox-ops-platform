@@ -13,15 +13,20 @@ describe('shared staff todo queue', () => {
   })
   it('counts a shared-payment refund once while retaining distinct refunds and independent approval', () => {
     const source = staffTodoSources(bootstrap(['refund.approve'], ['payments']))[0]
-    const refund = { id: 'refund-1', requestedByEmployeeId: 'operator', amountMinor: 100, status: 'requested', createdAt: '2026-09-20' }
+    const refund = { id: 'refund-1', requestedByEmployeeId: 'operator', amountMinor: 100, currency:'CNY', status: 'requested', createdAt: '2026-09-20' }
     const order = { id: 'order-1', publicId: 'O001', tableCode: 'A01', payments: [{ refunds: [refund] }] }
-    const items = source.map({ actions: { canApproveRefund: true }, orders: [order, { ...order, id: 'order-2' }, { ...order, payments: [{ refunds: [{ ...refund, id: 'refund-2', requestedByEmployeeId: 'another' }] }] }] })
+    const items = source.map({ actions: { canApproveRefund: true,refundApprovalLimits:{CNY:100} }, orders: [order, { ...order, id: 'order-2' }, { ...order, payments: [{ refunds: [{ ...refund, id: 'refund-2', requestedByEmployeeId: 'another' }] }] }] })
     expect(items).toHaveLength(2)
     expect(items.find(item => item.id === 'refund:refund-1')?.state).toBe('waiting')
     expect(items.find(item => item.id === 'refund:refund-2')?.state).toBe('action')
     const link = new URL(items[0].route, 'https://example.test')
     expect(link.searchParams.get('orderId')).toBe('order-1')
     expect(link.searchParams.get('todo')).toBe('refund:refund-2')
+  })
+  it.each([undefined,{}, {CNY:99},{USD:1000}])('does not label a refund actionable when the effective limit is unavailable or insufficient: %j',refundApprovalLimits=>{
+    const source=staffTodoSources(bootstrap(['refund.approve'],['payments']))[0]!
+    const items=source.map({actions:{canApproveRefund:true,refundApprovalLimits},orders:[{id:'o',publicId:'O',tableCode:'A',payments:[{provider:'cash',refunds:[{id:'r',requestedByEmployeeId:'other',amountMinor:100,currency:'CNY',status:'requested'}]}]}]})
+    expect(items[0]!.state).toBe('waiting');expect(items[0]!.owner).not.toBe('我可处理')
   })
   it('keeps a processing refund and a redeemed snack in waiting state', () => {
     const sources = staffTodoSources(bootstrap(['loyalty.redemption.fulfill'], ['member-fulfillment', 'payments']))

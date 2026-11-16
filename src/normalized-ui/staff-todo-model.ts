@@ -1,3 +1,4 @@
+import {refundReviewBlockReason} from '../shared/refund-review-availability'
 import type { CashierWorkbenchRefund, CashierWorkbenchView } from '../shared/cashier-workbench-contracts'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
 import type { StaffAnnualGiftReservation, StaffDailySnackClaim, StaffOperationsData } from './staff-actions/types'
@@ -88,7 +89,7 @@ export function staffTodoSources(bootstrap: StaffBootstrapView): StaffTodoSource
       const result: StaffTodo[] = []
       const addRefund = (refund: CashierWorkbenchRefund, title: string, parameters: Record<string, string>, provider: string) => {
         if (!['requested', 'approved', 'processing', 'failed'].includes(refund.status)) return
-        const approve = !refund.afterSalesCase && refund.status === 'requested' && view.actions.canApproveRefund && refund.requestedByEmployeeId !== bootstrap.staff.id
+        const approve = !refund.afterSalesCase && refund.status === 'requested' && refundReviewBlockReason(view.actions,refund,bootstrap.staff.id)===null
         const manual = ['cash', 'physical_pos', 'external_manual'].includes(provider)
         const execute = !refund.afterSalesCase && view.actions.canExecuteRefund && (refund.status === 'approved' || (refund.status === 'processing' && (manual || refund.providerSubmissionState === 'not_started')))
         const id = `refund:${refund.id}`

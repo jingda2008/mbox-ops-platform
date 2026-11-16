@@ -717,6 +717,23 @@ test('mobile manager can initiate but cannot review cashier refund work', async 
   await page.screenshot({ path: 'artifacts/normalized-browser/refund-policy/manager-refund-request-320.png', fullPage: true })
 })
 
+test('cashier refresh applies current approval currency and amount without exposing stale refund actions', async ({page})=>{
+  const data=await fixture()
+  let limits:Record<string,number>|undefined={}
+  await page.route('**/api/payments/workbench?*',route=>route.fulfill({json:{data:cashierWorkbenchFixture({canRequestRefund:false,canApproveRefund:true,canExecuteRefund:true,refundApprovalLimits:limits})}}))
+  await page.goto(data.staffUrl);await verifyStaffDevice(page,data.dailyCredential)
+  await page.getByLabel('员工账号').fill('sanmu');await page.getByLabel('四位 PIN').fill(data.employeePin)
+  await page.getByRole('button',{name:/进入工作台/}).click()
+  await expect(page.getByRole('button',{name:'收银复核',exact:true}).first()).toBeVisible()
+  for(const value of [undefined,{}, {CNY:999}, {USD:50000}, {CNY:1000}] as Array<Record<string,number>|undefined>){
+    limits=value;await page.setViewportSize({width:320,height:800});await page.goto('/staff/payments')
+    await page.getByRole('button',{name:/VIP1.*¥88\.00/}).click()
+    if(value?.CNY===1000)await expect(page.getByRole('button',{name:'复核通过',exact:true})).toBeVisible()
+    else {await expect(page.getByRole('button',{name:'复核通过',exact:true})).toHaveCount(0);await expect(page.getByText(/复核额度/).first()).toBeVisible()}
+    await expectNoHorizontalOverflow(page)
+  }
+})
+
 test('mobile cashier can review but cannot initiate manager refund work', async ({ page }, testInfo) => {
   // Keep the global print fault visible through 200% text and short-viewport checks.
   await page.route('**/api/hardware/print-alerts',route=>route.fulfill({json:{data:{manager:true,asOf:new Date().toISOString(),alerts:[{station:'generation',failed:0,stalled:88,oldestAt:new Date().toISOString(),newestKey:'12345678-1234-4234-8234-123456789012',escalated:false}]}}}))
@@ -728,6 +745,7 @@ test('mobile cashier can review but cannot initiate manager refund work', async 
     body: JSON.stringify({ data: cashierWorkbenchFixture({
       canRequestRefund: false,
       canApproveRefund: true,
+      refundApprovalLimits:{CNY:200000},
       canExecuteRefund: true,
     }) }),
   }))
@@ -1035,6 +1053,7 @@ function cashierWorkbenchFixture(actions: {
   canRequestRefund: boolean
   canApproveRefund: boolean
   canExecuteRefund: boolean
+  refundApprovalLimits?: Record<string, number>
 } = {
   canRequestRefund: true,
   canApproveRefund: false,

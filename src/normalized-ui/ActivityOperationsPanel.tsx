@@ -1,6 +1,7 @@
+import {ActivityRefundReviewActions} from './ActivityRefundReviewActions'
 import type {ActivityPackageChoiceGroup} from '../shared/activity-service'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { CheckCircle2, ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
+import { ChevronDown, RefreshCw, UserCheck, XCircle } from 'lucide-react'
 import type { NormalizedApiClient, StaffAuthView } from '../normalized-api'
 import { useConfirmationDialog } from './ConfirmationDialog'
 import { inventoryUnitLabel } from './inventory-presentation'
@@ -59,7 +60,7 @@ interface Registration {
   registeredAt: string; paymentDueAt: string | null; checkedInAt: string | null
   paymentId: string | null; authoritativePaymentStatus: string | null; providerActionState: string | null
   packageFulfillmentStatus: 'not_required' | 'pending' | 'delivered'
-  refund: null | { id: string; publicId: string; status: string; amountMinor: number; approvedByEmployeeId: string | null }
+  refund: null | { id: string; publicId: string; status: string; amountMinor: number; approvedByEmployeeId: string | null; reviewBlockReason: string | null }
 }
 
 interface OperationsDetail { activity: ActivityDetail; registrations: Registration[] }
@@ -310,8 +311,8 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       setReason('')
       setNotice(action === 'request' ? '退款已由店长发起，等待收银复核。'
         : action === 'approve' ? '退款已复核通过，仍需执行并等待渠道确认。'
-          : action === 'reject' ? '退款申请已驳回。'
-            : action === 'execute' ? '退款已提交渠道，尚未确认成功前不会标记已退款。'
+        : action === 'reject' ? '退款申请已驳回。'
+        : action === 'execute' ? '退款已提交渠道，尚未确认成功前不会标记已退款。'
               : '已向渠道查询退款状态。')
       await refreshSelected()
     } catch (error) { setNotice(message(error, '退款操作没有完成')) }
@@ -620,7 +621,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
               {canManage && ['reserved','payment_pending','confirmed','waitlisted'].includes(registration.status) && registration.paymentStatus !== 'paid' && registration.paidAmountMinor === 0 && <button type="button" onClick={() => void registrationAction(registration,'cancel')}>取消报名</button>}
               {registration.status === 'payment_pending' && registration.providerActionState && registration.paymentId && <button type="button" onClick={() => void queryPayment(registration)}>先查支付</button>}
               {registration.serviceVersion!==3 && canRequestRefund && registration.paymentStatus === 'paid' && registration.refund === null && <button type="button" onClick={() => void refundAction(registration,'request')}>店长发起退款取消</button>}
-              {registration.serviceVersion!==3 && canApproveRefund && registration.refund?.status === 'requested' && <><button type="button" onClick={() => void refundAction(registration,'approve')}><CheckCircle2 size={16} />收银复核通过</button><button type="button" onClick={() => void refundAction(registration,'reject')}>驳回</button></>}
+              {registration.serviceVersion!==3 && canApproveRefund && registration.refund?.status === 'requested' && <ActivityRefundReviewActions registrationPublicId={registration.publicId} canUseCashier={auth.permissions.includes('community.activity.cashier')} blockedReason={registration.refund.reviewBlockReason} busy={!!busy} onDecision={action=>void refundAction(registration,action)}/>}
               {registration.serviceVersion!==3 && canExecuteRefund && registration.refund?.status === 'approved' && <button type="button" onClick={() => void refundAction(registration,'execute')}>执行退款</button>}
               {registration.serviceVersion!==3 && canExecuteRefund && registration.refund?.status === 'processing' && <button type="button" onClick={() => void refundAction(registration,'query')}>查询渠道退款</button>}
             </div>
@@ -929,6 +930,7 @@ function registration(value: unknown): Registration {
     providerActionState: nullableString(record.providerActionState), refund: refund === null ? null : {
       id: string(refund.id), publicId: string(refund.publicId), status: string(refund.status), amountMinor: number(refund.amountMinor),
       approvedByEmployeeId: nullableString(refund.approvedByEmployeeId),
+      reviewBlockReason: refund.reviewBlockReason===null?null:typeof refund.reviewBlockReason==='string'?refund.reviewBlockReason:'复核额度尚未读取，请刷新活动后核对。',
     },
   }
 }

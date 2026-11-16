@@ -22,6 +22,22 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const otherEmployeeId = '44444444-4444-4444-8444-444444444444'
 
 describe('CashierAfterSalesWorkbenchView', () => {
+  it.each([undefined, {}, {CNY: 0}, {CNY: 999}, {USD: 50000}])('does not offer approval or rejection when the current currency limit cannot cover the refund: %j', limits => {
+    const view=workbench([payment('cash',[refund('requested-other','requested',otherEmployeeId)])])
+    view.actions.refundApprovalLimits=limits
+    const html=render(view)
+    expect(html).not.toContain('>复核通过</button>')
+    expect(html).not.toContain('>复核驳回</button>')
+    expect(html).toContain('复核额度')
+  })
+  it('offers a refund exactly at the live approval limit, but never self approval',()=>{
+    const view=workbench([payment('cash',[refund('requested-other','requested',otherEmployeeId)])])
+    view.actions.refundApprovalLimits={CNY:view.orders[0]!.payments[0]!.refunds[0]!.amountMinor}
+    expect(render(view)).toContain('复核通过')
+    view.orders[0]!.payments[0]!.refunds[0]!.requestedByEmployeeId=employeeId
+    expect(render(view)).not.toContain('>复核通过</button>')
+  })
+
   it.each(['pending','accepted','preparing'] as const)('offers collection before production finishes: %s',status=>{
     const view=workbench([])
     Object.assign(view.orders[0]!,{paymentStatus:'unpaid',outstandingAmountMinor:6800,tableSessionStatus:'open'})
@@ -724,6 +740,7 @@ function workbench(payments: CashierWorkbenchPayment[]): CashierWorkbenchView {
       canRecordManualExternal: true,
       canRequestRefund: true,
       canApproveRefund: true,
+      refundApprovalLimits: { CNY: 200000 },
       canExecuteRefund: true,
       canViewReconciliation: true,
       canManageKdsException: true,

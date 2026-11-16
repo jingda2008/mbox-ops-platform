@@ -1,3 +1,4 @@
+import {beijingDisplayTime} from './beijing-display-time'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NormalizedApiClient, NormalizedApiError } from '../normalized-api'
 import type { StaffBootstrapView } from '../shared/normalized-contracts'
@@ -79,7 +80,7 @@ export function StaffTodoPanel({ api, bootstrap, onNavigate, onLoginRequired }: 
   return <section className="normalized-section staff-unified-todos" aria-labelledby="staff-todo-title">
     <div className="normalized-section-heading"><div><h2 id="staff-todo-title">待办事项</h2><small>{updatedAt ? `最近全部核对成功 ${updatedAt} · 当前已读取 ${todos.length} 项` : loading ? '正在读取各业务待办' : `尚未完整读取各业务待办 · 当前已读取 ${todos.length} 项`}</small></div><button type="button" disabled={loading} onClick={() => void load()}>{loading ? '读取中…' : '刷新待办'}</button></div>
     {counts.filter(item => sources.some(source => source.id === item.id)).map(item => <div key={item.id} className="staff-todo-authoritative-summary">
-      {item.count ? <><p>{item.label}完整授权范围：共 {item.count.total} 项，当前可处理 {item.count.action} 项、等待处理 {item.count.waiting} 项；截至 {item.count.asOf}。</p>{item.count.activities && <div>{([['unpaid', '活动待收款', item.count.activities.pendingPayment], ['requested', '活动待复核', item.count.activities.requestedRefund], ['processing', '活动待退款', item.count.activities.processingRefund]] as const).map(([filter, label, count]) => <button type="button" key={filter} disabled={!onNavigate} onClick={() => onNavigate?.(`/staff/payments?activityFilter=${filter}`)}>{label} {count} 项</button>)}</div>}</> : <p role="alert">{item.label}完整范围汇总暂未读取，数量未知；下方仅保留已读明细。<button type="button" onClick={() => void load()}>重读待办汇总</button></p>}
+      {item.count ? <><p>{item.label}完整授权范围：共 {item.count.total} 项，当前可处理 {item.count.action} 项、等待处理 {item.count.waiting} 项；截至 {beijingDisplayTime(item.count.asOf)}（北京时间）。</p>{item.count.activities && <div>{([['unpaid', '活动待收款', item.count.activities.pendingPayment], ['requested', '活动待复核', item.count.activities.requestedRefund], ['processing', '活动待退款', item.count.activities.processingRefund]] as const).map(([filter, label, count]) => <button type="button" key={filter} disabled={!onNavigate} onClick={() => onNavigate?.(`/staff/payments?activityFilter=${filter}`)}>{label} {count} 项</button>)}</div>}</> : <p role="alert">{item.label}完整范围汇总暂未读取，数量未知；下方仅保留已读明细。<button type="button" onClick={() => void load()}>重读待办汇总</button></p>}
     </div>)}
     <div className="staff-todo-filters">
       <div role="group" aria-label="待办处理状态">

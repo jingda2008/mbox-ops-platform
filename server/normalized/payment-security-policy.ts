@@ -1,3 +1,4 @@
+import {refundApprovalLimitsSql} from './refund-approval-limits.js'
 import {lockClosedDebtRecovery} from './closed-debt-recovery.js'
 import { createHash } from 'node:crypto'
 import type { JsonObject, JsonValue } from './command-executor.js'
@@ -323,25 +324,8 @@ implements PaymentCapabilityAuthorizationPort {
             )
           ) AS allowed,
           (
-            SELECT MAX(approval_limit.amount_minor)
-            FROM mbox.employee_roles limit_employee_role
-            JOIN mbox.roles limit_role
-              ON limit_role.tenant_id = limit_employee_role.tenant_id
-             AND limit_role.store_id = limit_employee_role.store_id
-             AND limit_role.id = limit_employee_role.role_id
-             AND limit_role.status = 'active'
-            JOIN mbox.role_approval_limits approval_limit
-              ON approval_limit.tenant_id = limit_role.tenant_id
-             AND approval_limit.store_id = limit_role.store_id
-             AND approval_limit.role_id = limit_role.id
-             AND approval_limit.approval_code = $5
-             AND approval_limit.currency = refund.currency
-             AND approval_limit.enabled = true
-            WHERE limit_employee_role.tenant_id = employee.tenant_id
-              AND limit_employee_role.store_id = employee.store_id
-              AND limit_employee_role.employee_id = employee.id
-              AND limit_employee_role.starts_at <= clock_timestamp()
-              AND (limit_employee_role.ends_at IS NULL OR limit_employee_role.ends_at > clock_timestamp())
+            SELECT effective.amount_minor FROM (${refundApprovalLimitsSql('$4::uuid')}) effective
+            WHERE effective.currency=refund.currency
           ) AS approval_limit_minor
       ) approval_context
       WHERE refund.tenant_id = $1::uuid

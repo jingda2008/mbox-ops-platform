@@ -1,3 +1,4 @@
+import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
 import {participantMovementHistory} from './participant-movement-history.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
@@ -110,8 +111,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       const summary=await new TablePrepaymentRepository(tx).snapshot(id)
       if(!summary)return null
       const receipts=(await tx.query(`SELECT p.id,p.public_id AS "publicId",p.status,p.amount_minor::text AS "amountMinor",mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text AS "availableMinor" FROM mbox.payments p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY p.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
-      const refunds=(await tx.query(`SELECT r.id,r.public_id AS "publicId",r.status,r.amount_minor::text AS "amountMinor",r.requested_by_employee_id AS "requestedByEmployeeId",r.payment_id AS "paymentId" FROM mbox.refunds r JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(r.tenant_id,r.store_id,r.payment_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY r.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
-      return{...summary,receipts,refunds}
+      const refunds=(await tx.query(`SELECT r.id,r.public_id AS "publicId",r.status,r.currency,r.amount_minor::text AS "amountMinor",r.requested_by_employee_id AS "requestedByEmployeeId",r.payment_id AS "paymentId" FROM mbox.refunds r JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(r.tenant_id,r.store_id,r.payment_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.prepaid_table_session_id=$3 ORDER BY r.created_at`,[context.scope.tenantId,context.scope.storeId,id])).rows
+      return{...summary,receipts,refunds,reviewer:{employeeId:context.employeeId,canApproveRefund:access.permissions.includes('refund.approve'),refundApprovalLimits:access.permissions.includes('refund.approve')?await readRefundApprovalLimits(tx,context.employeeId):{}}}
     },{readOnly:true})
     reply.header('cache-control','no-store');return reply.send({data})
   }))

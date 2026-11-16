@@ -109,6 +109,10 @@ integration('table prepayment PostgreSQL authority',()=>{
    await pool.query("UPDATE mbox.role_approval_limits SET amount_minor=1000 WHERE role_id IN (SELECT role_id FROM mbox.employee_roles WHERE employee_id=$1) AND approval_code='refund.approve'",[managerId])
    const app=await staffApp()
    try{
+     const read=await app.inject({method:'GET',url:`/table-management/sessions/${tableSessionId}/prepayment`})
+     expect(read.statusCode,read.body).toBe(200)
+     expect(read.json().data.reviewer).toMatchObject({employeeId:managerId,canApproveRefund:true,refundApprovalLimits:{CNY:1000}})
+     expect(read.json().data.refunds[0]).toMatchObject({currency:'CNY',requestedByEmployeeId:managerId})
      const input={method:'POST' as const,url:`/table-management/sessions/${tableSessionId}/prepayment/waive`,headers:{'idempotency-key':randomUUID()},payload:{amountMinor:1000,reason:'门店原因部分无法履约'}}
      expect((await app.inject({...input,payload:{...input.payload,collectDifference:true}})).statusCode).toBe(400)
      const first=await app.inject(input);expect(first.statusCode,first.body).toBe(200)

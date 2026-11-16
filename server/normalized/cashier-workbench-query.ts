@@ -1,3 +1,4 @@
+import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {pendingTabReviewSql} from './carryover-tab-review.js'
 import {carryoverDebtSql} from './carryover-debt.js'
 import { bulkOrderNeedsCollectionSql, bulkOrderFinancialAttentionSql, orderCollectionBalancesCtesSql } from './order-collection-balances-sql.js'
@@ -267,6 +268,7 @@ export class PostgresCashierWorkbenchQuery {
       // JIT's cost threshold, spending seconds compiling a millisecond query.
       // SET LOCAL restores pooled connections on both commit and rollback.
       await transaction.query('SET LOCAL jit = off')
+      const refundApprovalLimits=input.capabilities.includes('refund.approve')?await readRefundApprovalLimits(transaction,input.employeeId):{}
       const schema=(await transaction.query<{present:boolean;direct:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct")).rows[0]
       const reviewSchema=schema?.present===true
       const directCollectionSchema=schema?.direct===true
@@ -676,7 +678,7 @@ export class PostgresCashierWorkbenchQuery {
         const points=await readCheckoutPoints(transaction,orderIds)
       for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
       return assembleView(
-          input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,totals,
+          input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,totals,refundApprovalLimits,
         )
       }
 
@@ -818,7 +820,7 @@ export class PostgresCashierWorkbenchQuery {
         kdsResult.rows,
         settlementExceptionResult.rows,
         recollectionResult.rows,
-        activityResult.rows,totals,
+        activityResult.rows,totals,refundApprovalLimits,
       )
     }, { readOnly: true })
   }
@@ -837,6 +839,7 @@ function assembleView(
   recollectionRows: readonly RecollectionAuthorizationRow[],
   activityRows: readonly ActivityRegistrationRow[],
   totals:OrderRow|undefined,
+  refundApprovalLimits:Record<string,number>,
 ): CashierWorkbenchView {
   const itemsByOrder = group(itemRows, (row) => row.order_id)
   const paymentsByOrder = group(paymentRows, (row) => row.order_id)
@@ -996,7 +999,7 @@ function assembleView(
     businessDate: input.businessDate,
     pagination:{page:input.page??0,pageSize:input.limit,totalCount:asSafeMinor(totals?.matched_count??orderRows.length,'matched order count'),totalOutstandingMinor:asSafeMinor(totals?.matched_due_minor??0,'matched outstanding')},
     query,
-    actions: actions(input.capabilities),
+    actions: {...actions(input.capabilities),refundApprovalLimits},
     summary: {
       orderCount: orders.length,
       ...(orders.some(order=>(order.couponRefundReviewCount??0)>0)?{couponRefundReviewCount:orders.reduce((sum,order)=>sum+(order.couponRefundReviewCount??0),0)}:{}),

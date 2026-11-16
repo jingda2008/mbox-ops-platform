@@ -1,3 +1,4 @@
+import {refundReviewBlockReason} from '../shared/refund-review-availability'
 import {StaffTableCreditPanel} from './staff-actions/StaffTableCreditPanel'
 import {CarryoverTabReviewPanel} from './CarryoverTabReviewPanel'
 import {CashierPageUpdateNotice} from './CashierPageUpdateNotice'
@@ -1627,8 +1628,8 @@ function RefundBlock({
 }) {
   const [manualConfirmation, setManualConfirmation] = useState<'failed' | 'succeeded' | null>(null)
   const [caseOpen,setCaseOpen]=useState(false)
-  const ownRequest = refund.requestedByEmployeeId === auth.employee.id
-  const canDecide = !refund.afterSalesCase && refund.status === 'requested' && actions.canApproveRefund && !ownRequest
+  const reviewBlocked = refundReviewBlockReason(actions,refund,auth.employee.id)
+  const canDecide = !refund.afterSalesCase && refund.status === 'requested' && reviewBlocked===null
   const canBegin = (refund.status === 'approved'
     || (!manualProvider && refund.status === 'processing' && refund.providerSubmissionState === 'not_started'))
     && actions.canExecuteRefund
@@ -1651,8 +1652,7 @@ function RefundBlock({
     {refund.decisionReason && <small>复核说明：{refund.decisionReason}</small>}
     {refund.receiptReference && <small>退款凭证：{refund.receiptReference}</small>}
 
-    {refund.status === 'requested' && ownRequest && <p className="cashier-guidance">发起人不能审核或驳回自己的退款，请交给另一名具备复核权限和额度的员工；无人可处理时，请联系管理员配置“退款复核”。</p>}
-    {refund.status === 'requested' && !actions.canApproveRefund && <p className="cashier-guidance">当前员工没有退款复核权限，请交给有权限和额度的其他员工，或联系管理员配置“退款复核”。</p>}
+    {refund.status === 'requested' && !refund.afterSalesCase && reviewBlocked && <p className="cashier-guidance">{reviewBlocked}</p>}
     {canDecide && <div className="cashier-decision-form">
       <label className="cashier-field"><span>复核说明</span><input value={decisionReason} placeholder="核对原支付、商品、金额和原因" onChange={(event) => onDecisionReason(refund.id, event.target.value)} /></label>
       <div className="cashier-action-row">
@@ -1793,7 +1793,7 @@ function orderWorkflowGuidance(
     return '这笔订单有退款待执行或待查渠道。请先在下方「收款与退款」处理，不要点顶部的「检查并结束」。'
   }
   if (requested > 0 && actions.canApproveRefund) {
-    return '这笔订单有退款待收银复核。请先在下方「收款与退款」复核通过或驳回。'
+    return '这笔订单有退款待收银复核。请先在下方「收款与退款」核对本人权限及复核额度，再由符合条件的其他员工复核。'
   }
   if (order.paymentStatus === 'paid' && orderHasRefundablePayment(order) && actions.canRequestRefund) {
     return '已收款。请先在下方「收款与退款」点击「选择原商品发起退款」。'

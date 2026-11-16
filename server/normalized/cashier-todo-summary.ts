@@ -1,3 +1,4 @@
+import {refundApprovalLimitsSql} from './refund-approval-limits.js'
 import { currentRefundAttemptSql } from './refund-attempt-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
@@ -16,7 +17,7 @@ export async function readCashierTodoSummary(
     .some(permission => permissions.includes(permission))
   const activities = permissions.includes('community.activity.cashier')
   const refund = (await tx.query<{ total: string; actionable: string; as_of: string }>(`
-    WITH visible AS (
+    WITH approval_limits AS MATERIALIZED (${refundApprovalLimitsSql('$3::uuid')}), visible AS (
       SELECT r.*, p.provider,
         EXISTS(SELECT 1 FROM mbox.item_after_sales_case_refunds link
           WHERE (link.tenant_id,link.store_id,link.refund_id)=(r.tenant_id,r.store_id,r.id)) AS has_case
@@ -40,7 +41,8 @@ export async function readCashierTodoSummary(
     )
     SELECT count(*)::text AS total,
       count(*) FILTER (WHERE NOT has_case AND (
-        ($6::boolean AND status='requested' AND requested_by_employee_id IS DISTINCT FROM $3::uuid)
+        ($6::boolean AND status='requested' AND requested_by_employee_id IS DISTINCT FROM $3::uuid
+          AND amount_minor <= (SELECT amount_minor::bigint FROM approval_limits WHERE currency=visible.currency))
         OR ($7::boolean AND (status='approved' OR (status='processing'
           AND (provider IN ('cash','physical_pos','external_manual') OR provider_submission_state='not_started'))))
       ))::text AS actionable, CURRENT_TIMESTAMP::text AS as_of

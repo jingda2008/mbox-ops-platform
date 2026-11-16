@@ -2629,6 +2629,55 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(performance.now()-started).toBeLessThan(8000)
   },15_000)
 
+  it('preserves empty, simulated, known and latest-corrected cost totals after report materialization',async()=>{
+    const saved=(await admin.query('SELECT cost_amount_minor,inventory_control_mode FROM mbox.products WHERE id=$1',[product])).rows[0]
+    let paid:Awaited<ReturnType<typeof financeFixture>>,simulation:Awaited<ReturnType<typeof financeFixture>>
+    try{
+      await admin.query("UPDATE mbox.products SET cost_amount_minor=1200,inventory_control_mode='not_managed' WHERE id=$1",[product])
+      paid=await financeFixture();simulation=await financeFixture(0,'simulation')
+    }finally{await admin.query('UPDATE mbox.products SET cost_amount_minor=$2,inventory_control_mode=$3 WHERE id=$1',[product,saved.cost_amount_minor,saved.inventory_control_mode])}
+    const batchId=async(visitId:string)=>(await admin.query('SELECT source_batch_id FROM mbox.channel_visits WHERE id=$1',[visitId])).rows[0].source_batch_id as string
+    const original=await batchId(paid!.visitId),simulated=await batchId(simulation!.visitId),empty=await batch(),latest=await batch()
+    const report=()=>runner.run(scope,tx=>readChannelReport(tx),{readOnly:true})
+    let rows=await report()
+    expect(rows.find(r=>r.id===original)).toMatchObject({costMinor:'1200',missingCostItems:0})
+    for(const id of [simulated,empty.id])expect(rows.find(r=>r.id===id)).toMatchObject({costMinor:'0',missingCostItems:0})
+    for(const id of [empty.id,latest.id])await runner.run(scope,tx=>new ChannelOperationsRepository(tx).correctOrders([paid!.order.id],id,employee,'隔离测试核实原订单来源'))
+    rows=await report()
+    expect(rows.find(r=>r.id===latest.id)).toMatchObject({costMinor:'1200',missingCostItems:0})
+    for(const id of [original,empty.id])expect(rows.find(r=>r.id===id)).toMatchObject({costMinor:'0',missingCostItems:0})
+    expect((await admin.query('SELECT amount_minor::int AS n FROM mbox.payments WHERE id=$1',[paid!.payment])).rows[0].n).toBe(9000)
+  },30_000)
+
+  it.each(['initial','partial','full'] as const)('bounds report attribution work under %s statistics without weakening RLS',async statistics=>{
+    if(statistics==='partial')await admin.query('ANALYZE mbox.orders')
+    if(statistics==='full')await admin.query('ANALYZE mbox.channel_batches,mbox.channel_order_attributions,mbox.channel_order_corrections,mbox.order_items')
+    const count=Number((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_order_attributions')).rows[0].n)
+    const corrections=Number((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_order_corrections')).rows[0].n)
+    expect(count).toBeGreaterThan(50)
+    await runner.run(scope,async tx=>{
+      let sql='',values:readonly unknown[]=[]
+      await readChannelReport({scope,query:async(text,args)=>{sql=text;values=args??[];return {rows:[],rowCount:0}}})
+      await tx.query("SET LOCAL statement_timeout='8s'")
+      const explained=await tx.query<{'QUERY PLAN':Array<{Plan:Record<string,unknown>;'Execution Time':number}>}>('EXPLAIN (ANALYZE,FORMAT JSON) '+sql,values)
+      const scans:Array<Record<string,unknown>>=[]
+      const visit=(node:Record<string,unknown>)=>{
+        if(node['Relation Name']==='channel_order_attributions')scans.push(node)
+        for(const child of (node.Plans??[]) as Array<Record<string,unknown>>)visit(child)
+      }
+      visit(explained.rows[0]!['QUERY PLAN'][0]!.Plan)
+      expect(scans.length).toBeGreaterThan(0)
+      // The UNION may scan the source once plus one anti-lookup per correction.
+      // It must not repeat those scans for every batch/item pair.
+      const work=scans.reduce((sum,node)=>sum+Number(node['Actual Loops'])*Math.max(1,Number(node['Actual Rows'])),0)
+      expect(scans.every(node=>Number(node['Actual Loops'])<=Math.max(1,corrections))).toBe(true)
+      expect(work).toBeLessThanOrEqual(count*(corrections+1)+corrections)
+      console.log(JSON.stringify({check:'channel-report-scan',statistics,attributions:count,scannedRows:work,ms:explained.rows[0]!['QUERY PLAN'][0]!['Execution Time']}))
+    },{readOnly:true})
+    expect(await runner.run({...scope,storeId:randomUUID()},tx=>readChannelReport(tx),{readOnly:true})).toEqual([])
+    expect(await runner.run({...scope,tenantId:randomUUID()},tx=>readChannelReport(tx),{readOnly:true})).toEqual([])
+  },30_000)
+
   it.each(['initial','partial','full'] as const)('fulfills only paid delivered channel orders under %s table statistics',async statistics=>{
     const paid=await financeFixture(),unmade=await financeFixture()
     await admin.query("UPDATE mbox.order_items SET status='submitted' WHERE order_id=$1",[unmade.order.id])

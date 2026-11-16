@@ -1938,6 +1938,9 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     expect(created).toMatchObject({amountMinor:null,priceReviewRequired:true,unmade:1,madeReview:0})
     expect((await pool.query('SELECT count(*)::int n FROM mbox.order_item_quantity_units WHERE held_by_case_id=$1',[created.caseId])).rows[0].n).toBe(1)
   })
+  // This multi-command approval/closure/physical-handover scenario needs a
+  // whole-flow budget; it is not a single-request latency benchmark. Awaited
+  // work must finish before the next print-worker case reads the shared fixture.
   it.each(['approved','rejected','withdrawn'] as const)('hands closed-visit physical work to an existing inventory role after %s without granting refund approval',async(decision)=>{
     await grantActor(employeeId,['refund.request','table.close','table.turnover_unsettled'])
     await grantActor(reviewerId,['refund.approve'],100000)
@@ -1972,7 +1975,7 @@ integration('quantity after-sales PostgreSQL candidate',()=>{
     await service.acknowledgeNotices({scope,employeeId:inventoryWorker,businessDate:nextBusinessDate,caseId:request.value.caseId,noticeIds:(await new ItemAfterSalesQuery(runner).item({scope,employeeId:inventoryWorker,itemId:row.itemId})).cases[0].notices.map(value=>value.id),reason:'交班已联系原岗位核对全部通知',idempotencyKey:`handover-ack-${randomUUID()}`})
     expect(await list(inventoryWorker)).toBe(false)
     if(decision==='approved')expect(await list(reviewerId)).toBe(true)
-  })
+  },30_000)
 
   it('persists one station-specific stop notice, filters a delayed original ticket and uses the existing print worker',async()=>{
     const printer=randomUUID()

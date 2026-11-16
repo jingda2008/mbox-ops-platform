@@ -35,3 +35,7 @@
 证据根目录：`/Users/jingda/mbox/outputs/channel-account-release-20261116/`。主要记录为 `ci-pr-result.json`、`ci-main-result.json`、`ci-tag-result.json`、`release-result.json`、`deployment/deploy.log`、`deployment/bundle/deployment/deployment-manifest.json`、`deployment/evidence/production-comparison.json`、`deployment/evidence/channel-after.json`、`deployment/evidence/ready-after.json`。回归场景见[专项审计](channel-account-recovery-audit-20261116.md)。
 
 员工使用：更新后先刷新员工网页；遇到断网或账号切换，保留原记录，回原账号并恢复所需权限后核对原编号。未查到不代表未执行；只有封存成功才结束等待，已完成的操作返回原结果、不自动反向转桌。换设备丢失编号时先查历史并核对现场，不凭空撤回。真实双设备、现场资金与出品验收继续开放。
+
+## 后续微信上传授权
+
+2026-11-16 09:10:51 CST，用户进一步授权按需上传后，已核对实际顾客端差异并通过官方工具上传 `1.0.0-rc.295-ui.1`。上述01:45后台发布时“未上传平台包”保留为当时事实；本次未再次部署后台，也未提审或正式发布新微信包。详见[上传记录](wechat-rc295-upload-20261116.md)。

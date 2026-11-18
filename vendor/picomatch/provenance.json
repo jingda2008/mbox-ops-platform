@@ -8,7 +8,7 @@
   "sourceHashes": {
     "index.js": "02ae26406508e28f9ba0865be16cf77f0b33de6c4d4d49c212c4176df1d5625a",
     "lib/constants.js": "c28f952d2758261fe5428a121add485cc25b03e0193633f649de903dc0e5e222",
-    "lib/parse.js": "922a272b18bfaf5f8013272d5f9ff21d8daf988a448de26816ed3716fb92ef1b",
+    "lib/parse.js": "78c262af9f55245e2ee22d1aea1b1ea2fd9fbcb4f447f1a705b090e47a5e84a6",
     "lib/picomatch.js": "fdd249d7ffff853f3bb1c77eafc8baa1a437bea85a94c35877b83c6a40d9ca94",
     "lib/scan.js": "6457a1764e5c2e543cc3a0c00ce12ebb3764097628868198370b64d4e642aaae",
     "lib/utils.js": "f04604f70cd1a3f6ace80b84766468674ff38b4bb83818d2ef1d81fc6355f935",

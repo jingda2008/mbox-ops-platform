@@ -969,13 +969,16 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
   const workspace=manager.page.getByRole('dialog',{name:'商品停止与退款'})
   await expect(workspace).toContainText('原订单 3 份')
   await workspace.getByLabel('本次停止份数').fill('2')
-  let drop=true;const sent:Array<{key:string;body:unknown}>=[]
+  let drop=true,dropped=false;const sent:Array<{key:string;body:unknown}>=[]
   await manager.page.route('**/api/commerce/item-after-sales/requests',async route=>{
     sent.push({key:route.request().headers()['idempotency-key'],body:route.request().postDataJSON()})
     const response=await route.fetch();expect(response.ok()).toBe(true)
-    if(drop){drop=false;await route.abort('failed')}else await route.fulfill({response})
+    if(drop){drop=false;await route.abort('failed');dropped=true}else await route.fulfill({response})
   })
   await workspace.getByRole('button',{name:'停止 / 申请退款'}).click()
+  // The recovery control can appear while the initial write is still in flight.
+  // This case deliberately loses a committed response; wait for that fault, not just the control.
+  await expect.poll(()=>dropped).toBe(true)
   await expect(workspace.getByRole('button',{name:'恢复上次商品处理'})).toBeVisible()
   await workspace.getByRole('button',{name:'关闭商品处理'}).click()
   await details.getByRole('button',{name:'停止 / 退款'}).first().click()

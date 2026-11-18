@@ -79,6 +79,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
+      - name: Verify security fork integrity, exploit rejection and glob compatibility
+        run: npm run test:glob-security
       - name: Audit production and development dependencies
         run: |
           for attempt in 1 2 3 4 5; do
@@ -121,6 +123,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
+      - name: Verify security fork integrity, exploit rejection and glob compatibility
+        run: npm run test:glob-security
       - name: Audit production and development dependencies
         run: |
           for attempt in 1 2 3 4 5; do
@@ -245,6 +249,19 @@ jobs:
         run: npx playwright install chromium
       - name: Run normalized mobile commercial flows against an isolated database
         run: npm run test:e2e:normalized
+      - name: Verify channel configuration copy, conditional fields and switch recovery
+        env:
+          CHANNEL_CONFIG_UI_EVIDENCE_DIR: artifacts/channel-config-ui
+        run: npm run test:channel-config-ui
+      - name: Upload channel configuration evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-config-ui-${{ github.sha }}
+          path: artifacts/channel-config-ui
+          if-no-files-found: warn
+          retention-days: 7
       - name: Seal normalized browser startup evidence
         id: normalized-browser-evidence
         run: |

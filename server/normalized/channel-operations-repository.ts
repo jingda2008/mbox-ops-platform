@@ -1,4 +1,4 @@
-import { channelRuleSchema } from '../../src/shared/channel-distribution.js'
+import { channelRuleSchema, type ChannelCampaignSwitch, type ChannelPublishSwitch, type ChannelPromoterSwitch } from '../../src/shared/channel-distribution.js'
 import { ChannelDistributionRepository } from './channel-distribution-repository.js'
 import { ChannelFinanceRepository } from './channel-finance-repository.js'
 import { ChannelGiftInventory } from './channel-gift-inventory.js'
@@ -11,18 +11,31 @@ export class ChannelOperationsRepository{
  async limits(claimLimit:number,capacityLimit:number,costLimitMinor:number,employee:string,reason:string){
   await this.repo.lockIdentity();await this.tx.query(`INSERT INTO mbox.channel_store_limits(tenant_id,store_id,claim_limit,capacity_limit,cost_limit_minor) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,store_id) DO UPDATE SET claim_limit=$3,capacity_limit=$4,cost_limit_minor=$5,updated_at=clock_timestamp()`,[...this.scope,claimLimit,capacityLimit,costLimitMinor]);await this.repo.event(this.tx.scope.storeId,'store.limits',`employee:${employee}`,{claimLimit,capacityLimit,costLimitMinor},reason);return{id:this.tx.scope.storeId}
  }
- async campaign(id:string,enabled:boolean,staff:boolean,self:boolean,employee:string,reason:string){
-  await this.repo.lockIdentity();const row=await this.tx.query(`UPDATE mbox.channel_campaigns SET accepting_claims=$4,staff_entry_enabled=$5,self_entry_enabled=$6 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled,staff,self]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);await this.repo.event(id,'campaign.switch',`employee:${employee}`,{enabled,staff,self},reason);return{id}
+ async campaign(id:string,enabled:boolean,staff:boolean,self:boolean,employee:string,reason:string,expected?:ChannelCampaignSwitch){
+  await this.repo.lockIdentity();
+  if(expected)await this.assertSwitch(id,'campaign',expected);
+const row=await this.tx.query(`UPDATE mbox.channel_campaigns SET accepting_claims=$4,staff_entry_enabled=$5,self_entry_enabled=$6 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled,staff,self]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);await this.repo.event(id,'campaign.switch',`employee:${employee}`,{enabled,staff,self},reason);return{id}
  }
- async publish(id:string,enabled:boolean,employee:string,reason:string){
+ async publish(id:string,enabled:boolean,employee:string,reason:string,expected?:ChannelPublishSwitch){
   await this.repo.lockIdentity()
+  if(expected)await this.assertSwitch(id,'publish',expected)
   if(enabled){await this.repo.assertStoreCapacity(0);const row=(await this.tx.query<{created_by:string|null;rule:unknown}>(`SELECT created_by,rule_snapshot AS rule FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...this.scope,id])).rows[0]
    if(!row||!row.created_by||row.created_by===employee)throw new ChannelDistributionError('NOT_AUTHORIZED',403);channelRuleSchema.parse(row.rule)}
   const row=await this.tx.query(`UPDATE mbox.channel_batches SET accepting_claims=$4,approved_by=CASE WHEN $4 THEN $5 ELSE approved_by END,approved_at=CASE WHEN $4 THEN clock_timestamp() ELSE approved_at END WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled,employee]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404)
   await this.repo.event(id,enabled?'batch.published':'batch.paused',`employee:${employee}`,{},reason);return{id}
  }
- async promoter(id:string,enabled:boolean,confirm:boolean,restaurantScope:boolean,contactEmployeeId:string,employee:string,reason:string){
-  await this.repo.lockIdentity();const row=await this.tx.query(`UPDATE mbox.channel_promoters SET status=$4,can_confirm_statement=$5,restaurant_scope=$6,contact_employee_id=$7 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled?'active':'disabled',confirm,restaurantScope,contactEmployeeId]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);if(!enabled)await this.tx.query(`UPDATE mbox.channel_web_sessions SET revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND promoter_id=$3 AND revoked_at IS NULL`,[...this.scope,id]);await this.repo.event(id,'promoter.access',`employee:${employee}`,{enabled,confirm,restaurantScope,contactEmployeeId},reason);return{id}
+ async promoter(id:string,enabled:boolean,confirm:boolean,restaurantScope:boolean,contactEmployeeId:string,employee:string,reason:string,expected?:ChannelPromoterSwitch){
+  await this.repo.lockIdentity();
+  if(expected)await this.assertSwitch(id,'promoter',expected);
+const row=await this.tx.query(`UPDATE mbox.channel_promoters SET status=$4,can_confirm_statement=$5,restaurant_scope=$6,contact_employee_id=$7 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[...this.scope,id,enabled?'active':'disabled',confirm,restaurantScope,contactEmployeeId]);if(!row.rows[0])throw new ChannelDistributionError('NOT_FOUND',404);if(!enabled)await this.tx.query(`UPDATE mbox.channel_web_sessions SET revoked_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND promoter_id=$3 AND revoked_at IS NULL`,[...this.scope,id]);await this.repo.event(id,'promoter.access',`employee:${employee}`,{enabled,confirm,restaurantScope,contactEmployeeId},reason);return{id}
+ }
+ private async assertSwitch(id:string,kind:'campaign'|'publish'|'promoter',expected:ChannelCampaignSwitch|ChannelPublishSwitch|ChannelPromoterSwitch){
+  const [table,columns]=kind==='campaign'?['channel_campaigns','accepting_claims AS enabled,staff_entry_enabled AS staff,self_entry_enabled AS self']:
+   kind==='publish'?['channel_batches','accepting_claims AS enabled']:
+   ['channel_promoters',"(status='active') AS enabled,can_confirm_statement AS confirm,restaurant_scope AS \"restaurantScope\",contact_employee_id AS \"contactEmployeeId\""]
+  const current=(await this.tx.query<Record<string,unknown>>(`SELECT ${columns} FROM mbox.${table} WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...this.scope,id])).rows[0]
+  if(!current)throw new ChannelDistributionError('NOT_FOUND',404)
+  if(Object.entries(expected).some(([key,value])=>current[key]!==value))throw new ChannelDistributionError('VERSION_CONFLICT')
  }
  private async replacementCapacity(id:string,cost:number){
   await this.repo.assertStoreCapacity(cost,id)

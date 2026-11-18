@@ -1,4 +1,4 @@
-import { channelStoreLimitsSchema } from '../../src/shared/channel-distribution.js'
+import { channelStoreLimitsSchema, channelCampaignSwitchSchema, channelPublishSwitchSchema, channelPromoterSwitchSchema } from '../../src/shared/channel-distribution.js'
 import { z } from 'zod'
 import type { FastifyInstance } from 'fastify'
 import type { ChannelApiOptions } from './channel-distribution-api.js'
@@ -10,9 +10,9 @@ import type { JsonCodec,JsonValue } from './command-executor.js'
 const uuid=z.string().uuid(),reason=z.string().trim().min(2).max(500)
 const inputSchema=z.discriminatedUnion('action',[
  channelStoreLimitsSchema,
- z.object({action:z.literal('campaign'),id:uuid,enabled:z.boolean(),staff:z.boolean(),self:z.boolean(),reason}).strict(),
- z.object({action:z.literal('publish'),id:uuid,enabled:z.boolean(),reason}).strict(),
- z.object({action:z.literal('promoter'),id:uuid,enabled:z.boolean(),confirm:z.boolean(),restaurantScope:z.boolean(),contactEmployeeId:uuid,reason}).strict(),
+ z.object({action:z.literal('campaign'),id:uuid,enabled:z.boolean(),staff:z.boolean(),self:z.boolean(),expected:channelCampaignSwitchSchema.optional(),reason}).strict(),
+ z.object({action:z.literal('publish'),id:uuid,enabled:z.boolean(),expected:channelPublishSwitchSchema.optional(),reason}).strict(),
+ z.object({action:z.literal('promoter'),id:uuid,enabled:z.boolean(),confirm:z.boolean(),restaurantScope:z.boolean(),contactEmployeeId:uuid,expected:channelPromoterSwitchSchema.optional(),reason}).strict(),
  z.object({action:z.literal('void'),id:uuid,reason}).strict(),z.object({action:z.literal('revoke'),id:uuid,reason}).strict(),
  z.object({action:z.literal('extend'),id:uuid,until:z.iso.datetime({offset:true}),reason}).strict(),
  z.object({action:z.literal('replace-gift'),id:uuid,productId:uuid,quantity:z.number().int().min(1).max(100),consent:reason,until:z.iso.datetime({offset:true}).optional(),reason}).strict(),
@@ -30,9 +30,9 @@ export function registerChannelOperationsRoutes(app:FastifyInstance,options:Chan
    const repo=new ChannelOperationsRepository(tx);let value:unknown
    switch(input.action){
     case'limits':value=await repo.limits(input.claimLimit,input.capacityLimit,input.costLimitMinor,ctx.employeeId,input.reason);break
-    case'campaign':value=await repo.campaign(input.id,input.enabled,input.staff,input.self,ctx.employeeId,input.reason);break
-    case'publish':value=await repo.publish(input.id,input.enabled,ctx.employeeId,input.reason);break
-    case'promoter':value=await repo.promoter(input.id,input.enabled,input.confirm,input.restaurantScope,input.contactEmployeeId,ctx.employeeId,input.reason);break
+    case'campaign':value=await repo.campaign(input.id,input.enabled,input.staff,input.self,ctx.employeeId,input.reason,input.expected);break
+    case'publish':value=await repo.publish(input.id,input.enabled,ctx.employeeId,input.reason,input.expected);break
+    case'promoter':value=await repo.promoter(input.id,input.enabled,input.confirm,input.restaurantScope,input.contactEmployeeId,ctx.employeeId,input.reason,input.expected);break
     case'arrival':value=await repo.arrival(input.tableSessionId,ctx.employeeId,input.reason);break
     case'continuity':value=await repo.continuity(input.tableSessionId,input.previousVisitId,input.customerId,input.mode,ctx.employeeId,input.reason);break
     case'correct-orders':value=await repo.correctOrders(input.orderIds,input.batchId,ctx.employeeId,input.reason);break

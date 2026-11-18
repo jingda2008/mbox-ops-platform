@@ -3,6 +3,7 @@ FROM node:24-alpine AS build
 ARG APP_COMMIT_SHA=development
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY vendor/picomatch/mbox-picomatch-4.0.7-mbox.2.tgz ./vendor/picomatch/
 RUN --mount=type=cache,id=mbox-normalized-build-npm,target=/root/.npm npm ci
 COPY . .
 RUN APP_COMMIT_SHA="${APP_COMMIT_SHA}" npm run build:normalized
@@ -24,6 +25,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY vendor/picomatch/mbox-picomatch-4.0.7-mbox.2.tgz ./vendor/picomatch/
 RUN --mount=type=cache,id=mbox-normalized-runtime-npm,target=/root/.npm \
   npm ci --omit=dev --ignore-scripts
 

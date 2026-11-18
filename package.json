@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.298",
+  "version": "1.0.0-rc.299",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {
@@ -32,6 +32,7 @@
     "acceptance:normalized:load": "node scripts/normalized-load-acceptance.mjs",
     "acceptance:normalized:http": "tsx scripts/run-normalized-http-acceptance.ts",
     "test:e2e:normalized": "playwright test --config playwright.normalized.config.ts",
+    "test:channel-config-ui": "node scripts/channel-config-ui-acceptance.mjs",
     "qr:generate:normalized": "tsx server/normalized/generate-table-qrs.ts",
     "qr:render:wechat-mini": "tsx server/normalized/render-wechat-table-mini-codes.ts",
     "qr:render:alipay-mini": "tsx server/normalized/render-alipay-table-mini-codes.ts",
@@ -93,7 +94,8 @@
     "checklist:verify": "node scripts/verify-commercialization-checklist.mjs && node --test scripts/verify-commercialization-checklist.test.mjs",
     "test:e2e:normalized:extended": "node scripts/run-normalized-extended-browser.mjs",
     "test:activity-recovery": "node scripts/activity-ui-recovery-browser.mjs && node scripts/activity-cashier-recovery-browser.mjs && node scripts/member-gift-entry-browser.mjs",
-    "test:print-resilience": "node --test deploy/windows-print-bridge/diagnostic-events.test.mjs deploy/windows-print-bridge/supervisor.test.mjs"
+    "test:print-resilience": "node --test deploy/windows-print-bridge/diagnostic-events.test.mjs deploy/windows-print-bridge/supervisor.test.mjs",
+    "test:glob-security": "node --test scripts/picomatch-security.test.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^8.4.2",
@@ -135,12 +137,14 @@
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
     "vite": "^8.1.6",
-    "vitest": "^4.1.12"
+    "vitest": "^4.1.12",
+    "picomatch": "file:vendor/picomatch/mbox-picomatch-4.0.7-mbox.2.tgz"
   },
   "overrides": {
     "concurrently": {
       "shell-quote": "1.11.0"
     },
-    "glob": "14.0.3"
+    "glob": "14.0.3",
+    "picomatch": "$picomatch"
   }
 }

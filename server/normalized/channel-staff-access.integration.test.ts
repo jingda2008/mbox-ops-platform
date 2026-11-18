@@ -57,6 +57,8 @@ integration('cooperation account permissions and migration',()=>{
   if(profile.read)expect(session.access.navigation.find(n=>n.code==='channel-partners')).toMatchObject({label:'周边店合作',route:'/staff/channel-partners'})
   const directory=await app.inject({url:'/api/staff/channel/directory',headers:{authorization:account.token}})
   expect(directory.statusCode,directory.body).toBe(profile.read?200:403)
+  const template=await app.inject({url:`/api/staff/channel/batch-template/${randomUUID()}`,headers:{authorization:account.token}})
+  expect(template.statusCode,template.body).toBe(['MARKETER','MANAGE_ONLY','PERSONAL_DENY'].includes(profile.code)?200:403)
   const finance=await app.inject({url:'/api/staff/channel/finance',headers:{authorization:account.token}})
   expect(finance.statusCode,finance.body).toBe(profile.settle?200:403)
  })

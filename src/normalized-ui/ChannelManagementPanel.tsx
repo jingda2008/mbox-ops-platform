@@ -43,7 +43,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
   }, [api])
   useEffect(() => {
     epoch.current++; writing.current=false; setBusy(false); setData(null); setInvitation(''); setError(''); setNotice(''); setPromoter(''); setCampaign(''); setProducts([]); setCommissionProducts([]); setAllowStacking(false); setOfferKind('credit'); setBatchDraft(null); setDraftVersion(v=>v+1);setReview(null);setSelectedBatchId('');selectedBatch.current='';setOperationTarget(undefined);setFinanceTarget(undefined)
-    try{const id=sessionStorage.getItem(selectionKey)??'';if(/^[0-9a-f-]{36}$/i.test(id)){selectedBatch.current=id;setSelectedBatchId(id)}}catch{/* Selection is a convenience; durable commands remain separately protected. */}
+    try{const id=sessionStorage.getItem(selectionKey)??'';if(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)){selectedBatch.current=id;setSelectedBatchId(id)}}catch{/* Selection is a convenience; durable commands remain separately protected. */}
     if (auth.permissions.includes('channel.view')) void reload().catch(e => setError(e.message))
     try { setPending(command.pending() !== null) } catch (e) { setError(message(e)) }
     return () => { epoch.current++ }

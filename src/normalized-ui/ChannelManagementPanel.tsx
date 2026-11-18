@@ -128,7 +128,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
   const currentBatch=data?.batches.find(b=>b.id===selectedBatchId&&b.promoterId===promoterId)
   const partner=data?.partners.find(p=>p.promoterId===promoterId)
   const campaign=data?.campaigns.find(c=>c.id===(currentBatch?.campaignId??campaignId))
-  const canDownload=!!currentBatch&&currentBatch.acceptingClaims&&partner?.status==='active'&&partner.partnerStatus==='active'&&campaign?.acceptingClaims===true&&campaign.selfEntryEnabled===true&&Date.parse(currentBatch.rule.claimUntil)>Date.now()
+  const canDownload=!!currentBatch&&currentBatch.acceptingClaims&&partner?.status==='active'&&partner.partnerStatus==='active'&&campaign?.acceptingClaims===true&&(campaign.selfEntryEnabled===true||campaign.staffEntryEnabled===true)&&Date.parse(currentBatch.rule.claimUntil)>Date.now()
   const reviewBody=review?.body as {rule:ChannelRule;contract:{version:string;terms:string};campaignId:string}|undefined
   const latestSent=data?.followups.find(f=>f.batchId===selectedBatchId&&f.promoterId===promoterId&&f.kind==='sent')
   if (!auth.permissions.includes('channel.view')) return null
@@ -180,7 +180,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
       {currentBatch&&<><p><strong>{partner?.name} · {partner?.promoterName} · {currentBatch.offerCode}</strong></p>
         <p>{currentBatch.rule.title} · {offerText(currentBatch.rule)} · 领取截止 {beijingDisplayTime(currentBatch.rule.claimUntil)}（北京）</p>
         <p>适用：{currentBatch.rule.eligibleProductNames?.map(p=>p.name).join('、')??currentBatch.rule.eligibleProductIds?.map(id=>data?.products.find(p=>p.id===id)?.name??id).join('、')} · 佣金 {currentBatch.rule.commissionBps/100}% · 观察 {currentBatch.rule.observationDays} 天</p>
-        <p>条款：{currentBatch.contract?.terms??'请核对原配置条款'}</p>
+        <p>条款：{currentBatch.contract?.terms??'请核对原配置条款'}</p>{campaign?.staffEntryEnabled&&!campaign.selfEntryEnabled&&<p>当前仅开放员工代领：请告知顾客到店出示原图，由服务员核验；微信自领尚未开启。</p>}
         <p>{currentBatch.acceptingClaims?'审批发布已完成':'待另一管理员审批，或已暂停领取'}{!currentBatch.createdBy?'；创建人记录缺失，请管理员核查':currentBatch.createdBy===auth.session.employeeId?'；本账号是创建人，不能自行审批':''}。</p>
         {!currentBatch.acceptingClaims&&currentBatch.createdBy!==auth.session.employeeId&&<button type="button" disabled={disabled||!currentBatch.createdBy} onClick={()=>focusOperation('publish',currentBatch.id)}>核对并审批本批次</button>}
         <button type="button" disabled={busy} onClick={()=>void reload().catch(e=>setError(message(e)))}>刷新本批审批状态</button>
@@ -201,7 +201,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
     {data&&<ChannelOperationsPanel api={api} auth={auth} data={data} onRefresh={reload} target={operationTarget}/>}
     {canManage&&<section className="channel-flow-card" aria-label="发送与跟进">
       <p>当前跟进：{currentBatch?`${partner?.name} · ${currentBatch.offerCode}`:'尚未选定批次；普通联系可登记，发送记录必须选择批次。'}</p>
-      <details ref={followSection}><summary>发送与合作跟进</summary><form onSubmit={e => form(e, 'followup')}><fieldset disabled={disabled}><label>进展<select name="kind"><option value="sent">已人工发送</option><option value="received">对方确认收到</option><option value="feedback">客户反馈</option><option value="contact">联系跟进</option></select></label><label>记录<textarea name="note" required minLength={2} maxLength={2000}/></label><label>下次联系（北京）<input name="nextContactAt" type="datetime-local"/></label><button disabled={!promoterId}>保存跟进</button></fieldset></form></details>
+      <details ref={followSection}><summary>发送与合作跟进</summary><form key={`${auth.session.id}:${promoterId}:${selectedBatchId}`} onSubmit={e => form(e, 'followup')}><fieldset disabled={disabled}><label>进展<select name="kind"><option value="sent">已人工发送</option><option value="received">对方确认收到</option><option value="feedback">客户反馈</option><option value="contact">联系跟进</option></select></label><label>记录<textarea name="note" required minLength={2} maxLength={2000}/></label><label>下次联系（北京）<input name="nextContactAt" type="datetime-local"/></label><button disabled={!promoterId}>保存跟进</button></fieldset></form></details>
     </section>}
     {canManage&&<details ref={setupSection}><summary>首次配置（首次合作或调整时使用）</summary>
       <details><summary>1. 登记合作店和推荐店长</summary><form onSubmit={e => form(e, 'partner')}><fieldset disabled={disabled} className="gift-form-grid">

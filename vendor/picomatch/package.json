@@ -1,0 +1,30 @@
+{
+  "name": "@mbox/picomatch",
+  "description": "Auditable M-BOX security fork of picomatch 4.0.7; rejects unbounded nested extglobs",
+  "version": "4.0.7-mbox.2",
+  "homepage": "https://github.com/micromatch/picomatch",
+  "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+  "repository": "micromatch/picomatch",
+  "bugs": {
+    "url": "https://github.com/micromatch/picomatch/issues"
+  },
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "posix.js",
+    "lib",
+    "LICENSE",
+    "SECURITY.md"
+  ],
+  "sideEffects": false,
+  "main": "index.js",
+  "engines": {
+    "node": ">=12"
+  },
+  "keywords": [
+    "glob",
+    "match",
+    "picomatch"
+  ],
+  "private": true
+}

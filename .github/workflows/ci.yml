@@ -79,6 +79,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
+      - name: Verify security fork integrity, exploit rejection and glob compatibility
+        run: npm run test:glob-security
       - name: Audit production and development dependencies
         run: |
           for attempt in 1 2 3 4 5; do
@@ -121,6 +123,8 @@ jobs:
       - run: npm ci
       - name: Install release-smoke browser
         run: npx playwright install --with-deps chromium
+      - name: Verify security fork integrity, exploit rejection and glob compatibility
+        run: npm run test:glob-security
       - name: Audit production and development dependencies
         run: |
           for attempt in 1 2 3 4 5; do

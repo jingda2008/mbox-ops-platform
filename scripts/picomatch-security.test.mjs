@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url)
 const pm = require('picomatch')
 const root = resolve(import.meta.dirname, '..')
 const vendor = resolve(root, 'vendor/picomatch')
-const archive = resolve(vendor, 'mbox-picomatch-4.0.7-mbox.2.tgz')
+const archive = resolve(vendor, 'mbox-picomatch-4.0.7-mbox.3.tgz')
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'))
 const hash = value => createHash('sha256').update(value).digest('hex')
 
@@ -20,7 +20,7 @@ test('all glob consumers resolve the reviewed fork and locked archive, not an un
   const lock = readJson(resolve(root, 'package-lock.json'))
   const packageInfo = require('picomatch/package.json')
   assert.equal(packageInfo.name, '@mbox/picomatch')
-  assert.equal(packageInfo.version, '4.0.7-mbox.2')
+  assert.equal(packageInfo.version, '4.0.7-mbox.3')
   const entries = Object.entries(lock.packages).filter(([key]) => key.endsWith('/picomatch'))
   assert.equal(entries.length, 1)
   assert.equal(entries[0][1].name, '@mbox/picomatch')
@@ -43,7 +43,7 @@ test('all glob consumers resolve the reviewed fork and locked archive, not an un
 })
 
 test('published exploit and nested variants fail before regex construction, even with recursion guard disabled', () => {
-  const patterns = ['+(*)', '*(*a)', '+(*a)', '+(a*)', '+([ab]*)', '+(@(*a))', '+(+(*a))', '+(+(a))', '*(*(a))', '+(a|*b)', 'prefix/+(*a)b', '**/+(*a).ts', '+(a*|b)', '+("x"*)', '+(\\**)', '+([*]*)', '+(a+)', '+((a+))', '+([a]+)', '+((ab|abab))', '+(ab|abab)', '+(a|[a])', '+(a|"a")', '+(a|a)', '+(a|)', '+({a,aa})']
+  const patterns = ['+(*)', '*(*a)', '+(*a)', '+(a*)', '+([ab]*)', '+(@(*a))', '+(+(*a))', '+(+(a))', '*(*(a))', '+(a|*b)', 'prefix/+(*a)b', '**/+(*a).ts', '+(a*|b)', '+("x"*)', '+(\\**)', '+([*]*)', '+(a+)', '+((a+))', '+([a]+)', '+((ab|abab))', '+(ab|abab)', '+(a|[a])', '+(a|"a")', '+(a|a)', '+(a|)', '+({a,aa})', '+(a|\\u0061)', '+(a|\\x61)', '+(a|\\141)', '+([!-~])', '+([A-z])', '+([][])']
   // A separate process timeout prevents a regression from hanging the test runner.
   const result = spawnSync(process.execPath, ['--input-type=commonjs', '-e', `
     const assert = require('node:assert/strict');
@@ -87,6 +87,12 @@ test('ordinary globs, finite extglobs, escaped stars, classes, exclusions and pu
   assert.equal(pm('src/*.ts', { windows: true })('src\\main.ts'), true)
   assert.equal(pm.scan('src/**/*.{ts,tsx}').base, 'src')
   assert.equal(pm.isMatch('foo.ts', '*.ts'), true)
+  for (const options of [{nocase:true}, {flags:'i'}, {flags:'iu'}]) {
+    for (const pattern of ['+(a|A)', '+(s|ſ)', '+(Σ|ς)']) {
+      assert.throws(() => pm.makeRe(pattern, options), {code:'ERR_UNSAFE_EXTGLOB'})
+    }
+    assert.equal(pm('+(index|main)', options)('INDEXmain'), true)
+  }
   const events = []
   const result = pm('*.ts', { onResult: () => events.push('result'), onMatch: () => events.push('match') })('a.ts', true)
   assert.equal(result.isMatch, true)
@@ -117,7 +123,7 @@ test('tinyglobby and fdir retain discovery, dotfile, ignore and sync/async seman
 
 test('release containers and CI include the security fork and mandatory exploit gate', () => {
   const docker = readFileSync(resolve(root, 'Dockerfile'), 'utf8')
-  assert.equal(docker.split('COPY vendor/picomatch/mbox-picomatch-4.0.7-mbox.2.tgz ./vendor/picomatch/').length - 1, 2)
+  assert.equal(docker.split('COPY vendor/picomatch/mbox-picomatch-4.0.7-mbox.3.tgz ./vendor/picomatch/').length - 1, 2)
   const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
   assert.match(ci, /npm run test:glob-security/)
   assert.match(ci, /npm audit --audit-level=moderate/)

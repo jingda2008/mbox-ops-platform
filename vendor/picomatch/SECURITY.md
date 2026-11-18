@@ -27,3 +27,11 @@ as a local tarball and locked with SHA-512 integrity. `test:glob-security` compa
 installed code to the reviewed source and checks every transitive consumer.
 Keep the npm audit threshold unchanged. Replace this fork with an official patched
 release after running the same regression gate; never silently update the archive.
+
+The mbox.3 revision additionally rejects opaque numeric/alphabetic regex escapes,
+compares ASCII alternatives under the effective case-insensitive flags, and
+rejects Unicode case folding in repeated alternatives. Repeated character classes
+are restricted to simple positive classes/ranges that cannot include the '['
+character, preventing ambiguity with picomatch's literal-bracket fallback.
+This is a targeted glob security boundary, not a sandbox for caller-supplied
+raw regex options (for example `prepend`); options remain trusted configuration.

@@ -289,21 +289,39 @@ const repeatedExtglobRecursion = pattern => {
 // alternatives can cause the same blowup; allow only a provably safe subset.
 // Reject it before emitting a RegExp; do not silently literalize a deny glob.
 // Unlike maxExtglobRecursion, this security boundary cannot be disabled.
-const hasUnboundedRepetition = body => {
+const hasUnboundedRepetition = (body, options) => {
   let escaped = false;
   let quoted = false;
   let bracket = false;
   let alternatives = false;
   let sawQuote = false;
+  let classBody = '';
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
-    if (escaped) { escaped = false; continue; }
+    if (escaped) {
+      // Numeric/letter escapes can become Unicode, hex, octal, backreferences
+      // or classes in RegExp; source-text comparison cannot prove disjointness.
+      if (/[A-Za-z0-9]/.test(ch) || bracket) return true;
+      escaped = false;
+      continue;
+    }
     if (ch === '\\') { escaped = true; continue; }
     if (ch === '"' && !bracket) { quoted = !quoted; sawQuote = true; continue; }
     if (quoted) continue;
-    if (ch === '[' && !bracket) { bracket = true; continue; }
-    if (ch === ']' && bracket) { bracket = false; continue; }
-    if (bracket) continue;
+    if (ch === '[' && !bracket) { bracket = true; classBody = ''; continue; }
+    if (ch === ']' && bracket) {
+      // Picomatch also accepts the literal '[...]' string by default. Keep
+      // only classes proven not to contain '[' so repetition is unambiguous.
+      if (!/^[A-Za-z0-9*?._ -]+$/.test(classBody)) return true;
+      for (let j = 1; j < classBody.length - 1; j++) {
+        if (classBody[j] !== '-') continue;
+        const range = classBody[j - 1] + classBody[j + 1];
+        if (!/^(?:[a-z]{2}|[A-Z]{2}|[0-9]{2})$/.test(range)) return true;
+      }
+      bracket = false;
+      continue;
+    }
+    if (bracket) { classBody += ch; continue; }
     if ('*+(){}'.includes(ch)) return true;
     if (ch === '|') alternatives = true;
   }
@@ -312,8 +330,16 @@ const hasUnboundedRepetition = body => {
     // Only prefix-free literal alternatives are provably unambiguous here.
     // Classes/quoted groups can overlap even when their source text does not.
     if (sawQuote) return true;
-    const branches = splitTopLevel(body).map(normalizeSimpleBranch);
+    let branches = splitTopLevel(body).map(normalizeSimpleBranch);
     if (branches.some(branch => !branch)) return true;
+    const flags = options.flags || (options.nocase ? 'i' : '');
+    if (typeof flags !== 'string') return true;
+    if (flags.includes('i')) {
+      // Unicode regex folding is not equivalent to String#toLowerCase.
+      // ASCII branches can be compared exactly after ASCII folding.
+      if (branches.some(branch => /[^\x00-\x7f]/.test(branch))) return true;
+      branches = branches.map(branch => branch.toLowerCase());
+    }
     for (let i = 0; i < branches.length; i++) {
       for (let j = i + 1; j < branches.length; j++) {
         if (branches[i].startsWith(branches[j]) || branches[j].startsWith(branches[i])) return true;
@@ -578,7 +604,7 @@ const parse = (input, options) => {
   const extglobClose = token => {
     const literal = input.slice(token.startIndex, state.index + 1);
     const body = input.slice(token.startIndex + 2, state.index);
-    if ((token.type === 'plus' || token.type === 'star') && hasUnboundedRepetition(body)) {
+    if ((token.type === 'plus' || token.type === 'star') && hasUnboundedRepetition(body, opts)) {
       const error = new SyntaxError('Unsafe nested repetition in extglob');
       error.code = 'ERR_UNSAFE_EXTGLOB';
       throw error;

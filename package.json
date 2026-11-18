@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.299",
+  "version": "1.0.0-rc.300",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {
@@ -138,7 +138,7 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.6",
     "vitest": "^4.1.12",
-    "picomatch": "file:vendor/picomatch/mbox-picomatch-4.0.7-mbox.2.tgz"
+    "picomatch": "file:vendor/picomatch/mbox-picomatch-4.0.7-mbox.3.tgz"
   },
   "overrides": {
     "concurrently": {

@@ -39,6 +39,12 @@ export const channelStoreLimitsSchema = z.object({
   action:z.literal('limits'),claimLimit:z.number().int().min(0).max(1_000_000),
   capacityLimit:z.number().int().min(0).max(1_000_000),costLimitMinor:z.number().int().min(0).max(1e12),reason:configReason,
 }).strict()
+export const channelCampaignSwitchSchema = z.object({ enabled:z.boolean(), staff:z.boolean(), self:z.boolean() }).strict()
+export const channelPublishSwitchSchema = z.object({ enabled:z.boolean() }).strict()
+export const channelPromoterSwitchSchema = z.object({ enabled:z.boolean(), confirm:z.boolean(), restaurantScope:z.boolean(), contactEmployeeId:configUuid.nullable() }).strict()
+export type ChannelCampaignSwitch = z.infer<typeof channelCampaignSwitchSchema>
+export type ChannelPublishSwitch = z.infer<typeof channelPublishSwitchSchema>
+export type ChannelPromoterSwitch = z.infer<typeof channelPromoterSwitchSchema>
 export const channelManagementSchemas = {
   partner:z.object({name:z.string().trim().min(2).max(100),settlementSubject:z.string().trim().min(2).max(200),promoterName:z.string().trim().min(1).max(100),reason:configReason}).strict(),
   campaign:z.object({title:z.string().trim().min(2).max(100),claimLimit:positive,capacityLimit:positive,costLimitMinor:z.number().int().min(0).max(1e12),reason:configReason}).strict(),

@@ -10,7 +10,7 @@ import React from 'react';import{createRoot}from'react-dom/client';
 import{ChannelActivationPanel}from'/src/normalized-ui/staff-actions/ChannelActivationPanel.tsx';
 import{ChannelFinancePanel}from'/src/normalized-ui/ChannelFinancePanel.tsx';
 import{ChannelOperationsPanel}from'/src/normalized-ui/ChannelOperationsPanel.tsx';
-const partner={id:'partner',name:'川菜餐厅',promoterId:'promoter',promoterName:'川菜店长'};
+const partner={id:'partner',name:'川菜餐厅',promoterId:'promoter',promoterName:'川菜店长',status:'active',canConfirmStatement:true,restaurantScope:false,contactEmployeeId:'staff'};
 const finance={positions:[{visitId:'visit',promoterId:'promoter',basisMinor:'7000',commissionMinor:'700',frozen:true,reasons:['退款待核实'],checkedAt:'2026-11-12'}],statements:[{id:'statement',promoterId:'promoter',amountMinor:'900',paidMinor:'0',status:'confirmed'},{id:'statement-b',promoterId:'promoter',amountMinor:'100',paidMinor:'0',status:'confirmed'}],ledger:[],payouts:[{id:'payout',amountMinor:'400',status:'unknown'}],accounts:[{id:'account',subject:'川菜公司',reference:'资料001',verifiedAt:'2026-11-12'}],balances:[{promoterId:'promoter',accruedMinor:'700',paidMinor:'900',balanceMinor:'-200'}],limit:500};
 window.calls=[];window.statementResolvers={};window.financeResolvers=[];const api={getEndpoint:async(path)=>{
  if(window.deferFinance&&path.endsWith('/finance'))return new Promise((resolve,reject)=>window.financeResolvers.push(balance=>balance==='error'?reject(Error('旧刷新失败')):resolve({data:{...finance,balances:[{...finance.balances[0],balanceMinor:balance}]}})));
@@ -18,7 +18,7 @@ window.calls=[];window.statementResolvers={};window.financeResolvers=[];const ap
  return{data:path.includes('/statement/')?{statement:{id:'statement'},lines:[{visitId:'visit',deltaMinor:'900',createdAt:'2026-11-12',evidence:{evidence:[{orderId:'order-original',paid:9000,refunded:2000,basis:7000}]}}]}:finance}
 },postEndpoint:async(path,body,options)=>{window.calls.push({path,body,options});if(window.failNextWrite){window.failNextWrite=false;throw Error('网络中断，结果未知')};return{data:{id:'record'}}}};
 const auth={session:{id:'isolated-channel-ui'},permissions:['channel.view','channel.manage','channel.correct','channel.settle']};
-const data={partners:[partner],campaigns:[{id:'campaign',title:'餐后小聚'}],batches:[{id:'batch',offerCode:'ABCD1234'}],products:[{id:'gift',name:'薯条'}],claims:[{id:'claim',title:'餐后小聚券',status:'active'}],employees:[{id:'staff',name:'跟进员工'}],continuity:[],limits:null};
+const data={partners:[partner],campaigns:[{id:'campaign',title:'餐后小聚',acceptingClaims:true,staffEntryEnabled:true,selfEntryEnabled:true}],batches:[{id:'batch',offerCode:'ABCD1234',acceptingClaims:true}],products:[{id:'gift',name:'薯条'}],claims:[{id:'claim',title:'餐后小聚券',status:'active'}],employees:[{id:'staff',name:'跟进员工'}],continuity:[],limits:null};
 window.activationCalls=[];let bound=false;
 window.giftCalls=[];window.tableResolvers=[];
 function giftRows(used){return {customers:[{id:'customer-a',label:'顾客甲'}],activations:['one','two'].map(id=>({id,claimId:id,title:'赠品'+id,sourceLabel:'川菜店',status:used==='2000'?'fulfilled':'active',arrivalConfirmed:true,offer:{kind:'gift',productId:id,quantity:1},giftOrderId:used==='2000'?'order-'+id:null,allowStacking:true,visitDiscountCapMinor:2500,usedDiscountMinor:used}))}}

@@ -2235,6 +2235,69 @@ integration('channel distribution real PostgreSQL authority', () => {
       expect(saved).toMatchObject({contract_snapshot:{version:'合同v2',settlementSubject:'配置公司',terms:'净消费计佣'},accepting_claims:false,created_by:employee})
     }
   })
+  it('copies the selected promoter latest template into a new paused batch, without consuming quota or copying approval',async()=>{
+    const b=await batch(),post=(payload:unknown,key=`channel-${randomUUID()}`)=>app.inject({method:'POST',url:'/staff/channel/batch',headers:{'idempotency-key':key},payload})
+    const payload={campaignId:b.campaign,promoterId:promoter,rule:{...rule,title:'复制来源',commissionProductIds:[product]},contract:{version:'复制v1',settlementSubject:'川菜公司',terms:'按净实收计佣'},reason:'配置复制回归'}
+    const original=await post(payload);expect(original.statusCode,original.body).toBe(200)
+    const source=original.json().data
+    const before=(await admin.query('SELECT count(*)::int n FROM mbox.channel_claims WHERE tenant_id=$1 AND store_id=$2',args)).rows[0].n
+    const template=await app.inject({url:`/staff/channel/batch-template/${promoter}`});expect(template.statusCode,template.body).toBe(200)
+    expect(template.json().data).toMatchObject({id:source.id,campaignId:b.campaign,rule:payload.rule,contract:payload.contract})
+    expect(Object.keys(template.json().data).sort()).toEqual(['campaignId','contract','id','rule'])
+    expect((await app.inject({url:`/staff/channel/batch-template/${randomUUID()}`})).json().data).toBeNull()
+    const key=`channel-${randomUUID()}`,copyPayload={...payload,rule:{...template.json().data.rule,title:'复制后的新批次',claimFrom:new Date(now+86400000).toISOString(),claimUntil:new Date(now+90000000).toISOString(),useFrom:new Date(now+86400000).toISOString(),useUntil:new Date(now+93600000).toISOString()}}
+    const copied=await post(copyPayload,key),replayed=await post(copyPayload,key);expect(copied.statusCode,copied.body).toBe(200);expect(replayed.json().data.id).toBe(copied.json().data.id);expect(replayed.json().meta.replayed).toBe(true)
+    expect(copied.json().data.offerCode).not.toBe(source.offerCode);expect(copied.json().data.publicToken).not.toBe(source.publicToken)
+    const saved=(await admin.query('SELECT accepting_claims,approved_by,created_by FROM mbox.channel_batches WHERE id=$1',[copied.json().data.id])).rows[0]
+    expect(saved).toEqual({accepting_claims:false,approved_by:null,created_by:employee})
+    const selfApproval=await app.inject({method:'POST',url:'/staff/channel/operations',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{action:'publish',id:copied.json().data.id,enabled:true,expected:{enabled:false},reason:'不能自批'}})
+    expect(selfApproval.statusCode).toBe(403)
+    expect((await admin.query('SELECT count(*)::int n FROM mbox.channel_claims WHERE tenant_id=$1 AND store_id=$2',args)).rows[0].n).toBe(before)
+    expect((await admin.query('SELECT rule_snapshot FROM mbox.channel_batches WHERE id=$1',[source.id])).rows[0].rule_snapshot.title).toBe('复制来源')
+  })
+  it('keeps the selected batch and its source in the directory beyond the recent window, with exact followup linkage',async()=>{
+    const b=await batch()
+    await admin.query(`INSERT INTO mbox.channel_batches(tenant_id,store_id,campaign_id,partner_id,promoter_id,offer_code,public_token,rule_snapshot,contract_snapshot)
+      SELECT tenant_id,store_id,campaign_id,partner_id,promoter_id,translate(upper(substr(md5(random()::text),1,12)),'01','GH'),gen_random_uuid()::text,rule_snapshot,contract_snapshot FROM mbox.channel_batches CROSS JOIN generate_series(1,105) WHERE id=$1`,[b.id])
+    const read=await app.inject({url:`/staff/channel/directory?batchId=${b.id}`});expect(read.statusCode,read.body).toBe(200)
+    const directory=read.json().data;expect(directory.batches).toHaveLength(100);expect(directory.batches[0]).toMatchObject({id:b.id,campaignId:b.campaign,createdBy:null,approvedAt:null})
+    expect(directory.partners.find((p:any)=>p.promoterId===promoter)).toMatchObject({partnerStatus:'active',hasVerifiedAccount:expect.any(Boolean)})
+    const payload={promoterId:promoter,batchId:b.id,kind:'sent',note:'已发送当前专属图',nextContactAt:null},key=`channel-${randomUUID()}`
+    const post={method:'POST' as const,url:'/staff/channel/followup',headers:{'idempotency-key':key},payload}
+    const sent=await app.inject(post);expect(sent.statusCode,sent.body).toBe(200)
+    expect((await app.inject({...post,headers:{...post.headers,'x-channel-recovery':'1'}})).json().meta.replayed).toBe(true)
+    await admin.query(`INSERT INTO mbox.channel_followups(tenant_id,store_id,promoter_id,employee_id,actor_ref,kind,note) SELECT $1,$2,$3,$4::uuid,'employee:'||$4::uuid::text,'contact','其他联系' FROM generate_series(1,105)`,[...args,promoter,employee])
+    const rows=(await app.inject({url:`/staff/channel/directory?batchId=${b.id}`})).json().data.followups.filter((f:any)=>f.id===sent.json().data.id)
+    expect(rows).toHaveLength(1);expect(rows[0]).toMatchObject({batchId:b.id,promoterId:promoter,kind:'sent'})
+    expect((await app.inject({...post,headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{...payload,promoterId:randomUUID()}})).statusCode).toBe(403)
+    const missing=(await app.inject({url:`/staff/channel/directory?batchId=${randomUUID()}`})).json().data;expect(missing.batches).toHaveLength(100)
+    expect((await app.inject({url:'/staff/channel/directory?batchId=invalid'})).statusCode).toBe(400)
+  })
+  it('reads complete campaign and promoter switches and prevents concurrent stale overwrites with recoverable receipts',async()=>{
+    const b=await batch(),directory=(await app.inject({url:'/staff/channel/directory'})).json().data
+    expect(directory.campaigns.find((c:any)=>c.id===b.campaign)).toMatchObject({acceptingClaims:true,staffEntryEnabled:true,selfEntryEnabled:true})
+    expect(directory.partners.find((p:any)=>p.promoterId===promoter)).toMatchObject({status:'active',canConfirmStatement:expect.any(Boolean),restaurantScope:expect.any(Boolean),contactEmployeeId:null})
+    const expected={enabled:true,staff:true,self:true},requests=[false,true].map(staff=>({method:'POST' as const,url:'/staff/channel/operations',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{action:'campaign',id:b.campaign,enabled:true,staff,self:!staff,expected,reason:'并发修改入口'}}))
+    const results=await Promise.all(requests.map(r=>app.inject(r)));expect(results.map(r=>r.statusCode).sort()).toEqual([200,409])
+    const success=results.findIndex(r=>r.statusCode===200),last=requests[success]!
+    expect((await admin.query('SELECT staff_entry_enabled,self_entry_enabled FROM mbox.channel_campaigns WHERE id=$1',[b.campaign])).rows[0]).toEqual({staff_entry_enabled:last.payload.staff,self_entry_enabled:last.payload.self})
+    const replay=await app.inject({...last,headers:{...last.headers,'x-channel-recovery':'1'}});expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true)
+    expect((await app.inject({url:'/staff/channel/directory'})).json().data.campaigns.find((c:any)=>c.id===b.campaign)).toMatchObject({staffEntryEnabled:last.payload.staff,selfEntryEnabled:last.payload.self})
+  })
+  it('refuses stale publish and promoter state without overwriting untouched settings',async()=>{
+    const b=await batch(),post=(payload:unknown)=>app.inject({method:'POST',url:'/staff/channel/operations',headers:{'idempotency-key':`channel-${randomUUID()}`},payload})
+    expect((await post({action:'publish',id:b.id,enabled:false,expected:{enabled:false},reason:'旧页面状态'})).statusCode).toBe(409)
+    const correct=await post({action:'publish',id:b.id,enabled:false,expected:{enabled:true},reason:'核对后暂停'});expect(correct.statusCode,correct.body).toBe(200)
+    const create=await app.inject({method:'POST',url:'/staff/channel/partner',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{name:'状态回显店',settlementSubject:'回显公司',promoterName:'回显店长',reason:'回显回归'}})
+    const id=create.json().data.promoterId
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).promoter(id,true,true,true,employee,employee,'完整状态'))
+    const current={enabled:true,confirm:true,restaurantScope:true,contactEmployeeId:employee}
+    const stale=await post({action:'promoter',id,enabled:true,confirm:false,restaurantScope:false,contactEmployeeId:employee,expected:{...current,confirm:false},reason:'拒绝覆盖'})
+    expect(stale.statusCode).toBe(409)
+    const saved=await post({action:'promoter',id,enabled:true,confirm:false,restaurantScope:true,contactEmployeeId:employee,expected:current,reason:'只改确认权限'});expect(saved.statusCode,saved.body).toBe(200)
+    expect((await app.inject({url:'/staff/channel/directory'})).json().data.partners.find((p:any)=>p.promoterId===id)).toMatchObject({canConfirmStatement:false,restaurantScope:true,contactEmployeeId:employee})
+    expect((await post({action:'campaign',id:b.campaign,enabled:true,staff:true,self:true,expected:{enabled:true},reason:'不完整快照'})).statusCode).toBe(400)
+  })
   it('accepts the advertised maximum 500 eligible products through the HTTP configuration route',async()=>{
     const ids=Array.from({length:500},()=>randomUUID()),b=await batch()
     await admin.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) SELECT id,$1,$2,id::text,'配置商品','drinks','bar' FROM unnest($3::uuid[]) id`,[...args,ids])

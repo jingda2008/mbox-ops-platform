@@ -1,0 +1,5 @@
+.channel-flow-heading{font-weight:700;line-height:1.8;color:#244f47}
+.channel-flow-card{margin:1rem 0;padding:1rem;border:1px solid #cbd8d2;border-radius:12px;background:#f7faf8;overflow-wrap:anywhere}
+.channel-flow-card h4{margin:0 0 .7rem}.channel-flow-card p{line-height:1.65}
+.channel-flow-card select{width:100%;max-width:100%;min-width:0}.channel-flow-card label{display:block}
+.channel-flow-card button{margin:.25rem .4rem .25rem 0;max-width:100%;white-space:normal}

@@ -57,17 +57,31 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
     if(query.format==='csv')return reply.header('content-type','text/csv; charset=utf-8').header('content-disposition','attachment; filename="channel-report.csv"').send(channelReportCsv(rows))
     return{data:rows}
   })
+  // Read-only template lookup is scoped to the selected promoter, not the directory's latest 100 rows.
+  app.get('/staff/channel/batch-template/:promoterId', async request => {
+    const ctx = await options.resolveStaffContext(request)
+    const { promoterId } = z.object({promoterId:z.string().uuid()}).parse(request.params)
+    const data = await options.transactions.run(ctx.scope, async tx => {
+      await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'channel.manage')
+      return (await tx.query(`SELECT id,campaign_id AS "campaignId",rule_snapshot AS rule,contract_snapshot AS contract
+        FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 AND promoter_id=$3
+        ORDER BY created_at DESC,id DESC LIMIT 1`, [ctx.scope.tenantId,ctx.scope.storeId,promoterId])).rows[0] ?? null
+    }, {readOnly:true})
+    return {data}
+  })
   app.get('/staff/channel/directory', async request => {
     const ctx = await options.resolveStaffContext(request)
+    const query = z.object({batchId:z.string().uuid().optional()}).strict().parse(request.query)
     const data = await options.transactions.run(ctx.scope, async tx => {
       await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'channel.view')
       const args = [ctx.scope.tenantId, ctx.scope.storeId]
-      const partners = (await tx.query(`SELECT p.id,p.name,p.settlement_subject AS "settlementSubject",r.id AS "promoterId",r.name AS "promoterName",EXISTS(SELECT 1 FROM mbox.channel_web_accounts a WHERE (a.tenant_id,a.store_id,a.promoter_id)=(r.tenant_id,r.store_id,r.id)) AS linked,r.status
+      const selected = query.batchId ? (await tx.query<{promoter_id:string;campaign_id:string}>(`SELECT promoter_id,campaign_id FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...args,query.batchId])).rows[0] : null
+      const partners = (await tx.query(`SELECT p.id,p.name,p.settlement_subject AS "settlementSubject",r.id AS "promoterId",r.name AS "promoterName",EXISTS(SELECT 1 FROM mbox.channel_web_accounts a WHERE (a.tenant_id,a.store_id,a.promoter_id)=(r.tenant_id,r.store_id,r.id)) AS linked,r.status,r.can_confirm_statement AS "canConfirmStatement",r.restaurant_scope AS "restaurantScope",r.contact_employee_id AS "contactEmployeeId",p.status AS "partnerStatus",EXISTS(SELECT 1 FROM mbox.channel_settlement_accounts a WHERE (a.tenant_id,a.store_id,a.partner_id)=(p.tenant_id,p.store_id,p.id) AND a.verified_at IS NOT NULL AND a.revoked_at IS NULL) AS "hasVerifiedAccount"
         FROM mbox.channel_partners p JOIN mbox.channel_promoters r ON (r.tenant_id,r.store_id,r.partner_id)=(p.tenant_id,p.store_id,p.id)
-        WHERE p.tenant_id=$1 AND p.store_id=$2 ORDER BY p.created_at DESC,p.id LIMIT 100`, args)).rows
-      const campaigns = (await tx.query(`SELECT id,title,claim_limit AS "claimLimit",capacity_limit AS "capacityLimit",cost_limit_minor::text AS "costLimitMinor",accepting_claims AS "acceptingClaims" FROM mbox.channel_campaigns WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id LIMIT 100`, args)).rows
-      const batches = (await tx.query(`SELECT id,promoter_id AS "promoterId",campaign_id AS "campaignId",offer_code AS "offerCode",public_token AS "publicToken",rule_snapshot AS rule,accepting_claims AS "acceptingClaims" FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id LIMIT 100`, args)).rows
-      const followups = (await tx.query(`SELECT id,promoter_id AS "promoterId",kind,note,next_contact_at::text AS "nextContactAt",created_at::text AS "createdAt" FROM mbox.channel_followups WHERE tenant_id=$1 AND store_id=$2 ORDER BY created_at DESC,id LIMIT 100`, args)).rows
+        WHERE p.tenant_id=$1 AND p.store_id=$2 ORDER BY (r.id=$3) DESC NULLS LAST,p.created_at DESC,p.id LIMIT 100`, [...args,selected?.promoter_id??null])).rows
+      const campaigns = (await tx.query(`SELECT id,title,claim_limit AS "claimLimit",capacity_limit AS "capacityLimit",cost_limit_minor::text AS "costLimitMinor",accepting_claims AS "acceptingClaims",staff_entry_enabled AS "staffEntryEnabled",self_entry_enabled AS "selfEntryEnabled" FROM mbox.channel_campaigns WHERE tenant_id=$1 AND store_id=$2 ORDER BY (id=$3) DESC NULLS LAST,created_at DESC,id LIMIT 100`, [...args,selected?.campaign_id??null])).rows
+      const batches = (await tx.query(`SELECT id,promoter_id AS "promoterId",campaign_id AS "campaignId",offer_code AS "offerCode",public_token AS "publicToken",rule_snapshot AS rule,contract_snapshot AS contract,created_by AS "createdBy",approved_at::text AS "approvedAt",accepting_claims AS "acceptingClaims" FROM mbox.channel_batches WHERE tenant_id=$1 AND store_id=$2 ORDER BY (id=$3) DESC NULLS LAST,created_at DESC,id LIMIT 100`, [...args,query.batchId??null])).rows
+      const followups = (await tx.query(`SELECT id,promoter_id AS "promoterId",batch_id AS "batchId",kind,note,next_contact_at::text AS "nextContactAt",created_at::text AS "createdAt" FROM mbox.channel_followups WHERE tenant_id=$1 AND store_id=$2 ORDER BY (batch_id=$3) DESC NULLS LAST,created_at DESC,id LIMIT 100`, [...args,query.batchId??null])).rows
       const products = (await tx.query(`SELECT id,name FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY name,id LIMIT 500`, args)).rows
       const claims=(await tx.query(`SELECT q.id,q.status,q.batch_id AS "batchId",b.rule_snapshot->>'title' AS title FROM mbox.channel_claims q JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(q.tenant_id,q.store_id,q.batch_id) WHERE q.tenant_id=$1 AND q.store_id=$2 ORDER BY q.issued_at DESC LIMIT 200`,args)).rows
       const employees=(await tx.query(`SELECT id,display_name AS name FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY display_name,id`,args)).rows

@@ -13,7 +13,8 @@ it('renders maturity, refresh, ledger and statement evidence in Beijing time wit
  let index=0
  const data={positions:[{visitId:'visit',promoterId:'promoter',basisMinor:16000,commissionMinor:1600,frozen:false,maturesAt:'2026-12-31 16:00:00.123456+00',checkedAt:'2026-12-31 15:59:59.999999+00'}],statements:[],ledger:[{id:'ledger',visitId:'visit',deltaMinor:-200,createdAt:'2026-02-29T00:00:00Z'}],accounts:[],balances:[],payouts:[],limit:500}
  const detail={statement:{id:'statement'},lines:[{createdAt:'2024-02-28 16:00:00+00',deltaMinor:1800}]}
- vi.mocked(useState).mockImplementation(initial=>[index++===0?data:initial===null?detail:initial,vi.fn()] as never)
+ // Seed only the two nullable data slots; unrelated form state may be added before them.
+ vi.mocked(useState).mockImplementation(initial=>[initial===null?(index++===0?data:detail):initial,vi.fn()] as never)
  const html=renderToStaticMarkup(createElement(ChannelFinancePanel,{api:{} as NormalizedApiClient,auth:{session:{id:'s'},permissions:['channel.settle']} as StaffAuthView,partners:[]}))
  expect(html).toContain('北京时间');expect(html).toContain('2027-01-01 00:00');expect(html).toContain('2026-12-31 23:59');expect(html).toContain('2024-02-29 00:00');expect(html).toContain('时间待核对');expect(html).not.toContain('+00')
 })

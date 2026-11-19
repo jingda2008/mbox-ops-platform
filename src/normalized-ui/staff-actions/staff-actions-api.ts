@@ -254,7 +254,16 @@ export interface ObservationEventReplacement {
   rawExcerpt: string
 }
 
+export interface GuestCountChange {
+  tableId: string
+  locationVersion: number
+  expectedGuestCount: number
+  guestCount: number
+  capacityOverrideReason?: string
+}
+
 export interface StaffActionsApiPort {
+  updateGuestCount(sessionId: string, change: GuestCountChange, key: string): Promise<number>
   loadMemberGiftWallet?(code:string,cursor?:string,signal?:AbortSignal):Promise<MemberGiftWallet>
   runMemberGiftCommand?(employeeId:string,command:MemberGiftCommand,key:string):Promise<MemberGiftReceipt>
   loadActivityBoard?(station:'bar'|'kitchen'|'pickup',signal?:AbortSignal):Promise<ActivityProductionBoard>
@@ -735,6 +744,21 @@ export class StaffActionsApi implements StaffActionsApiPort {
     }>
   }>): Promise<void> {
     await this.command('/api/table-management/sessions/open', input, 'x-idempotency-key')
+  }
+
+  async updateGuestCount(sessionId: string, change: GuestCountChange, key: string): Promise<number> {
+    const path = `/api/table-management/sessions/${encodeURIComponent(sessionId)}/guest-count`
+    const response = await this.request(path, {
+      method: 'POST', body: JSON.stringify(change),
+      headers: { 'content-type': 'application/json', 'x-idempotency-key': key },
+    })
+    const receipt = await readJson(response).catch(() => null)
+    const current = isObject(receipt) && isObject(receipt.meta) ? receipt.meta.currentGuestCount : undefined
+    if (!isObject(receipt) || !isObject(receipt.data) || receipt.data.guestCount !== change.guestCount ||
+        typeof current !== 'number' || !Number.isInteger(current) || current < 1 || current > 200) {
+      throw new StaffActionsApiError('保存回执未能确认', 'INVALID_GUEST_COUNT_RECEIPT', null)
+    }
+    return current
   }
 
   async closeTable(sessionId: string, sessionStatus: 'open' | 'closing' = 'open'): Promise<void> {

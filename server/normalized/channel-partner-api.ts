@@ -111,12 +111,21 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
       if (!row || (promoter && row.promoter_id !== promoter.id)) throw new ChannelDistributionError('NOT_AUTHORIZED', 403)
       await repo.followup({ promoterId: row.promoter_id, batchId, employeeId: staff?.employeeId ?? null,
         actorRef: staff ? `employee:${staff.employeeId}` : `promoter:${promoter!.id}`, kind: 'download', note: '请求生成推广图；不代表已发送或已保存', nextContactAt: null })
-      return { ...row, rule: channelRuleSchema.parse(row.rule) }
+      const rule=channelRuleSchema.parse(row.rule)
+      // Older stored rules may lack display snapshots. Resolve only missing IDs in this store;
+      // existing frozen names remain authoritative and the coupon rules are never rewritten.
+      const missing=rule.eligibleProductIds.filter(id=>!rule.eligibleProductNames?.some(p=>p.id===id))
+      if(missing.length){
+        const names=(await tx.query<{id:string;name:string}>('SELECT id,name FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[])',[scope.tenantId,scope.storeId,missing])).rows
+        if(names.length!==missing.length)throw new ChannelDistributionError('NOT_FOUND',404)
+        rule.eligibleProductNames=[...(rule.eligibleProductNames??[]),...names]
+      }
+      return { ...row, rule }
     })
     const provider = options.miniCode
     if (!provider) throw new WechatMiniProgramCodeError('尚未配置微信小程序码服务，暂不能生成直达领券推广图', 'WECHAT_MINI_CODE_CONFIGURATION_INVALID')
     const entry = { appId: provider.appId, page: 'pages/channel-coupons/index', scene: `CH_${poster.code}`, environment: 'release' as const }
-    const snapshot = { template: 'channel-poster-official-v2', ...poster, entry }
+    const snapshot = { template: 'channel-poster-official-v3-scope', ...poster, entry }
     const artifactKey=createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')
     const cached=await options.transactions.run(scope,async tx=>(await tx.query<{png:Buffer}>(`SELECT png FROM mbox.channel_poster_versions WHERE tenant_id=$1 AND store_id=$2 AND batch_id=$3 AND artifact_key=$4`,[scope.tenantId,scope.storeId,batchId,artifactKey])).rows[0],{readOnly:true})
     let png = cached?.png

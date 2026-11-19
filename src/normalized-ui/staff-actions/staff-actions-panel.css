@@ -746,10 +746,9 @@
 .staff-fulfillment-history-item button { justify-self: start; }
 .staff-fulfillment-history nav { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
-.staff-table-more { border:1px solid var(--staff-border, #dce5df); border-radius:12px; padding:8px 12px; margin:12px 0; }
+.staff-table-more { border:1px solid var(--staff-border, #dce5df); border-radius:12px; padding:0 12px; margin:8px 0; }
 .staff-table-more > summary { min-height:44px; cursor:pointer; font-weight:700; padding:10px 0; }
-.staff-table-more > summary small { display:block; font-weight:400; color:#5c6c62; margin-top:4px; }
-.staff-table-more .staff-session-actions { margin-top:8px; }
+.staff-table-more .staff-session-actions { margin:0 0 10px; }
 .staff-session-primary { margin:12px 0; }
 
 .staff-table-action-dialog > header .staff-table-sheet-close { color:#fff; background:#172019; border-color:#596159; }
@@ -758,3 +757,13 @@
 /* Keep confirmed-table controls anchored while asynchronous detail panels expand. */
 .staff-table-action-dialog.is-confirmed-session { height: min(92dvh, 760px); }
 @media (max-width: 720px) { .staff-table-action-dialog.is-confirmed-session { height: 96dvh; } }
+
+.staff-guest-count-editor { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding: 10px; border: 1px solid var(--staff-line); border-radius: 6px; }
+.staff-guest-count-editor > label { font-weight: 700; }
+.staff-guest-count-stepper { display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 6px; }
+.staff-guest-count-stepper input { width: 100%; min-width: 0; text-align: center; border: 1px solid var(--staff-line); border-radius: 6px; }
+.staff-guest-count-editor input, .staff-guest-count-editor button { min-height: 44px; font-size: 16px; }
+.staff-guest-count-editor p { margin: 0; color: var(--staff-red); }
+.staff-guest-count-buttons { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; }
+.staff-guest-count-buttons .is-payment { grid-column: auto; }
+.staff-guest-count-confirmed { grid-column: 1 / -1; margin: 0; color: var(--staff-green); }

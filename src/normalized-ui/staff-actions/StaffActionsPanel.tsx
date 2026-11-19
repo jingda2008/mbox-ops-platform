@@ -1,3 +1,5 @@
+import { TableGuestCountEditor } from './TableGuestCountEditor'
+import type { GuestCountChange } from './staff-actions-api'
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import {TableMinimumSpendPanel} from './TableMinimumSpendPanel'
 import {ChannelActivationPanel} from './ChannelActivationPanel'
@@ -199,6 +201,7 @@ export function StaffActionsPanel({
   useEffect(()=>{window.dispatchEvent(new CustomEvent('mbox:fulfillment-read',{detail:fulfillmentStale?null:fulfillment}))},[fulfillment,fulfillmentStale])
   const fulfillmentStaleRef = useRef(false)
   const [historyRefreshRevision, setHistoryRefreshRevision] = useState(0)
+  const guestCountReadRevision = useRef(0)
   const operationsRef = useRef<StaffOperationsData | null>(null)
   const fulfillmentRevisionRef = useRef(0)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
@@ -277,6 +280,7 @@ export function StaffActionsPanel({
     }
     const fulfillmentQueue = new RefreshQueue(readFulfillment)
     const operationsQueue = new RefreshQueue(async (signal) => {
+      const countRevision = guestCountReadRevision.current
       const previousOperations = operationsRef.current
       const accessAtStart = accessRevision
       const couldRead = previousOperations && FULFILLMENT_READ_PERMISSIONS.some(permission => previousOperations.actor.capabilities.includes(permission))
@@ -288,6 +292,8 @@ export function StaffActionsPanel({
           denySession()
           return
         }
+        // A count receipt arrived after this read began. Its post-save refresh is already queued.
+        if (countRevision !== guestCountReadRevision.current) return
         operationsRef.current = nextOperations
         setOperations(nextOperations)
         const { paymentDue, refunds } = staffTableFinancialSummary(nextOperations.tables)
@@ -663,6 +669,24 @@ export function StaffActionsPanel({
       showNotice({ kind: 'error', message: actionError(error, '开台未完成，桌台状态已恢复') })
     } finally {
       setPendingAction(null)
+    }
+  }
+
+  const updateGuestCount = async (change: GuestCountChange, key: string) => {
+    const session = selectedTable?.activeSession
+    if (!session) throw new Error('请重新打开桌台')
+    try {
+      const confirmedCount = await api.updateGuestCount(session.id, change, key)
+      guestCountReadRevision.current += 1
+      setOperations(current => {
+        const active = current?.tables.find(table => table.id === change.tableId)?.activeSession
+        if (!current || current.actor.id !== operations?.actor.id || active?.id !== session.id ||
+            active.locationVersion !== session.locationVersion || active.guestCount !== session.guestCount) return current
+        return replaceTableSession(current, change.tableId, { ...active, guestCount: confirmedCount })
+      })
+      return confirmedCount
+    } finally {
+      void load(true)
     }
   }
 
@@ -1248,6 +1272,8 @@ export function StaffActionsPanel({
               onTransferTarget={setTransferTargetId}
               onTransferReason={setTransferReason}
               onRefreshSession={() => void load(true)}
+              refreshFailed={phase === 'error'}
+              onUpdateGuestCount={updateGuestCount}
               onOpen={() => void openTable()}
               onClose={() => void closeTable()}
               onCloseAfterCustomerLeft={() => void closeAfterCustomerLeft()}
@@ -1837,6 +1863,8 @@ interface TableActionSheetProps {
   onTransferTarget(value: string | null): void
   onTransferReason(value: string): void
   onRefreshSession(): void
+  refreshFailed: boolean
+  onUpdateGuestCount(change: GuestCountChange, key: string): Promise<number>
   onOpen(): void
   onClose(): void
   onCloseAfterCustomerLeft(): void
@@ -1939,7 +1967,86 @@ function TableActionSheet(props: TableActionSheetProps) {
             {table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
               <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyholeOpen size={17} /> 恢复顾客修改</button>
             )}
+            {table.activeSession.status === 'open' && hasPermission(props.permissions, 'table.open') &&
+              (table.assignedToActor || props.permissions.includes('table.view_all')) && (
+                <TableGuestCountEditor key={`${table.id}:${table.activeSession.id}:${table.activeSession.locationVersion ?? 0}`}
+                  tableId={table.id} session={table.activeSession} pending={props.pending} onSave={props.onUpdateGuestCount} />
+              )}
           </div>
+      )}
+      {table.activeSession && !sessionSyncing && (
+        <>
+          {props.refreshFailed && <p role="status" className="staff-actions-stale">现场数据刷新失败，显示上次确认的数据。</p>}
+          <details className="staff-table-more" open={moreOpen || props.transferTargetId !== null || props.closeConfirm || props.customerLeftConfirm} onToggle={event => setMoreOpen(event.currentTarget.open)}>
+            <summary>更多操作</summary>
+            <div className="staff-session-actions" role="group" aria-label="更多桌台操作">
+              {hasPermission(props.permissions, 'recommendation.staff.modify') && (
+                <button type="button" onClick={props.onRecommendation}><Sparkles size={17} /> 查看/调整推荐</button>
+              )}
+              {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
+                <button type="button" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>
+              )}
+              {hasPermission(props.permissions, 'table.transfer') ? (
+                <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
+              ) : <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>}
+              {hasPermission(props.permissions, 'table.participation.manage') && (
+                <button type="button" onClick={props.onParticipantMovement}><Users size={17} /> 人员拆并桌</button>
+              )}
+              {!table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
+                <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyhole size={17} /> 锁定顾客购物车</button>
+              )}
+              {!closeInPrimary && closeAction}
+              {props.closeIssue === null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+                <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
+                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
+                </button>
+              )}
+            </div>
+          </details>
+          {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
+          {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
+          {props.closeIssue !== null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
+            <section className="staff-turnover-exception" aria-label="顾客离店翻台处理">
+              <div>
+                <strong>顾客已离店？财务待跟进不阻断翻台</strong>
+                <span>释放本桌并取消未履约部分；付款、退款和对账仍由收银继续处理。</span>
+              </div>
+              <div className="staff-turnover-exception-actions">
+                {hasTableCollectionPermission(props.permissions) && (
+                  <button type="button" className="is-account" onClick={props.onPayment}><QrCode size={17} /> 查看桌账/收款</button>
+                )}
+                <button type="button" className="is-turnover" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
+                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '再次确认，立即翻台' : '顾客离店，立即翻台'}
+                </button>
+              </div>
+              {props.customerLeftConfirm && <button type="button" className="staff-turnover-exception-cancel" onClick={props.onCancelClose}>暂不翻台</button>}
+            </section>
+          )}
+          {props.closeConfirm && <p className="staff-close-issue">确认后核对付款和制作送达情况；全部处理完才会结束本桌。仍有未结事项时保留桌台。</p>}
+          {props.customerLeftConfirm && props.closeIssue === null && <p className="staff-close-issue">确认后释放桌台并取消未履约部分。未结付款、退款继续由收银跟进，不代表账务结清。</p>}
+          {(props.closeConfirm || (props.customerLeftConfirm && props.closeIssue === null)) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
+          {props.transferTargetId !== null && (
+            <div className="staff-transfer-targets" data-action-reveal>
+              <strong>选择空闲目标桌台</strong>
+              <div>
+                {availableTargets.map((candidate) => (
+                  <button
+                    type="button"
+                    className={props.transferTargetId === candidate.id ? 'is-active' : ''}
+                    key={candidate.id}
+                    onClick={() => props.onTransferTarget(candidate.id)}
+                  >{candidate.code}<small>{candidate.capacity}人</small></button>
+                ))}
+              </div>
+              {availableTargets.length === 0 && <p>当前没有可转入的空闲桌台。</p>}
+              {transferTarget&&<p>转至 {transferTarget.code} 后采用目标桌配置的低消；原款随桌次保留，不足部分提示顾客补足，余额不自动退款。</p>}
+              {transferNeedsReason && (
+                <label>加座说明<input value={props.transferReason} maxLength={1000} placeholder="说明加座及现场安全确认" onChange={(event) => props.onTransferReason(event.target.value)} /></label>
+              )}
+              <button className="staff-primary-action" type="button" onClick={props.onTransfer} disabled={props.pending || transferTarget === null}>确认转桌</button>
+            </div>
+          )}
+        </>
       )}
       {table.activeSession&&!sessionSyncing&&<StaffTableCreditPanel sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
       {table.activeSession&&!sessionSyncing&&(props.permissions.includes('table.view_all')||props.permissions.includes('order.create'))&&<TableMinimumSpendPanel key={table.activeSession.id} sessionId={table.activeSession.id} staffSessionId={props.staffSessionId} permissions={props.permissions}/>}
@@ -2003,75 +2110,6 @@ function TableActionSheet(props: TableActionSheetProps) {
         <div className="staff-open-session">
           <TableServicePanel compact key={`${table.id}:${table.activeSession?.id}`} tableId={table.id} staffSessionId={props.staffSessionId} canHandover={hasPermission(props.permissions, 'table.assignment.manage')}/>
           <p><strong>{table.activeSession.guestCount}人</strong><span>{table.activeSession.status === 'closing' ? '结台待完成，请先处理下方提示' : '本桌服务进行中'}</span></p>
-          {table.activeSession.guestCartWritesFrozen && <p className="staff-close-issue" role="status"><strong>顾客购物车已锁定：</strong>顾客仍可查看，服务人员核对完成后请恢复修改。</p>}
-          {props.closeIssue !== null && <p className="staff-close-issue" role="alert"><strong>暂不能结台：</strong>{props.closeIssue}</p>}
-          {props.closeIssue !== null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
-            <section className="staff-turnover-exception" aria-label="顾客离店翻台处理">
-              <div>
-                <strong>顾客已离店？财务待跟进不阻断翻台</strong>
-                <span>释放本桌并取消未履约部分；付款、退款和对账仍由收银继续处理。</span>
-              </div>
-              <div className="staff-turnover-exception-actions">
-                {hasTableCollectionPermission(props.permissions) && (
-                  <button type="button" className="is-account" onClick={props.onPayment}><QrCode size={17} /> 查看桌账/收款</button>
-                )}
-                <button type="button" className="is-turnover" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
-                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '再次确认，立即翻台' : '顾客离店，立即翻台'}
-                </button>
-              </div>
-              {props.customerLeftConfirm && <button type="button" className="staff-turnover-exception-cancel" onClick={props.onCancelClose}>暂不翻台</button>}
-            </section>
-          )}
-          <details className="staff-table-more" open={moreOpen || props.transferTargetId !== null || props.closeConfirm || props.customerLeftConfirm} onToggle={event => setMoreOpen(event.currentTarget.open)}>
-            <summary>更多操作 <small>赠送、推荐、转桌与结台</small></summary>
-            <div className="staff-session-actions" role="group" aria-label="更多桌台操作">
-              {hasPermission(props.permissions, 'recommendation.staff.modify') && (
-                <button type="button" onClick={props.onRecommendation}><Sparkles size={17} /> 查看/调整推荐</button>
-              )}
-              {hasPermission(props.permissions, 'order.create') && hasPermission(props.permissions, 'order.gift') && (
-                <button type="button" onClick={props.onGift}><Gift size={17} /> 赠送商品</button>
-              )}
-              {hasPermission(props.permissions, 'table.transfer') ? (
-                <button type="button" onClick={() => props.onTransferTarget(props.transferTargetId === null ? '' : null)}><ArrowRightLeft size={17} /> 转桌</button>
-              ) : <button type="button" onClick={() => props.onPermissionGuidance('table.transfer')}>转桌说明</button>}
-              {hasPermission(props.permissions, 'table.participation.manage') && (
-                <button type="button" onClick={props.onParticipantMovement}><Users size={17} /> 人员拆并桌</button>
-              )}
-              {!table.activeSession.guestCartWritesFrozen && hasPermission(props.permissions, 'guest.cart.freeze') && (
-                <button type="button" onClick={props.onGuestCartFreeze} disabled={props.pending}><LockKeyhole size={17} /> 锁定顾客购物车</button>
-              )}
-              {!closeInPrimary && closeAction}
-              {props.closeIssue === null && hasPermission(props.permissions, 'table.close') && hasPermission(props.permissions, 'table.turnover_unsettled') && (
-                <button type="button" className="is-danger" onClick={props.onCloseAfterCustomerLeft} disabled={props.pending}>
-                  {props.pending ? '正在处理…' : props.customerLeftConfirm ? '确认立即翻台' : '顾客离店，立即翻台'}
-                </button>
-              )}
-            </div>
-          </details>
-          {props.closeConfirm && <p className="staff-close-issue">确认后核对付款和制作送达情况；全部处理完才会结束本桌。仍有未结事项时保留桌台。</p>}
-          {props.customerLeftConfirm && props.closeIssue === null && <p className="staff-close-issue">确认后释放桌台并取消未履约部分。未结付款、退款继续由收银跟进，不代表账务结清。</p>}
-          {(props.closeConfirm || (props.customerLeftConfirm && props.closeIssue === null)) && <button type="button" className="staff-cancel-confirm" data-action-reveal onClick={props.onCancelClose}>取消关台</button>}
-          {props.transferTargetId !== null && (
-            <div className="staff-transfer-targets" data-action-reveal>
-              <strong>选择空闲目标桌台</strong>
-              <div>
-                {availableTargets.map((candidate) => (
-                  <button
-                    type="button"
-                    className={props.transferTargetId === candidate.id ? 'is-active' : ''}
-                    key={candidate.id}
-                    onClick={() => props.onTransferTarget(candidate.id)}
-                  >{candidate.code}<small>{candidate.capacity}人</small></button>
-                ))}
-              </div>
-              {availableTargets.length === 0 && <p>当前没有可转入的空闲桌台。</p>}
-              {transferTarget&&<p>转至 {transferTarget.code} 后采用目标桌配置的低消；原款随桌次保留，不足部分提示顾客补足，余额不自动退款。</p>}
-              {transferNeedsReason && (
-                <label>加座说明<input value={props.transferReason} maxLength={1000} placeholder="说明加座及现场安全确认" onChange={(event) => props.onTransferReason(event.target.value)} /></label>
-              )}
-              <button className="staff-primary-action" type="button" onClick={props.onTransfer} disabled={props.pending || transferTarget === null}>确认转桌</button>
-            </div>
-          )}
           {props.orderStatusPanel}
           {props.memberBenefitsPanel}
         </div>

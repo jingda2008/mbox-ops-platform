@@ -2,6 +2,7 @@ import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
 import {participantMovementHistory} from './participant-movement-history.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
+import { reauthorizingCommands } from './staff-authorized-command.js'
 import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
 import { registerNativeAssignmentSchedule } from './native-assignment-schedule.js'
@@ -279,6 +280,54 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
       guestProfileSnapshot: readOpenTableGuestProfileSnapshot(body),
     }))
     return reply.code(201).send(commandResponse(execution))
+  }))
+
+  app.post('/table-management/sessions/:tableSessionId/guest-count', async (request, reply) => handle(reply, async () => {
+    if (!options.nativeCommands) throw new Error('Table command executor unavailable')
+    const context = await authorizedContext(options, request)
+    const body = readObject(request.body)
+    const sessionId = readUuid(readParams(request).tableSessionId, '桌次')
+    const command = commandBase(request, context, body, '修改实际人数', {
+      tableId: readUuid(body.tableId, '桌台'),
+      locationVersion: readInteger(body.locationVersion, '桌台位置版本', 0, Number.MAX_SAFE_INTEGER),
+      expectedGuestCount: readInteger(body.expectedGuestCount, '原人数', 1, 200),
+      guestCount: readInteger(body.guestCount, '实际人数', 1, 200),
+      capacityOverrideReason: optionalString(body.capacityOverrideReason, '加座说明', 1000),
+    })
+    // A replay acknowledges the original edit. Another employee may have changed the count since.
+    let replayGuestCount: number | undefined
+    const result = await reauthorizingCommands(options.nativeCommands).execute<JsonObject>({
+      ...command, operationScope: 'table.guest_count.edit',
+      resultCodec: { encode: value => value, decode: value => value as JsonObject },
+      authorizeReplay: async tx => {
+        const { rows } = await tx.query<{ guest_count: number }>(`
+          SELECT guest_count FROM mbox.table_sessions
+          WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND table_id=$4 AND location_version=$5
+            AND status='open' AND mbox.can_edit_session_guest_count(id,$6)
+          FOR SHARE
+        `, [context.scope.tenantId, context.scope.storeId, sessionId, command.tableId, command.locationVersion, context.employeeId])
+        if (!rows[0]) throw new TableManagementConflictError('桌次已变化，请重新打开桌台')
+        replayGuestCount = rows[0].guest_count
+      },
+    }, async tx => {
+      const { rows } = await tx.query<{ business_date: string }>(
+        'SELECT mbox.edit_session_guest_count($1,$2,$3,$4,$5,$6,$7)::text AS business_date',
+        [sessionId, context.employeeId, command.tableId, command.locationVersion, command.expectedGuestCount,
+          command.guestCount, command.capacityOverrideReason],
+      )
+      const after = { guestCount: command.guestCount }
+      return { result: after, auditEvents: [{
+        actor: command.actor, action: 'table.guest_count.edit', objectType: 'table_session', objectId: sessionId,
+        businessDate: rows[0]!.business_date, beforeData: { guestCount: command.expectedGuestCount }, afterData: after,
+        reason: command.capacityOverrideReason ?? '现场修改实际人数',
+      }], outboxMessages: [] }
+    }, async tx => {
+      const { rows } = await tx.query<{ allowed: boolean }>('SELECT mbox.can_edit_session_guest_count($1,$2) AS allowed', [sessionId, context.employeeId])
+      if (!rows[0]?.allowed) throw new StaffAccessDeniedError('无权修改该桌人数')
+    })
+    return reply.send({ data: result.value, meta: {
+      replayed: result.replayed, currentGuestCount: replayGuestCount ?? result.value.guestCount,
+    } })
   }))
 
   app.post('/table-management/sessions/:tableSessionId/transfer', async (request, reply) => handle(reply, async () => {
@@ -807,6 +856,11 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  if (error instanceof Error && 'code' in error) {
+    if (error.code === 'P3171') return { status: 403, code: 'TABLE_PERMISSION_DENIED', message: error.message }
+    if (error.code === 'P3172') return { status: 409, code: 'TABLE_GUEST_COUNT_CHANGED', message: error.message }
+    if (error.code === 'P3173') return { status: 422, code: 'TABLE_GUEST_COUNT_INVALID', message: error.message }
+  }
   if(error instanceof ParticipantMovementReceiptMissingError)return{status:409,code:'TABLE_MOVEMENT_RECEIPT_UNAVAILABLE',message:error.message}
   if(error instanceof ParticipantMovementSealedError)return{status:409,code:'TABLE_MOVEMENT_REQUEST_SEALED',message:error.message,commitDisposition:'not_committed'}
   if(error instanceof TablePrepaymentError)return{status:409,code:error.code,message:error.message}

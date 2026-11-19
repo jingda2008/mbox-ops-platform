@@ -33,6 +33,52 @@ suite('table service ownership and employee-visible history',()=>{
   const handover=(sessionId:string,employeeId=reader,expectedRevision=0,key=randomUUID(),actor=manager)=>app.inject({method:'POST',url:`/table-service/sessions/${sessionId}/handover`,headers:{'x-test-employee':actor,'idempotency-key':key},payload:{employeeId,expectedRevision,reason:'晚班交接'}})
   return {scope,tableId,manager,server,reader,role,app,open,get,handover}
  }
+ it('edits the open visit headcount with scope, capacity, stale-write and replay checks', async () => {
+  const f = await fixture()
+  const visit = await f.open()
+  const path = `/table-management/sessions/${visit.id}/guest-count`
+  const original = { tableId: f.tableId, locationVersion: 0, expectedGuestCount: 2, guestCount: 5, capacityOverrideReason: '现场加座' }
+  const change = (patch: Record<string,unknown> = {}, key = randomUUID(), actor = f.manager) => f.app.inject({
+    method: 'POST', url: path, headers: { 'x-test-employee': actor, 'x-idempotency-key': key }, payload: { ...original, ...patch },
+  })
+  try {
+    expect((await change()).statusCode).toBe(403)
+    await admin.query(`INSERT INTO mbox.table_assignments(tenant_id,store_id,table_id,employee_id,role_id,assignment_type,starts_at,reason,created_by_employee_id)
+      VALUES($1,$2,$3,$4,$5,'primary','2020-01-01','负责本桌',$4)`, [f.scope.tenantId,f.scope.storeId,f.tableId,f.manager,f.role])
+    expect((await change({}, randomUUID(), f.reader)).statusCode).toBe(403)
+    expect((await change({ capacityOverrideReason: '' })).statusCode).toBe(422)
+    expect((await change({ locationVersion: 1 })).statusCode).toBe(409)
+    expect((await change({ guestCount: 0 })).statusCode).toBe(400)
+    const key = randomUUID()
+    const saved = await change({}, key)
+    expect(saved.statusCode, saved.body).toBe(200)
+    expect((await change({}, key)).json().meta.replayed).toBe(true)
+    const row = async () => (await admin.query('SELECT guest_count,guest_profile_snapshot,capacity_override_reason,capacity_overridden_by_employee_id FROM mbox.table_sessions WHERE id=$1',[visit.id])).rows[0]
+    expect(await row()).toMatchObject({guest_count:5,guest_profile_snapshot:{extraSeatCount:1},capacity_override_reason:'现场加座',capacity_overridden_by_employee_id:f.manager})
+    const audits = await admin.query("SELECT before_snapshot,after_snapshot,actor_employee_id FROM mbox.audit_events WHERE object_id=$1 AND action='table.guest_count.edit'",[visit.id])
+    expect(audits.rows).toEqual([{before_snapshot:{guestCount:2},after_snapshot:{guestCount:5},actor_employee_id:f.manager}])
+    const corrections = await Promise.all([3,4].map(guestCount => change({expectedGuestCount:5,guestCount,capacityOverrideReason:null})))
+    expect(corrections.map(response => response.statusCode).sort()).toEqual([200,409])
+    expect(await row()).toMatchObject({guest_profile_snapshot:{extraSeatCount:0},capacity_override_reason:null,capacity_overridden_by_employee_id:null})
+    const correctedCount = (await row()).guest_count
+    const recovered = await change({}, key)
+    expect(recovered.json()).toEqual({data:{guestCount:5},meta:{replayed:true,currentGuestCount:correctedCount}})
+    expect((await row()).guest_count).toBe(correctedCount)
+    const eventCount = await admin.query("SELECT count(*)::int AS count FROM mbox.audit_events WHERE object_id=$1 AND action='table.guest_count.edit'", [visit.id])
+    expect(eventCount.rows[0].count).toBe(2)
+    expect((await change({expectedGuestCount:correctedCount,guestCount:2,capacityOverrideReason:null})).statusCode).toBe(200)
+    const freshEdit = await change()
+    expect(freshEdit.json()).toEqual({data:{guestCount:5},meta:{replayed:false,currentGuestCount:5}})
+    const edits = await admin.query("SELECT before_snapshot,after_snapshot FROM mbox.audit_events WHERE object_id=$1 AND action='table.guest_count.edit' ORDER BY occurred_at",[visit.id])
+    expect(edits.rows.map(e => [e.before_snapshot.guestCount,e.after_snapshot.guestCount])).toEqual([
+      [2,5],[5,correctedCount],[correctedCount,2],[2,5],
+    ])
+    await admin.query("UPDATE mbox.table_sessions SET status='closing' WHERE id=$1",[visit.id])
+    expect((await change({expectedGuestCount:(await row()).guest_count})).statusCode).toBe(409)
+    await admin.query('DELETE FROM mbox.role_permission_assignments WHERE role_id=$1',[f.role])
+    expect((await change({}, key)).statusCode).toBe(403)
+  } finally { await f.app.close() }
+ })
  it('requires a named primary through both open repositories and rejects inactive/cross-store selections',async()=>{
   const f=await fixture(),other=await fixture()
   for(const primary of [undefined,other.server])await expect(txs.run(f.scope,tx=>new TableManagementRepository(tx).open({tableId:f.tableId,publicId:randomUUID(),guestCount:2,businessDate:'2026-10-18',openedByEmployeeId:f.manager,primaryServiceEmployeeId:primary}))).rejects.toThrow(/主服务员/)

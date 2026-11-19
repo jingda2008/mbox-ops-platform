@@ -1,10 +1,12 @@
+import { ChannelRuleSummary } from './ChannelRuleSummary'
+import type { ChannelRule } from '../shared/channel-distribution'
 import {channelSwitchState,type ChannelSwitchDirectory} from './channel-operation-state'
 import {channelStoreLimitsSchema} from '../shared/channel-distribution'
 import {useEffect,useMemo,useRef,useState} from 'react'
 import type {NormalizedApiClient,StaffAuthView} from '../normalized-api'
 import {DurableStaffCommand} from './durable-staff-command'
 import {beijingDateTimeIso} from './membership-workflow'
-type Data={partners:(ChannelSwitchDirectory['partners'][number]&{promoterName:string})[];campaigns:(ChannelSwitchDirectory['campaigns'][number]&{title:string})[];batches:(ChannelSwitchDirectory['batches'][number]&{offerCode:string})[];products:{id:string;name:string}[];continuity:{tableSessionId:string;tableName:string;previousVisitId:string;customerId:string}[];claims:{id:string;title:string;status:string}[];employees:{id:string;name:string}[];limits:{claimLimit:number;capacityLimit:number;costLimitMinor:string}|null}
+type Data={partners:(ChannelSwitchDirectory['partners'][number]&{promoterName:string})[];campaigns:(ChannelSwitchDirectory['campaigns'][number]&{title:string})[];batches:(ChannelSwitchDirectory['batches'][number]&{offerCode:string;rule?:ChannelRule;contract?:{version:string;terms:string;settlementSubject:string}})[];products:{id:string;name:string}[];continuity:{tableSessionId:string;tableName:string;previousVisitId:string;customerId:string}[];claims:{id:string;title:string;status:string}[];employees:{id:string;name:string}[];limits:{claimLimit:number;capacityLimit:number;costLimitMinor:string}|null}
 export type ChannelOperationTarget={action:string;id:string;sequence:number}
 export function ChannelOperationsPanel({api,auth,data,onRefresh,target}:{api:NormalizedApiClient;auth:StaffAuthView;data:Data;onRefresh:()=>Promise<void>;target?:ChannelOperationTarget}){
  const panel=useRef<HTMLDetailsElement>(null)
@@ -26,6 +28,7 @@ export function ChannelOperationsPanel({api,auth,data,onRefresh,target}:{api:Nor
  const ids=action==='publish'?data.batches.map(x=>({id:x.id,label:x.offerCode})):action==='campaign'?data.campaigns.map(x=>({id:x.id,label:x.title})):action==='promoter'?data.partners.map(x=>({id:x.promoterId,label:x.promoterName})):data.claims.map(x=>({id:x.id,label:`${x.title} · ${({available:'可使用',active:'已绑定',fulfilled:'已兑现',expired:'已到期',revoked:'已撤销'} as Record<string,string>)[x.status]??x.status} · ${x.id.slice(-8)}`}))
  const currentId=selectedId || (ids[0]?.id??'')
  const switchAction=['publish','campaign','promoter'].includes(action),switchState=channelSwitchState(action,currentId,data)
+ const approvalBatch=action==='publish'?data.batches.find(b=>b.id===currentId):undefined
  const formKey=JSON.stringify([auth.session.id,action,currentId,switchState])
  if(!manage&&!correct)return null
  return <details ref={panel}><summary>营业配置、发券审批与异常处理</summary>
@@ -33,12 +36,13 @@ export function ChannelOperationsPanel({api,auth,data,onRefresh,target}:{api:Nor
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}{pending&&<button type="button" disabled={busy} onClick={()=>void run()}>恢复原操作</button>}
   <form key={formKey} onSubmit={form}><fieldset disabled={busy||pending} className="gift-form-grid"><label>办理事项<select value={action} onChange={e=>{setAction(e.target.value);setSelectedId('');setNotice('');setError('')}}>{actions.map(([v,l])=><option value={v} key={v}>{l}</option>)}</select></label>
    {action==='limits'?<><label>全店累计发券数<input name="claimLimit" type="number" min="0" max="1000000" required/></label><label>全店承诺份数<input name="capacityLimit" type="number" min="0" max="1000000" required/></label><label>全店优惠成本上限（元）<input name="cost" type="number" min="0" step="0.01" required/></label></>:action==='continuity'?<><label>近期重开候选（需全桌查看权限）<select name="candidate" required>{data.continuity.map((c,i)=><option key={i} value={i}>{c.tableName} · 客组尾号 {c.previousVisitId.slice(-8)} · 顾客尾号 {c.customerId.slice(-8)}</option>)}</select></label><label>现场核对结论<select name="mode"><option value="continue">同批客人续台，沿用原来源和次数</option><option value="new">已真实离店后重新到访，记录新客组依据</option></select></label></>:action==='correct-orders'?<><label>限定原消费单号（从原账单复制，逗号分隔）<textarea name="orderIds" required/></label><label>更正到原推广批次<select name="batchId" required>{data.batches.map(b=><option key={b.id} value={b.id}>{b.offerCode}</option>)}</select></label></>:<label>原记录<select name="id" required value={currentId} onChange={e=>{setSelectedId(e.target.value);setNotice('');setError('')}}>{currentId&&!ids.some(x=>x.id===currentId)&&<option value={currentId}>原记录未读回，请刷新核对</option>}{ids.map(x=><option key={x.id} value={x.id}>{x.label}</option>)}</select></label>}
+   {action==='publish'&&<section className="channel-approval-rule" aria-label="待办理批次规则"><h4>本次办理：{approvalBatch?.offerCode??'批次待核对'}</h4>{approvalBatch?.rule?<ChannelRuleSummary rule={approvalBatch.rule} contract={approvalBatch.contract} products={data.products} saved/>:<p role="alert">本批完整规则未读取，请刷新核对后办理。</p>}</section>}
    {switchAction&&!switchState&&<p role="alert">当前开关状态未完整读取，请刷新周边店合作记录后再操作。</p>}
    {switchAction&&<label><input name="enabled" type="checkbox" defaultChecked={switchState?.enabled===true} disabled={!switchState}/>确认启用（取消勾选则停用新增）</label>}
    {action==='campaign'&&<><label><input name="staff" type="checkbox" defaultChecked={switchState?.staff===true} disabled={!switchState}/>A 员工代办新领取</label><label><input name="self" type="checkbox" defaultChecked={switchState?.self===true} disabled={!switchState}/>B 顾客自行新领取</label></>}
    {action==='promoter'&&<><label><input name="confirm" type="checkbox" defaultChecked={switchState?.confirm===true} disabled={!switchState}/>授权本人确认结算单</label><p>官网合作账号仅查看本人推荐的匿名汇总。</p><label>酒吧固定联系人<select name="contactEmployeeId" required defaultValue={String(switchState?.contactEmployeeId??'')}><option value="">请选择联系人</option>{data.employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></label></>}
    {action==='extend'&&<label>新的使用截止（北京时间，最多延至当前7天内）<input name="until" type="datetime-local" required/></label>}
    {action==='replace-gift'&&<><label>替换商品<select name="productId" required>{data.products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>份数<input name="quantity" type="number" min="1" max="100" required/></label><label>过期券的新截止（北京，未过期可留空）<input name="until" type="datetime-local"/></label><label>顾客同意的时间及依据<input name="consent" required minLength={2}/></label></>}
-   <label>原因与证据编号<input name="reason" required minLength={2} maxLength={500}/></label><button disabled={switchAction&&!switchState}>确认办理</button></fieldset></form>
+   <label>原因与证据编号<input name="reason" required minLength={2} maxLength={500}/></label><button disabled={(switchAction&&!switchState)||(action==='publish'&&!approvalBatch?.rule)}>确认办理</button></fieldset></form>
  </details>
 }

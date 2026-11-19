@@ -47,7 +47,7 @@ import { channelDistributionApiPlugin } from './channel-distribution-api.js'
 import { ChannelPartnerRepository } from './channel-partner-repository.js'
 import { assertRuntimeDatabasePool } from './runtime-database-identity.js'
 import { grantFixtureStaffPermissions } from './staff-permission.test-helper.js'
-import type { ChannelRule } from '../../src/shared/channel-distribution.js'
+import { channelRuleSchema, type ChannelRule } from '../../src/shared/channel-distribution.js'
 
 const databaseUrl = process.env.TEST_NORMALIZED_DATABASE_URL, runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
 const integration = databaseUrl && runtimeUrl ? describe : describe.skip
@@ -1292,6 +1292,36 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(snapshot.entry).toEqual({appId:miniCode.appId,page:'pages/channel-coupons/index',scene:`CH_${b.code}`,environment:'release'})
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(0)
   })
+  it('regenerates pre-scope posters while keeping frozen product names and the original coupon',async()=>{
+    const b=await batch({offer:{kind:'discount',discountBps:1500,maximumMinor:2000}})
+    const row=(await admin.query(`SELECT b.promoter_id,b.offer_code AS code,b.public_token AS token,b.rule_snapshot AS rule,p.name AS source,
+      b.accepting_claims AND c.accepting_claims AND r.status='active' AND p.status='active' AS accepting
+      FROM mbox.channel_batches b JOIN mbox.channel_campaigns c ON c.id=b.campaign_id JOIN mbox.channel_promoters r ON r.id=b.promoter_id JOIN mbox.channel_partners p ON p.id=b.partner_id WHERE b.id=$1`,[b.id])).rows[0]
+    row.rule=channelRuleSchema.parse(row.rule)
+    const oldSnapshot={template:'channel-poster-official-v2',...row,entry:{appId:miniCode.appId,page:'pages/channel-coupons/index',scene:`CH_${b.code}`,environment:'release'}}
+    const oldKey=createHash('sha256').update(JSON.stringify(oldSnapshot)).digest('hex'),oldPng=await sharp({create:{width:1,height:1,channels:3,background:'#ffffff'}}).png().toBuffer()
+    await admin.query('INSERT INTO mbox.channel_poster_versions(tenant_id,store_id,batch_id,artifact_key,sha256,png,snapshot) VALUES($1,$2,$3,$4,$5,$6,$7)',[...args,b.id,oldKey,createHash('sha256').update(oldPng).digest('hex'),oldPng,oldSnapshot])
+    const original=(await admin.query('SELECT rule_snapshot FROM mbox.channel_batches WHERE id=$1',[b.id])).rows[0].rule_snapshot
+    await admin.query("UPDATE mbox.products SET name='当前已改名商品' WHERE id=$1",[product])
+    try{
+      const first=await app.inject({method:'GET',url:`/staff/channel/poster/${b.id}?format=data`});expect(first.statusCode,first.body).toBe(200);expect(first.json().data.artifactKey).not.toBe(oldKey)
+      const artifact=(await admin.query('SELECT snapshot FROM mbox.channel_poster_versions WHERE batch_id=$1 AND artifact_key=$2',[b.id,first.json().data.artifactKey])).rows[0].snapshot
+      expect(artifact.template).toBe('channel-poster-official-v3-scope');expect(artifact.rule.eligibleProductNames).toEqual(original.eligibleProductNames)
+      const directory=await app.inject({method:'GET',url:`/staff/channel/directory?batchId=${b.id}`});expect(directory.json().data.batches.find((x:{id:string})=>x.id===b.id).rule).toEqual(original)
+      const again=await app.inject({method:'GET',url:`/staff/channel/poster/${b.id}?format=data`});expect(again.json().data).toEqual(first.json().data)
+      expect((await admin.query('SELECT count(*)::int n FROM mbox.channel_poster_versions WHERE batch_id=$1',[b.id])).rows[0].n).toBe(2)
+      expect((await admin.query('SELECT rule_snapshot FROM mbox.channel_batches WHERE id=$1',[b.id])).rows[0].rule_snapshot).toEqual(original)
+    }finally{await admin.query("UPDATE mbox.products SET name='推荐饮品' WHERE id=$1",[product])}
+  })
+  it('fills missing legacy display labels only in the poster snapshot without altering the saved scope',async()=>{
+    const b=await batch(),legacy=randomUUID()
+    await admin.query(`INSERT INTO mbox.channel_batches(id,tenant_id,store_id,campaign_id,partner_id,promoter_id,offer_code,public_token,rule_snapshot,contract_snapshot)
+      SELECT $2,tenant_id,store_id,campaign_id,partner_id,promoter_id,'LEGACYAB2345',encode(gen_random_bytes(32),'hex'),rule_snapshot-'eligibleProductNames',contract_snapshot FROM mbox.channel_batches WHERE id=$1`,[b.id,legacy])
+    const poster=await app.inject({method:'GET',url:`/staff/channel/poster/${legacy}?format=data`});expect(poster.statusCode,poster.body).toBe(200)
+    const saved=(await admin.query('SELECT snapshot FROM mbox.channel_poster_versions WHERE batch_id=$1',[legacy])).rows[0].snapshot
+    expect(saved.rule.eligibleProductIds).toEqual([product]);expect(saved.rule.eligibleProductNames).toEqual([{id:product,name:'推荐饮品'}])
+    expect((await admin.query('SELECT rule_snapshot FROM mbox.channel_batches WHERE id=$1',[legacy])).rows[0].rule_snapshot).not.toHaveProperty('eligibleProductNames')
+  })
   it('fails closed for an unreleased page or invalid platform image without archiving a fake QR', async () => {
     const b=await batch()
     miniCode.render.mockRejectedValueOnce(new WechatMiniProgramCodeError('微信小程序码场景或页面未获平台接受','WECHAT_MINI_CODE_CONTRACT_INVALID'))
@@ -2254,6 +2284,25 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(selfApproval.statusCode).toBe(403)
     expect((await admin.query('SELECT count(*)::int n FROM mbox.channel_claims WHERE tenant_id=$1 AND store_id=$2',args)).rows[0].n).toBe(before)
     expect((await admin.query('SELECT rule_snapshot FROM mbox.channel_batches WHERE id=$1',[source.id])).rows[0].rule_snapshot.title).toBe('复制来源')
+  })
+  it('reuses a configuration for a new merchant without copying source identity, approval or consumed quota',async()=>{
+    const seed=await batch()
+    const source={...await runner.run(scope,tx=>new ChannelDistributionRepository(tx).createBatch({campaignId:seed.campaign,promoterId:promoter,rule,contract:{version:'v1',settlementSubject:'原商家公司',terms:'适用商品净实收计佣'}})),campaign:seed.campaign}
+    const post=(path:string,payload:unknown,key=`channel-${randomUUID()}`)=>app.inject({method:'POST',url:`/staff/channel/${path}`,headers:{'idempotency-key':key},payload})
+    const partnerReply=await post('partner',{name:'新合作茶馆',settlementSubject:'茶馆结算公司',promoterName:'茶馆店长',reason:'复用优惠演练'})
+    expect(partnerReply.statusCode,partnerReply.body).toBe(200)
+    const target=partnerReply.json().data
+    const before=(await admin.query('SELECT rule_snapshot,contract_snapshot,promoter_id,partner_id,offer_code,public_token FROM mbox.channel_batches WHERE id=$1',[source.id])).rows[0]
+    const read=await app.inject({url:`/staff/channel/batch-template/${promoter}`});expect(read.statusCode,read.body).toBe(200)
+    const template=read.json().data,key=`channel-${randomUUID()}`
+    const body={promoterId:target.promoterId,campaignId:template.campaignId,rule:{...template.rule,title:'新商家沿用方案'},contract:{...template.contract,settlementSubject:'茶馆结算公司'},reason:'确认条款适用新商家'}
+    const result=await post('batch',body,key);expect(result.statusCode,result.body).toBe(200)
+    const replay=await post('batch',body,key);expect(replay.json().data.id).toBe(result.json().data.id)
+    const saved=(await admin.query('SELECT promoter_id,partner_id,campaign_id,contract_snapshot,offer_code,public_token,accepting_claims,approved_by FROM mbox.channel_batches WHERE id=$1',[result.json().data.id])).rows[0]
+    expect(saved.promoter_id).toBe(target.promoterId);expect(saved.partner_id).toBe(target.id);expect(saved.campaign_id).toBe(source.campaign)
+    expect(saved.contract_snapshot.settlementSubject).toBe('茶馆结算公司');expect(saved.accepting_claims).toBe(false);expect(saved.approved_by).toBeNull();expect((await admin.query('SELECT count(*)::int n FROM mbox.channel_claims WHERE batch_id=$1',[result.json().data.id])).rows[0].n).toBe(0)
+    expect(saved.offer_code).not.toBe(before.offer_code);expect(saved.public_token).not.toBe(before.public_token)
+    expect((await admin.query('SELECT rule_snapshot,contract_snapshot,promoter_id,partner_id,offer_code,public_token FROM mbox.channel_batches WHERE id=$1',[source.id])).rows[0]).toEqual(before)
   })
   it('keeps the selected batch and its source in the directory beyond the recent window, with exact followup linkage',async()=>{
     const b=await batch()

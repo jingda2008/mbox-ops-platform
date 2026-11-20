@@ -118,6 +118,12 @@ describe('channel shared authority policy',()=>{
     expect(channelManagementSchemas.followup.safeParse({promoterId:rule.eligibleProductIds[0],batchId:null,kind:'fake-sent',note:'收到',nextContactAt:null}).success).toBe(false)
   })
 
+  it.each(['sent','received','feedback','contact'])('requires an offer batch for delivery evidence but permits general follow-up: %s',kind=>{
+    const value={promoterId:rule.eligibleProductIds[0],batchId:null,kind,note:'演示跟进',nextContactAt:null}
+    expect(channelManagementSchemas.followup.safeParse(value).success).toBe(['feedback','contact'].includes(kind))
+    expect(channelManagementSchemas.followup.safeParse({...value,batchId:rule.eligibleProductIds[0]}).success).toBe(true)
+  })
+
   it('defaults missing stacking configuration to off with no total cap',()=>{
     const {allowStacking:_allow,visitDiscountCapMinor:_cap,...legacy}=rule
     expect(channelRuleSchema.parse(legacy)).toMatchObject({allowStacking:false,visitDiscountCapMinor:null})

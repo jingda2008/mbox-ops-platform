@@ -1,7 +1,7 @@
 {
   "name": "@mbox/ops-platform",
   "private": true,
-  "version": "1.0.0-rc.301",
+  "version": "1.0.0-rc.302",
   "type": "module",
   "packageManager": "npm@11.12.1",
   "engines": {
@@ -32,6 +32,7 @@
     "acceptance:normalized:load": "node scripts/normalized-load-acceptance.mjs",
     "acceptance:normalized:http": "tsx scripts/run-normalized-http-acceptance.ts",
     "test:e2e:normalized": "playwright test --config playwright.normalized.config.ts",
+    "test:channel-ui": "node scripts/channel-ui-acceptance.mjs",
     "test:channel-config-ui": "node scripts/channel-config-ui-acceptance.mjs",
     "qr:generate:normalized": "tsx server/normalized/generate-table-qrs.ts",
     "qr:render:wechat-mini": "tsx server/normalized/render-wechat-table-mini-codes.ts",

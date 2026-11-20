@@ -6,7 +6,7 @@ import { menuCheckoutPricing } from '../../src/components/menu-channel-pricing.j
 import { ItemQuantityFulfillmentRepository } from './item-quantity-fulfillment-repository.js'
 import { readCheckoutPrintSummary } from './checkout-print-summary.js'
 import { createRequire } from 'node:module'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { inviteChannelWeb, hashChannelWebToken } from './channel-web-auth.js'
 import { channelAnonymousVisit } from './channel-partner-repository.js'
@@ -101,11 +101,11 @@ integration('channel distribution real PostgreSQL authority', () => {
     if (verified) await admin.query(`INSERT INTO mbox.customer_identities(tenant_id,store_id,customer_id,identity_kind,identity_hash) VALUES($1,$2,$3::uuid,'wechat',encode(digest($3::text,'sha256'),'hex'))`, [...args, id])
     return id
   }
-  async function batch(overrides: Partial<ChannelRule> = {}, limits = { claim: 100, capacity: 100, cost: 1000000 }) {
+  async function batch(overrides: Partial<ChannelRule> = {}, limits = { claim: 100, capacity: 100, cost: 1000000 }, targetPromoter = promoter) {
     const campaign = randomUUID()
     await admin.query(`INSERT INTO mbox.channel_campaigns(id,tenant_id,store_id,title,claim_limit,capacity_limit,cost_limit_minor,accepting_claims,staff_entry_enabled,self_entry_enabled)
       VALUES($3,$1,$2,'test campaign',$4,$5,$6,true,true,true)`, [...args, campaign, limits.claim, limits.capacity, limits.cost])
-    const value = await runner.run(scope, tx => new ChannelDistributionRepository(tx).createBatch({ campaignId: campaign, promoterId: promoter, rule: { ...rule, ...overrides }, contract: { version: 'test1' } }))
+    const value = await runner.run(scope, tx => new ChannelDistributionRepository(tx).createBatch({ campaignId: campaign, promoterId: targetPromoter, rule: { ...rule, ...overrides }, contract: { version: 'test1' } }))
     await admin.query(`UPDATE mbox.channel_batches SET accepting_claims=true WHERE id=$1`, [value.id])
     return { id: String(value.id), code: String(value.offerCode), token: String(value.publicToken), campaign }
   }
@@ -679,7 +679,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     }finally{await guest.close()}
   }, 30_000)
   const reviewer=randomUUID()
-  it.each([false,true])('closes the original commerce, cash, quantity and refund flow with channel attribution=%s',async withChannel=>{
+  it.each([false,true])('closes self claim, staff binding, commerce, transfer, refund and commission settlement with channel attribution=%s',async withChannel=>{
     const approver=randomUUID(),cid=await customer(),session=await table([cid])
     await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3::uuid,$1,$2,$3::text,'闭环独立复核')",[...args,approver])
     // New roles already receive selected baseline permissions from migrations.
@@ -698,10 +698,38 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) VALUES($1,$2,$3,'refund.approve',100000,'CNY')",[...args,approvalRole])
     await admin.query("UPDATE mbox.products SET inventory_control_mode='not_managed' WHERE id=$1",[product])
     const meta=(actor=employee)=>({scope,actor:{type:'employee' as const,employeeId:actor},businessDate:'2026-11-12',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
-    let visitId:string|undefined,quoteId:string|undefined
+    let visitId:string|undefined,quoteId:string|undefined,claimId='',batchId='',demoPromoter='',demoPartner=''
+    let miniPage:any,miniClient:any
+    const evidence:Record<string,unknown>={isolated:true,realFunds:false,stages:[]}
+    if(process.env.CHANNEL_CLOSURE_DEMO_DIR)mkdirSync(process.env.CHANNEL_CLOSURE_DEMO_DIR,{recursive:true})
+    const stage=(name:string,data:unknown)=>{(evidence.stages as unknown[]).push({name,data});if(process.env.CHANNEL_CLOSURE_DEMO_DIR)writeFileSync(process.env.CHANNEL_CLOSURE_DEMO_DIR+'/lifecycle-progress.json',JSON.stringify(evidence,null,2))}
     if(withChannel){
-      const b=await batch({minimumMinor:0,observationDays:0}),claim=await issue(b.code,cid)
-      visitId=(await activate(claim.claimId,cid,session)).visitId!
+      demoPartner=randomUUID();demoPromoter=randomUUID()
+      await admin.query("INSERT INTO mbox.channel_partners(id,tenant_id,store_id,name,settlement_subject) VALUES($3,$1,$2,'演示闭环茶馆','演示茶馆公司')",[...args,demoPartner])
+      await admin.query("INSERT INTO mbox.channel_promoters(id,tenant_id,store_id,partner_id,name,can_confirm_statement) VALUES($3,$1,$2,$4,'演示茶馆店长',true)",[...args,demoPromoter,demoPartner])
+      const b=await batch({minimumMinor:0,observationDays:0},undefined,demoPromoter);batchId=b.id
+      selfCustomer=cid
+      const memberNo='MBX'+cid.replaceAll('-','').toUpperCase()
+      await admin.query('INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,$4)',[...args,cid,memberNo])
+      const {liveMiniHarness}=createRequire(import.meta.url)('../../scripts/miniprogram-live-contract-harness.mjs')
+      miniClient=liveMiniHarness('miniprogram',async(call:any)=>{
+        const reply=await app.inject({method:call.method,url:call.path.replace(/^\/api/,'')+call.query,headers:call.headers,...(call.method==='GET'?{}:{payload:call.data})})
+        return{status:reply.statusCode,data:reply.json()}
+      })
+      vm.runInNewContext(readFileSync(new URL('../../miniprogram/pages/channel-coupons/index.js',import.meta.url),'utf8'),{
+        Page:(value:unknown)=>{miniPage=value},wx:miniClient.runtime,Date,getApp:()=>({globalData:{}}),setTimeout:()=>1,clearTimeout:()=>{},
+        require:(path:string)=>miniClient.load(miniClient.root+'/'+path.replace('../../','')),
+      })
+      miniPage.data=structuredClone(miniPage.data);miniPage.setData=(patch:object)=>Object.assign(miniPage.data,patch)
+      miniPage.onLoad({code:b.code});await miniPage.onShow();await miniPage.claim()
+      expect(miniPage.data.error).toBe('');claimId=miniPage.data.coupons[0].id
+      expect(miniPage.data.coupons[0].status).toBe('available');stage('本人小程序领券',miniPage.data.coupons)
+      const bind={method:'POST' as const,url:'/staff/channel/activate',headers:{'idempotency-key':'channel-'+randomUUID()},payload:{code:b.code,memberCode:memberNo,tableSessionId:session,claimId}}
+      const preview=await app.inject({...bind,url:'/staff/channel/preview'});expect(preview.statusCode,preview.body).toBe(200);expect(preview.json().data.claims[0].id).toBe(claimId)
+      expect((await admin.query('SELECT c.customer_id FROM mbox.channel_claims c JOIN mbox.customer_memberships m ON m.customer_id=c.customer_id WHERE c.id=$1 AND m.member_no=$2',[claimId,memberNo])).rows[0].customer_id).toBe(cid)
+      const result=await app.inject(bind);expect(result.statusCode,result.body).toBe(200);visitId=result.json().data.visitId
+      expect((await app.inject({...bind,headers:{...bind.headers,'x-channel-recovery':'1'}})).json().meta.replayed).toBe(true)
+      stage('员工复用原券绑定本桌',result.json())
       quoteId=(await prepare(session)).id
     }
     const commands=new NormalizedCommandExecutor(runner),commerce=new CommerceCommandService(commands,new PostgresPricingAuthority())
@@ -731,9 +759,20 @@ integration('channel distribution real PostgreSQL authority', () => {
       expect((await production.deliver(delivery)).replayed).toBe(true)
     })
     if(visitId)expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))).toMatchObject({basis:paid,target:paid/10,frozen:true,reasons:expect.arrayContaining(['客组尚未结束'])})
+    if(withChannel){
+      const transfer=await moveRequest(session,await emptyMovementTable(),'whole_table_transfer')
+      const moved=await app.inject(transfer);expect(moved.statusCode,moved.body).toBe(200)
+      expect((await app.inject(transfer)).json().meta.replayed).toBe(true)
+      const tableState=await app.inject({method:'GET',url:'/staff/channel/table/'+session})
+      expect(tableState.statusCode,tableState.body).toBe(200)
+      expect(tableState.json().data.activations).toHaveLength(1)
+      expect(tableState.json().data.activations[0]).toMatchObject({claimId,sourceLabel:expect.stringContaining('演示闭环茶馆')})
+      stage('转桌后原券与来源不变',tableState.json())
+    }
     const refund=await money.requestRefund({...meta(),paymentId:payment.value.id,publicId:randomUUID(),purpose:'service_compensation',reason:'隔离服务补偿',allocations:[{orderItemId:order.items[0]!.id,amountMinor:2000}]})
     await money.approveRefund({...meta(approver),refundId:refund.value.id,decisionReason:'隔离独立复核'})
     await money.beginRefundExecution({...meta(approver),refundId:refund.value.id})
+    if(visitId)expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))).toMatchObject({frozen:true,reasons:expect.arrayContaining(['退款待核实'])})
     const refundCommand={...meta(approver),refundId:refund.value.id,succeeded:true,receiptReference:randomUUID()}
     expect((await money.recordManualRefundResult(refundCommand)).value.status).toBe('succeeded')
     expect((await money.recordManualRefundResult(refundCommand)).replayed).toBe(true)
@@ -763,9 +802,76 @@ integration('channel distribution real PostgreSQL authority', () => {
       expect(await runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visitId!))).toMatchObject({basis:paid-2000,target:(paid-2000)/10,frozen:false,deltaMinor:0})
       expect((await admin.query('SELECT closed_at FROM mbox.channel_visits WHERE id=$1',[visitId])).rows[0].closed_at).not.toBeNull()
     }
+    if(visitId){
+      await grant(employee,['channel.settle']);await grant(approver,['channel.settle'])
+      const peer=Fastify()
+      await peer.register(channelDistributionApiPlugin,{transactions:runner,commands,resolveSelfContext:async()=>{throw Error('unused')},resolveGuestContext:async()=>{throw Error('unused')},resolveStaffContext:async()=>({scope,employeeId:approver,businessDate:'2026-11-12'})})
+      const finance=async(server:FastifyInstance,payload:Record<string,unknown>,status=200)=>{
+        const request={method:'POST' as const,url:'/staff/channel/finance',headers:{'idempotency-key':'channel-'+randomUUID()},payload:{...payload,reason:'隔离演示，不发生真实转账'}}
+        const result=await server.inject(request);expect(result.statusCode,result.body).toBe(status)
+        if(status===200){const retry=await server.inject({...request,headers:{...request.headers,'x-channel-recovery':'1'}});expect(retry.json().meta.replayed).toBe(true);expect(retry.json().data).toEqual(result.json().data)}
+        return result.json().data
+      }
+      try{
+        const account=await finance(app,{action:'account',partnerId:demoPartner,reference:'DEMO-ACCOUNT-'+randomUUID()})
+        await finance(app,{action:'verify-account',id:account.id},403)
+        await finance(peer,{action:'verify-account',id:account.id})
+        const statement=await finance(app,{action:'statement',promoterId:demoPromoter,accountId:account.id})
+        expect(Number(statement.amountMinor)).toBe(700)
+        const headers=await webSession(demoPromoter)
+        const dashboard=await app.inject({method:'GET',url:'/cooperation/partner',headers})
+        expect(dashboard.statusCode,dashboard.body).toBe(200)
+        expect(dashboard.json().data.balance).toMatchObject({accruedMinor:'700',paidMinor:'0',balanceMinor:'700'})
+        stage('退款20元后应计佣金7元',dashboard.json())
+        // Drive the shipped partner browser UI into the real HTTP/PG handlers.
+        if(process.env.CHANNEL_CLOSURE_DEMO_DIR){
+          const {chromium}=await import('playwright'),browser=await chromium.launch({headless:true})
+          try{
+            const page=await browser.newPage({viewport:{width:390,height:844},locale:'zh-CN',timezoneId:'Asia/Shanghai'}),errors:string[]=[]
+            page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(e.message))
+            await page.route('http://localhost/**',async route=>{
+              const request=route.request(),url=new URL(request.url())
+              if(url.pathname.startsWith('/cooperation/api/')){
+                const reply=await app.inject({method:request.method() as 'GET'|'POST',url:url.pathname.replace('/api/','/')+url.search,headers:{...request.headers(),...headers,host:'localhost',origin:'https://www.shmbox.com','x-channel-web':'1'},...(request.method()==='POST'?{payload:request.postDataJSON()}:{})})
+                return route.fulfill({status:reply.statusCode,contentType:'application/json',body:reply.body})
+              }
+              const file=url.pathname==='/cooperation/'?'index.html':url.pathname.split('/').at(-1)!
+              if(!/^[a-zA-Z0-9.-]+$/.test(file))return route.abort()
+              return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:readFileSync(new URL('../../public/cooperation/'+file,import.meta.url))})
+            })
+            await page.goto('http://localhost/cooperation/')
+            await page.getByRole('button',{name:'查看汇总'}).click()
+            await page.getByRole('button',{name:'确认汇总金额'}).click()
+            await page.locator('#message').filter({hasText:'已保存'}).waitFor()
+            expect(await page.locator('#balance').innerText()).toContain('¥7.00')
+            expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+            mkdirSync(process.env.CHANNEL_CLOSURE_DEMO_DIR,{recursive:true})
+            await page.screenshot({path:process.env.CHANNEL_CLOSURE_DEMO_DIR+'/partner-confirmed.png',fullPage:true})
+            expect(errors).toEqual([])
+          }finally{await browser.close()}
+        }else{
+          const response=await app.inject({method:'POST',url:'/cooperation/statement-response',headers:{...headers,host:'localhost',origin:'https://www.shmbox.com','x-channel-web':'1','idempotency-key':'channel-'+randomUUID()},payload:{id:statement.id,dispute:false,reason:'隔离演示核对'}})
+          expect(response.statusCode,response.body).toBe(200)
+        }
+        await finance(app,{action:'approve',id:statement.id},403)
+        await finance(peer,{action:'approve',id:statement.id})
+        const payout=await finance(app,{action:'start-payment',id:statement.id,amountMinor:700,reference:'DEMO-PAYOUT-'+randomUUID()})
+        await finance(app,{action:'start-payment',id:statement.id,amountMinor:700,reference:'DEMO-DUPLICATE-'+randomUUID()},409)
+        await finance(peer,{action:'confirm-payment',id:payout.id,success:true,reference:'DEMO-RECEIPT-'+randomUUID()})
+        const final=await app.inject({method:'GET',url:'/cooperation/partner',headers})
+        expect(final.json().data.balance).toMatchObject({accruedMinor:'700',paidMinor:'700',balanceMinor:'0'})
+        for(const value of [cid,order.id,session])expect(final.body).not.toContain(value)
+        expect(JSON.stringify(final.json().data.visits)).not.toContain('推荐饮品')
+        await miniPage.load();expect(miniPage.data.coupons[0].status).toBe('fulfilled')
+        expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[batchId])).rows[0].n).toBe(1)
+        stage('已用券不复活',miniPage.data.coupons);stage('佣金7元结清与脱敏',final.json())
+        const financeView=(await app.inject({method:'GET',url:'/staff/channel/finance'})).json();expect(financeView.data.payouts.find((p:any)=>p.id===payout.id)).toMatchObject({promoterId:demoPromoter,status:'succeeded',amountMinor:'700'});stage('财务最终状态',financeView)
+        if(process.env.CHANNEL_CLOSURE_DEMO_DIR)writeFileSync(process.env.CHANNEL_CLOSURE_DEMO_DIR+'/lifecycle.json',JSON.stringify(evidence,null,2))
+      }finally{await peer.close();miniPage.onUnload()}
+    }
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.payments WHERE order_id=$1',[order.id])).rows[0].n).toBe(1)
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.refunds WHERE payment_id=$1',[payment.value.id])).rows[0].n).toBe(1)
-  })
+  },30_000)
   it('passes a promised gift through the real quantity production and delivery path without consuming stock or commission twice',async()=>{
     const gift=await giftProduct(1),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),claim=await issue(b.code,cid)
     const active=await activate(claim.claimId,cid,session)
@@ -2397,15 +2503,32 @@ integration('channel distribution real PostgreSQL authority', () => {
       expect(result.statusCode,result.body).toBe(200)
       expect((await admin.query('SELECT staff_entry_enabled,self_entry_enabled FROM mbox.channel_campaigns WHERE id=$1',[b.campaign])).rows[0]).toEqual({staff_entry_enabled:staff,self_entry_enabled:self})
     }
+    const followupBatch=await batch({},undefined,pid)
     const nextContactAt=new Date(Date.now()+86400000).toISOString()
+    for(const kind of ['sent','received']){
+      const invalid=await post('followup',{promoterId:pid,batchId:null,kind,note:'不得脱离批次登记',nextContactAt:null})
+      expect(invalid.statusCode,invalid.body).toBe(400)
+      const wrong=await post('followup',{promoterId:pid,batchId:b.id,kind,note:'不得串用商家批次',nextContactAt:null})
+      expect(wrong.statusCode,wrong.body).toBe(403)
+    }
     for(const kind of ['sent','received','feedback','contact']){
-      const request={method:'POST' as const,url:'/staff/channel/followup',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{promoterId:pid,batchId:null,kind,note:kind==='contact'?'中'.repeat(2000):'逐项交流记录',nextContactAt}}
-      const result=await app.inject(request);expect(result.statusCode,result.body).toBe(200)
+      const request={method:'POST' as const,url:'/staff/channel/followup',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{promoterId:pid,batchId:['sent','received'].includes(kind)?followupBatch.id:null,kind,note:kind==='contact'?'中'.repeat(2000):'逐项交流记录',nextContactAt}}
+      const result=await app.inject(request);expect(result.statusCode,kind+':'+result.body).toBe(200)
       const replay=await app.inject({...request,headers:{...request.headers,'x-channel-recovery':'1'}})
       expect(replay.statusCode,replay.body).toBe(200);expect(replay.json().meta.replayed).toBe(true);expect(replay.json().data).toEqual(result.json().data)
     }
     const rows=(await admin.query('SELECT kind,note,next_contact_at FROM mbox.channel_followups WHERE promoter_id=$1',[pid])).rows
     expect(rows).toHaveLength(4);expect(rows.every(r=>r.note===(r.kind==='contact'?'中'.repeat(2000):'逐项交流记录')&&new Date(r.next_contact_at).toISOString()===nextContactAt)).toBe(true)
+    // Preserve a pre-upgrade successful receipt without permitting new unbatched sends.
+    const legacyInput={promoterId:pid,batchId:null,kind:'sent',note:'旧版已发送，丢失回执',nextContactAt:null},legacyKey='channel-'+randomUUID()
+    const legacy=await new NormalizedCommandExecutor(runner).execute({scope,operationScope:'channel.partner.followup',idempotencyKey:legacyKey,requestFingerprint:JSON.stringify({input:legacyInput,employeeId:employee}),retainReceipt:true,resultCodec:{encode:(v:{id:string})=>v,decode:(v:unknown)=>v as {id:string}}},async tx=>({result:await new ChannelPartnerRepository(tx).followup({...legacyInput,employeeId:employee,actorRef:`employee:${employee}`}) as {id:string},auditEvents:[],outboxMessages:[]}))
+    const recovery={method:'POST' as const,url:'/staff/channel/followup',headers:{'idempotency-key':legacyKey,'x-channel-recovery':'1'},payload:legacyInput}
+    const recovered=await app.inject(recovery);expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json()).toMatchObject({data:{id:legacy.value.id},meta:{replayed:true}})
+    const missing=await app.inject({...recovery,headers:{...recovery.headers,'idempotency-key':'channel-'+randomUUID()}})
+    expect(missing.statusCode,missing.body).toBe(409)
+    const changed=await app.inject({...recovery,payload:{...legacyInput,note:'不能改写旧回执'}});expect(changed.statusCode,changed.body).toBe(409)
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_followups WHERE promoter_id=$1',[pid])).rows[0].n).toBe(5)
+
   })
   it('rejects forged extra configuration fields and keeps the enlarged batch route bounded',async()=>{
     const b=await batch(),base={campaignId:b.campaign,promoterId:promoter,rule,contract:{version:'v1',settlementSubject:'川菜公司',terms:'约定条款'},reason:'输入验证'}

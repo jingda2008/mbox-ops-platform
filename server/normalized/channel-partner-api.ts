@@ -37,7 +37,12 @@ export function registerChannelPartnerRoutes(app: FastifyInstance, options: Chan
     return {data:page.items,meta:{nextCursor:page.nextCursor}}
   })
   for (const action of ['invite', 'followup'] as const) app.post(`/staff/channel/${action}`, { bodyLimit: action === 'followup' ? 16384 : 4096 }, async request => {
-    const ctx = await options.resolveStaffContext(request), input = schemas[action].parse(request.body)
+    const ctx = await options.resolveStaffContext(request)
+    // Old successful unbatched follow-ups remain recoverable, but receipt-only
+    // execution can never create a new record or resume an unfinished write.
+    const input = action === 'followup' && request.headers['x-channel-recovery'] === '1'
+      ? z.object(schemas.followup.shape).strict().parse(request.body)
+      : schemas[action].parse(request.body)
     const authorize = async (tx: ScopedTransaction) => { await new StaffAccessRepository(tx).assertPermission(ctx.employeeId, 'channel.manage') }
     const result = await options.commands.execute({ scope: ctx.scope, operationScope: `channel.partner.${action}`, idempotencyKey: keySchema.parse(request.headers['idempotency-key']),
       requestFingerprint: JSON.stringify({ input, employeeId: ctx.employeeId }), resultCodec: codec, retainReceipt: true, rejectExpiredReceipt: true,

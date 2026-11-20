@@ -50,7 +50,7 @@ export const channelManagementSchemas = {
   campaign:z.object({title:z.string().trim().min(2).max(100),claimLimit:positive,capacityLimit:positive,costLimitMinor:z.number().int().min(0).max(1e12),reason:configReason}).strict(),
   batch:z.object({campaignId:configUuid,promoterId:configUuid,rule:channelRuleSchema,contract:z.object({version:z.string().min(1).max(100),settlementSubject:z.string().min(2).max(200),terms:z.string().min(2).max(3000)}).strict(),reason:configReason}).strict(),
   invite:z.object({promoterId:configUuid}).strict(),
-  followup:z.object({promoterId:configUuid,batchId:configUuid.nullable(),kind:z.enum(['sent','received','feedback','contact']),note:z.string().trim().min(2).max(2000),nextContactAt:timestamp.nullable()}).strict(),
+  followup:z.object({promoterId:configUuid,batchId:configUuid.nullable(),kind:z.enum(['sent','received','feedback','contact']),note:z.string().trim().min(2).max(2000),nextContactAt:timestamp.nullable()}).strict().refine(input=>!['sent','received'].includes(input.kind)||input.batchId!==null,{message:'发送或收到登记必须选择对应优惠批次',path:['batchId']}),
 }
 export type ChannelRule = z.infer<typeof channelRuleSchema>
 export type ChannelOffer = ChannelRule['offer']

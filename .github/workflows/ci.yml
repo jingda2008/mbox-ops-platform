@@ -249,10 +249,13 @@ jobs:
         run: npx playwright install chromium
       - name: Run normalized mobile commercial flows against an isolated database
         run: npm run test:e2e:normalized
-      - name: Verify channel configuration copy, conditional fields and switch recovery
+      - name: Verify channel configuration, activation and financial recovery
         env:
           CHANNEL_CONFIG_UI_EVIDENCE_DIR: artifacts/channel-config-ui
-        run: npm run test:channel-config-ui
+          CHANNEL_UI_EVIDENCE_DIR: artifacts/channel-config-ui/operations
+        run: |
+          npm run test:channel-config-ui
+          npm run test:channel-ui
       - name: Upload channel configuration evidence
         if: always()
         continue-on-error: true

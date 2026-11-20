@@ -115,7 +115,8 @@ async function showStatement(id, { preserveReason = false, scroll = true } = {})
   const version = epoch, request = detailRequest, data = (await api(`statement/${encodeURIComponent(id)}`)).data
   if (version !== epoch || request !== detailRequest) return
   detailId = data.statement.id; detailReady = true; $('detail-body').replaceChildren(text('p', `结算金额 ${money(data.statement.amountMinor)} · ${statuses[data.statement.status] || '处理中'}`))
-  for (const line of data.lines) $('detail-body').append(text('p', `${line.date} · 匿名记录 ${line.visitNumber} · 计佣净额 ${money(line.basisMinor)} · 佣金变动 ${money(line.deltaMinor)}`))
+  $('detail-body').append(text('p', '同一匿名客组可能多次核算，以下净消费不相加；本单金额按佣金变动汇总。'))
+  for (const line of data.lines) $('detail-body').append(text('p', `${line.date} · 匿名记录 ${line.visitNumber} · 本次核算净消费 ${money(line.basisMinor)} · 佣金变动 ${money(line.deltaMinor)}`))
   if (!preserveReason) $('reason').value = ''; $('detail').hidden = false
   $('response').hidden = !state.promoter.canConfirmStatement || !['pending', 'confirmed'].includes(data.statement.status)
   $('confirm').hidden = data.statement.status !== 'pending'

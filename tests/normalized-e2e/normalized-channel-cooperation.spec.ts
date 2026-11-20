@@ -94,3 +94,17 @@ test('refresh preserves an unfinished explanation and cannot bypass recovery of 
  await page.getByRole('button',{name:'刷新',exact:true}).click();await expect(page.locator('#pending')).toBeVisible();expect(h.writes).toHaveLength(1)
  await page.getByRole('button',{name:'恢复原操作'}).click();await expect(page.locator('#pending')).toBeHidden();expect(h.writes).toHaveLength(2);expect(h.writes[1]?.key).toBe(h.writes[0]?.key)
 })
+
+test('refund settlement explains successive consumption snapshots instead of implying additive consumption',async({page})=>{
+ await setup(page)
+ await page.route('**/cooperation/api/statement/statement-a',route=>route.fulfill({json:{data:{
+  statement:{id:'statement-a',sourceStatementId:null,amountMinor:'700',status:'pending'},
+  lines:[{visitNumber:'ANON0001',date:'2026-11-20',basisMinor:'9000',deltaMinor:'900'},{visitNumber:'ANON0001',date:'2026-11-20',basisMinor:'7000',deltaMinor:'-200'}],
+ }}}))
+ await page.goto('/cooperation/');await page.getByRole('button',{name:'查看汇总'}).click()
+ await expect(page.locator('#detail-body')).toContainText('结算金额 ¥7.00')
+ await expect(page.locator('#detail-body')).toContainText('以下净消费不相加')
+ await expect(page.locator('#detail-body')).toContainText('本次核算净消费 ¥90.00 · 佣金变动 ¥9.00')
+ await expect(page.locator('#detail-body')).toContainText('本次核算净消费 ¥70.00 · 佣金变动 ¥-2.00')
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+})

@@ -79,7 +79,7 @@ import {
 } from './guest-request-context.js'
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
-import { PaymentRepository,OrderNotPayableError, type Payment } from './payment-repository.js'
+import { PaymentRepository,OrderNotPayableError, PaymentCapturePendingError, type Payment } from './payment-repository.js'
 import { GuestCheckoutCaptureConfirmedError, PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { GuestImmediateCheckoutReconciliationRepository } from './guest-immediate-checkout-reconciliation-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
@@ -2333,6 +2333,7 @@ async function createGuestProviderAction(
       || error instanceof AlipayPaymentIdentityRequiredError) {
       return unavailablePaymentAction(payment, orderPublicId, 'failed', 'identity_rejected')
     }
+    if (error instanceof PaymentCapturePendingError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
     if (error instanceof ProviderPaymentInProgressError) return unavailablePaymentAction(payment, orderPublicId, 'pending')
     if (error instanceof ProviderPaymentUnknownError || error instanceof OnlinePaymentUnknownError) {
       return unavailablePaymentAction(payment, orderPublicId, 'unknown')
@@ -3012,6 +3013,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
         details: { dimension: error.dimension },
       } })
     }
+    if (error instanceof PaymentCapturePendingError) return reply.code(409).send({error:{code:error.code,message:error.message}})
     if (error instanceof GuestCheckoutCaptureConfirmedError) {
       return reply.code(409).send({ error: { code: 'GUEST_CHECKOUT_ALREADY_PAID', message: error.message } })
     }

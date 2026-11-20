@@ -1,3 +1,4 @@
+import { unpostedCaptureSql } from './verified-capture-sql.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 import type { PaymentMethod, PaymentProvider } from './payment-repository.js'
 import type { ScopedTransaction } from './transaction-runner.js'
@@ -7,6 +8,7 @@ export type ProviderPresentation = 'jsapi' | 'qr' | 'barcode'
 export type ProviderActionPayload = Readonly<Record<string, unknown>>
 
 export interface ProviderPaymentContext {
+  captureAwaitingPosting?: boolean
   id: string
   payableKind: 'order' | 'activity_registration' | 'order_batch' | 'table_prepayment'
   orderId: string | null
@@ -143,7 +145,7 @@ export class PaymentProviderActionRepository {
         activity_registration.public_id AS activity_registration_public_id,
         payment.public_id, payment.provider, payment.provider_transaction_id,
         payment.method, payment.amount_minor,
-        payment.currency, payment.status, payment.created_at::text,
+        payment.currency, payment.status, payment.created_at::text, ${unpostedCaptureSql} AS capture_awaiting_posting,
         COALESCE(activity_registration.customer_id,payment.prepaid_customer_id) AS customer_id,
         COALESCE(ordering.table_session_id,payment_batch.table_session_id,payment.prepaid_table_session_id) AS table_session_id, venue_table.code AS table_code
       FROM mbox.payments payment
@@ -955,6 +957,7 @@ function mapContext(row: ContextRow): ProviderPaymentContext {
   const amountMinor = Number(row.amount_minor)
   if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error('支付金额无效')
   return {
+    ...(row.capture_awaiting_posting === true ? {captureAwaitingPosting:true} : {}),
     id: row.id,
     payableKind: row.payable_kind,
     orderId: row.order_id,

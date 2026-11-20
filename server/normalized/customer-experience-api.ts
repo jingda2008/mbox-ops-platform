@@ -61,7 +61,7 @@ import type { MembershipTermsService } from './membership-terms-service.js'
 import type { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import { EmployeeTableAccessDeniedError } from './employee-table-access.js'
 import { createMemberIdentificationQrDataUrl } from './member-code-qr.js'
-import { ActivityPaymentLateSuccessRefundRequiredError } from './payment-repository.js'
+import { ActivityPaymentLateSuccessRefundRequiredError, PaymentCapturePendingError } from './payment-repository.js'
 import {
   RefundApprovalRequiredError,
   RefundLimitError,
@@ -1792,6 +1792,7 @@ function knownErrorResponse(error: unknown): { statusCode: number; code: string;
   if (error instanceof EmployeeTableAccessDeniedError) return {
     statusCode: 403, code: 'TABLE_ACCESS_DENIED', message: '当前员工不是该桌负责人，无权处理该桌会员权益',
   }
+  if (error instanceof PaymentCapturePendingError) return { statusCode: 409, code: error.code, message: error.message }
   if (error instanceof ActivityPaymentLateSuccessRefundRequiredError) return {
     statusCode: 409,
     code: 'ACTIVITY_LATE_PAYMENT_REFUND_REQUIRED',

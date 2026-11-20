@@ -798,6 +798,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
     values: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number }> {
     const sql = normalizeSql(text)
+    if (sql.startsWith('SELECT payment.order_id FROM mbox.order_payment_facts payment') && sql.includes('mbox.verified_provider_observations')) return result([])
     if(sql.includes("to_regclass('mbox.order_carryover_debts')"))return result([{present:false}])
     if (sql.includes("FROM mbox.order_carryover_debts") || sql.startsWith("SELECT table_session_id FROM mbox.orders")) return result([])
     this.calls.push(sql)
@@ -836,6 +837,7 @@ class PaymentFlowTransaction implements ScopedTransaction {
       this.paymentStaged = true
       return result([{...paymentRow(this.orderId, this.paymentId, 'pending'),public_id:values[3]}])
     }
+    if (sql.startsWith('SELECT order_id FROM mbox.payments')) return result([{order_id:this.orderId}])
     if (sql.includes('FROM mbox.payments') && sql.includes('FOR UPDATE')) {
       const payment = paymentRow(this.orderId, this.paymentId, this.paymentStatus)
       return result([this.mode === 'release'
@@ -899,6 +901,7 @@ class RollbackClient implements PostgresPoolClient {
     values: unknown[] = [],
   ): Promise<PostgresQueryResult<Row>> {
     const sql = normalizeSql(text)
+    if (sql.startsWith('SELECT payment.order_id FROM mbox.order_payment_facts payment') && sql.includes('mbox.verified_provider_observations')) return result([])
     if(sql.includes("to_regclass('mbox.order_carryover_debts')"))return result([{present:false}])
     if (sql.includes("FROM mbox.order_carryover_debts") || sql.startsWith("SELECT table_session_id FROM mbox.orders")) return result([])
     if (sql.startsWith('BEGIN')) {

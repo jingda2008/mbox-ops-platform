@@ -1,3 +1,4 @@
+import { orderHasUnpostedCaptureSql } from './verified-capture-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 /** Call before taking downstream row locks, or while already holding the movement
@@ -12,6 +13,7 @@ export async function releaseUnusedChannelDiscounts(tx:ScopedTransaction,visitId
    FROM mbox.channel_price_applications p JOIN mbox.channel_activations a ON (a.tenant_id,a.store_id,a.id)=(p.tenant_id,p.store_id,p.activation_id)
    JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.order_id)
    WHERE p.tenant_id=$1 AND p.store_id=$2 AND a.visit_id=$3 AND o.status='cancelled'
+      AND NOT ${orderHasUnpostedCaptureSql}
    AND NOT EXISTS(SELECT 1 FROM mbox.channel_gift_promises g WHERE (g.tenant_id,g.store_id,g.order_id)=(o.tenant_id,o.store_id,o.id))
    AND NOT EXISTS(SELECT 1 FROM mbox.channel_price_releases r WHERE (r.tenant_id,r.store_id,r.quote_id,r.activation_id)=(p.tenant_id,p.store_id,p.quote_id,p.activation_id))
    AND NOT EXISTS(SELECT 1 FROM mbox.order_payment_facts f WHERE (f.tenant_id,f.store_id,f.order_id)=(o.tenant_id,o.store_id,o.id) AND f.status NOT IN('failed','closed'))

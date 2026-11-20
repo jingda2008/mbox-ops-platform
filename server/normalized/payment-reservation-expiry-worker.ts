@@ -1,3 +1,6 @@
+import { appendOutboxMessage } from './command-executor.js'
+import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
+import { RecommendationFinancialAttributionRepository } from './recommendation-financial-attribution-repository.js'
 import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { PaymentRepository } from './payment-repository.js'
 import type {
@@ -9,6 +12,7 @@ import type {
 interface ExpiredPaymentReservationRow extends Record<string, unknown> {
   id: string
   public_id: string
+  session_status: string
   payment_state: 'none' | 'terminal' | 'unknown' | 'captured'
 }
 
@@ -45,16 +49,43 @@ export class PaymentReservationExpiryWorker {
       const fulfillment = new PaymentFulfillmentRepository(transaction)
 
       for (const order of due) {
-        if (order.payment_state === 'unknown') {
+        if (order.payment_state === 'unknown' || (order.payment_state === 'captured' && order.session_status !== 'open')) {
           reviewOrderIds.push(order.id)
           continue
         }
         if (order.payment_state === 'captured') {
+          // Single-receipt recovery follows the callback's original payment deadline.
+          // If multiple receipts disagree about eligibility, retain the order for review.
+          const receipts = await transaction.query<{id:string; status:string; succeeded_at:string; late:boolean}>(`
+            SELECT p.id, p.status, p.succeeded_at::text, p.succeeded_at >= a.expires_at AS late FROM mbox.order_payment_facts p
+            LEFT JOIN mbox.payment_provider_actions a ON (a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id)
+            WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=$3
+              AND p.status IN ('succeeded','partially_refunded','refunded')
+            ORDER BY p.succeeded_at DESC,p.id`, [scope.tenantId,scope.storeId,order.id])
+          const receipt = receipts.rows[0]
+          if (!receipt || receipts.rows.some(row => row.status !== 'succeeded')
+            || (receipts.rows.length > 1 && receipts.rows.some(row => row.late))) {
+            reviewOrderIds.push(order.id)
+            continue
+          }
           await new PaymentRepository(transaction).syncOrderPaymentStatus(order.id)
           const result = await fulfillment.activatePaidOrder(order.id, {
+            paymentId: receipt.id,
             metadata: { recoveryWorkerId: workerId },
           })
           if (result.activated) {
+            await new RecommendationFinancialAttributionRepository(transaction).recordPaidForOrder({
+              orderId: order.id, paymentId: receipt.id, actorRef: `payment:${receipt.id}`,
+            })
+            await new LoyaltyAccrualRepository(transaction).recordPaidOrder({
+              orderId: order.id, paymentId: receipt.id, occurredAt: new Date(receipt.succeeded_at).toISOString(),
+            })
+            await appendOutboxMessage(transaction, {
+              businessEventKey: `fulfillment:order.fulfillment_activated_after_payment:${order.id}`,
+              aggregateType: 'order', aggregateId: order.id, aggregateVersion: 2,
+              eventType: 'order.fulfillment_activated_after_payment.v1',
+              payload: {orderId: order.id, inventoryMovementCount: result.inventoryConsumptions.length, kdsTaskCount: result.kdsTasks.length},
+            })
             activatedOrderIds.push(order.id)
             await recordResolution(transaction, order, workerId, 'activated', result.kdsTasks.length)
           }
@@ -88,17 +119,17 @@ async function claimExpiredPaymentReservations(
   batchSize: number,
 ): Promise<ExpiredPaymentReservationRow[]> {
   const result = await transaction.query<ExpiredPaymentReservationRow>(`
-    SELECT order_row.id, order_row.public_id,
+    SELECT order_row.id, order_row.public_id, session.status AS session_status,
       CASE
         WHEN EXISTS (
-          SELECT 1 FROM mbox.payments AS payment
+          SELECT 1 FROM mbox.order_payment_facts AS payment
           WHERE payment.tenant_id = order_row.tenant_id
             AND payment.store_id = order_row.store_id
             AND payment.order_id = order_row.id
             AND payment.status IN ('succeeded', 'partially_refunded', 'refunded')
         ) THEN 'captured'
         WHEN EXISTS (
-          SELECT 1 FROM mbox.payments AS payment
+          SELECT 1 FROM mbox.order_payment_facts AS payment
           WHERE payment.tenant_id = order_row.tenant_id
             AND payment.store_id = order_row.store_id
             AND payment.order_id = order_row.id
@@ -106,7 +137,7 @@ async function claimExpiredPaymentReservations(
             AND payment.retry_released_at IS NULL
         ) THEN 'unknown'
         WHEN EXISTS (
-          SELECT 1 FROM mbox.payments AS payment
+          SELECT 1 FROM mbox.order_payment_facts AS payment
           WHERE payment.tenant_id = order_row.tenant_id
             AND payment.store_id = order_row.store_id
             AND payment.order_id = order_row.id
@@ -114,6 +145,7 @@ async function claimExpiredPaymentReservations(
         ELSE 'none'
       END AS payment_state
     FROM mbox.orders AS order_row
+    JOIN mbox.table_sessions session ON (session.tenant_id,session.store_id,session.id)=(order_row.tenant_id,order_row.store_id,order_row.table_session_id)
     WHERE order_row.tenant_id = $1::uuid
       AND order_row.store_id = $2::uuid
       AND order_row.settlement_mode = 'immediate_payment'
@@ -121,7 +153,7 @@ async function claimExpiredPaymentReservations(
       AND order_row.fulfillment_expires_at <= clock_timestamp()
     ORDER BY
       CASE WHEN EXISTS (
-        SELECT 1 FROM mbox.payments AS pending_payment
+        SELECT 1 FROM mbox.order_payment_facts AS pending_payment
         WHERE pending_payment.tenant_id = order_row.tenant_id
           AND pending_payment.store_id = order_row.store_id
           AND pending_payment.order_id = order_row.id
@@ -129,6 +161,7 @@ async function claimExpiredPaymentReservations(
           AND pending_payment.retry_released_at IS NULL
       ) THEN 1 ELSE 0 END,
       order_row.fulfillment_expires_at, order_row.id
+    FOR SHARE OF session SKIP LOCKED
     FOR UPDATE OF order_row SKIP LOCKED
     LIMIT $3
   `, [transaction.scope.tenantId, transaction.scope.storeId, batchSize])

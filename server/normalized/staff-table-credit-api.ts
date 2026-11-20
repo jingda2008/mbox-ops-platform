@@ -5,7 +5,7 @@ import type {PaymentApiOptions} from './payment-api.js'
 import {NormalizedCommandExecutor,type JsonObject} from './command-executor.js'
 import {assertStaffCreditAccess,collectStaffCredit,readStaffCredit,type StaffCreditInput} from './staff-table-credit.js'
 import {TablePrepaymentError} from './table-prepayment-repository.js'
-import {PaymentEvidenceError} from './payment-repository.js'
+import {PaymentCapturePendingError, PaymentEvidenceError} from './payment-repository.js'
 import {IdempotencyConflictError,IdempotencyInProgressError,IdempotencyReceiptUnavailableError} from './command-executor.js'
 import {NormalizedAuthenticationRequiredError} from './normalized-request-context.js'
 import {StaffAccessDeniedError} from './staff-access-repository.js'
@@ -60,6 +60,7 @@ export function registerStaffTableCreditApi(app:FastifyInstance,options:PaymentA
  })
 }
 function fail(reply:import('fastify').FastifyReply,e:unknown){
+ if(e instanceof PaymentCapturePendingError)return reply.code(409).send({error:{code:e.code,message:e.message}})
  const status=e instanceof NormalizedAuthenticationRequiredError?401:e instanceof StaffAccessDeniedError||e instanceof EmployeeTableAccessDeniedError?403:e instanceof TablePrepaymentError||e instanceof IdempotencyConflictError||e instanceof IdempotencyInProgressError||e instanceof IdempotencyReceiptUnavailableError?409:e instanceof TypeError||e instanceof PaymentEvidenceError?400:500
  return reply.code(status).send({error:{code:e instanceof TablePrepaymentError?e.code:'TABLE_PREPAYMENT_ERROR',message:status===500?'预收款结果待核对，请重试同一操作或查询原付款':e instanceof Error?e.message:'操作失败'}})
 }

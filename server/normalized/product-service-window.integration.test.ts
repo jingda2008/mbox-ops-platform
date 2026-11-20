@@ -1,3 +1,6 @@
+import {PaymentRepository} from './payment-repository.js'
+import {VerifiedProviderObservationService} from './provider-verification-observation.js'
+import {PaymentReservationExpiryWorker} from './payment-reservation-expiry-worker.js'
 import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import {beforeAll,afterAll,describe,it,expect} from 'vitest'
@@ -147,6 +150,55 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   }
   expect((await admin.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].fulfillment_state).toBe(late?'cancelled':'active')
   expect((await admin.query('SELECT status FROM mbox.payments WHERE id=$1',[f.payment])).rows[0].status).toBe('succeeded')
+ })
+ it.each([true,false])('rechecks the payment deadline during background fulfillment recovery (late=%s)',async late=>{
+  const f=await paymentOrder()
+  await admin.query("UPDATE mbox.order_items SET fulfillment_station='bar' WHERE order_id=$1",[f.order.id])
+  await admin.query("UPDATE mbox.orders SET fulfillment_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1",[f.order.id])
+  await admin.query("UPDATE mbox.payment_provider_actions SET expires_at=clock_timestamp()-interval '1 minute' WHERE payment_id=$1",[f.payment])
+  await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id=$1::text,succeeded_at=clock_timestamp()-make_interval(mins=>$2) WHERE id=$1",[f.payment,late?0:2])
+  const batch=await new PaymentReservationExpiryWorker(runner).runBatch(scope,'deadline-recovery')
+  expect(batch.activatedOrderIds.includes(f.order.id)).toBe(!late)
+  expect((await admin.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].fulfillment_state).toBe(late?'cancelled':'active')
+  await new PaymentReservationExpiryWorker(runner).runBatch(scope,'deadline-recovery-replay')
+  const sources=await admin.query(`SELECT
+    (SELECT count(*)::int FROM mbox.kds_tasks k JOIN mbox.order_items i ON i.id=k.order_item_id WHERE i.order_id=$1) AS tasks,
+    (SELECT count(*)::int FROM mbox.print_source_jobs WHERE aggregate_id=$1 AND ticket_kind='production') AS tickets`,[f.order.id])
+  expect(sources.rows[0]).toEqual({tasks:late?0:1,tickets:late?0:1})
+ })
+ it('blocks replacement collections and preserves the original stock hold after verified success',async()=>{
+  const f=await paymentOrder()
+  await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'active_query_binding',
+    paymentPublicId:f.payment,providerEventId:randomUUID(),integrationRef:'isolated-retry-test',
+    providerTransactionId:randomUUID(),reportedAmountMinor:1000,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString()})
+  await expect(new OnlinePaymentService(runner,'isolated-capture-before-presentation',null).create({
+    scope,paymentId:f.payment,principal:{type:'employee',employeeId:employee},clientIp:'127.0.0.1',operatorId:'MBOX',
+  })).rejects.toMatchObject({code:'PAYMENT_CAPTURE_PENDING'})
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).releaseUnresolvedForRetry({
+    paymentId:f.payment,employeeId:employee,idempotencyKey:randomUUID(),reason:'改用收银台付款',
+  }))).rejects.toThrow('渠道已确认')
+  await admin.query("UPDATE mbox.orders SET fulfillment_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1",[f.order.id])
+  await runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).ensureReservationBeforePayment(f.order.id))
+  expect((await admin.query('SELECT fulfillment_expires_at<clock_timestamp() AS original FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].original).toBe(true)
+  const request={publicId:randomUUID(),provider:'cash' as const,method:'cash' as const,initialStatus:'succeeded' as const,
+    evidence:{collectedByEmployeeId:employee,receiptReference:randomUUID()},principal:{type:'employee' as const,employeeId:employee}}
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({...request,orderId:f.order.id}))).rejects.toThrow('渠道已确认')
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).createForOrders({...request,orderIds:[f.order.id]}))).rejects.toThrow('渠道已确认')
+ })
+ it('holds the reservation for a pending sibling and retains late funds if stock was already released',async()=>{
+  const f=await paymentOrder()
+  const release=()=>runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).releaseAfterDefinitiveFailure(f.order.id,'付款尝试已关闭'))
+  expect((await release()).released).toBe(false)
+  await admin.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[f.payment])
+  expect((await release()).released).toBe(true)
+  await runner.run(scope,async tx=>{
+    const repo=new PaymentRepository(tx)
+    await repo.applySucceededCallback({paymentPublicId:f.payment,provider:'postar',providerTransactionId:randomUUID(),
+      reportedAmountMinor:1000,reportedCurrency:'CNY',succeededAt:new Date().toISOString()})
+    await repo.syncOrderPaymentStatus(f.order.id)
+    expect((await new PaymentFulfillmentRepository(tx).activatePaidOrder(f.order.id,{paymentId:f.payment})).activated).toBe(false)
+  })
+  expect((await admin.query('SELECT fulfillment_state,payment_status FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0]).toEqual({fulfillment_state:'cancelled',payment_status:'paid'})
  })
  it('blocks new quotes during preview while still making the dish visible',async()=>{
   const id=await product();await runner.run(scope,tx=>saveProductServiceWindow(tx,id,{...all,dateFrom:'2100-01-01',dateThrough:'2100-01-01',saleStartMinute:1200,saleEndMinute:1380,visibleStartMinute:1080,visibleEndMinute:1380}))

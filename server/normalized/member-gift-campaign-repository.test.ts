@@ -288,7 +288,7 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         throw Error('restore isolated unpaid cancellation branch')
       })).rejects.toThrow('restore isolated unpaid cancellation branch')
       expect((await pool.query('SELECT quantity_reserved,quantity_redeemed FROM mbox.benefits WHERE id=$1',[row.id])).rows[0]).toEqual({quantity_reserved:1,quantity_redeemed:0})
-      const payment=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:placed.id,publicId:`coupon-pay-${randomUUID()}`,provider:'simulation',method:'jsapi',initialStatus:'pending',principal:{type:'guest',tableSessionId:sessionId,customerId,guestSessionId:actorRef.slice('guest-session:'.length)}}))
+      const payment=await runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({orderId:placed.id,publicId:`coupon-pay-${randomUUID()}`,provider:'postar',method:'jsapi',initialStatus:'pending',principal:{type:'guest',tableSessionId:sessionId,customerId,guestSessionId:actorRef.slice('guest-session:'.length)}}))
       await expect(complete()).rejects.toThrow('confirmed paid')
       await expect(runner.run(scope,async tx=>{
         await temporarilyCancel(tx)
@@ -296,9 +296,19 @@ const runtimeUrl=process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
         throw Error('restore isolated unknown payment branch')
       })).rejects.toThrow('restore isolated unknown payment branch')
       expect(await new CheckoutCouponRecoveryWorker(runner).runBatch(scope,'coupon-test-worker')).toMatchObject({examined:0,released:0,failed:0})
+      const originalTransactionId=randomUUID()
+      await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'callback_signature',
+        providerEventId:randomUUID(),integrationRef:'isolated-coupon-success',paymentPublicId:payment.publicId,
+        providerTransactionId:originalTransactionId,reportedAmountMinor:990,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString()})
+      await expect(runner.run(scope,async tx=>{
+        await tx.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[payment.id])
+        await temporarilyCancel(tx)
+        expect(await new CheckoutCouponLifecycleRepository(tx).releaseCancelledOrderHolds(placed.id)).toEqual({released:0})
+        throw Error('restore isolated unposted success branch')
+      })).rejects.toThrow('restore isolated unposted success branch')
       await runner.run(scope,async tx=>{
         const payments=new PaymentRepository(tx)
-        await payments.applySucceededCallback({paymentPublicId:payment.publicId,provider:'simulation',providerTransactionId:`isolated-${randomUUID()}`,reportedAmountMinor:990,reportedCurrency:'CNY'})
+        await payments.applySucceededCallback({paymentPublicId:payment.publicId,provider:'postar',providerTransactionId:originalTransactionId,reportedAmountMinor:990,reportedCurrency:'CNY'})
         await payments.syncOrderPaymentStatus(placed.id)
       })
       expect(await complete()).toEqual({redeemed:1})

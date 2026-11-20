@@ -4,6 +4,7 @@ import {beforeAll,afterAll,describe,it,expect} from 'vitest'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
 import {saveProductServiceWindow,readProductServiceWindow} from './product-service-window-repository.js'
+import { readTables } from './operations-query-service.js'
 import {OrderRepository} from './order-repository.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
 import {validateProductPaymentWindow} from './product-payment-window.js'
@@ -117,7 +118,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const order=await runner.run(scope,tx=>new OrderRepository(tx,customer).createSubmitted({tableSessionId:session,publicId:randomUUID(),channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:customer,lines}))
   await admin.query("INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status) VALUES($1::uuid,$2,$3,$4,$1::text,$5,$6,1000,'pending')",[payment,scope.tenantId,scope.storeId,order.id,simulation?'simulation':'postar',simulation?'native_qr':'jsapi'])
   await admin.query("INSERT INTO mbox.payment_provider_actions(payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,expires_at) VALUES($1,$2,$3,$5,$6,$4,'creating',clock_timestamp()+interval '5 minutes')",[payment,scope.tenantId,scope.storeId,simulation?employee:customer,simulation?'qr':'jsapi',simulation?'employee':'guest'])
-  return {p,order,payment,child,quote}
+  return {p,order,payment,child,quote,session}
  }
  it('checks the real persisted quote on a new payment and refuses a subsequent product stop',async()=>{
   const f=await paymentOrder(),expiry=new Date(Date.now()+5*60_000).toISOString()
@@ -129,10 +130,21 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const f=await paymentOrder()
   await admin.query("UPDATE mbox.payment_provider_actions SET expires_at=clock_timestamp()-interval '1 minute' WHERE payment_id=$1",[f.payment])
   await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id=$1::text,succeeded_at=clock_timestamp()-make_interval(mins=>$2) WHERE id=$1",[f.payment,late?0:2])
+  await admin.query(`INSERT INTO mbox.verified_provider_observations
+    (tenant_id,store_id,provider,subject_kind,payment_id,verification_kind,provider_event_id,integration_ref,observed_status,
+     provider_transaction_id,reported_amount_minor,reported_currency,evidence_sha256,occurred_at)
+    SELECT tenant_id,store_id,provider,'payment',id,'callback_signature',$2,'postar-callback','payment_succeeded',
+      provider_transaction_id,amount_minor,currency,repeat('a',64),succeeded_at FROM mbox.payments WHERE id=$1`,[f.payment,randomUUID()])
   // Product changes after a valid action must not revoke its original promise.
   await admin.query("UPDATE mbox.products SET status='sold_out' WHERE id=$1",[f.p])
   const activation=await runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).activatePaidOrder(f.order.id,{paymentId:f.payment}))
   expect(activation.activated).toBe(!late)
+  if (late) {
+    const tables=await runner.run(scope,tx=>readTables(tx,employee,true))
+    expect(tables.find(row=>row.activeSession?.id===f.session)?.activeSession).toMatchObject({
+      financialState:'payment_exception', refundAttentionCount:0,
+    })
+  }
   expect((await admin.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].fulfillment_state).toBe(late?'cancelled':'active')
   expect((await admin.query('SELECT status FROM mbox.payments WHERE id=$1',[f.payment])).rows[0].status).toBe('succeeded')
  })

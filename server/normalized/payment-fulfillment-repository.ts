@@ -155,7 +155,7 @@ export class PaymentFulfillmentRepository {
         WHERE p.tenant_id=$1::uuid AND p.store_id=$2::uuid AND p.id=$3::uuid`,
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,options.paymentId])
       if(receipt.rows[0]?.late) {
-        await this.abandonGuestSelfCheckout(orderId,'渠道付款晚于购买截止，保留收款并转人工售后')
+        await this.cancelReservedFulfillment(state, '渠道付款晚于购买截止，保留收款并转人工售后')
         return {activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan()}
       }
     }
@@ -255,6 +255,7 @@ export class PaymentFulfillmentRepository {
     if (order.settlement_mode !== 'immediate_payment' || order.fulfillment_state !== 'awaiting_payment') {
       return { released: false, orderId, reservationCount: 0 }
     }
+    if (await this.hasVerifiedCapture(orderId)) return { released: false, orderId, reservationCount: 0 }
     return this.release(orderId, reason)
   }
 
@@ -278,10 +279,14 @@ export class PaymentFulfillmentRepository {
       return { released: false, orderId, reservationCount: 0 }
     }
 
-    // The exit and worker paths already hold payment locks. Read in a separate
-    // statement so evidence committed while acquiring those locks is visible.
+    if (await this.hasVerifiedCapture(orderId)) throw new GuestCheckoutCaptureConfirmedError()
+    return this.cancelReservedFulfillment(order, reason)
+  }
+
+  private async hasVerifiedCapture(orderId: string): Promise<boolean> {
+    // Read after the locks in the caller so evidence committed during a lock wait is visible.
     const capture = await this.transaction.query(`
-      SELECT 1 FROM mbox.payments payment
+      SELECT 1 FROM mbox.order_payment_facts payment
       JOIN mbox.verified_provider_observations observation
         ON (observation.tenant_id,observation.store_id,observation.payment_id)
          = (payment.tenant_id,payment.store_id,payment.id)
@@ -289,8 +294,11 @@ export class PaymentFulfillmentRepository {
         AND observation.observed_status='payment_succeeded'
       LIMIT 1
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
-    if (capture.rowCount) throw new GuestCheckoutCaptureConfirmedError()
+    return Boolean(capture.rowCount)
+  }
 
+  private async cancelReservedFulfillment(order: FulfillmentOrderRow, reason: string): Promise<PaymentFulfillmentRelease> {
+    const orderId = order.id
     const released = order.fulfillment_state === 'awaiting_payment'
       ? await this.release(orderId, reason)
       : { released: false, orderId, reservationCount: 0 }

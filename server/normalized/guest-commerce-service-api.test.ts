@@ -19,6 +19,7 @@ import {
   type GuestRequestContext,
 } from './guest-request-context.js'
 import { readTables } from './operations-query-service.js'
+import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
 import { NormalizedProviderObservationAuthority, VerifiedProviderObservationService } from './provider-verification-observation.js'
@@ -1373,6 +1374,9 @@ integration('guest service and mood API with PostgreSQL', () => {
     if (observationId) {
       expect(response.statusCode, response.body).toBe(409)
       expect(response.json().error.code).toBe('GUEST_CHECKOUT_ALREADY_PAID')
+      const release = await transactions.run(integrationContext.scope, tx =>
+        new PaymentFulfillmentRepository(tx).releaseAfterDefinitiveFailure(abandonedOrderId, 'another attempt closed'))
+      expect(release.released).toBe(false)
       const payments = new PaymentCommandService(new NormalizedCommandExecutor(transactions),
         new NormalizedPaymentCapabilityAuthorization(), new NormalizedProviderObservationAuthority())
       const callback = { ...paymentEvidence, verifiedObservationId: observationId,

@@ -378,7 +378,20 @@ export async function readTables(
                 WHERE completed_refund.tenant_id=followup.tenant_id
                   AND completed_refund.store_id=followup.store_id
                   AND completed_refund.payment_id=followup.payment_id
-                  AND completed_refund.status='succeeded'),0)) AS payment_exception_count
+                  AND completed_refund.status='succeeded'),0))
+          + (SELECT count(*)::integer FROM mbox.orders unfulfilled
+             WHERE (unfulfilled.tenant_id,unfulfilled.store_id,unfulfilled.table_session_id)
+                 =(session.tenant_id,session.store_id,session.id)
+               AND unfulfilled.settlement_mode='immediate_payment' AND unfulfilled.status<>'cancelled'
+               AND unfulfilled.fulfillment_state='cancelled'
+               AND EXISTS (SELECT 1 FROM mbox.order_payment_facts receipt
+                 WHERE (receipt.tenant_id,receipt.store_id,receipt.order_id)
+                     =(unfulfilled.tenant_id,unfulfilled.store_id,unfulfilled.id)
+                   AND receipt.status IN ('succeeded','partially_refunded')
+                   AND receipt.amount_minor>COALESCE((SELECT sum(r.amount_minor) FROM mbox.order_refund_facts r
+                     WHERE (r.tenant_id,r.store_id,r.order_id,r.payment_id)
+                         =(receipt.tenant_id,receipt.store_id,receipt.order_id,receipt.id)
+                       AND r.status='succeeded'),0))) AS payment_exception_count
     ) finance ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid

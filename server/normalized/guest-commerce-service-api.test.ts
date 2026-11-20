@@ -18,6 +18,11 @@ import {
   GuestStoreScopeError,
   type GuestRequestContext,
 } from './guest-request-context.js'
+import { readTables } from './operations-query-service.js'
+import { PaymentCommandService } from './payment-command-service.js'
+import { NormalizedPaymentCapabilityAuthorization } from './payment-security-policy.js'
+import { NormalizedProviderObservationAuthority, VerifiedProviderObservationService } from './provider-verification-observation.js'
+import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
 import type { Payment } from './payment-repository.js'
 import {
   OnlinePaymentService,
@@ -1318,7 +1323,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     }])
   })
 
-  it('releases a customer JSAPI checkout before channel reconciliation and makes a late capture a refund follow-up', async () => {
+  it.each(['after exit', 'before exit'] as const)('handles a verified JSAPI capture %s', async timing => {
     const abandonedOrderId = randomUUID()
     const abandonedItemId = randomUUID()
     const abandonedPaymentId = randomUUID()
@@ -1350,11 +1355,49 @@ integration('guest service and mood API with PostgreSQL', () => {
         '{}'::jsonb)
     `, [abandonedPaymentId, integrationTenantId, integrationStoreId, abandonedOrderId, paymentPublicId])
 
+    const paymentEvidence = {
+      scope: integrationContext.scope, provider: 'postar' as const, paymentPublicId,
+      providerTransactionId: randomUUID(), reportedAmountMinor: 25600, reportedCurrency: 'CNY',
+      occurredAt: new Date().toISOString(), integrationRef: 'postar-integration',
+    }
+    const observationId = timing === 'before exit'
+      ? await new VerifiedProviderObservationService(transactions).recordPayment({
+          ...paymentEvidence, providerEventId: randomUUID(), verificationKind: 'callback_signature', status: 'succeeded',
+        })
+      : null
     const response = await app.inject({
       method: 'POST',
       url: `/api/guest/orders/${orderPublicId}/abandon-checkout`,
       headers: { 'idempotency-key': `guest-jsapi-abandon-${abandonedOrderId.slice(0, 16)}` },
     })
+    if (observationId) {
+      expect(response.statusCode, response.body).toBe(409)
+      expect(response.json().error.code).toBe('GUEST_CHECKOUT_ALREADY_PAID')
+      const payments = new PaymentCommandService(new NormalizedCommandExecutor(transactions),
+        new NormalizedPaymentCapabilityAuthorization(), new NormalizedProviderObservationAuthority())
+      const callback = { ...paymentEvidence, verifiedObservationId: observationId,
+        actor: { type: 'integration' as const, ref: paymentEvidence.integrationRef },
+        idempotencyKey: randomUUID(), requestFingerprint: paymentPublicId, businessDate: integrationContext.businessDate }
+      const accrual = vi.spyOn(LoyaltyAccrualRepository.prototype, 'recordPaidOrder')
+        .mockRejectedValueOnce(Object.assign(new Error('deadlock during accrual'), { code: '40P01' }))
+      try {
+        expect((await payments.recordSucceededCallback(callback)).replayed).toBe(false)
+        expect((await payments.recordSucceededCallback(callback)).replayed).toBe(true)
+        expect(accrual).toHaveBeenCalledTimes(2)
+      } finally { accrual.mockRestore() }
+      const result = await pool.query(`
+        SELECT o.status,o.payment_status,o.fulfillment_state,
+          (SELECT count(*)::int FROM mbox.kds_tasks WHERE order_item_id=$2) AS tasks,
+          (SELECT count(*)::int FROM mbox.print_source_jobs WHERE aggregate_id=o.id AND ticket_kind='production') AS tickets,
+          (SELECT count(*)::int FROM mbox.outbox_messages WHERE aggregate_id=o.id
+            AND message_type='order.fulfillment_activated_after_payment.v1') AS activations,
+          (SELECT count(*)::int FROM mbox.guest_immediate_checkout_abandonment_events WHERE order_id=o.id) AS exits,
+          (SELECT count(*)::int FROM mbox.guest_immediate_checkout_late_capture_refund_followups WHERE order_id=o.id) AS followups
+        FROM mbox.orders o WHERE o.id=$1`, [abandonedOrderId, abandonedItemId])
+      expect(result.rows).toEqual([{ status:'submitted', payment_status:'paid', fulfillment_state:'active',
+        tasks:1, tickets:1, activations:1, exits:0, followups:0 }])
+      return
+    }
     expect(response.statusCode, response.body).toBe(200)
     expect(response.json()).toMatchObject({
       data: {
@@ -1401,6 +1444,9 @@ integration('guest service and mood API with PostgreSQL', () => {
       abandonment_events: '1', refund_followups: '1', order_status: 'cancelled', fulfillment_state: 'cancelled',
       refund_eligible: 'true',
     }])
+    const tables = await transactions.run(integrationContext.scope, tx => readTables(tx, randomUUID(), true))
+    expect(tables.find(table => table.activeSession?.id === integrationSessionId)?.activeSession)
+      .toMatchObject({ financialState: 'payment_exception', refundAttentionCount: 0, refundActionCount: 0 })
   })
 
   it('lists all active bundles with disabled components without enabling ordering or exposing stopped bundles', async () => {

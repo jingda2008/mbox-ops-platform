@@ -87,6 +87,8 @@ export interface IdempotentCommand<Result> {
   retainReceipt?: boolean
   /** Snapshot reports opt in without changing existing business command isolation. */
   transactionIsolation?: TransactionIsolation
+  /** Only for handlers whose effects are entirely inside the database transaction. */
+  retryOnConflict?: number
   ttlMs?: number
   lockMs?: number
   // Only explicitly non-final outcomes may resume, under the original row lock
@@ -189,7 +191,7 @@ export class NormalizedCommandExecutor {
         if (command.retainReceipt) throw new NativeCommandNotCommittedError(error)
         throw error
       }
-    }, command.transactionIsolation ? { isolation: command.transactionIsolation } : undefined)
+    }, { isolation: command.transactionIsolation, retryOnConflict: command.retryOnConflict })
   }
 }
 

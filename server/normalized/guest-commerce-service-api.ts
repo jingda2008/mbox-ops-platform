@@ -80,7 +80,7 @@ import {
 import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository,OrderNotPayableError, type Payment } from './payment-repository.js'
-import { PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
+import { GuestCheckoutCaptureConfirmedError, PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
 import { GuestImmediateCheckoutReconciliationRepository } from './guest-immediate-checkout-reconciliation-repository.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import type { OnlinePaymentAction, OnlinePaymentService } from './online-payment-service.js'
@@ -3011,6 +3011,9 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
         retryAt: error.retryAt,
         details: { dimension: error.dimension },
       } })
+    }
+    if (error instanceof GuestCheckoutCaptureConfirmedError) {
+      return reply.code(409).send({ error: { code: 'GUEST_CHECKOUT_ALREADY_PAID', message: error.message } })
     }
     if (error instanceof OrderNotPayableError) {
       return reply.code(409).send({ error: { code: 'ORDER_NOT_PAYABLE', message: '订单已提交，但当前无法创建支付，请稍后重试或呼叫服务员' } })

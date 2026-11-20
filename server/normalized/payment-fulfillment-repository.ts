@@ -16,6 +16,13 @@ import {
   type ExperiencePlanActivationResult,
 } from './experience-plan-activation-repository.js'
 
+export class GuestCheckoutCaptureConfirmedError extends Error {
+  constructor() {
+    super('渠道已确认收款，系统正在处理原订单，请勿重复付款')
+    this.name = 'GuestCheckoutCaptureConfirmedError'
+  }
+}
+
 interface FulfillmentOrderRow extends Record<string, unknown> {
   id: string
   settlement_mode: 'immediate_payment' | 'table_tab'
@@ -270,6 +277,19 @@ export class PaymentFulfillmentRepository {
     if (order.fulfillment_state === 'cancelled') {
       return { released: false, orderId, reservationCount: 0 }
     }
+
+    // The exit and worker paths already hold payment locks. Read in a separate
+    // statement so evidence committed while acquiring those locks is visible.
+    const capture = await this.transaction.query(`
+      SELECT 1 FROM mbox.payments payment
+      JOIN mbox.verified_provider_observations observation
+        ON (observation.tenant_id,observation.store_id,observation.payment_id)
+         = (payment.tenant_id,payment.store_id,payment.id)
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3
+        AND observation.observed_status='payment_succeeded'
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    if (capture.rowCount) throw new GuestCheckoutCaptureConfirmedError()
 
     const released = order.fulfillment_state === 'awaiting_payment'
       ? await this.release(orderId, reason)

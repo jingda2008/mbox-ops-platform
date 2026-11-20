@@ -704,7 +704,7 @@ export function CashierAfterSalesWorkbenchView({
                     className="cashier-order-turnover-link"
                     onClick={() => onNavigate?.(`/staff/live?tableSessionId=${encodeURIComponent(order.tableSessionId ?? '')}`)}
                   >顾客已离店，去翻台</button>}
-                {order.status==='cancelled'&&order.closedDebtRecovery?.kind!=='consumption'&&order.payments.some(payment=>payment.remainingRefundableMinor>0&&['succeeded','partially_refunded'].includes(payment.status))&&<p className="cashier-workflow-guidance" role="alert">订单已取消，仍有实际到账，请核对下方原付款并办理退款。</p>}
+                {order.status==='cancelled'&&order.closedDebtRecovery?.kind!=='consumption'&&order.payments.some(payment=>payment.remainingRefundableMinor>0&&['succeeded','partially_refunded'].includes(payment.status))&&<p className="cashier-workflow-guidance" role="alert">订单已取消，原付款已到账。请核对商品是否已制作或送达，再按现场情况处理；确认需要退款时，从下方原付款发起。</p>}
                 {order.overCollectedAmountMinor > 0 && <p className="cashier-workflow-guidance" role="alert">本单已确认多收 ¥{formatAmount(order.overCollectedAmountMinor)}。请在下方对应收款记录发起退款；不要用新订单或手工改金额冲抵。</p>}
                 {orderWorkflowGuidance(order, view.actions) && <p className="cashier-workflow-guidance">{orderWorkflowGuidance(order, view.actions)}</p>}
                 {order.tableSessionId&&order.tableSessionStatus==='open'&&<StaffTableCreditPanel sessionId={order.tableSessionId} initialOrderId={order.id} staffSessionId={auth.session.id} permissions={auth.permissions} onUpdated={onReload}/>}

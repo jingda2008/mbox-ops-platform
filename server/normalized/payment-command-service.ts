@@ -711,7 +711,7 @@ export class PaymentCommandService {
   recordSucceededCallback(input: Readonly<PaymentCallbackCommand>): Promise<CommandExecution<Payment>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
     const integrationRef = requireIntegrationRef(input.actor, 'Payment callback')
-    return this.commands.execute(command(input, 'payment.callback', paymentCodec), async (transaction) => {
+    return this.commands.execute({ ...command(input, 'payment.callback', paymentCodec), retryOnConflict: 2 }, async (transaction) => {
       await this.providerObservations.consume({
         transaction,
         observationId: input.verifiedObservationId,
@@ -806,7 +806,7 @@ export class PaymentCommandService {
   ): Promise<CommandExecution<Payment>> {
     const providerSnapshot = sanitizeProviderSnapshot(input.providerSnapshot)
     const integrationRef = requireIntegrationRef(input.actor, 'Payment provider query')
-    return this.commands.execute(command(input, 'payment.provider-query', paymentCodec), async (transaction) => {
+    return this.commands.execute({ ...command(input, 'payment.provider-query', paymentCodec), retryOnConflict: 2 }, async (transaction) => {
       await this.providerObservations.consume({
         transaction,
         observationId: input.verifiedObservationId,

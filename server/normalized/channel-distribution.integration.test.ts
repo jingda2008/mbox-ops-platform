@@ -118,6 +118,14 @@ integration('channel distribution real PostgreSQL authority', () => {
       VALUES($1,$2,$3,$4,$5,$6,'employee_assisted','wechat','confirmed',clock_timestamp())`, [...args, randomUUID(), session, id, cid])
     return session
   }
+  // Construct pre-upgrade records to verify compatibility; never exposed as an API mode.
+  const seedLegacyClaim=(code:string,cid:string)=>runner.run(scope,async tx=>{
+    const repo=new ChannelDistributionRepository(tx);await repo.lockIdentity();const b=await repo.batch(code,true),offer=b.rule_snapshot.offer
+    const cost=offer.kind==='gift'?offer.costMinor:offer.kind==='credit'?offer.amountMinor:offer.maximumMinor
+    const q=(await tx.query<{id:string}>(`INSERT INTO mbox.channel_claims(tenant_id,store_id,batch_id,customer_id,entry,cost_commitment_minor) VALUES($1,$2,$3,$4,'self',$5) RETURNING id`,[...args,b.id,cid,cost])).rows[0]!
+    if(offer.kind==='gift')await new ChannelGiftInventory(tx).reserve(q.id,offer)
+    return{claimId:q.id,status:'available'}
+  })
   const issue = (code: string, cid: string, entry: 'staff' | 'self' = 'self', reuse = false) => runner.run(scope, tx => new ChannelDistributionRepository(tx).issue(code, cid, entry, reuse))
   const activate = (claim: string, cid: string, session: string) => runner.run(scope, tx => new ChannelDistributionRepository(tx).activate(claim, cid, session, `employee:${employee}`))
 
@@ -161,17 +169,24 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(results.filter(r=>r.status==='rejected')).toHaveLength(14)
     expect((await admin.query('SELECT count(*)::integer AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(2)
   })
-  it('reserves the last actual gift once under a 12-customer burst and rolls back losing claims',async()=>{
-    const gift=await giftProduct(1),b=await batch({totalClaims:30,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}})
+  it('allows twelve claims without stock holds but fulfills the last actual gift only once under concurrency',async()=>{
+    const gift=await giftProduct(1),b=await batch({totalClaims:30,minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}})
     const people=await Promise.all(Array.from({length:12},()=>customer()))
-    const results=await Promise.allSettled(people.map((cid,i)=>issue(i%2?b.token:b.code,cid,i%2?'self':'staff')))
-    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1)
-    expect(results.filter(r=>r.status==='rejected')).toHaveLength(11)
-    expect((await admin.query('SELECT count(*)::integer AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(1)
-    const stock=(await admin.query('SELECT on_hand_quantity,reserved_quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[gift.iid])).rows[0]
-    expect(Number(stock.on_hand_quantity)).toBe(1);expect(Number(stock.reserved_quantity)).toBe(1)
+    const claims=await Promise.all(people.map((cid,i)=>issue(i%2?b.token:b.code,cid,i%2?'self':'staff')))
+    expect((await admin.query('SELECT count(*)::integer AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(12)
+    const stock=()=>admin.query('SELECT on_hand_quantity,reserved_quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[gift.iid])
+    expect(Number((await stock()).rows[0].reserved_quantity)).toBe(0)
+    const tables=await Promise.all(people.map(cid=>table([cid])))
+    await Promise.all(claims.map((c,i)=>activate(c.claimId,people[i]!,tables[i]!)))
+    expect(Number((await stock()).rows[0].reserved_quantity)).toBe(0)
+    const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
+    const results=await Promise.allSettled(claims.map((c,i)=>runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:c.claimId,tableSessionId:tables[i]!,employeeId:employee,businessDate:'2026-11-12'}))))
+    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);expect(results.filter(r=>r.status==='rejected')).toHaveLength(11)
+    expect(Number((await stock()).rows[0].reserved_quantity)).toBe(1)
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_gift_promises WHERE claim_id=ANY($1::uuid[])',[claims.map(c=>c.claimId)])).rows[0].n).toBe(1)
     expect((await admin.query('SELECT sale_remaining_quantity FROM mbox.products WHERE id=$1',[gift.pid])).rows[0].sale_remaining_quantity).toBe(0)
   })
+
   it('recovers one claim after 12 simultaneous identical HTTP commands and rejects changed owner or payload',async()=>{
     const b=await batch({totalClaims:30,perCustomerClaims:20});selfCustomer=await customer()
     const request={method:'POST' as const,url:'/public/mini/channel/claim',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{code:b.code}}
@@ -191,7 +206,7 @@ integration('channel distribution real PostgreSQL authority', () => {
   })
   it('rejects malformed, oversized and authority-forging claim bodies without issuing',async()=>{
     const b=await batch();selfCustomer=await customer()
-    const bodies=[{code:b.code,customerId:randomUUID()},{code:b.code,promoterId:promoter},{code:b.code,amountMinor:-1},{code:[]},{code:"'; DROP TABLE mbox.channel_claims; --"},{code:'x'.repeat(3000)}]
+    const bodies=[{code:b.code,fulfillmentPolicy:'reserved'},{code:b.code,cost_commitment_minor:0},{code:b.code,customerId:randomUUID()},{code:b.code,promoterId:promoter},{code:b.code,amountMinor:-1},{code:[]},{code:"'; DROP TABLE mbox.channel_claims; --"},{code:'x'.repeat(3000)}]
     for(const payload of bodies){
       const response=await app.inject({method:'POST',url:'/public/mini/channel/claim',headers:{'idempotency-key':`channel-${randomUUID()}`},payload})
       expect([400,404,413],response.body).toContain(response.statusCode)
@@ -251,9 +266,9 @@ integration('channel distribution real PostgreSQL authority', () => {
     const fulfill=()=>runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:coupon.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'}))
     if(price===0){
       await expect(fulfill()).rejects.toThrow('标准价格')
-      expect((await admin.query('SELECT order_id,state FROM mbox.channel_gift_promises WHERE claim_id=$1',[coupon.claimId])).rows[0]).toEqual({order_id:null,state:'reserved'})
-      expect((await admin.query('SELECT sale_remaining_quantity FROM mbox.products WHERE id=$1',[g.pid])).rows[0].sale_remaining_quantity).toBe(0)
-      expect(Number((await admin.query('SELECT reserved_quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[g.iid])).rows[0].reserved_quantity)).toBe(1)
+      expect((await admin.query('SELECT order_id,state FROM mbox.channel_gift_promises WHERE claim_id=$1',[coupon.claimId])).rows[0]).toBeUndefined()
+      expect((await admin.query('SELECT sale_remaining_quantity FROM mbox.products WHERE id=$1',[g.pid])).rows[0].sale_remaining_quantity).toBe(1)
+      expect(Number((await admin.query('SELECT reserved_quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[g.iid])).rows[0].reserved_quantity)).toBe(0)
       expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(0)
       return
     }
@@ -264,8 +279,8 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect((await admin.query('SELECT status FROM mbox.channel_claims WHERE id=$1',[coupon.claimId])).rows[0].status).toBe('active')
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.kds_tasks k JOIN mbox.order_items i ON i.id=k.order_item_id WHERE i.order_id=$1',[result.result.orderId])).rows[0].n).toBe(1)
   })
-  it('blocks replacing a gift without customer consent and preserves the original reservation',async()=>{
-    const old=await giftProduct(1),replacement=await giftProduct(1),b=await batch({offer:{kind:'gift',productId:old.pid,quantity:1,costMinor:100}}),coupon=await issue(b.code,await customer())
+  it('legacy: blocks replacing a gift without customer consent and preserves the original reservation',async()=>{
+    const old=await giftProduct(1),replacement=await giftProduct(1),b=await batch({offer:{kind:'gift',productId:old.pid,quantity:1,costMinor:100}}),coupon=await seedLegacyClaim(b.code,await customer())
     await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(coupon.claimId,'replace-gift',employee,'误点替换',{productId:replacement.pid,quantity:1,consent:' '}))).rejects.toMatchObject({code:'NOT_REVERSIBLE'})
     expect((await admin.query('SELECT product_id,state,generation FROM mbox.channel_gift_promises WHERE claim_id=$1',[coupon.claimId])).rows[0]).toEqual({product_id:old.pid,state:'reserved',generation:1})
     expect((await admin.query('SELECT sale_remaining_quantity FROM mbox.products WHERE id=$1',[replacement.pid])).rows[0].sale_remaining_quantity).toBe(1)
@@ -326,14 +341,14 @@ integration('channel distribution real PostgreSQL authority', () => {
     await expect(issue(b.code, cid)).rejects.toMatchObject({ code: 'CUSTOMER_LIMIT' })
     await expect(activate(coupon.claimId, other, session)).rejects.toMatchObject({ code: 'OWNERSHIP' })
   })
-  it('prevents campaign overspend even across separate batches', async () => {
+  it('does not reserve campaign cost for claims across separate batches', async () => {
     const b = await batch({}, { claim: 100, capacity: 100, cost: 1000 })
     const c = await runner.run(scope, tx => new ChannelDistributionRepository(tx).createBatch({ campaignId: b.campaign, promoterId: promoter, rule, contract: { version: 'test1' } }))
     await admin.query('UPDATE mbox.channel_batches SET accepting_claims=true WHERE id=$1', [c.id])
     const a = await customer(), d = await customer()
     const results = await Promise.allSettled([issue(b.code, a), issue(String(c.offerCode), d)])
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter(r => r.status === 'rejected').map(r => (r as PromiseRejectedResult).reason.code)).toEqual(['CAPACITY'])
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(2)
+    expect(results.filter(r => r.status === 'rejected').map(r => (r as PromiseRejectedResult).reason.code)).toEqual([])
   })
   it('recovers the same HTTP claim receipt without issuing twice or trusting a body customer', async () => {
     const b = await batch(); selfCustomer = await customer()
@@ -536,9 +551,9 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query(`INSERT INTO mbox.recipe_items(tenant_id,store_id,recipe_id,inventory_item_id,quantity) VALUES($1,$2,$3,$4,1)`,[...args,rid,iid])
     return{pid,iid,rid}
   }
-  it('reserves actual gift stock at issuance, protects it from normal sales and creates one zero-value KDS order',async()=>{
+  it('legacy: reserves actual gift stock at issuance, protects it from normal sales and creates one zero-value KDS order',async()=>{
     const g=await giftProduct(),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:999}}),cid=await customer(),session=await table([cid])
-    const coupon=await issue(b.code,cid)
+    const coupon=await seedLegacyClaim(b.code,cid)
     const stock=()=>admin.query(`SELECT on_hand_quantity::text AS hand,reserved_quantity::text AS held FROM mbox.inventory_balances WHERE inventory_item_id=$1`,[g.iid])
     expect(Number((await stock()).rows[0].held)).toBe(1)
     expect((await admin.query('SELECT sale_remaining_quantity FROM mbox.products WHERE id=$1',[g.pid])).rows[0].sale_remaining_quantity).toBe(1)
@@ -549,7 +564,7 @@ integration('channel distribution real PostgreSQL authority', () => {
       return o
     })
     expect(ordinary.totalAmountMinor).toBe(1000)
-    await expect(issue(b.code,await customer())).rejects.toMatchObject({code:'CAPACITY'})
+    await expect(issue(b.code,await customer())).resolves.toMatchObject({status:'available'})
     // The ordinary order above is deliberately a separate organic table.
     // Binding after a first order is blocked; use a new empty table for the coupon.
     await admin.query('UPDATE mbox.table_session_customer_participations SET left_at=clock_timestamp() WHERE customer_id=$1 AND left_at IS NULL',[cid])
@@ -565,8 +580,8 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(Number((await stock()).rows[0].held)).toBe(2)
     expect(Number((await stock()).rows[0].hand)).toBe(2)
   })
-  it('rolls back a premature gift redemption and releases only unused expired stock, without restoring N/K',async()=>{
-    const g=await giftProduct(1),b=await batch({offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),coupon=await issue(b.code,cid)
+  it('legacy: rolls back a premature gift redemption and releases only unused expired stock, without restoring N/K',async()=>{
+    const g=await giftProduct(1),b=await batch({offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),coupon=await seedLegacyClaim(b.code,cid)
     await activate(coupon.claimId,cid,session)
     const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
     await expect(runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:coupon.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'}))).rejects.toThrow('尚未达到赠品门槛')
@@ -580,8 +595,11 @@ integration('channel distribution real PostgreSQL authority', () => {
   })
 
 
-  it('converts a gift hold into actual KDS-start inventory consumption exactly once',async()=>{
+  it.each(['100','0',null])('records actual gift consumption cost %s, preserving zero versus unknown and not charging for claims',async unitCost=>{
     const g=await giftProduct(1),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),coupon=await issue(b.code,cid)
+    const report=()=>runner.run(scope,tx=>readChannelReport(tx))
+    expect((await report()).find(r=>r.id===b.id)).toMatchObject({giftCostMinor:'0',fulfilledClaims:0})
+    await admin.query("UPDATE mbox.inventory_balances SET weighted_unit_cost_minor=$2,cost_status=CASE WHEN $2::numeric IS NULL THEN 'pending' ELSE 'complete' END,cost_basis=CASE WHEN $2::numeric IS NULL THEN 'none' ELSE 'manual_correction' END WHERE inventory_item_id=$1",[g.iid,unitCost])
     await activate(coupon.claimId,cid,session)
     const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
     const outcome=await runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:coupon.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'}))
@@ -590,10 +608,11 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect((await consume()).length).toBe(1);expect((await consume()).length).toBe(0)
     const stock=(await admin.query('SELECT on_hand_quantity::text AS hand,reserved_quantity::text AS held FROM mbox.inventory_balances WHERE inventory_item_id=$1',[g.iid])).rows[0]
     expect(Number(stock.hand)).toBe(0);expect(Number(stock.held)).toBe(0)
+    expect((await report()).find(r=>r.id===b.id)).toMatchObject({costMinor:unitCost,giftCostMinor:unitCost,fulfilledClaims:0})
     await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(coupon.claimId,'revoke',employee,'制作后误撤'))).rejects.toMatchObject({code:'NOT_REVERSIBLE'})
   })
-  it('replaces an unused gift atomically with consent, restores old stock and preserves one N/K claim',async()=>{
-    const a=await giftProduct(1),b=await giftProduct(1),batchA=await batch({minimumMinor:0,offer:{kind:'gift',productId:a.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),claim=await issue(batchA.code,cid)
+  it('legacy: replaces an unused gift atomically with consent, restores old stock and preserves one N/K claim',async()=>{
+    const a=await giftProduct(1),b=await giftProduct(1),batchA=await batch({minimumMinor:0,offer:{kind:'gift',productId:a.pid,quantity:1,costMinor:100}}),cid=await customer(),session=await table([cid]),claim=await seedLegacyClaim(batchA.code,cid)
     await activate(claim.claimId,cid,session)
     await runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(claim.claimId,'replace-gift',employee,'顾客要求换口味',{productId:b.pid,quantity:1,consent:'顾客现场确认同意'}))
     expect((await admin.query('SELECT product_id,generation,state FROM mbox.channel_gift_promises WHERE claim_id=$1',[claim.claimId])).rows[0]).toEqual({product_id:b.pid,generation:2,state:'reserved'})
@@ -602,11 +621,11 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(wallet[0]!.offer).toMatchObject({productId:b.pid})
     await expect(issue(batchA.code,cid)).rejects.toMatchObject({code:'CUSTOMER_LIMIT'})
     const soldOut=await giftProduct(0)
-    await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(claim.claimId,'replace-gift',employee,'缺货替换',{productId:soldOut.pid,quantity:1,consent:'顾客同意'}))).rejects.toMatchObject({code:'CAPACITY'})
+    await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(claim.claimId,'replace-gift',employee,'缺货替换',{productId:soldOut.pid,quantity:1,consent:'顾客同意'}))).rejects.toMatchObject({code:'GIFT_STOCK'})
     expect((await admin.query('SELECT product_id,generation,state FROM mbox.channel_gift_promises WHERE claim_id=$1',[claim.claimId])).rows[0]).toEqual({product_id:b.pid,generation:2,state:'reserved'})
   })
-  it('expires unused gift holds through the worker but protects active promises past the use deadline',async()=>{
-    const g=await giftProduct(2),b=await batch({minimumMinor:0,totalClaims:2,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),one=await customer(),two=await customer(),c1=await issue(b.code,one),c2=await issue(b.code,two),session=await table([two])
+  it('legacy: expires unused gift holds through the worker but protects active promises past the use deadline',async()=>{
+    const g=await giftProduct(2),b=await batch({minimumMinor:0,totalClaims:2,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),one=await customer(),two=await customer(),c1=await seedLegacyClaim(b.code,one),c2=await seedLegacyClaim(b.code,two),session=await table([two])
     await activate(c2.claimId,two,session)
     await admin.query(`UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 minute' WHERE id=ANY($1::uuid[])`,[[c1.claimId,c2.claimId]])
     const result=await new ChannelReconciliationWorker(runner).runBatch(scope,'test-channel-worker')
@@ -615,13 +634,13 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect((await admin.query('SELECT state FROM mbox.channel_gift_promises WHERE claim_id=$1',[c2.claimId])).rows[0].state).toBe('reserved')
     await expect(issue(b.code,one)).rejects.toMatchObject({code:'CLAIM_LIMIT'})
   })
-  it('rechecks campaign capacity on an expired gift extension and voids an unused issuance only once',async()=>{
-    const g=await giftProduct(1),b=await batch({totalClaims:1,minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),q=await issue(b.code,cid)
+  it('legacy: rechecks campaign capacity on an expired gift extension and voids an unused issuance only once',async()=>{
+    const g=await giftProduct(1),b=await batch({totalClaims:1,minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),q=await seedLegacyClaim(b.code,cid)
     await admin.query(`UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 minute' WHERE id=$1`,[q.claimId])
     await new ChannelReconciliationWorker(runner).runBatch(scope,'extension-test')
     const until=new Date(Date.now()+3*3600000).toISOString()
     await admin.query('UPDATE mbox.channel_campaigns SET cost_limit_minor=99 WHERE id=$1',[b.campaign])
-    await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'extend',employee,'门店排队延期',{until}))).rejects.toMatchObject({code:'CAPACITY'})
+    await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'extend',employee,'门店排队延期',{until}))).rejects.toMatchObject({code:'CAMPAIGN_BUDGET'})
     await admin.query('UPDATE mbox.channel_campaigns SET cost_limit_minor=100 WHERE id=$1',[b.campaign])
     await runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'extend',employee,'门店排队延期',{until}))
     expect((await admin.query('SELECT status FROM mbox.channel_claims WHERE id=$1',[q.claimId])).rows[0].status).toBe('available')
@@ -1256,7 +1275,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).publish(b.id,true,employee,'自己发布'))).rejects.toMatchObject({code:'NOT_AUTHORIZED'})
     await runner.run(scope,tx=>new ChannelOperationsRepository(tx).publish(b.id,true,reviewer,'独立审核规则和成本'))
     await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(0,0,0,employee,'暂停全店新增承诺'))
-    await expect(issue(b.code,cid)).rejects.toMatchObject({code:'CAPACITY'})
+    await expect(issue(b.code,cid)).rejects.toMatchObject({code:'STORE_LIMIT'})
     await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,100000,1e9,employee,'恢复测试上限'))
     const f=await financeFixture(),statement=await runner.run(scope,tx=>new ChannelFinanceRepository(tx).statement(f.rid,f.account,employee,'生成对账'))
     await expect(runner.run(scope,tx=>new ChannelFinanceRepository(tx).statementDetail(statement.id,promoter))).rejects.toMatchObject({code:'NOT_AUTHORIZED'})
@@ -2320,34 +2339,105 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(2)
     expect((await prepare(session)).discountMinor).toBe(500)
   })
-  it('honors campaign capacity and exact budget across concurrent different batches',async()=>{
+  it('enforces shared campaign claim quota while capacity and budget no longer reserve at issuance',async()=>{
     for(const limit of [{claim:100,capacity:1,cost:1000000},{claim:100,capacity:100,cost:1999},{claim:1,capacity:100,cost:1000000}]){
       const b=await batch({},limit),other=await runner.run(scope,tx=>new ChannelDistributionRepository(tx).createBatch({campaignId:b.campaign,promoterId:promoter,rule,contract:{version:'test'}}))
       await admin.query('UPDATE mbox.channel_batches SET accepting_claims=true WHERE id=$1',[other.id])
       const a=await customer(),c=await customer(),outcomes=await Promise.allSettled([issue(b.code,a),issue(String(other.offerCode),c,'staff')])
-      expect(outcomes.filter(r=>r.status==='fulfilled')).toHaveLength(1)
-      expect((await admin.query('SELECT count(*)::int AS n,sum(cost_commitment_minor)::text AS cost FROM mbox.channel_claims WHERE batch_id=ANY($1::uuid[])',[[b.id,other.id]])).rows[0]).toEqual({n:1,cost:'1000'})
+      expect(outcomes.filter(r=>r.status==='fulfilled')).toHaveLength(limit.claim===1?1:2)
+      expect((await admin.query('SELECT count(*)::int AS n,sum(cost_commitment_minor)::text AS cost FROM mbox.channel_claims WHERE batch_id=ANY($1::uuid[])',[[b.id,other.id]])).rows[0]).toEqual({n:limit.claim===1?1:2,cost:'0'})
     }
   })
-  it('releases elapsed unactivated claims from store budget before the expiry worker, preserving N/K',async()=>{
-    const b=await batch({totalClaims:3}),cid=await customer(),old=await issue(b.code,cid)
+  it('expired unredeemed coupons never reserve cost or restore N/K',async()=>{
+    const b=await batch({totalClaims:4}),cid=await customer(),old=await issue(b.code,cid)
     await admin.query("UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 minute' WHERE id=$1",[old.claimId])
     const baseline=(await admin.query(`SELECT count(*) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp()))::int AS held,COALESCE(sum(q.cost_commitment_minor) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp())),0)::text AS cost FROM mbox.channel_claims q JOIN mbox.channel_batches b ON b.id=q.batch_id WHERE q.tenant_id=$1 AND q.store_id=$2 AND NOT q.voided`,args)).rows[0]
     try{
       await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,baseline.held+1,Number(baseline.cost)+1000,employee,'精确剩余一张额度'))
       await expect(issue(b.code,await customer())).resolves.toMatchObject({status:'available'})
-      await expect(issue(b.code,await customer())).rejects.toMatchObject({code:'CAPACITY'})
+      await expect(issue(b.code,await customer())).resolves.toMatchObject({status:'available'})
       await expect(issue(b.code,cid)).rejects.toMatchObject({code:'CUSTOMER_LIMIT'})
     }finally{await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,100000,1e9,employee,'恢复隔离测试额度'))}
   })
-  it('shows exhausted campaign or store monetary capacity on the customer preview without claiming',async()=>{
+  it('retries a stock failure and lost gift-order response without reserving early or duplicating the order',async()=>{
+    const g=await giftProduct(0),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}},{claim:50,capacity:1,cost:0}),cid=await customer(),session=await table([cid])
+    const q=await issue(b.code,cid);await activate(q.claimId,cid,session)
+    const commands=new NormalizedCommandExecutor(runner),commerce=new CommerceCommandService(commands,new PostgresPricingAuthority()),server=Fastify()
+    await server.register(channelDistributionApiPlugin,{transactions:runner,commands,commerce,resolveStaffContext:()=>({scope,employeeId:employee,businessDate:'2026-11-12'}),resolveSelfContext:()=>{throw Error('No self')},resolveGuestContext:()=>{throw Error('No guest')}});await server.ready()
+    const request=()=>({method:'POST' as const,url:'/staff/channel/fulfill-gift',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{claimId:q.claimId,tableSessionId:session}})
+    try{
+      const failed=await server.inject(request());expect(failed.statusCode).toBe(409);expect(failed.json().error).toMatchObject({code:'GIFT_STOCK',commitDisposition:'not_committed'})
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_gift_promises WHERE claim_id=$1',[q.claimId])).rows[0].n).toBe(0)
+      await admin.query('UPDATE mbox.inventory_balances SET on_hand_quantity=1 WHERE inventory_item_id=$1',[g.iid]);await admin.query('UPDATE mbox.products SET sale_remaining_quantity=1,cost_amount_minor=260000 WHERE id=$1',[g.pid])
+      const write=request(),first=await server.inject(write);expect(first.statusCode,first.body).toBe(200)
+      const recovered=await server.inject({...write,headers:{...write.headers,'x-channel-recovery':'1'}});expect(recovered.statusCode,recovered.body).toBe(200);expect(recovered.json().meta.replayed).toBe(true);expect(recovered.json().data.orderId).toBe(first.json().data.orderId)
+      const duplicate=await server.inject(request());expect(duplicate.statusCode,duplicate.body).toBe(200);expect(duplicate.json().data.orderId).toBe(first.json().data.orderId)
+      expect((await admin.query('SELECT cost_minor::text FROM mbox.channel_gift_promises WHERE claim_id=$1',[q.claimId])).rows[0].cost_minor).toBe('260000')
+      expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(1)
+      expect((await admin.query('SELECT cost_commitment_minor::text,fulfillment_policy FROM mbox.channel_claims WHERE id=$1',[q.claimId])).rows[0]).toEqual({cost_commitment_minor:'0',fulfillment_policy:'on_use'})
+      await expect(admin.query("UPDATE mbox.channel_claims SET fulfillment_policy='reserved' WHERE id=$1",[q.claimId])).rejects.toThrow('immutable')
+    }finally{await server.close()}
+  })
+  it('replaces and extends an unused on-use gift without checking stock, keeps consent, and updates staff and customer views',async()=>{
+    const g=await giftProduct(0),replacement=await giftProduct(0),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}},{claim:50,capacity:1,cost:0}),cid=await customer(),session=await table([cid]),q=await issue(b.code,cid)
+    await activate(q.claimId,cid,session)
+    const run=(consent:string)=>runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'replace-gift',employee,'缺货确认替换',{productId:replacement.pid,quantity:2,consent}))
+    await expect(run(' ')).rejects.toMatchObject({code:'NOT_REVERSIBLE'});await run('顾客同意更换两份')
+    const wallet=await runner.run(scope,tx=>new ChannelDistributionRepository(tx).wallet(cid));expect(wallet[0]).toMatchObject({fulfillmentPolicy:'on_use',offer:{productId:replacement.pid,quantity:2}});expect(wallet[0]!.offer).not.toHaveProperty('costMinor')
+    const staff=await app.inject({url:`/staff/channel/table/${session}`});expect(staff.statusCode,staff.body).toBe(200);expect(staff.json().data.activations[0].offer).toMatchObject({productId:replacement.pid,quantity:2})
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'extend',employee,'到店延期',{until:new Date(now+3*3600000).toISOString()}))
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_gift_promises WHERE claim_id=$1',[q.claimId])).rows[0].n).toBe(0)
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'revoke',employee,'顾客不再使用'))
+    expect((await admin.query('SELECT sum(reserved_quantity)::text AS n FROM mbox.inventory_balances WHERE inventory_item_id=ANY($1::uuid[])',[[g.iid,replacement.iid]])).rows[0].n).toBe('0.000000')
+  })
+  it('expires or cancels on-use entitlements without stock movement, expense or restoring claim limits',async()=>{
+    const g=await giftProduct(0),b=await batch({totalClaims:2,minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:100}}),cid=await customer(),q=await issue(b.code,cid)
+    await admin.query("UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 minute' WHERE id=$1",[q.claimId]);await new ChannelReconciliationWorker(runner).runBatch(scope,'on-use-expiry')
+    expect((await admin.query('SELECT status,cost_commitment_minor::text FROM mbox.channel_claims WHERE id=$1',[q.claimId])).rows[0]).toEqual({status:'expired',cost_commitment_minor:'0'})
+    await expect(issue(b.code,cid)).rejects.toMatchObject({code:'CUSTOMER_LIMIT'})
+    await runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(q.claimId,'extend',employee,'未使用延期',{until:new Date(now+3*3600000).toISOString()}))
+    const session=await table([cid]),a=await activate(q.claimId,cid,session)
+    await runner.run(scope,tx=>new ChannelDistributionRepository(tx).cancelActivation(a.activationId!,session,employee,'仅取消绑定'))
+    expect((await admin.query('SELECT status FROM mbox.channel_claims WHERE id=$1',[q.claimId])).rows[0].status).toBe('available')
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_gift_promises WHERE claim_id=$1',[q.claimId])).rows[0].n).toBe(0)
+  })
+  it('allows fifty claims against forty-three gifts and a lower budget without changing recorded costs',async()=>{
+    const g=await giftProduct(43)
+    await admin.query('UPDATE mbox.products SET cost_amount_minor=260000 WHERE id=$1',[g.pid])
+    const b=await batch({totalClaims:50,minimumMinor:0,offer:{kind:'gift',productId:g.pid,quantity:1,costMinor:0}},{claim:100,capacity:100,cost:200000})
+    const cid=await customer(),preview=await runner.run(scope,tx=>new ChannelDistributionRepository(tx).customerOffer(b.code,cid))
+    expect(preview.unavailable).toBeNull()
+    expect(preview.offer).not.toHaveProperty('costMinor')
+    await issue(b.code,cid)
+    await Promise.all(Array.from({length:49},async()=>issue(b.code,await customer())))
+    await expect(issue(b.code,await customer())).rejects.toMatchObject({code:'CLAIM_LIMIT'})
+    expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(50)
+    expect(Number((await admin.query('SELECT reserved_quantity FROM mbox.inventory_balances WHERE inventory_item_id=$1',[g.iid])).rows[0].reserved_quantity)).toBe(0)
+    expect(Number((await admin.query('SELECT cost_amount_minor FROM mbox.products WHERE id=$1',[g.pid])).rows[0].cost_amount_minor)).toBe(260000)
+  })
+  it('proves all-products scope on the server, freezes IDs and carries it to both landing and wallet',async()=>{
+    const catalog=(await admin.query(`SELECT id FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY id`,args)).rows.map(p=>p.id)
+    const b=await batch({eligibleProductIds:catalog,eligibleProductScope:'all'}),cid=await customer()
+    const preview=()=>runner.run(scope,tx=>new ChannelDistributionRepository(tx).customerOffer(b.code,cid))
+    expect((await preview()).eligibleProductScope).toBe('all')
+    await issue(b.code,cid)
+    const wallet=await runner.run(scope,tx=>new ChannelDistributionRepository(tx).wallet(cid))
+    expect(wallet[0]!.eligibleProductScope).toBe('all');expect(wallet[0]!.eligibleProducts.map(p=>p.id).sort()).toEqual([...catalog].sort())
+    await giftProduct(1)
+    expect((await preview()).eligibleProducts).toHaveLength(catalog.length)
+    await expect(batch({eligibleProductIds:catalog,eligibleProductScope:'all'})).rejects.toThrow('商品范围已变化')
+    const selected=await batch({eligibleProductIds:[product],eligibleProductScope:'selected'})
+    expect((await runner.run(scope,tx=>new ChannelDistributionRepository(tx).customerOffer(selected.code,cid))).eligibleProductScope).toBe('selected')
+    await expect(batch({eligibleProductIds:[product],eligibleProductScope:'all'})).rejects.toThrow('商品范围已变化')
+  })
+  it('keeps customer preview claimable under zero monetary budget without issuing or reserving',async()=>{
     const b=await batch({}, {claim:100,capacity:100,cost:999}),cid=await customer();selfCustomer=cid
     const read=()=>app.inject({method:'GET',url:`/public/mini/channel/offer?code=${b.code}`})
-    expect((await read()).json().data.unavailable).toBe('本批次可承诺份数不足')
+    expect((await read()).json().data.unavailable).toBeNull()
     await admin.query('UPDATE mbox.channel_campaigns SET cost_limit_minor=1000 WHERE id=$1',[b.campaign])
     try{
       await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,100000,0,employee,'全店成本暂为零'))
-      expect((await read()).json().data.unavailable).toBe('本批次可承诺份数不足')
+      expect((await read()).json().data.unavailable).toBeNull()
     }finally{await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,100000,1e9,employee,'恢复测试额度'))}
     expect((await read()).json().data.unavailable).toBeNull()
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(0)
@@ -2472,22 +2562,22 @@ integration('channel distribution real PostgreSQL authority', () => {
     await expect(activate(prior.claimId,cid,session)).resolves.toMatchObject({status:'active'})
   })
 
-  it('serializes cross-campaign issuance at each independent store cap without exceeding a cent or slot',async()=>{
+  it('serializes cross-campaign claim quota without reserving budget or capacity',async()=>{
     for(const kind of ['claims','capacity','cost']){
       const a=await batch(),b=await batch(),ca=await customer(),cb=await customer()
       const base=(await admin.query(`SELECT count(*)::int AS issued,count(*) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp()))::int AS held,COALESCE(sum(q.cost_commitment_minor) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp())),0)::text AS cost FROM mbox.channel_claims q JOIN mbox.channel_batches b ON b.id=q.batch_id WHERE q.tenant_id=$1 AND q.store_id=$2 AND NOT q.voided`,args)).rows[0]
       try{
         await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(kind==='claims'?base.issued+1:100000,kind==='capacity'?base.held+1:100000,kind==='cost'?Number(base.cost)+1999:1e9,employee,'全店边界并发'))
         const outcomes=await Promise.allSettled([issue(a.code,ca),issue(b.token,cb,'staff')])
-        expect(outcomes.filter(r=>r.status==='fulfilled')).toHaveLength(1)
-        expect(outcomes.filter(r=>r.status==='rejected').map(r=>(r as PromiseRejectedResult).reason.code)).toEqual(['CAPACITY'])
+        expect(outcomes.filter(r=>r.status==='fulfilled')).toHaveLength(kind==='claims'?1:2)
+        expect(outcomes.filter(r=>r.status==='rejected').map(r=>(r as PromiseRejectedResult).reason.code)).toEqual(kind==='claims'?['STORE_LIMIT']:[])
       }finally{await runner.run(scope,tx=>new ChannelOperationsRepository(tx).limits(100000,100000,1e9,employee,'恢复隔离限额'))}
     }
   })
-  it('uses the same elapsed-promise capacity for extensions before the expiry worker runs',async()=>{
-    const b=await batch({}, {claim:3,capacity:1,cost:1000}),old=await issue(b.code,await customer())
+  it('legacy: uses the same elapsed-promise capacity for extensions before the expiry worker runs',async()=>{
+    const b=await batch({}, {claim:3,capacity:1,cost:1000}),old=await seedLegacyClaim(b.code,await customer())
     await admin.query("UPDATE mbox.channel_claims SET use_until_override=clock_timestamp()-interval '1 minute' WHERE id=$1",[old.claimId])
-    const current=await issue(b.code,await customer()),until=new Date(Date.now()+3*3600000).toISOString()
+    const current=await seedLegacyClaim(b.code,await customer()),until=new Date(Date.now()+3*3600000).toISOString()
     await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(current.claimId,'extend',employee,'门店延迟核验',{until}))).resolves.toMatchObject({id:current.claimId})
     await expect(runner.run(scope,tx=>new ChannelOperationsRepository(tx).claim(old.claimId,'extend',employee,'不得多占份数',{until}))).rejects.toMatchObject({code:'CAPACITY'})
   })
@@ -2698,7 +2788,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     await consumePrice(session,(await prepare(session)).id)
     const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
     await expect(runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:g.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'}))).rejects.toThrow('余额不足')
-    expect((await admin.query('SELECT state,order_id FROM mbox.channel_gift_promises WHERE claim_id=$1',[g.claimId])).rows[0]).toMatchObject({state:'reserved',order_id:null})
+    expect((await admin.query('SELECT state,order_id FROM mbox.channel_gift_promises WHERE claim_id=$1',[g.claimId])).rows[0]).toBeUndefined()
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(1)
   })
   it('a gift redeemed first leaves only the remaining capped monetary discount',async()=>{
@@ -2860,7 +2950,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect((await admin.query('SELECT sum(applied_discount_minor)::text AS used FROM mbox.channel_activations WHERE visit_id=$1',[active.visitId])).rows[0].used).toBe('1000')
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(1)
     const promise=(await admin.query('SELECT state,order_id FROM mbox.channel_gift_promises WHERE claim_id=$1',[g.claimId])).rows[0]
-    if(results[0]!.status==='fulfilled')expect(promise).toMatchObject({state:'reserved',order_id:null})
+    if(results[0]!.status==='fulfilled')expect(promise).toBeUndefined()
     else expect(promise.order_id).toBeTruthy()
   })
 

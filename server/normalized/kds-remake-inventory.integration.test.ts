@@ -66,6 +66,7 @@ integration('KDS remake inventory timing', () => {
   })
 
   it('consumes a second batch exactly once only when the remake starts', async () => {
+    await pool.query("UPDATE mbox.inventory_balances SET weighted_unit_cost_minor=125.5,cost_status='complete',cost_basis='manual_correction' WHERE inventory_item_id=$1",[inventoryItemId])
     const fixture = await createConsumedFailure('start')
     const remake = await runner.run({ tenantId, storeId }, async (transaction) => {
       const task = await new KdsRepository(transaction).create({
@@ -84,6 +85,7 @@ integration('KDS remake inventory timing', () => {
     })
     expect(await balance()).toEqual({ on_hand: '8.000000', reserved: '1.000000' })
 
+    await pool.query("UPDATE mbox.inventory_balances SET weighted_unit_cost_minor=250.125 WHERE inventory_item_id=$1",[inventoryItemId])
     const consumed = await runner.run({ tenantId, storeId }, async (transaction) => (
       new InventoryRepository(transaction).consumeRemakeMaterials(remake.id, {
         createdByEmployeeId: employeeId,
@@ -106,6 +108,8 @@ integration('KDS remake inventory timing', () => {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND reference_id=$3::uuid
     `, [tenantId, storeId, remake.id])
     expect(movements.rows[0]).toEqual({ count: '1', movement_type: 'waste', reference_type: 'kds_remake' })
+    const costs=(await pool.query('SELECT movement_type,unit_cost_minor::text FROM mbox.inventory_movements WHERE order_item_id=$1 ORDER BY movement_type,id',[fixture.orderItemId])).rows
+    expect(costs).toEqual([{movement_type:'sale',unit_cost_minor:'125.500000'},{movement_type:'waste',unit_cost_minor:'250.125000'}])
   })
 
   it('allows only one direct remake for the same failed task under concurrency', async () => {

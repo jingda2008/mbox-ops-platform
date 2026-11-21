@@ -16,6 +16,10 @@ describe('channel poster saved scope and safe layout',()=>{
   expect(svg).toContain('仅限以下商品');expect(svg).toContain('不叠加');expect(svg).not.toContain('43.21');expect(svg).toContain(offer.kind==='credit'?'减免 ¥12.34':'赠 演示薯条 × 2')
   const code=await sharp({create:{width:50,height:50,channels:3,background:'#174d36'}}).png().toBuffer();const png=await renderChannelPoster(input(rule),code);const meta=await sharp(png).metadata();expect(meta.format).toBe('png');expect(meta.width).toBe(900);expect(meta.height).toBeGreaterThan(1000)
  })
+ it('summarizes the authoritative all-products scope without printing every name',()=>{
+  const svg=buildChannelPosterSvg(input({...base,eligibleProductScope:'all'}),'demo')
+  expect(svg).toContain('全部商品参与');expect(svg).toContain('生成时在售商品');expect(svg).not.toContain('指定鸡尾酒');expect(svg).not.toContain('仅限以下商品')
+ })
  it('bounds long lists, exposes truncation and reserves space before the code',()=>{
   const ids=Array.from({length:500},(_,n)=>`product-${n}`),rule={...base,eligibleProductIds:ids,eligibleProductNames:ids.map((id,n)=>({id,name:`第${n}款`+'超长商品🧋'.repeat(30)}))}
   const svg=buildChannelPosterSvg(input(rule),'data:image/png;base64,demo');expect(svg).toContain('共 500 款');expect(svg).toContain('完整适用范围请微信扫码查看');expect(svg).toContain('…')

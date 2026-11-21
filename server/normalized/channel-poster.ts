@@ -45,9 +45,13 @@ export function buildChannelPosterSvg(input: PosterInput, codeDataUrl: string) {
     rule.allowStacking ? (rule.visitDiscountCapMinor == null ? '允许渠道券叠加 · 未设置客组总上限' : `可叠加 · 客组优惠合计最高 ${money(rule.visitDiscountCapMinor)}`) : '不叠加 · 本次客组只能用一张渠道券',
     '北京时间；换桌不重置次数和额度',
   ]) draw(line, 23, 39)
+  if(rule.eligibleProductScope==='all') { draw('全部商品参与',25,38,true); draw('范围以本券生成时在售商品为准',23,34) }
+  else {
   draw(`仅限以下商品（共 ${names.length} 款）：`, 25, 38, true)
   for (const line of scope.lines) draw(line, 23, 34)
   if (scope.truncated) draw('仅限指定商品 · 完整适用范围请微信扫码查看', 23, 36, true)
+  }
+  if(rule.offer.kind==='gift'){draw('领券不预留库存 · 到店核验后赠送',23,36);draw('赠品以到店可供情况为准，缺货经双方确认更换',23,36)}
   if (rule.allowStacking) draw('赠品按正常售价计入客组总优惠', 23, 36)
   const qrY = y + 16, height = qrY + 340 + 175
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="${height}" viewBox="0 0 900 ${height}">

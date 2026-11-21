@@ -1,3 +1,4 @@
+import { ChannelBudgetSummary } from './ChannelBudgetSummary'
 import { ChannelRuleSummary } from './ChannelRuleSummary'
 import { ChannelProductSelector } from './ChannelProductSelector'
 import {channelBatchDraft, type ChannelBatchTemplate} from './channel-batch-template'
@@ -16,15 +17,16 @@ import './channel-workflow.css'
 type Directory = {
   continuity:{tableSessionId:string;tableName:string;previousVisitId:string;customerId:string}[];claims:{id:string;title:string;status:string}[];employees:{id:string;name:string}[];limits:{claimLimit:number;capacityLimit:number;costLimitMinor:string}|null
   partners: { id: string; name: string; settlementSubject: string; promoterId: string; promoterName: string; linked: boolean;status?:string;canConfirmStatement?:boolean;restaurantScope?:boolean;contactEmployeeId?:string|null;partnerStatus?:string;hasVerifiedAccount?:boolean }[]
-  campaigns: { id: string; title: string; acceptingClaims: boolean;staffEntryEnabled?:boolean;selfEntryEnabled?:boolean }[]
+  campaigns: { id: string; title: string; costLimitMinor?:string; acceptingClaims: boolean;staffEntryEnabled?:boolean;selfEntryEnabled?:boolean }[]
   batches: { id: string; promoterId: string; campaignId?:string; offerCode: string; rule: ChannelRule; acceptingClaims: boolean;createdBy?:string|null;approvedAt?:string|null;contract?:{version:string;terms:string;settlementSubject:string} }[]
   followups: { id: string; batchId?:string|null; promoterId: string; note: string; kind: string; createdAt: string }[]
-  products: { id: string; name: string }[]
+  products: { id: string; name: string;costAmountMinor?:string|null }[]
 }
 type Intent = { action: 'partner' | 'campaign' | 'batch' | 'invite' | 'followup'; body: object }
 export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
   const [data, setData] = useState<Directory | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [pending, setPending] = useState(false)
   const [invitation, setInvitation] = useState(''), [promoterId, setPromoter] = useState(''), [campaignId, setCampaign] = useState(''), [productIds, setProducts] = useState<string[]>([]),[commissionProducts,setCommissionProducts]=useState<string[]>([])
+  const [allProducts,setAllProducts]=useState(true)
   const [allowStacking,setAllowStacking]=useState(false)
   const [offerKind,setOfferKind]=useState<ChannelRule['offer']['kind']>('credit'),[batchDraft,setBatchDraft]=useState<ReturnType<typeof channelBatchDraft>|null>(null),[draftVersion,setDraftVersion]=useState(0)
   const [directoryFresh,setDirectoryFresh]=useState(false)
@@ -45,14 +47,14 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
     if (current === epoch.current && sequence===readSequence.current){setData(result.data);setDirectoryFresh(true);const b=result.data.batches.find(b=>b.id===selectedBatch.current);if(b)setPromoter(b.promoterId)}
   }, [api])
   useEffect(() => {
-    epoch.current++; writing.current=false; setBusy(false); setData(null); setInvitation(''); setError(''); setNotice(''); setPromoter(''); setCampaign(''); setProducts([]); setCommissionProducts([]); setAllowStacking(false); setOfferKind('credit'); setBatchDraft(null); setDraftVersion(v=>v+1);setReview(null);setSelectedBatchId('');selectedBatch.current='';setOperationTarget(undefined);setFinanceTarget(undefined);setTemplatePromoter('');setCopiedFrom('')
+    epoch.current++; writing.current=false; setBusy(false); setData(null); setInvitation(''); setError(''); setNotice(''); setPromoter(''); setCampaign(''); setProducts([]);setAllProducts(true); setCommissionProducts([]); setAllowStacking(false); setOfferKind('credit'); setBatchDraft(null); setDraftVersion(v=>v+1);setReview(null);setSelectedBatchId('');selectedBatch.current='';setOperationTarget(undefined);setFinanceTarget(undefined);setTemplatePromoter('');setCopiedFrom('')
     try{const id=sessionStorage.getItem(selectionKey)??'';if(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)){selectedBatch.current=id;setSelectedBatchId(id)}}catch{/* Selection is a convenience; durable commands remain separately protected. */}
     if (auth.permissions.includes('channel.view')) void reload().catch(e => setError(e.message))
     try { setPending(command.pending() !== null) } catch (e) { setError(message(e)) }
     return () => { epoch.current++ }
   }, [auth.session.id, auth.permissions, reload, command,selectionKey])
   function changePromoter(id:string) {
-    setPromoter(id);setCampaign('');setReview(null);selectBatchId('');setBatchDraft(null);setDraftVersion(v=>v+1);setOfferKind('credit');setProducts([]);setCommissionProducts([]);setAllowStacking(false);setNotice('');setError('');setTemplatePromoter('');setCopiedFrom('')
+    setPromoter(id);setCampaign('');setReview(null);selectBatchId('');setBatchDraft(null);setDraftVersion(v=>v+1);setOfferKind('credit');setProducts([]);setAllProducts(true);setCommissionProducts([]);setAllowStacking(false);setNotice('');setError('');setTemplatePromoter('');setCopiedFrom('')
   }
   async function copyPrevious(sourceId=promoterId) {
     if(writing.current||pending||!canManage||!promoterId)return
@@ -67,7 +69,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
       const needed=[...draft.productIds,...draft.commissionProducts,...(draft.kind==='gift'?[draft.fields.giftProductId]:[])]
       if(needed.some(id=>!data?.products.some(p=>p.id===id)))throw new Error('原批次有已停用或不在当前列表的商品，请刷新核对后重新配置，不自动删减原适用范围')
       if(!data?.campaigns.some(c=>c.id===draft.campaignId))throw new Error('原活动不在当前列表，请刷新核对后重新配置')
-      setCopiedFrom(other?sourceName:'');setReview(null);selectBatchId('');setBatchDraft(draft);setDraftVersion(v=>v+1);setCampaign(draft.campaignId);setProducts(draft.productIds);setCommissionProducts(draft.commissionProducts);setAllowStacking(draft.allowStacking);setOfferKind(draft.kind)
+      setCopiedFrom(other?sourceName:'');setReview(null);selectBatchId('');setBatchDraft(draft);setDraftVersion(v=>v+1);setCampaign(draft.campaignId);setProducts(draft.productIds);setAllProducts(draft.productIds.length===data?.products.length&&draft.productIds.every(id=>data.products.some(p=>p.id===id)));setCommissionProducts(draft.commissionProducts);setAllowStacking(draft.allowStacking);setOfferKind(draft.kind)
       if(batchSection.current)batchSection.current.open=true
       setNotice(other?`已沿用${sourceName}的优惠方案。请填写本次时间，核对佣金、条款和标题适用于当前商家；专属码和佣金归属将绑定当前推荐店长。`:'已复制这位店长上一批配置。请填写本次领取和使用时间，核对后生成；新批次仍需另一人审批，原图和已用额度不会改变。')
     }catch(e){if(current===epoch.current)setError(message(e))}
@@ -96,7 +98,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
     event.preventDefault(); const fields = new FormData(event.currentTarget), value = (name: string) => String(fields.get(name) ?? '').trim(), integer = (name: string) => Number(value(name))
     try {
       if (action === 'partner') void mutate({ action, body: { name: value('name'), settlementSubject: value('settlementSubject'), promoterName: value('promoterName'), reason: value('reason') } })
-      if (action === 'campaign') void mutate({ action, body: { title: value('title'), claimLimit: integer('claimLimit'), capacityLimit: integer('capacityLimit'), costLimitMinor: Math.round(integer('costYuan') * 100), reason: value('reason') } })
+      if (action === 'campaign') void mutate({ action, body: { title: value('title'), claimLimit: integer('claimLimit'), capacityLimit: integer('claimLimit'), costLimitMinor: Math.round(integer('costYuan') * 100), reason: value('reason') } })
       if (action === 'followup'&&['sent','received'].includes(value('kind'))&&!currentBatch)throw new Error('请先选择本次推广批次，再登记发送或收到')
       if (action === 'followup') void mutate({ action, body: { promoterId, batchId: selectedBatchId || null, kind: value('kind'), note: value('note'), nextContactAt: value('nextContactAt') ? beijingDateTimeIso(value('nextContactAt')) : null } })
       if (action === 'batch') {
@@ -109,7 +111,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
         const rule = channelRuleSchema.parse({ title: value('title'), totalClaims: integer('N'), perCustomerClaims: integer('K'), perVisitUses: integer('L'),
           claimFrom: beijingDateTimeIso(value('claimFrom')), claimUntil: beijingDateTimeIso(value('claimUntil')), useFrom: beijingDateTimeIso(value('useFrom')), useUntil: beijingDateTimeIso(value('useUntil')),
           allowStacking, visitDiscountCapMinor:allowStacking&&value('visitDiscountCap')?Math.round(integer('visitDiscountCap')*100):null,
-          minimumMinor: Math.round(integer('minimum') * 100), eligibleProductIds: productIds,...(commissionProducts.length?{commissionProductIds:commissionProducts}:{}), offer, commissionBps: Math.round(integer('commission') * 100), observationDays: integer('observationDays') })
+          minimumMinor: Math.round(integer('minimum') * 100), eligibleProductIds: allProducts?(data?.products??[]).map(p=>p.id):productIds, eligibleProductScope:allProducts?'all':'selected',...(commissionProducts.length?{commissionProductIds:commissionProducts}:{}), offer, commissionBps: Math.round(integer('commission') * 100), observationDays: integer('observationDays') })
         setReview({ action, body: channelManagementSchemas.batch.parse({ campaignId, promoterId, rule, contract: { version: value('contractVersion'), settlementSubject: partner.settlementSubject, terms: value('terms') }, reason: value('reason') }) })
       }
     } catch (e) { setError(message(e)) }
@@ -167,18 +169,20 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
           <label>优惠类型<select name="kind" value={offerKind} onChange={e=>setOfferKind(e.target.value as ChannelRule['offer']['kind'])}><option value="credit">金额优惠</option><option value="discount">百分比减免</option><option value="gift">指定赠品</option></select></label>
           {offerKind!=='gift'&&<label>{offerKind==='credit'?'减免金额（元）':'减免百分比（九折填10）'}<input key={offerKind} name="value" type="number" min="0.01" max={offerKind==='discount'?100:10000000} step="0.01" required defaultValue={batchDraft?.kind===offerKind?draftValue('value'):''}/></label>}
           {offerKind==='discount'&&<><label>百分比减免封顶（元）<input name="maximum" type="number" min="0.01" step="0.01" required defaultValue={batchDraft?.kind==='discount'?draftValue('maximum'):''}/></label><p>九折填10，八五折填15。封顶为每张券最多减免金额。</p></>}
-          {offerKind==='gift'&&<><label>赠品<select name="giftProductId" required defaultValue={batchDraft?.kind==='gift'?draftValue('giftProductId'):''}><option value="">请选择赠品</option>{data?.products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>每券赠送份数<input name="quantity" type="number" min="1" max="100" required defaultValue={batchDraft?.kind==='gift'?draftValue('quantity'):'1'}/></label><p>赠品成本按当前商品档案重新核对；缺成本不能发行，领取时校验库存。</p></>}
+          {offerKind==='gift'&&<><label>赠品<select name="giftProductId" required defaultValue={batchDraft?.kind==='gift'?draftValue('giftProductId'):''}><option value="">请选择赠品</option>{data?.products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>每券赠送份数<input name="quantity" type="number" min="1" max="100" required defaultValue={batchDraft?.kind==='gift'?draftValue('quantity'):'1'}/></label><p>赠品成本按当前商品档案重新核对；缺成本不能发行，领券不占库存，实际赠送时检查库存并记账。</p></>}
           <p>不叠加时每客组只能使用一张渠道券；叠加时赠品按正常售价计入客组总优惠，转桌不重置。</p>
           <label>使用门槛（元）<input name="minimum" defaultValue={draftValue('minimum', '0')} type="number" min="0" step="0.01" required/></label>
           <label>佣金比例（%）<input name="commission" defaultValue={draftValue('commission', '10')} type="number" min="0" max="100" step="0.01" required/></label><label>结算观察天数<input name="observationDays" defaultValue={draftValue('observationDays', '7')} type="number" min="0" max="90" required/></label><label>合作条款版本<input name="contractVersion" defaultValue={draftValue('contractVersion')} required/></label><label>合作条款摘要<textarea name="terms" defaultValue={draftValue('terms')} required minLength={2} maxLength={3000}/></label><label>生成原因<input name="reason" defaultValue={draftValue('reason')} required minLength={2}/></label>
-        </div><ChannelProductSelector label="适用商品" products={data?.products??[]} selected={productIds} onChange={setProducts}/>
+        </div><label className="channel-scope-toggle"><input type="checkbox" checked={allProducts} onChange={e=>{setAllProducts(e.target.checked);setReview(null)}}/>全部商品参与（默认）</label>
+        {allProducts?<p>当前 {data?.products.length??0} 款；生成时固定适用范围，后续新增商品不自动加入旧券。推广图和券面简写“全部商品参与”。</p>:<ChannelProductSelector label="适用商品" products={data?.products??[]} selected={productIds} onChange={setProducts}/> }
         <ChannelProductSelector label="计佣商品" products={data?.products??[]} selected={commissionProducts} onChange={setCommissionProducts} hint="不选则与适用商品相同；未列入的充值、票务、服务费不计佣。"/>
         {copiedFrom&&<label className="channel-reuse-confirm"><input name="confirmReusedTerms" type="checkbox" required/>已核对来自{copiedFrom}的标题、佣金和条款适用于{partner?.name}；结算主体为{partner?.settlementSubject}</label>}
-        <button disabled={!promoterId || !campaignId || !productIds.length}>核对配置，进入下一步</button>
+        <button disabled={!promoterId || !campaignId || !(allProducts?data?.products.length:productIds.length)}>核对配置，进入下一步</button>
       </fieldset></form></details>
     </>}
     {reviewBody&&<section className="channel-flow-card" aria-label="生成前核对"><h4>核对配置后生成待审批批次</h4>
       <p>{partner?.name} · {partner?.promoterName}</p>
+      <ChannelBudgetSummary rule={reviewBody.rule} campaignLimit={data?.campaigns.find(c=>c.id===reviewBody.campaignId)?.costLimitMinor} storeLimit={data?.limits?.costLimitMinor} products={data?.products}/>
       <ChannelRuleSummary rule={reviewBody.rule} contract={reviewBody.contract} products={data?.products}/>
       <button type="button" disabled={disabled} onClick={()=>void mutate(review!)}>确认生成待审批批次</button>
       <button type="button" disabled={disabled} onClick={()=>{setReview(null);if(batchSection.current)batchSection.current.open=true}}>返回修改</button>
@@ -187,6 +191,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
       <label>继续处理已有批次<select value={selectedBatchId} disabled={disabled} onChange={e=>e.target.value?continueBatch(e.target.value):selectBatchId('')}><option value="">请选择，或在上方生成新批次</option>{data?.batches.filter(b=>!promoterId||b.promoterId===promoterId).map(b=><option key={b.id} value={b.id}>{data.partners.find(p=>p.promoterId===b.promoterId)?.name??'合作商户'} · {b.rule.title} · {b.offerCode} · {b.acceptingClaims?'已发布':'待审批或已停发'}</option>)}</select></label>
       {selectedBatchId&&!currentBatch&&<p role="alert">当前批次尚未读回，请刷新核对；不要重新生成，也不会自动改选其他批次。</p>}
       {currentBatch&&<><p><strong>{partner?.name} · {partner?.promoterName} · {currentBatch.offerCode}</strong></p>
+        <ChannelBudgetSummary rule={currentBatch.rule} campaignLimit={campaign?.costLimitMinor} storeLimit={data?.limits?.costLimitMinor} saved/>
         <ChannelRuleSummary rule={currentBatch.rule} contract={currentBatch.contract} products={data?.products} saved/>
         {campaign?.staffEntryEnabled&&!campaign.selfEntryEnabled&&<p>当前仅开放员工代领：请告知顾客到店出示原图，由服务员核验；微信自领尚未开启。</p>}
         <p>{currentBatch.acceptingClaims?'审批发布已完成':'待另一管理员审批，或已暂停领取'}{!currentBatch.createdBy?'；创建人记录缺失，请管理员核查':currentBatch.createdBy===auth.session.employeeId?'；本账号是创建人，不能自行审批':''}。</p>
@@ -198,12 +203,12 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
       </>}
       {partner&&<><h4>配置检查与补齐</h4>
         {partner.status!=='active'||partner.partnerStatus!=='active'?<p>商家或推荐人未启用／状态待核对。<button type="button" disabled={disabled} onClick={()=>focusOperation('promoter',promoterId)}>核对推荐人设置</button></p>:null}
-        {!data?.limits||data.limits.claimLimit<=0||data.limits.capacityLimit<=0?<p>全店发券额度未配置或为零。<button type="button" disabled={disabled} onClick={()=>focusOperation('limits')}>设置全店额度</button></p>:null}
+        {!data?.limits||data.limits.claimLimit<=0?<p>全店发券额度未配置或为零。<button type="button" disabled={disabled} onClick={()=>focusOperation('limits')}>设置全店额度</button></p>:null}
         {!campaign?<p>尚未选择活动。<button type="button" disabled={disabled} onClick={()=>{if(batchSection.current){batchSection.current.open=true;batchSection.current.scrollIntoView({block:'nearest'})}}}>选择活动与优惠</button></p>:!campaign.acceptingClaims||!campaign.selfEntryEnabled||!campaign.staffEntryEnabled?<p>活动或领取入口未全部启用。顾客扫码需要“顾客自行新领取”，员工代领需要“员工代办新领取”。<button type="button" disabled={disabled} onClick={()=>focusOperation('campaign',campaign.id)}>核对本活动入口</button></p>:null}
         {!partner.contactEmployeeId||!partner.canConfirmStatement?<p>联系人或店长确认结算权限未配置。<button type="button" disabled={disabled} onClick={()=>focusOperation('promoter',promoterId)}>补齐推荐人配置</button></p>:null}
         {!partner.linked&&<p>官网账号待开通。<button type="button" disabled={disabled} onClick={openSetup}>开通官网账号</button></p>}
         {partner.hasVerifiedAccount!==true&&<p>佣金收款账户尚未核实／待核对。{auth.permissions.includes('channel.settle')?<button type="button" onClick={openFinance}>登记并复核账户</button>:'请财务在本页完成账户登记和独立复核。'}</p>}
-        <p>以上核对配置状态，不预留额度或库存；领取时系统仍会实时检查累计额度、库存和有效时间。</p>
+        <p>领取只检查名额、每人次数及有效期，不预留库存或成本；实际赠送时才检查库存。历史已预留券沿用原承诺。</p>
       </>}
     </section>
     {data&&<ChannelOperationsPanel api={api} auth={auth} data={data} onRefresh={reload} target={operationTarget}/>}
@@ -216,7 +221,7 @@ export function ChannelManagementPanel({ api, auth }: { api: NormalizedApiClient
         <label>合作店名称<input name="name" required minLength={2} maxLength={100}/></label><label>约定佣金结算主体<input name="settlementSubject" required minLength={2} maxLength={200}/></label><label>店长姓名<input name="promoterName" required maxLength={100}/></label><label>登记依据<input name="reason" required minLength={2}/></label><button>保存合作方</button>
       </fieldset></form></details>
       <details><summary>2. 建立活动总额度</summary><form onSubmit={e => form(e, 'campaign')}><fieldset disabled={disabled} className="gift-form-grid">
-        <label>活动名称<input name="title" required minLength={2}/></label><label>活动最多发券数<input name="claimLimit" type="number" min="1" max="1000000" required/></label><label>最多可承诺份数<input name="capacityLimit" type="number" min="1" max="1000000" required/></label><label>优惠成本总上限（元）<input name="costYuan" type="number" min="0" step="0.01" required/></label><label>额度依据<input name="reason" required minLength={2}/></label><button>保存暂停状态的活动</button>
+        <label>活动名称<input name="title" required minLength={2}/></label><label>活动最多发券数<input name="claimLimit" type="number" min="1" max="1000000" required/></label><label>优惠成本预警金额（元）<input name="costYuan" type="number" min="0" step="0.01" required/></label><label>额度依据<input name="reason" required minLength={2}/></label><button>保存暂停状态的活动</button>
       </fieldset></form></details>
       <button type="button" disabled={disabled || !promoterId} onClick={() => void mutate({ action: 'invite', body: { promoterId } })}>生成官网开通／重置链接</button>
       <p>当前推荐店长：{partner?`${partner.name} · ${partner.promoterName}`:'先登记合作方，保存后自动选中。'}。员工授权由管理员在系统配置完成，不会自动扩大权限。</p>

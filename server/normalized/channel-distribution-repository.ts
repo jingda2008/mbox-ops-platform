@@ -4,7 +4,7 @@ import { ChannelGiftInventory } from './channel-gift-inventory.js'
 import { randomBytes, randomInt } from 'node:crypto'
 import { channelRuleSchema, type ChannelRule } from '../../src/shared/channel-distribution.js'
 import { CustomerRepository } from './customer-repository.js'
-import { assertChannelActivation, assertChannelClaimCapacity, ChannelDistributionError } from './channel-distribution-policy.js'
+import { assertChannelActivation, assertChannelClaimCapacity, ChannelDistributionError, ChannelBusinessError } from './channel-distribution-policy.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 interface Batch extends Record<string, unknown> {
@@ -16,7 +16,7 @@ interface Claim extends Record<string, unknown> { id: string; customer_id: strin
 export interface ChannelClaimResult { claimId: string; batchId: string; status: string; reused: boolean; activationId?: string; visitId?: string }
 
 /** All writes use one scoped transaction. The movement lock is shared with
- * canonical-customer merges; the campaign row serializes N/K/budget decisions. */
+ * canonical-customer merges; the campaign row serializes shared issuance quotas. Legacy holds remain separate. */
 export class ChannelDistributionRepository {
   private readonly args: [string, string]
   constructor(private readonly tx: ScopedTransaction) { this.args = [tx.scope.tenantId, tx.scope.storeId] }
@@ -81,17 +81,15 @@ export class ChannelDistributionRepository {
       WHERE q.tenant_id=$1 AND q.store_id=$2 AND b.campaign_id=$5 AND NOT q.voided`,
     [...this.args, batch.id, customer.family, batch.campaign_id, now.toISOString()])).rows[0]!
     assertChannelClaimCapacity({ rule, issued: counts.issued, customerIssued: counts.customer_issued,
-      poolRemaining: batch.claim_limit - counts.pool_issued, capacityRemaining: batch.capacity_limit - counts.held,
+      poolRemaining: batch.claim_limit - counts.pool_issued,
       paused: !batch.accepting_claims || !batch.campaign_open || batch.partner_status !== 'active' || batch.promoter_status !== 'active'
         || !(entry === 'staff' ? batch.staff_entry_enabled : batch.self_entry_enabled), now })
-    const commitment = rule.offer.kind === 'gift' ? rule.offer.costMinor : rule.offer.kind === 'credit' ? rule.offer.amountMinor : rule.offer.maximumMinor
-    if (BigInt(counts.cost) + BigInt(commitment) > BigInt(batch.cost_limit_minor)) throw new ChannelDistributionError('CAPACITY')
-    await this.assertStoreCapacity(commitment)
+    // A claim is a marketing entitlement, not a stock reservation or an expense.
+    await this.assertNewClaimQuota()
     const row = (await this.tx.query<{ id: string }>(`INSERT INTO mbox.channel_claims
-      (tenant_id,store_id,batch_id,customer_id,entry,cost_commitment_minor)
-      VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, [...this.args, batch.id, customer.id, entry, commitment])).rows[0]!
-    if(rule.offer.kind==='gift')await new ChannelGiftInventory(this.tx).reserve(row.id,rule.offer)
-    await this.event(row.id, 'claim.issued', actorRef ?? `customer:${customer.id}`, { batchId: batch.id, customerId: customer.id, entry })
+      (tenant_id,store_id,batch_id,customer_id,entry,cost_commitment_minor,fulfillment_policy)
+      VALUES($1,$2,$3,$4,$5,0,'on_use') RETURNING id`, [...this.args, batch.id, customer.id, entry])).rows[0]!
+    await this.event(row.id, 'claim.issued', actorRef ?? `customer:${customer.id}`, { batchId: batch.id, customerId: customer.id, entry, fulfillmentPolicy:'on_use' })
     return { claimId: row.id, batchId: batch.id, status: 'available', reused: false }
   }
 
@@ -202,12 +200,12 @@ export class ChannelDistributionRepository {
       [...this.args,customer.family,options.cursor,batchId])).rows[0]
       if(!anchor)throw new ChannelDistributionError('NOT_FOUND',404)
     }
-    const rows=(await this.tx.query(`SELECT q.id,q.batch_id AS "batchId",b.offer_code AS "offerCode",b.rule_snapshot->>'title' AS title,
+    const rows=(await this.tx.query(`SELECT q.id,q.fulfillment_policy AS "fulfillmentPolicy",q.batch_id AS "batchId",b.offer_code AS "offerCode",b.rule_snapshot->>'title' AS title,
       CASE WHEN q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)<=clock_timestamp() THEN 'expired' ELSE q.status END AS status,
-      COALESCE((SELECT v.snapshot->'offer' FROM mbox.channel_gift_versions v WHERE (v.tenant_id,v.store_id,v.claim_id)=(q.tenant_id,q.store_id,q.id) ORDER BY generation DESC LIMIT 1),b.rule_snapshot->'offer') AS offer,b.rule_snapshot->>'useFrom' AS "useFrom",COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)::text AS "useUntil",p.name AS "sourceLabel"
+      COALESCE((SELECT v.snapshot->'offer' FROM mbox.channel_gift_versions v WHERE (v.tenant_id,v.store_id,v.claim_id)=(q.tenant_id,q.store_id,q.id) ORDER BY generation DESC LIMIT 1),q.gift_selection,b.rule_snapshot->'offer') AS offer,b.rule_snapshot->>'useFrom' AS "useFrom",COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)::text AS "useUntil",p.name AS "sourceLabel"
       ,(b.rule_snapshot->>'minimumMinor')::integer AS "minimumMinor",(b.rule_snapshot->>'perCustomerClaims')::integer AS "perCustomerClaims",(b.rule_snapshot->>'perVisitUses')::integer AS "perVisitUses"
       ,COALESCE((b.rule_snapshot->>'allowStacking')::boolean,false) AS "allowStacking",(b.rule_snapshot->>'visitDiscountCapMinor')::integer AS "visitDiscountCapMinor"
-      ,b.rule_snapshot->'eligibleProductNames' AS "eligibleProducts"
+      ,b.rule_snapshot->'eligibleProductNames' AS "eligibleProducts",COALESCE(b.rule_snapshot->>'eligibleProductScope','selected') AS "eligibleProductScope"
       FROM mbox.channel_claims q JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(q.tenant_id,q.store_id,q.batch_id)
       JOIN mbox.channel_partners p ON (p.tenant_id,p.store_id,p.id)=(b.tenant_id,b.store_id,b.partner_id)
       WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.customer_id=ANY($3::uuid[]) AND NOT q.voided AND ($4::uuid IS NULL OR q.batch_id=$4) AND ($5::uuid IS NULL OR q.id=$5)
@@ -233,11 +231,9 @@ export class ChannelDistributionRepository {
     [...this.args,batch.id,customer.family,batch.campaign_id,now.toISOString()])).rows[0]!
     let unavailable: string | null = null
     try { assertChannelClaimCapacity({ rule, issued: counts.issued, customerIssued: counts.own,
-      poolRemaining: batch.claim_limit-counts.pool, capacityRemaining: batch.capacity_limit-counts.held, now,
+      poolRemaining: batch.claim_limit-counts.pool,  now,
       paused: !batch.accepting_claims || !batch.campaign_open || !batch.self_entry_enabled || batch.partner_status!=='active' || batch.promoter_status!=='active' })
-      const commitment=rule.offer.kind==='gift'?rule.offer.costMinor:rule.offer.kind==='credit'?rule.offer.amountMinor:rule.offer.maximumMinor
-      if(BigInt(counts.cost)+BigInt(commitment)>BigInt(batch.cost_limit_minor))throw new ChannelDistributionError('CAPACITY')
-      await this.assertStoreCapacity(commitment,null,true)
+      await this.assertNewClaimQuota(true)
     }
     catch(error) { if (!(error instanceof ChannelDistributionError)) throw error; unavailable=error.message }
     const source = (await this.tx.query<{ name: string }>('SELECT name FROM mbox.channel_partners WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.args,batch.partner_id])).rows[0]!.name
@@ -251,7 +247,7 @@ export class ChannelDistributionRepository {
     return { batchId: batch.id, offerCode: batch.offer_code, title:rule.title, sourceLabel:source, offer,
       minimumMinor:rule.minimumMinor, perCustomerClaims:rule.perCustomerClaims, perVisitUses:rule.perVisitUses, allowStacking:rule.allowStacking,visitDiscountCapMinor:rule.visitDiscountCapMinor,
       claimFrom:rule.claimFrom, claimUntil:rule.claimUntil, useFrom:rule.useFrom, useUntil:rule.useUntil,
-      eligibleProducts:rule.eligibleProductNames ?? [], claimedCount:counts.own, existingClaimId:existing, existingCoupon, unavailable }
+      eligibleProductScope:rule.eligibleProductScope??'selected', eligibleProducts:rule.eligibleProductNames ?? [], claimedCount:counts.own, existingClaimId:existing, existingCoupon, unavailable }
   }
 
   async cancelActivation(activationId: string, tableSessionId: string, employeeId: string, reason: string) {
@@ -282,6 +278,11 @@ export class ChannelDistributionRepository {
   async createBatch(input: { campaignId: string; promoterId: string; rule: ChannelRule; contract: Record<string, unknown> }) {
     await this.lockIdentity()
     const rule = channelRuleSchema.parse(input.rule)
+    // Freeze the current catalog. A client cannot label a selected subset as all goods.
+    const catalog=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND status='active' ORDER BY id FOR SHARE`,this.args)).rows
+    const all=catalog.length===rule.eligibleProductIds.length&&catalog.every(p=>rule.eligibleProductIds.includes(p.id))
+    if(rule.eligibleProductScope==='all'&&!all)throw new ChannelBusinessError('商品范围已变化，请刷新并重新选择全部商品')
+    rule.eligibleProductScope=all?'all':'selected'
     const productIds = [...new Set([...rule.eligibleProductIds,...(rule.commissionProductIds??[]), ...(rule.offer.kind === 'gift' ? [rule.offer.productId] : [])])]
     const products = await this.tx.query<{ id: string; name: string; cost_amount_minor:string|null;product_kind:string }>(`SELECT id,name,cost_amount_minor::text,product_kind FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) AND status='active' ORDER BY id FOR SHARE`, [...this.args, productIds])
     if (products.rows.length !== productIds.length) throw new ChannelDistributionError('NOT_FOUND', 404)
@@ -289,7 +290,7 @@ export class ChannelDistributionRepository {
     if (rule.offer.kind === 'gift') {
       const giftId = rule.offer.productId
       const product=products.rows.find(p => p.id === giftId)!
-      if(product.cost_amount_minor===null||product.product_kind!=='single')throw new ChannelDistributionError('CAPACITY')
+      if(product.cost_amount_minor===null||product.product_kind!=='single')throw new ChannelDistributionError('GIFT_CONFIGURATION')
       rule.offer.productName=product.name
       rule.offer.costMinor=Number(product.cost_amount_minor)*rule.offer.quantity
     }
@@ -303,15 +304,24 @@ export class ChannelDistributionRepository {
     [...this.args, input.campaignId, promoter.partner_id, input.promoterId, offerCode, randomBytes(32).toString('base64url'), JSON.stringify(rule), JSON.stringify(input.contract)])).rows[0]!
   }
 
+  /** Only issuance counts govern new claims. Legacy cost/stock holds are separate. */
+  async assertNewClaimQuota(readOnly=false){
+    const limit=(await this.tx.query<{claim_limit:number}>(`SELECT claim_limit FROM mbox.channel_store_limits WHERE tenant_id=$1 AND store_id=$2 ${readOnly?'':'FOR UPDATE'}`,this.args)).rows[0]
+    if(!limit)throw new ChannelDistributionError('STORE_LIMIT')
+    const count=(await this.tx.query<{n:number}>(`SELECT count(*)::integer AS n FROM mbox.channel_claims WHERE tenant_id=$1 AND store_id=$2 AND NOT voided`,this.args)).rows[0]!.n
+    if(count>=limit.claim_limit)throw new ChannelDistributionError('STORE_LIMIT')
+  }
+
   async assertStoreCapacity(commitment:number,excludeClaimId:string|null=null,readOnly=false){
     const limits=(await this.tx.query<{claim_limit:number;capacity_limit:number;cost_limit_minor:string}>(`SELECT claim_limit,capacity_limit,cost_limit_minor::text FROM mbox.channel_store_limits WHERE tenant_id=$1 AND store_id=$2 ${readOnly?'':'FOR UPDATE'}`,this.args)).rows[0]
-    if(!limits)throw new ChannelDistributionError('CAPACITY')
+    if(!limits)throw new ChannelDistributionError('STORE_LIMIT')
     const counts=(await this.tx.query<{issued:number;held:number;cost:string}>(`SELECT count(*)::integer AS issued,
-      count(*) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp()))::integer AS held,
-      COALESCE(sum(q.cost_commitment_minor) FILTER(WHERE q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp())),0)::text AS cost
+      count(*) FILTER(WHERE q.fulfillment_policy='reserved' AND (q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp())))::integer AS held,
+      COALESCE(sum(q.cost_commitment_minor) FILTER(WHERE q.fulfillment_policy='reserved' AND (q.status IN('active','fulfilled') OR(q.status='available' AND COALESCE(q.use_until_override,(b.rule_snapshot->>'useUntil')::timestamptz)>clock_timestamp()))),0)::text AS cost
       FROM mbox.channel_claims q JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(q.tenant_id,q.store_id,q.batch_id)
       WHERE q.tenant_id=$1 AND q.store_id=$2 AND NOT q.voided AND ($3::uuid IS NULL OR q.id<>$3)`,[...this.args,excludeClaimId])).rows[0]!
-    if((!excludeClaimId&&counts.issued>=limits.claim_limit)||counts.held>=limits.capacity_limit||BigInt(counts.cost)+BigInt(commitment)>BigInt(limits.cost_limit_minor))throw new ChannelDistributionError('CAPACITY')
+    if((!excludeClaimId&&counts.issued>=limits.claim_limit)||counts.held>=limits.capacity_limit)throw new ChannelDistributionError('STORE_LIMIT')
+    if(BigInt(counts.cost)+BigInt(commitment)>BigInt(limits.cost_limit_minor))throw new ChannelDistributionError('STORE_BUDGET')
   }
 
   async event(id: string, type: string, actor: string, payload: Record<string, unknown>, reason = type) {

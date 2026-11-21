@@ -36,6 +36,16 @@ function harness(name: string) {
 }
 
 describe('channel mini program identity and action boundaries', () => {
+  it('summarizes all goods in both landing and wallet while legacy selected goods retain their names',async()=>{
+    const {page,api}=harness('channel-coupons')
+    const goods={offer:{kind:'credit',amountMinor:1000},eligibleProductScope:'all',eligibleProducts:[{id:'p',name:'不应展开的明细'}]}
+    api.getChannelOffer.mockResolvedValue(goods as never)
+    api.getChannelWallet.mockResolvedValue([{...goods,id:'all'},{...goods,id:'legacy',eligibleProductScope:undefined}] as never)
+    page.onLoad({scene:'CH_ABCDEFGH2345'});await page.onShow()
+    expect(page.data.offer.productText).toBe('全部商品参与（本券生成时在售商品）')
+    expect(page.data.coupons[0].productText).toBe(page.data.offer.productText)
+    expect(page.data.coupons[1].productText).toBe('不应展开的明细')
+  })
   it('refreshes a foreground wallet when a claim finishes after hide/show read an older snapshot', async () => {
     const {page,api}=harness('channel-coupons')
     let finish!: () => void

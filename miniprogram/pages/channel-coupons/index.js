@@ -15,7 +15,7 @@ function present(item) {
     claimTimeText: time(item.claimFrom) + ' 至 ' + time(item.claimUntil),
     stackingText: item.allowStacking ? '允许渠道券叠加 · ' + (item.visitDiscountCapMinor == null ? '未设置客组总上限' : '客组总优惠最高 ¥' + (item.visitDiscountCapMinor / 100).toFixed(2)) + '（含赠品售价，转桌不重置；不同批次取更严限制）' : '不允许叠加，本次客组只能使用一张渠道券',
     minimumText: '¥' + (item.minimumMinor / 100).toFixed(2),
-    productText: (item.eligibleProducts || []).map(p => p.name).join('、') || '请向员工核对适用商品',
+    productText: item.eligibleProductScope === 'all' ? '全部商品参与（本券生成时在售商品）' : (item.eligibleProducts || []).map(p => p.name).join('、') || '请向员工核对适用商品',
     offerText: item.offer.kind === 'gift' ? (item.offer.productName || '指定赠品') + ' ' + item.offer.quantity + ' 份' : item.offer.kind === 'credit' ? '优惠 ¥' + (item.offer.amountMinor / 100).toFixed(2) : '优惠 ' + (item.offer.discountBps / 100) + '%，最多 ¥' + (item.offer.maximumMinor / 100).toFixed(2),
   })
 }

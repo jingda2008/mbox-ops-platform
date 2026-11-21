@@ -18,6 +18,7 @@ export const channelRuleSchema = z.object({
   visitDiscountCapMinor: money.refine(n => n > 0).nullable().default(null),
   claimFrom: timestamp, claimUntil: timestamp, useFrom: timestamp, useUntil: timestamp,
   minimumMinor: money,
+  eligibleProductScope: z.enum(['all', 'selected']).optional(),
   eligibleProductIds: z.array(z.string().uuid()).min(1).max(500),
   commissionProductIds:z.array(z.string().uuid()).min(1).max(500).optional(),
   // Server replaces this display snapshot from the actual same-store catalog.
@@ -65,7 +66,12 @@ export const CHANNEL_ERROR_MESSAGES = {
   NOT_FOUND: '未找到此渠道优惠', NOT_STARTED: '还未到可用时间', EXPIRED: '已超过有效时间',
   PAUSED: '已暂停新的领取，原有效券仍可使用', CLAIM_LIMIT: '本批次已领完',
   CUSTOMER_LIMIT: '您已达到本批次领取上限', VISIT_LIMIT: '本次客组已达到限用次数',
-  SOURCE_CONFLICT: '本次消费已有其他推荐来源', CAPACITY: '本批次可承诺份数不足',
+  SOURCE_CONFLICT: '本次消费已有其他推荐来源', CAPACITY: '活动可承诺份数不足，请联系门店核对',
+  CAMPAIGN_BUDGET: '活动优惠成本额度不足，请联系门店核对',
+  STORE_BUDGET: '全店优惠成本额度不足，请联系门店核对',
+  STORE_LIMIT: '全店领券数量或承诺份数不足，请联系门店核对',
+  GIFT_CONFIGURATION: '赠品成本或配方待核对，请联系门店',
+  GIFT_STOCK: '赠品可用库存不足，请联系门店',
   OWNERSHIP: '请使用本人优惠券并确认当前桌次', VERSION_CONFLICT: '记录已变化，请刷新核对',
   NOT_REVERSIBLE: '权益已兑现，不能直接撤销使用', INVALID_AMOUNT: '金额或分摊依据无效',
 } as const

@@ -132,12 +132,12 @@ export class ChannelPricingRepository {
    JOIN mbox.order_items i ON (i.tenant_id,i.store_id,i.id)=(b.tenant_id,b.store_id,b.order_item_id) JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(x.tenant_id,x.store_id,x.order_id)
    WHERE x.tenant_id=$1 AND x.store_id=$2 AND x.visit_id=$3 AND i.product_id=ANY($4::uuid[]) AND o.status NOT IN('draft','cancelled')
    AND NOT EXISTS(SELECT 1 FROM mbox.pricing_authorizations z WHERE (z.tenant_id,z.store_id,z.order_id)=(o.tenant_id,o.store_id,o.id) AND z.status='consumed' AND z.kind='gift')`,[...this.scope,gift!.visit_id,rule.eligibleProductIds])).rows[0]!
-  if(money(spend.amount)<rule.minimumMinor)deny('本次消费尚未达到赠品门槛，原券和库存承诺仍保留')
+  if(money(spend.amount)<rule.minimumMinor)deny('本次消费尚未达到赠品门槛，原券保持，未生成新的赠品出品单')
   const priced=await new OrderRepository(this.tx).quoteCurrent(input.lines,'cashier',false)
   if(priced.subtotalAmountMinor<=0)deny('赠品缺少可追溯的标准价格，请先维护商品')
   await this.releaseUnusedCancelled(gift!.visit_id)
   const budget=await this.visitBudget(gift!.visit_id)
-  if(priced.subtotalAmountMinor>budget.remaining)deny('本次客组优惠余额不足以完整赠送，原券和库存承诺仍保留')
+  if(priced.subtotalAmountMinor>budget.remaining)deny('本次客组优惠余额不足以完整赠送，原券保持，未生成新的赠品出品单')
   return{visitId:gift!.visit_id,subtotalMinor:priced.subtotalAmountMinor,discountMinor:priced.subtotalAmountMinor,payableMinor:0,currency:priced.currency,giftClaimId:claimId,
    coupons:[{activationId:gift!.activation_id,amountMinor:priced.subtotalAmountMinor,usedBeforeMinor:0,eligibleMinor:money(spend.amount)}],
    allocations:priced.items.map((i,index)=>({requestIndex:index,productId:i.productId,quantity:i.quantity,unitPriceMinor:i.unitPriceMinor,discountAmountMinor:i.amountMinor,lineFingerprint:pricingLineFingerprint(input.lines[index]!)})),basisFingerprint:hash({budget,claimId,activationId:gift!.activation_id,spend:spend.amount})}

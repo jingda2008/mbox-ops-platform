@@ -18,6 +18,7 @@ describe('ActivityPaymentService', () => {
       { overrides: { payment_status: 'not_required', authoritative_payment_status: null }, state: 'not_required', actions: ['cancel_registration'] },
       { overrides: {}, state: 'action_required', actions: ['start_payment', 'cancel_registration'] },
       { overrides: { provider_action_state: 'ready' }, state: 'pending', actions: ['start_payment', 'query_payment', 'cancel_registration'] },
+      { overrides: { authoritative_payment_status: 'closed', capture_awaiting_posting: true }, state: 'unknown', actions: ['query_payment'] },
       { overrides: { provider_action_state: 'unknown' }, state: 'unknown', actions: ['query_payment'] },
       { overrides: { payment_status: 'paid', authoritative_payment_status: 'succeeded' }, state: 'confirmed', actions: [] },
       { overrides: { authoritative_payment_status: 'failed' }, state: 'failed', actions: ['cancel_registration'] },
@@ -276,7 +277,8 @@ function serviceFor(
   const transactions = {
     run: async (_scope: unknown, handler: (transaction: ScopedTransaction) => Promise<unknown>) => handler({
       scope,
-      query: async () => {
+      query: async (sql:string) => {
+        if (sql.includes('SELECT 1 FROM mbox.payments payment') && sql.includes('mbox.verified_provider_observations')) return {rows:[],rowCount:0}
         const row = typeof source === 'function' ? source() : source
         return { rows: [row], rowCount: 1 }
       },

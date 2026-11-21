@@ -2758,6 +2758,19 @@ integration('channel distribution real PostgreSQL authority', () => {
     await admin.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[payment])
     expect((await prepare(session)).discountMinor).toBe(500)
   })
+  it('preserves a channel discount after local closure with an unposted success receipt',async()=>{
+    const b=await batch({minimumMinor:0,allowStacking:true,visitDiscountCapMinor:500}),cid=await customer(),session=await table([cid])
+    const claim=await issue(b.code,cid),active=await activate(claim.claimId,cid,session)
+    const order=await consumePrice(session,(await prepare(session)).id),payment=randomUUID()
+    await admin.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status)
+      VALUES($3::uuid,$1,$2,$4,$3::text,'postar','jsapi',$5,'closed')`,[...args,payment,order.id,order.totalAmountMinor])
+    await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'active_query_binding',
+      providerEventId:randomUUID(),integrationRef:'isolated-channel-success',paymentPublicId:payment,providerTransactionId:randomUUID(),
+      reportedAmountMinor:order.totalAmountMinor,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString()})
+    await admin.query("UPDATE mbox.orders SET status='cancelled' WHERE id=$1",[order.id])
+    await runner.run(scope,tx=>new ChannelPricingRepository(tx).releaseUnusedCancelled(active.visitId!))
+    expect((await admin.query('SELECT applied_discount_minor::int AS used FROM mbox.channel_activations WHERE id=$1',[active.activationId])).rows[0].used).toBe(500)
+  })
   it('allows immediate unused activation cancellation after safe order cancellation without waiting for a worker',async()=>{
     const b=await batch({minimumMinor:0,allowStacking:true,visitDiscountCapMinor:500}),cid=await customer(),session=await table([cid]),coupon=await issue(b.code,cid),active=await activate(coupon.claimId,cid,session)
     const order=await consumePrice(session,(await prepare(session)).id)

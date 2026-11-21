@@ -1203,7 +1203,7 @@ Page({
           orderPublicId: pendingFromOrders.publicId,
           retryIdempotencyKey: randomId(`guest-payment-${pendingFromOrders.publicId}`),
           checkoutKind: 'guest_immediate_payment',
-          paymentPresentationState: 'ready_not_presented',
+          paymentPresentationState: 'recovered_from_bill',
           paymentPresentationInFlight: false,
           tableScope: paymentScope,
           amountText: money(pendingFromOrders.payableAmountMinor),
@@ -2523,7 +2523,13 @@ Page({
       }
       if (this.isCurrentTableRequest(guard)) await this.refreshSharedCart()
     } catch (error) {
-      if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt && runtime.getStorageSync(storageKey)?.key === attempt.key) { runtime.removeStorageSync(storageKey); await this.refreshSharedCart() }
+      if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt) {
+        const savedAttempt = runtime.getStorageSync(storageKey)
+        if (savedAttempt && savedAttempt.key === attempt.key) {
+          runtime.removeStorageSync(storageKey)
+          await this.refreshSharedCart()
+        }
+      }
       if (this.isCurrentTableRequest(guard)) this.setData({ error: isAlipayCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })
     } finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }
   },
@@ -2546,9 +2552,7 @@ Page({
       return
     }
     if (!isPresentableAlipayTradeAction(action)) {
-      const waitingForResult = Boolean(action && (
-        action.status === 'unknown' || (action.status === 'pending' && !action.payload)
-      ))
+      const waitingForResult = !action || action.status !== 'failed'
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
         statusText: waitingForResult ? '付款结果确认中' : '付款未完成',
         paymentPresentationState: waitingForResult ? 'result_unknown' : 'action_failed',
@@ -2566,7 +2570,7 @@ Page({
           mark: waitingForResult ? '…' : '!',
           title: waitingForResult ? '正在核对付款结果' : '未能发起支付宝支付',
           copy: waitingForResult
-            ? '本次不会进入出品；核对完成后可重新选购付款。'
+            ? '请在本桌账单查看原付款结果，核对期间请勿重复付款。'
             : '本次订单正在释放，你可以继续选购后重新付款。',
           canRetry: false,
         },
@@ -2622,12 +2626,12 @@ Page({
       this.setData({
         error: '',
         paymentResult: {
-          kind: cancelled ? 'cancelled' : 'failed',
-          mark: cancelled ? '×' : '!',
+          kind: cancelled ? 'cancelled' : 'pending',
+          mark: cancelled ? '×' : '…',
           title: cancelled ? '付款已取消' : '正在核对付款结果',
           copy: cancelled
             ? '本次订单正在释放，你可以继续选购后重新付款。'
-            : '本次不会进入出品；核对完成后可重新选购付款。',
+            : '请在本桌账单查看原付款结果，核对期间请勿重复付款。',
           canRetry: false,
         },
       })

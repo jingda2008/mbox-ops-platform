@@ -76,9 +76,10 @@ describe('PaymentRepository', () => {
   it('keeps a released unresolved payment auditable while removing it from the active pending lock', async () => {
     const releasedAt = '2026-08-11T12:02:00.000Z'
     const transaction = new ScriptedTransaction([
-      rows([paymentRow('pending', 8800)]),
-      rows([orderRow(8800)]),
+      rows([{order_id:orderId}]),
       rows([{ id: tableSessionId }]),
+      rows([orderRow(8800)]),
+      rows([paymentRow('pending', 8800)]),
       rows([{ ...paymentRow('pending', 8800), retry_released_at: releasedAt, retry_release_reason: '顾客未确认到账，改用另一种方式收款' }]),
       rows([orderRow(8800)]),
       rows([{ collection_due_minor: '8800', gross_paid_minor: '0', refunded_minor: '0', has_pending: false }]),
@@ -96,12 +97,14 @@ describe('PaymentRepository', () => {
       id: paymentId, status: 'pending', retryReleasedAt: releasedAt,
       retryReleaseReason: '顾客未确认到账，改用另一种方式收款',
     })
-    expect(transaction.calls[2]?.sql).toContain('FROM mbox.table_sessions')
-    expect(transaction.calls[3]?.sql).toContain('SET retry_released_at=clock_timestamp()')
-    expect(transaction.calls[3]?.values.slice(3)).toEqual([
+    expect(transaction.calls[1]?.sql).toContain('FOR SHARE OF session')
+    expect(transaction.calls[2]?.sql).toContain('FROM mbox.orders')
+    expect(transaction.calls[3]?.sql).toContain('FROM mbox.payments')
+    expect(transaction.calls[4]?.sql).toContain('SET retry_released_at=clock_timestamp()')
+    expect(transaction.calls[4]?.values.slice(3)).toEqual([
       employeeId, '顾客未确认到账，改用另一种方式收款', 'payment-retry-release-0001',
     ])
-    expect(transaction.calls[5]?.sql).toContain('p.retry_released_at IS NULL')
+    expect(transaction.calls[6]?.sql).toContain('p.retry_released_at IS NULL')
   })
 
   it('derives the payment amount only from the locked order and existing database settlement', async () => {
@@ -532,6 +535,10 @@ class ScriptedTransaction implements ScopedTransaction {
   ): Promise<{ rows: Row[]; rowCount: number }> {
     if(text.includes("to_regclass('mbox.checkout_point_holds')")||text.includes("to_regclass('mbox.order_carryover_debts')"))return {rows:[{present:false}] as unknown as Row[],rowCount:1}
     if(text.includes('FROM mbox.order_carryover_debts'))return {rows:[],rowCount:0}
+    // These legacy fixtures model a store with no verified provider observations.
+    const sql = normalizeSql(text)
+    if ((sql.startsWith('SELECT 1 FROM mbox.payments payment') || sql.startsWith('SELECT payment.order_id FROM mbox.order_payment_facts payment'))
+      && sql.includes('mbox.verified_provider_observations')) return {rows:[],rowCount:0}
     this.calls.push({ sql: normalizeSql(text), values: [...values] })
     const response = this.responses.shift()
     if (response === undefined) throw new Error(`Unexpected query: ${normalizeSql(text)}`)

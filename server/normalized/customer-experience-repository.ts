@@ -1,3 +1,4 @@
+import { verifiedCaptureSql } from './verified-capture-sql.js'
 import type {ActivityPackageChoiceGroup} from '../../src/shared/activity-service.js'
 import {prepareActivityPurchase,reserveActivityMealInventory,type ActivityPurchaseOptions} from './activity-purchase-support.js'
 import { ActivityServiceRepository, assertActivityUnusedRefund } from './activity-service-repository.js'
@@ -2155,6 +2156,7 @@ export class CustomerExperienceRepository {
             SELECT 1 FROM mbox.payments payment
             WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
               AND payment.id=community_activity_registrations.payment_id
+              AND NOT ${verifiedCaptureSql}
               AND (
                 (
                   payment.status IN ('created','pending')
@@ -2174,13 +2176,6 @@ export class CustomerExperienceRepository {
                       AND reconciliation.store_id=payment.store_id
                       AND reconciliation.payment_id=payment.id
                       AND reconciliation.entry_type='payment'
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1 FROM mbox.verified_provider_observations observation
-                    WHERE observation.tenant_id=payment.tenant_id
-                      AND observation.store_id=payment.store_id
-                      AND observation.payment_id=payment.id
-                      AND observation.observed_status='payment_succeeded'
                   )
                 )
               )
@@ -2204,6 +2199,7 @@ export class CustomerExperienceRepository {
           ),
           updated_at=clock_timestamp()
         WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid AND payment.id=$3::uuid
+          AND NOT ${verifiedCaptureSql}
           AND (
             (payment.status IN ('created','pending') AND NOT EXISTS (
               SELECT 1 FROM mbox.payment_provider_actions provider_action

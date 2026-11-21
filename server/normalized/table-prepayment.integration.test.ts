@@ -20,7 +20,7 @@ import {guestCommerceServiceApiPlugin} from './guest-commerce-service-api.js'
 import {GuestSharedCartRepository} from './guest-shared-cart-repository.js'
 import {RefundRepository} from './refund-repository.js'
 import {randomUUID} from 'node:crypto'
-import {beforeAll,afterAll,describe,it,expect} from 'vitest'
+import {beforeAll,afterAll,describe,it,expect,vi} from 'vitest'
 import {Pool} from 'pg'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {TablePrepaymentRepository} from './table-prepayment-repository.js'
@@ -101,7 +101,14 @@ integration('table prepayment PostgreSQL authority',()=>{
    const scope={tenantId,storeId},providerRefundId=randomUUID(),occurredAt=new Date().toISOString(),integrationRef='postar-fixture-refund'
    const observed=await new VerifiedProviderObservationService(transactions).recordRefund({scope,provider:'postar',verificationKind:'callback_signature',providerEventId:randomUUID(),integrationRef,refundPublicId:refund.public_id,providerTransactionId:providerRefundId,originalProviderTransactionId:payment.provider_transaction_id,reportedAmountMinor:2400,reportedCurrency:'CNY',status:'succeeded',occurredAt})
    const command={scope,actor:{type:'integration' as const,ref:integrationRef},businessDate:'2026-10-31',idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),verifiedObservationId:observed,refundPublicId:refund.public_id,provider:'postar' as const,providerRefundId,originalProviderTransactionId:payment.provider_transaction_id,reportedAmountMinor:2400,reportedCurrency:'CNY',succeeded:true,occurredAt}
-   const service=paymentService();expect((await service.recordProviderRefundResult(command)).value.status).toBe('succeeded');expect((await service.recordProviderRefundResult(command)).replayed).toBe(true)
+   const service=paymentService()
+   const attempt=vi.spyOn(RefundRepository.prototype,'completeProviderExecution')
+     .mockRejectedValueOnce(Object.assign(new Error('isolated posting deadlock'),{code:'40P01'}))
+   try {
+     expect((await service.recordProviderRefundResult(command)).value.status).toBe('succeeded')
+     expect((await service.recordProviderRefundResult(command)).replayed).toBe(true)
+     expect(attempt).toHaveBeenCalledTimes(2)
+   } finally { attempt.mockRestore() }
    expect(Number((await pool.query('SELECT sum(amount_minor) amount FROM mbox.reconciliation_entries WHERE tenant_id=$1',[tenantId])).rows[0].amount)).toBe(17600)
  })
  it('records waiver instead of charging a fee and rejects out-of-range waivers',async()=>{
@@ -311,6 +318,20 @@ integration('table prepayment PostgreSQL authority',()=>{
  async function staffApp(){
    const app=Fastify();await app.register(tableManagementApiPlugin,{commands:{} as never,nativeCommands:new NormalizedCommandExecutor(transactions),transactions,resolveContext:()=>({scope:{tenantId,storeId},employeeId:managerId,businessDate:'2026-10-31',capabilities:[]})});return app
  }
+ it('blocks a replacement top-up after a locally closed receipt has verified success',async()=>{
+   const session=await creditSession(0), request={tableSessionId:session,customerId,amountMinor:1200,provider:'postar' as const,method:'jsapi' as const}
+   const original=await run(tx=>new PaymentRepository(tx).createForTablePrepayment({...request,publicId:randomUUID()}))
+   await pool.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[original.id])
+   await new VerifiedProviderObservationService(transactions).recordPayment({scope:{tenantId,storeId},provider:'postar',verificationKind:'callback_signature',
+     providerEventId:randomUUID(),integrationRef:'isolated-topup-test',paymentPublicId:original.publicId,providerTransactionId:randomUUID(),
+     reportedAmountMinor:1200,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString()})
+   const snapshot=await run(tx=>new TablePrepaymentRepository(tx).snapshot(session,customerId))
+   expect(snapshot).toMatchObject({availableMinor:0,receivedMinor:0,myPendingReceipts:[{id:original.id}]})
+   expect((await run(tx=>readStaffCredit(tx,session))).pending.map(p=>p.id)).toContain(original.id)
+   expect((await run(tx=>tx.query<{blocked:boolean}>('SELECT mbox.table_prepayment_unsettled($1,$2,$3) AS blocked',[tenantId,storeId,session]))).rows[0].blocked).toBe(true)
+   await expect(run(tx=>new TablePrepaymentRepository(tx).requestUnusedRefunds(session,managerId,'预收款核对'))).rejects.toMatchObject({code:'TABLE_PREPAYMENT_PENDING'})
+   await expect(run(tx=>new PaymentRepository(tx).createForTablePrepayment({...request,publicId:randomUUID()}))).rejects.toThrow('渠道已确认')
+ })
  function paymentService(){return new PaymentCommandService(new NormalizedCommandExecutor(transactions),new NormalizedPaymentCapabilityAuthorization(),new NormalizedProviderObservationAuthority())}
  async function creditSession(minimum=15000){
    const table=randomUUID(),session=randomUUID()

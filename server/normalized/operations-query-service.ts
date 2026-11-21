@@ -351,18 +351,7 @@ export async function readTables(
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
-            AND refund.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('refund')})
-          + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
-            JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
-              AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
-            WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-              AND ordering.table_session_id=session.id
-              AND followup.amount_minor>COALESCE((SELECT sum(completed_refund.amount_minor)
-                FROM mbox.refunds completed_refund
-                WHERE completed_refund.tenant_id=followup.tenant_id
-                  AND completed_refund.store_id=followup.store_id
-                  AND completed_refund.payment_id=followup.payment_id
-                  AND completed_refund.status='succeeded'),0)) AS refund_attention_count,
+            AND refund.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('refund')}) AS refund_attention_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
             AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
@@ -370,18 +359,7 @@ export async function readTables(
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
-            AND refund.status IN ('requested','approved','failed') AND ${currentRefundAttemptSql('refund')})
-          + (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
-            JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
-              AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
-            WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-              AND ordering.table_session_id=session.id
-              AND followup.amount_minor>COALESCE((SELECT sum(completed_refund.amount_minor)
-                FROM mbox.refunds completed_refund
-                WHERE completed_refund.tenant_id=followup.tenant_id
-                  AND completed_refund.store_id=followup.store_id
-                  AND completed_refund.payment_id=followup.payment_id
-                  AND completed_refund.status='succeeded'),0)) AS refund_action_count,
+            AND refund.status IN ('requested','approved','failed') AND ${currentRefundAttemptSql('refund')}) AS refund_action_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
             AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
@@ -390,7 +368,30 @@ export async function readTables(
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id
             AND refund.status='processing') AS refund_processing_count,
-        0::integer AS payment_exception_count
+        (SELECT count(*)::integer FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
+            JOIN mbox.orders ordering ON ordering.tenant_id=followup.tenant_id
+              AND ordering.store_id=followup.store_id AND ordering.id=followup.order_id
+            WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
+              AND ordering.table_session_id=session.id
+              AND followup.amount_minor>COALESCE((SELECT sum(completed_refund.amount_minor)
+                FROM mbox.refunds completed_refund
+                WHERE completed_refund.tenant_id=followup.tenant_id
+                  AND completed_refund.store_id=followup.store_id
+                  AND completed_refund.payment_id=followup.payment_id
+                  AND completed_refund.status='succeeded'),0))
+          + (SELECT count(*)::integer FROM mbox.orders unfulfilled
+             WHERE (unfulfilled.tenant_id,unfulfilled.store_id,unfulfilled.table_session_id)
+                 =(session.tenant_id,session.store_id,session.id)
+               AND unfulfilled.settlement_mode='immediate_payment' AND unfulfilled.status<>'cancelled'
+               AND unfulfilled.fulfillment_state='cancelled'
+               AND EXISTS (SELECT 1 FROM mbox.order_payment_facts receipt
+                 WHERE (receipt.tenant_id,receipt.store_id,receipt.order_id)
+                     =(unfulfilled.tenant_id,unfulfilled.store_id,unfulfilled.id)
+                   AND receipt.status IN ('succeeded','partially_refunded')
+                   AND receipt.amount_minor>COALESCE((SELECT sum(r.amount_minor) FROM mbox.order_refund_facts r
+                     WHERE (r.tenant_id,r.store_id,r.order_id,r.payment_id)
+                         =(receipt.tenant_id,receipt.store_id,receipt.order_id,receipt.id)
+                       AND r.status='succeeded'),0))) AS payment_exception_count
     ) finance ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid

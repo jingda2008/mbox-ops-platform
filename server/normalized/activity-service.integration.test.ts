@@ -1,3 +1,5 @@
+import {ActivityRegistrationExpiryWorker} from './activity-registration-expiry-worker.js'
+import {VerifiedProviderObservationService} from './provider-verification-observation.js'
 import {validateProductPaymentWindow} from './product-payment-window.js'
 import {PrintTicketSourceRepository,ActivityPrintHeldError} from './print-ticket-source.js'
 import {PrintSourceWorker} from './print-source-worker.js'
@@ -150,6 +152,51 @@ const database = process.env.TEST_NORMALIZED_DATABASE_URL;
     it('keeps a verified on-time payment valid even when its callback arrives after the deadline',async()=>{
       const pkg=await salePackage(),purchase=await buy(pkg.id),success=new Date(Date.now()-120000).toISOString();await admin.query(`UPDATE mbox.community_activity_registrations SET payment_due_at=clock_timestamp()-interval '1 minute',seat_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE public_id=$1`,[purchase.publicId]);
       const paid=await pay(purchase,success);expect(paid.status).toBe('succeeded');expect((await run(repo=>repo.registration(purchase.publicId))).status).toBe('confirmed');
+    });
+    it.each(['cancel','expire','manual','stale_failure'])('preserves a verified activity payment during %s before posting',async entry=>{
+      const purchase=await buy((await salePackage()).id);
+      const occurredAt=new Date(Date.now()-120000).toISOString(), transactionId=randomUUID();
+      await new VerifiedProviderObservationService(runner).recordPayment({
+        scope,provider:'postar',verificationKind:'callback_signature',providerEventId:randomUUID(),
+        integrationRef:'isolated-activity-payment',paymentPublicId:purchase.paymentPublicId!,
+        providerTransactionId:transactionId,reportedAmountMinor:purchase.amountDueMinor,reportedCurrency:'CNY',status:'succeeded',occurredAt,
+      });
+      if(entry==='cancel'){
+        await expect(runner.run(scope,tx=>new CustomerExperienceRepository(tx).cancelActivityRegistration({
+          registrationPublicId:purchase.publicId,customerId:customer,reason:'退出报名',
+        }))).rejects.toMatchObject({code:'ACTIVITY_PAYMENT_RESULT_UNKNOWN'});
+      }else if(entry==='manual'){
+        await expect(runner.run(scope,tx=>new PaymentRepository(tx).recordManualForActivityRegistration({
+          registrationPublicId:purchase.publicId,collectedByEmployeeId:employee,publicId:randomUUID(),provider:'cash',method:'cash',
+          evidence:{collectedByEmployeeId:employee,receiptReference:randomUUID()},
+        }))).rejects.toThrow('渠道已确认');
+      }else if(entry==='expire'){
+        await admin.query("UPDATE mbox.community_activity_registrations SET payment_due_at=clock_timestamp()-interval '1 minute',seat_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE public_id=$1",[purchase.publicId]);
+        const outcome=await new ActivityRegistrationExpiryWorker(runner).runBatch(scope,'activity-capture-race');
+        expect(outcome.reviewRegistrationIds).toContain((await run(repo=>repo.registration(purchase.publicId))).id);
+      }else{
+        const outcome=await runner.run(scope,tx=>new PaymentRepository(tx).applyProviderQueryResult({
+          paymentPublicId:purchase.paymentPublicId!,provider:'postar',providerTransactionId:transactionId,
+          reportedAmountMinor:purchase.amountDueMinor,reportedCurrency:'CNY',status:'failed',providerSnapshot:{},
+        }));
+        expect(outcome.applied).toBe(false);
+      }
+      expect((await run(repo=>repo.registration(purchase.publicId))).status).toBe('payment_pending');
+      await runner.run(scope,async tx=>{
+        const repo=new PaymentRepository(tx);
+        const result=await repo.applySucceededCallback({paymentPublicId:purchase.paymentPublicId!,provider:'postar',
+          providerTransactionId:transactionId,reportedAmountMinor:purchase.amountDueMinor,reportedCurrency:'CNY',succeededAt:occurredAt});
+        await repo.syncActivityRegistrationPaymentStatus(result.payment);
+      });
+      expect((await run(repo=>repo.registration(purchase.publicId))).status).toBe('confirmed');
+    });
+    it.each([true,false])('honors the original deadline when recovering a posted activity receipt (late=%s)',async late=>{
+      const purchase=await buy((await salePackage()).id);
+      await admin.query("UPDATE mbox.community_activity_registrations SET payment_due_at=clock_timestamp()-interval '1 minute',seat_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE public_id=$1",[purchase.publicId]);
+      await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id=id::text,succeeded_at=clock_timestamp()-make_interval(mins=>$2) WHERE public_id=$1",[purchase.paymentPublicId,late?0:2]);
+      await new ActivityRegistrationExpiryWorker(runner).runBatch(scope,'activity-paid-recovery');
+      const registration=await run(repo=>repo.registration(purchase.publicId));
+      expect([registration.status, registration.payment_status]).toEqual([late?'cancelled':'confirmed','paid']);
     });
     it('records late funds without creating rights or kitchen tasks and permits a refund of the exact original payment',async()=>{
       const pkg=await salePackage(),purchase=await buy(pkg.id);await admin.query(`UPDATE mbox.community_activity_registrations SET payment_due_at=clock_timestamp()-interval '1 minute',seat_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE public_id=$1`,[purchase.publicId]);

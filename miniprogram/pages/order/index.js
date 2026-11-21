@@ -1295,7 +1295,7 @@ Page({
           orderPublicId: pendingFromOrders.publicId,
           retryIdempotencyKey: randomId(`guest-payment-${pendingFromOrders.publicId}`),
           checkoutKind: 'guest_immediate_payment',
-          paymentPresentationState: 'ready_not_presented',
+          paymentPresentationState: 'recovered_from_bill',
           paymentPresentationInFlight: false,
           tableScope: paymentScope,
           amountText: money(pendingFromOrders.payableAmountMinor),
@@ -2760,9 +2760,7 @@ Page({
       return
     }
     if (!isPresentableWechatJsapiAction(action)) {
-      const waitingForResult = Boolean(action && (
-        action.status === 'unknown' || (action.status === 'pending' && !action.payload)
-      ))
+      const waitingForResult = !action || action.status !== 'failed'
       const networkRejected = Boolean(action && action.failureCode === 'network_rejected')
       const identityRejected = Boolean(action && action.failureCode === 'identity_rejected')
       const configurationUnavailable = Boolean(action && action.failureCode === 'configuration_unavailable')
@@ -2786,7 +2784,7 @@ Page({
               : identityRejected ? '微信支付身份需要刷新'
                 : configurationUnavailable ? '线上支付暂时不可用' : '未能发起微信支付',
           copy: waitingForResult
-            ? '本次不会进入出品；核对完成后可重新选购付款。'
+            ? '请在本桌账单查看原付款结果，核对期间请勿重复付款。'
             : networkRejected
               ? '本次没有发起扣款。请切换手机网络或门店 Wi-Fi 后重试，也可请服务员改用扫码、POS 或现金收款。'
               : identityRejected
@@ -2845,12 +2843,12 @@ Page({
       this.setData({
         error: '',
         paymentResult: {
-          kind: cancelled ? 'cancelled' : 'failed',
-          mark: cancelled ? '×' : '!',
+          kind: cancelled ? 'cancelled' : 'pending',
+          mark: cancelled ? '×' : '…',
           title: cancelled ? '付款已取消' : '正在核对付款结果',
           copy: cancelled
             ? '本次订单正在释放，你可以继续选购后重新付款。'
-            : '本次不会进入出品；核对完成后可重新选购付款。',
+            : '请在本桌账单查看原付款结果，核对期间请勿重复付款。',
           canRetry: false,
         },
       })

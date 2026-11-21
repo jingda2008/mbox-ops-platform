@@ -48,7 +48,7 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
     await fixtures?.end()
   })
 
-  it.each(['callback', 'query'] as const)('serializes %s behind a session-then-order transaction without deadlock', async mode => {
+  it.each(['callback', 'query', 'release'] as const)('serializes %s behind a session-then-order transaction without deadlock', async mode => {
     const tableId = randomUUID(), sessionId = randomUUID(), orderId = randomUUID()
     const paymentId = randomUUID(), paymentPublicId = randomUUID()
     await fixtures.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)
@@ -59,6 +59,12 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),4000,4000)`, [orderId, scope.tenantId, scope.storeId, sessionId, orderId])
     await fixtures.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status)
       VALUES($1,$2,$3,$4,$5,'postar','native_qr',4000,'pending')`, [paymentId, scope.tenantId, scope.storeId, orderId, paymentPublicId])
+
+    const employeeId = randomUUID()
+    if (mode === 'release') {
+      await fixtures.query(`INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name)
+        VALUES($1,$2,$3,$4,'收银测试')`, [employeeId,scope.tenantId,scope.storeId,employeeId])
+    }
 
     // Refunds and table closure use this parent-first prefix. This connection
     // takes the parent first, then races the real provider-result repository.
@@ -92,6 +98,13 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
           },
         }
         const repository = new PaymentRepository(scheduled)
+        if (mode === 'release') {
+          await repository.findOrderIdForRetry(paymentId)
+          const payment = await repository.releaseUnresolvedForRetry({
+            paymentId, employeeId, reason: '未收到明确付款结果', idempotencyKey: randomUUID(),
+          })
+          return {payment}
+        }
         const input = { paymentPublicId, provider: 'postar' as const, providerTransactionId: randomUUID(), reportedAmountMinor: 4000, reportedCurrency: 'CNY', succeededAt: new Date().toISOString() }
         return mode === 'callback' ? repository.applySucceededCallback(input)
           : repository.applyProviderQueryResult({ ...input, status: 'closed' })
@@ -111,6 +124,7 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       const competing = (async () => {
         try {
           await other.query('SELECT id FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE', [scope.tenantId, scope.storeId, orderId])
+          await other.query('SELECT id FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE NOWAIT', [scope.tenantId,scope.storeId,paymentId])
           await other.query('COMMIT'); otherCommitted = true
           return { ok: true }
         } catch (error) {
@@ -128,8 +142,9 @@ const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       const [result, competingResult] = await Promise.all([repositoryWork, competing])
       expect({ heldOrderBeforeParent, waitsForParent }).toEqual({ heldOrderBeforeParent: false, waitsForParent: true })
       expect(competingResult).toEqual({ ok: true })
-      expect(result).toEqual({ ok: true, status: mode === 'callback' ? 'succeeded' : 'closed' })
-      expect((await fixtures.query('SELECT status FROM mbox.payments WHERE id=$1', [paymentId])).rows[0]!.status).toBe(mode === 'callback' ? 'succeeded' : 'closed')
+      const expectedStatus = { callback:'succeeded', query:'closed', release:'pending' }[mode]
+      expect(result).toEqual({ok:true,status:expectedStatus})
+      expect((await fixtures.query('SELECT status FROM mbox.payments WHERE id=$1', [paymentId])).rows[0]!.status).toBe(expectedStatus)
     } finally {
       releaseOrder()
       if (!otherCommitted) await other.query('ROLLBACK')

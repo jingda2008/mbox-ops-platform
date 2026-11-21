@@ -1,3 +1,4 @@
+import { unpostedCaptureSql } from './verified-capture-sql.js'
 import {assertEmployeeTableSessionAccess,assertEmployeeTableSessionReadAccess} from './employee-table-access.js'
 import {randomUUID} from 'node:crypto'
 import type {ScopedTransaction} from './transaction-runner.js'
@@ -18,7 +19,7 @@ export async function readStaffCredit(tx:ScopedTransaction,sessionId:string){
  const session=(await tx.query<{id:string;tableCode:string;locationVersion:number;minimumMinor:string;status:string}>(`SELECT s.id,t.code AS "tableCode",s.location_version::int AS "locationVersion",s.effective_minimum_spend_minor::text AS "minimumMinor",s.status FROM mbox.table_sessions s JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id) WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.id=$3`,[...scope,sessionId])).rows[0]
  if(!session)throw new TablePrepaymentError('TABLE_CREDIT_NOT_FOUND','桌次不存在')
  const orders=(await tx.query(`SELECT o.id,o.public_id AS "publicId",EXISTS(SELECT 1 FROM mbox.table_credit_order_links l WHERE(l.tenant_id,l.store_id,l.order_id)=(o.tenant_id,o.store_id,o.id)) AS linked,GREATEST(0,mbox.order_financial_receivable_amount(o.tenant_id,o.store_id,o.id)-COALESCE((SELECT sum(p.amount_minor) FROM mbox.order_payment_facts p WHERE(p.tenant_id,p.store_id,p.order_id)=(o.tenant_id,o.store_id,o.id) AND p.status IN('succeeded','partially_refunded','refunded')),0))::text AS "dueMinor" FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.table_session_id=$3 AND o.channel IN('staff_assisted','cashier') AND o.status NOT IN('draft','cancelled') AND o.payment_status IN('unpaid','pending','partially_paid') ORDER BY o.created_at,o.id`,[...scope,sessionId])).rows
- const pending=(await tx.query(`SELECT id,public_id AS "publicId",amount_minor::text AS "amountMinor",method,status FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND status IN('created','pending') ORDER BY created_at`,[...scope,sessionId])).rows
+ const pending=(await tx.query(`SELECT id,public_id AS "publicId",amount_minor::text AS "amountMinor",method,status FROM mbox.payments payment WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND (status IN('created','pending') OR ${unpostedCaptureSql}) ORDER BY created_at`,[...scope,sessionId])).rows
  return{session,orders,pending,prepayment:await new TablePrepaymentRepository(tx).snapshot(sessionId)}
 }
 export async function collectStaffCredit(tx:ScopedTransaction,input:StaffCreditInput){
@@ -35,7 +36,7 @@ export async function collectStaffCredit(tx:ScopedTransaction,input:StaffCreditI
   await tx.query('SELECT id FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE',[...scope,id])
   const refreshed=(await readStaffCredit(tx,input.sessionId)).orders.find(o=>o.id===id)
   if(!refreshed||Number(refreshed.dueMinor)<=0)throw new TablePrepaymentError('TABLE_CREDIT_ORDER_CHANGED','选定订单已结清，请刷新核对后再收款')
-  const blocked=(await tx.query<{blocked:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.order_payment_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND status IN('created','pending')) OR EXISTS(SELECT 1 FROM mbox.order_refund_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3) OR EXISTS(SELECT 1 FROM mbox.item_after_sales_cases WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND status IN('requested','approved')) AS blocked`,[...scope,id])).rows[0]?.blocked
+  const blocked=(await tx.query<{blocked:boolean}>(`SELECT EXISTS(SELECT 1 FROM mbox.order_payment_facts payment WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND (status IN('created','pending') OR ${unpostedCaptureSql})) OR EXISTS(SELECT 1 FROM mbox.order_refund_facts WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3) OR EXISTS(SELECT 1 FROM mbox.item_after_sales_cases WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3 AND status IN('requested','approved')) AS blocked`,[...scope,id])).rows[0]?.blocked
   if(blocked)throw new TablePrepaymentError('TABLE_CREDIT_REVIEW_REQUIRED','原订单有待确认付款或售后退款，请先核对，不能用预收款覆盖')
  }
  await tx.query('SELECT mbox.enable_staff_table_credit($1,$2)',[input.sessionId,input.employeeId])

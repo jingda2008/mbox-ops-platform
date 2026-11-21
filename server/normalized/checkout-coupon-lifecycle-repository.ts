@@ -1,3 +1,4 @@
+import { orderHasUnpostedCaptureSql } from './verified-capture-sql.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {appendAuditEvent} from './command-executor.js'
@@ -19,6 +20,7 @@ export class CheckoutCouponLifecycleRepository{
     const order=(await this.tx.query<{id:string;business_date:string}>(`SELECT o.id,t.business_date::text FROM mbox.orders o JOIN mbox.table_sessions t ON t.tenant_id=o.tenant_id AND t.store_id=o.store_id AND t.id=o.table_session_id WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
       AND o.status='cancelled' AND o.fulfillment_state='cancelled'
       AND ${noCouponFulfillmentHistorySql}
+      AND NOT ${orderHasUnpostedCaptureSql}
       AND NOT EXISTS(SELECT 1 FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('created','pending'))
       AND (SELECT COALESCE(sum(p.amount_minor),0) FROM mbox.order_payment_facts p WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND p.status IN('succeeded','partially_refunded','refunded'))
        =(SELECT COALESCE(sum(r.amount_minor),0) FROM mbox.refunds r JOIN mbox.order_payment_facts p ON p.tenant_id=r.tenant_id AND p.store_id=r.store_id AND p.id=r.payment_id AND (r.order_id IS NULL OR r.order_id=p.order_id) WHERE p.tenant_id=o.tenant_id AND p.store_id=o.store_id AND p.order_id=o.id AND r.status='succeeded')

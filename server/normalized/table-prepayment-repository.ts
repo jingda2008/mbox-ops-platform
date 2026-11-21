@@ -1,3 +1,4 @@
+import { unpostedCaptureSql } from './verified-capture-sql.js'
 import {randomUUID} from 'node:crypto'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {minimumSpendSummary} from './table-minimum-spend.js'
@@ -18,7 +19,7 @@ export class TablePrepaymentRepository {
     const session=(await this.tx.query<{minimum_spend_mode:string;minimum_spend_minor:string;minimum_spend_waiver_minor:string;location_version:number;table_code:string;table_name:string}>(`SELECT minimum_spend_mode,COALESCE(transfer_minimum_minor,minimum_spend_minor) AS minimum_spend_minor,minimum_spend_waiver_minor-transfer_waiver_baseline_minor AS minimum_spend_waiver_minor,location_version,(SELECT code FROM mbox.tables t WHERE(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id)) table_code,(SELECT display_name FROM mbox.tables t WHERE(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id)) table_name FROM mbox.table_sessions s WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...this.scope,sessionId])).rows[0]
     if(!session)throw new TablePrepaymentError('TABLE_PREPAYMENT_SESSION_CLOSED','桌次不存在')
     if(session.minimum_spend_mode!=='prepaid')return null
-    const receipts=(await this.tx.query<{id:string;public_id:string;status:string;amount_minor:string;available:string;mine:boolean;revoked:boolean}>(`SELECT p.id,p.public_id,p.status,p.amount_minor::text,mbox.prepayment_available(p.tenant_id,p.store_id,p.id)::text available,mbox.canonical_customer_id(p.tenant_id,p.store_id,p.prepaid_customer_id)=mbox.canonical_customer_id(p.tenant_id,p.store_id,$4::uuid) mine,EXISTS(SELECT 1 FROM mbox.table_prepayment_revocations revoked WHERE (revoked.tenant_id,revoked.store_id,revoked.payment_id)=(p.tenant_id,p.store_id,p.id)) revoked FROM mbox.payments p WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 ORDER BY created_at,id`,[...this.scope,sessionId,customerId??null])).rows
+    const receipts=(await this.tx.query<{id:string;public_id:string;status:string;amount_minor:string;available:string;mine:boolean;unposted:boolean;revoked:boolean}>(`SELECT ${unpostedCaptureSql} AS unposted,payment.id,payment.public_id,payment.status,payment.amount_minor::text,mbox.prepayment_available(payment.tenant_id,payment.store_id,payment.id)::text available,mbox.canonical_customer_id(payment.tenant_id,payment.store_id,payment.prepaid_customer_id)=mbox.canonical_customer_id(payment.tenant_id,payment.store_id,$4::uuid) mine,EXISTS(SELECT 1 FROM mbox.table_prepayment_revocations revoked WHERE (revoked.tenant_id,revoked.store_id,revoked.payment_id)=(payment.tenant_id,payment.store_id,payment.id)) revoked FROM mbox.payments payment WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 ORDER BY created_at,id`,[...this.scope,sessionId,customerId??null])).rows
     const goods=Number((await this.tx.query<{amount:string}>('SELECT mbox.table_qualifying_goods($1,$2,$3)::text amount',[...this.scope,sessionId])).rows[0]?.amount??0)
     const summary=minimumSpendSummary(Number(session.minimum_spend_minor)-Number(session.minimum_spend_waiver_minor),goods,0)
     const captured=receipts.filter(p=>['succeeded','partially_refunded','refunded'].includes(p.status))
@@ -32,7 +33,7 @@ export class TablePrepaymentRepository {
     const netReceivedMinor=Math.max(0,Number(funds?.net??receivedMinor)),pendingOrderDueMinor=Number(funds?.pending??0)
     return {mode:'prepaid' as const,tableCode:session.table_code,tableDisplayName:session.table_name,locationVersion:Number(session.location_version),netReceivedMinor,pendingOrderDueMinor,minimumMinor:Number(session.minimum_spend_minor),waiverMinor:Number(session.minimum_spend_waiver_minor),qualifyingGoodsMinor:summary.consumedMinor,shortfallMinor:summary.shortfallMinor,receivedMinor,availableMinor,refundableBalanceMinor,initialFundingRequiredMinor:Math.max(0,summary.minimumMinor-netReceivedMinor),differenceChargingEnabled:false as const,
       mySharedReceipts:receipts.filter(p=>p.mine&&!p.revoked&&['created','pending','succeeded','partially_refunded'].includes(p.status)).map(p=>({id:p.id,publicId:p.public_id,availableMinor:Number(p.available)})),
-      myPendingReceipts:receipts.filter(p=>p.mine&&['created','pending'].includes(p.status)).map(p=>({id:p.id,publicId:p.public_id,amountMinor:Number(p.amount_minor)})),
+      myPendingReceipts:receipts.filter(p=>p.mine&&(p.unposted||['created','pending'].includes(p.status))).map(p=>({id:p.id,publicId:p.public_id,amountMinor:Number(p.amount_minor)})),
       message:`本桌按优惠前商品金额累计，当前 ¥${(summary.consumedMinor/100).toFixed(2)} / ¥${(summary.minimumMinor/100).toFixed(2)}；可用预收款 ¥${(availableMinor/100).toFixed(2)}；未结清商品 ¥${(pendingOrderDueMinor/100).toFixed(2)}。余额不足需补款，余款不自动转服务费。`}
   }
   async assertCurrent(sessionId:string,locationVersion?:number,minimumMinor?:number){
@@ -93,7 +94,7 @@ export class TablePrepaymentRepository {
     if(!summary)throw new TablePrepaymentError('TABLE_PREPAYMENT_NOT_ENABLED','本桌未启用预收款')
     if(summary.shortfallMinor>0)throw new TablePrepaymentError('TABLE_MINIMUM_REVIEW_REQUIRED','本桌商品金额尚未达标，差额收费未启用。请继续点单或由授权员工记录减免后结算')
     if(reason.trim().length<2||reason.length>500)throw new TablePrepaymentError('TABLE_PREPAYMENT_REFUND_REASON','请填写退款原因')
-    const pending=(await this.tx.query<{n:string}>(`SELECT count(*)::text n FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND status IN ('created','pending')`,[...this.scope,sessionId])).rows[0]
+    const pending=(await this.tx.query<{n:string}>(`SELECT count(*)::text n FROM mbox.payments payment WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND (status IN ('created','pending') OR ${unpostedCaptureSql})`,[...this.scope,sessionId])).rows[0]
     if(Number(pending?.n)>0)throw new TablePrepaymentError('TABLE_PREPAYMENT_PENDING','存在待确认的预付款，请先查询渠道结果')
     const afterSales=(await this.tx.query<{pending:boolean}>(`SELECT EXISTS(
       SELECT 1 FROM mbox.item_after_sales_cases c JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(c.tenant_id,c.store_id,c.order_id)

@@ -1,3 +1,4 @@
+import { orderHasUnpostedCaptureSql } from './verified-capture-sql.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import type { JsonObject } from './command-executor.js'
 import {CheckoutCouponLifecycleRepository} from './checkout-coupon-lifecycle-repository.js'
@@ -15,6 +16,13 @@ import {
   ExperiencePlanActivationRepository,
   type ExperiencePlanActivationResult,
 } from './experience-plan-activation-repository.js'
+
+export class GuestCheckoutCaptureConfirmedError extends Error {
+  constructor() {
+    super('渠道已确认收款，系统正在处理原订单，请勿重复付款')
+    this.name = 'GuestCheckoutCaptureConfirmedError'
+  }
+}
 
 interface FulfillmentOrderRow extends Record<string, unknown> {
   id: string
@@ -85,6 +93,11 @@ export class PaymentFulfillmentRepository {
       && order.fulfillment_expires_at !== null
       && Date.parse(order.fulfillment_expires_at) > Date.now()) return
 
+    const capture = await this.transaction.query(`SELECT 1 FROM mbox.orders o
+      WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND ${orderHasUnpostedCaptureSql}`,
+      [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    if (capture.rowCount) return
+
     if (order.fulfillment_state === 'awaiting_payment') {
       await this.release(orderId, 'payment reservation expired before an intent was active')
       order = await this.lockOrder(orderId)
@@ -139,6 +152,10 @@ export class PaymentFulfillmentRepository {
         inventoryConsumptions: [], kdsTasks: [], experiencePlan,
       }
     }
+    if (state.fulfillment_state === 'released') {
+      await this.cancelReservedFulfillment(state, '实收时原库存与制作名额已释放，转人工核对')
+      return {activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan()}
+    }
     // Provider success is a money fact even when late. Compare the channel's
     // success time, never callback arrival or today's product/card settings.
     if(options.paymentId) {
@@ -148,7 +165,7 @@ export class PaymentFulfillmentRepository {
         WHERE p.tenant_id=$1::uuid AND p.store_id=$2::uuid AND p.id=$3::uuid`,
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,options.paymentId])
       if(receipt.rows[0]?.late) {
-        await this.abandonGuestSelfCheckout(orderId,'渠道付款晚于购买截止，保留收款并转人工售后')
+        await this.cancelReservedFulfillment(state, '渠道付款晚于购买截止，保留收款并转人工售后')
         return {activated:false,financialAttributionEligible:false,orderId,inventoryConsumptions:[],kdsTasks:[],experiencePlan:absentPlan()}
       }
     }
@@ -248,6 +265,12 @@ export class PaymentFulfillmentRepository {
     if (order.settlement_mode !== 'immediate_payment' || order.fulfillment_state !== 'awaiting_payment') {
       return { released: false, orderId, reservationCount: 0 }
     }
+    if (await this.hasVerifiedCapture(orderId)) return { released: false, orderId, reservationCount: 0 }
+    const pending = await this.transaction.query(`SELECT 1 FROM mbox.order_payment_facts payment
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3
+        AND payment.status IN ('created','pending') AND payment.retry_released_at IS NULL LIMIT 1`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
+    if (pending.rowCount) return {released:false,orderId,reservationCount:0}
     return this.release(orderId, reason)
   }
 
@@ -271,6 +294,26 @@ export class PaymentFulfillmentRepository {
       return { released: false, orderId, reservationCount: 0 }
     }
 
+    if (await this.hasVerifiedCapture(orderId)) throw new GuestCheckoutCaptureConfirmedError()
+    return this.cancelReservedFulfillment(order, reason)
+  }
+
+  private async hasVerifiedCapture(orderId: string): Promise<boolean> {
+    // Read after the locks in the caller so evidence committed during a lock wait is visible.
+    const capture = await this.transaction.query(`
+      SELECT 1 FROM mbox.order_payment_facts payment
+      JOIN mbox.verified_provider_observations observation
+        ON (observation.tenant_id,observation.store_id,observation.payment_id)
+         = (payment.tenant_id,payment.store_id,payment.id)
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=$3
+        AND observation.observed_status='payment_succeeded'
+      LIMIT 1
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderId])
+    return Boolean(capture.rowCount)
+  }
+
+  private async cancelReservedFulfillment(order: FulfillmentOrderRow, reason: string): Promise<PaymentFulfillmentRelease> {
+    const orderId = order.id
     const released = order.fulfillment_state === 'awaiting_payment'
       ? await this.release(orderId, reason)
       : { released: false, orderId, reservationCount: 0 }

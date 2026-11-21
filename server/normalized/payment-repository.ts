@@ -1,3 +1,4 @@
+import { orderHasPendingTableCreditSql, unpostedCaptureSql, verifiedCaptureSql } from './verified-capture-sql.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import {ActivityServiceRepository} from './activity-service-repository.js'
 import {localUnpresentedPaymentSql} from './closed-debt-recovery.js'
@@ -195,6 +196,14 @@ export class OrderNotPayableError extends Error {
   }
 }
 
+export class PaymentCapturePendingError extends Error {
+  readonly code = 'PAYMENT_CAPTURE_PENDING'
+  constructor() {
+    super('渠道已确认付款，正在入账，请查询原付款')
+    this.name = 'PaymentCapturePendingError'
+  }
+}
+
 export class PaymentEvidenceError extends Error {
   constructor(message: string) {
     super(message)
@@ -235,12 +244,26 @@ export class PaymentRepository {
 
   constructor(private readonly transaction: ScopedTransaction) {}
 
+  private async hasVerifiedReceipt(paymentId: string): Promise<boolean> {
+    const result = await this.transaction.query(`SELECT 1 FROM mbox.payments payment
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND ${verifiedCaptureSql}`,
+      [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
+    return Boolean(result.rowCount)
+  }
+
+  private async assertNoUnpostedOrderCapture(orderIds: readonly string[]): Promise<void> {
+    const result = await this.transaction.query<{order_id:string}>(`SELECT payment.order_id
+      FROM mbox.order_payment_facts payment
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.order_id=ANY($3::uuid[])
+        AND ${unpostedCaptureSql} LIMIT 1`, [this.transaction.scope.tenantId, this.transaction.scope.storeId, orderIds])
+    if (result.rows[0]) throw new PaymentCapturePendingError()
+  }
+
   async findOrderIdForRetry(paymentId: string): Promise<string> {
     const selected = await this.transaction.query<{ order_id: string | null }>(`
       SELECT order_id
       FROM mbox.payments
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-      FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, paymentId])
     const row = selected.rows[0]
     if (row === undefined) throw new PaymentNotFoundError(paymentId)
@@ -269,6 +292,7 @@ export class PaymentRepository {
     if (!['postar', 'wechat'].includes(row.provider) || !['created', 'pending'].includes(row.status)) {
       throw new OrderNotPayableError(paymentId, 'payment already has a final result or is not an online payment')
     }
+    if (await this.hasVerifiedReceipt(row.id)) throw new PaymentCapturePendingError()
     return mapPayment(row)
   }
 
@@ -318,6 +342,7 @@ export class PaymentRepository {
         'online payment was presented or its provider result is unknown; query or close it before manual collection',
       )
     }
+    await this.assertNoUnpostedOrderCapture([orderId])
     const ids = selected.rows.map((payment) => payment.id)
     const closed = await this.transaction.query<{ id: string }>(`
       UPDATE mbox.payments
@@ -359,6 +384,8 @@ export class PaymentRepository {
     if (reason.length < 4 || reason.length > 500) {
       throw new TypeError('retry release reason must contain between 4 and 500 characters')
     }
+    const orderId = await this.findOrderIdForRetry(input.paymentId)
+    const order = await this.lockReceiptOrder(orderId)
     const selected = await this.transaction.query<PaymentRow>(`
       SELECT ${paymentColumns()}
       FROM mbox.payments
@@ -367,17 +394,7 @@ export class PaymentRepository {
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.paymentId])
     const payment = selected.rows[0]
     if (payment === undefined) throw new PaymentNotFoundError(input.paymentId)
-    if (payment.order_id === null) {
-      throw new OrderNotPayableError(payment.id, 'only a table-order payment can be released for retry')
-    }
-    const order = await this.lockOrder(payment.order_id)
-    const session = await this.transaction.query<{ id: string }>(`
-      SELECT id
-      FROM mbox.table_sessions
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-      FOR SHARE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, order.table_session_id])
-    if (session.rowCount !== 1) throw new OrderNotPayableError(order.id, 'table session is unavailable')
+    if (payment.order_id !== order.id) throw new OrderNotPayableError(order.id, '原付款关联订单已变化，请刷新')
     if (order.status === 'draft' || order.status === 'cancelled') {
       throw new OrderNotPayableError(order.id, `status is ${order.status}`)
     }
@@ -385,6 +402,7 @@ export class PaymentRepository {
       || !['created', 'pending'].includes(payment.status)) {
       throw new OrderNotPayableError(order.id, 'payment is already final or is not an online payment')
     }
+    await this.assertNoUnpostedOrderCapture([order.id])
     if (payment.retry_released_at !== null) {
       throw new OrderNotPayableError(order.id, 'payment was already released for a replacement collection')
     }
@@ -445,6 +463,11 @@ export class PaymentRepository {
     // A still unresolved receipt must be resumed, not replaced by another charge.
     const unresolved=await this.transaction.query<PaymentRow>(`SELECT ${paymentColumns()} FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3 AND mbox.canonical_customer_id(tenant_id,store_id,prepaid_customer_id)=mbox.canonical_customer_id(tenant_id,store_id,$4) AND status IN ('created','pending') ORDER BY created_at LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId])
     if(unresolved.rows[0])return mapPayment(unresolved.rows[0])
+    const captured=await this.transaction.query(`SELECT 1 FROM mbox.payments payment
+      WHERE tenant_id=$1 AND store_id=$2 AND prepaid_table_session_id=$3
+        AND mbox.canonical_customer_id(tenant_id,store_id,prepaid_customer_id)=mbox.canonical_customer_id(tenant_id,store_id,$4)
+        AND ${unpostedCaptureSql} LIMIT 1`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId])
+    if(captured.rowCount)throw new PaymentCapturePendingError()
     const result=await this.transaction.query<PaymentRow>(`INSERT INTO mbox.payments(tenant_id,store_id,payable_kind,prepaid_table_session_id,prepaid_customer_id,public_id,provider,method,amount_minor,currency,status,provider_snapshot,provider_transaction_id,succeeded_at)
       SELECT $1,$2,'table_prepayment',$3,$4,$5,$6,$7,$8,'CNY',$9,$10::jsonb,$11,CASE WHEN $9='succeeded' THEN clock_timestamp() ELSE NULL END RETURNING ${paymentColumns()}`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.tableSessionId,input.customerId,input.publicId,input.provider,input.method,input.amountMinor,manual?'succeeded':'created',JSON.stringify({...sanitizeProviderSnapshot(input.evidence),sharedTableConsent:'v1',differenceChargingEnabled:false}),manual?String(input.evidence?.receiptReference):null])
     return onePayment(result,'预收款创建失败')
@@ -476,6 +499,7 @@ export class PaymentRepository {
       const existing = await this.findReusableOnlineAttempt(input, [{ orderId: order.id, amountMinor: outstandingMinor }], order.currency)
       if (existing) return existing
     }
+    await this.assertNoUnpostedOrderCapture([order.id])
     // A refund records money leaving the venue. It must not by itself reopen a
     // customer payment link: an explicit, short-lived cashier authorization is
     // locked and consumed together with the replacement payment below.
@@ -528,7 +552,7 @@ export class PaymentRepository {
     validateCreateInput({...input,orderId:input.orderIds[0]!})
     for(const id of input.orderIds)if(!/^[0-9a-f-]{36}$/i.test(id))throw new TypeError('订单编号无效')
     // Match callback/refund order lock ordering before locking the payment row.
-    const orders=(await this.transaction.query<OrderRow&{submitted_at:string}>(`SELECT id,table_session_id,total_amount_minor,currency,status,COALESCE(submitted_at,created_at)::text AS submitted_at,EXISTS(SELECT 1 FROM mbox.table_credit_order_links link JOIN mbox.payments credit ON(credit.tenant_id,credit.store_id,credit.prepaid_table_session_id)=(link.tenant_id,link.store_id,link.table_session_id) WHERE(link.tenant_id,link.store_id,link.order_id)=(orders.tenant_id,orders.store_id,orders.id) AND credit.status IN('created','pending')) AS pending_table_credit FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderIds])).rows
+    const orders=(await this.transaction.query<OrderRow&{submitted_at:string}>(`SELECT id,table_session_id,total_amount_minor,currency,status,COALESCE(submitted_at,created_at)::text AS submitted_at,${orderHasPendingTableCreditSql} AS pending_table_credit FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderIds])).rows
     if(orders.length!==input.orderIds.length)throw new OrderNotPayableError('batch','an order was not found')
     if(orders.some(order=>order.table_session_id!==orders[0]!.table_session_id||order.currency!==orders[0]!.currency))throw new TypeError('合并付款只支持同一桌次、同一币种的订单')
     const balances=[]
@@ -549,6 +573,7 @@ export class PaymentRepository {
       const existing = await this.findReusableOnlineAttempt(input, allocations, orders[0]!.currency)
       if (existing) return existing
     }
+    await this.assertNoUnpostedOrderCapture(allocations.map(allocation => allocation.orderId))
     const authorizations=[]
     const recollections=new RecollectionAuthorizationRepository(this.transaction)
     for(const allocation of allocations){const balance=balances.find(row=>row.id===allocation.orderId)!;authorizations.push(await recollections.prepareForPayment({orderId:allocation.orderId,outstandingMinor:balance.outstandingMinor,refundedMinor:balance.refundedMinor,currency:orders[0]!.currency}))}
@@ -1021,6 +1046,10 @@ export class PaymentRepository {
     // from avoiding an unnecessary lock, this keeps the guard focused on the
     // only lifecycle in which an older payment can be mistaken for a current
     // one: a reopened registration.
+    const unposted = await this.transaction.query(`SELECT 1 FROM mbox.payments payment
+      WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.activity_registration_id=$3
+        AND ${unpostedCaptureSql} LIMIT 1`, [this.transaction.scope.tenantId, this.transaction.scope.storeId, registrationId])
+    if (unposted.rowCount) throw new PaymentCapturePendingError()
     if (currentRegistrationCycle <= 1) return
     const unresolved = await this.transaction.query<{ id: string }>(`
       SELECT payment.id
@@ -1165,6 +1194,12 @@ export class PaymentRepository {
       return { payment: await this.enrichSettlementChannel(stored, input.settlementChannel), applied: false }
     }
 
+    // The observation writer takes a SHARE lock on this receipt. Re-read its evidence
+    // after acquiring FOR UPDATE so an older negative query cannot win during posting.
+    if (input.status !== 'succeeded' && await this.hasVerifiedReceipt(paymentId)) {
+      return { payment: mapPayment(stored), applied: false }
+    }
+
     const nextStatus: PaymentStatus = input.status === 'succeeded'
       ? 'succeeded'
       : input.status === 'failed'
@@ -1307,7 +1342,8 @@ export class PaymentRepository {
     return row.payment_status
   }
 
-  async syncActivityRegistrationPaymentStatus(payment: Readonly<Payment>): Promise<void> {
+  async syncActivityRegistrationPaymentStatus(payment: Readonly<Pick<Payment,
+    'payableKind' | 'activityRegistrationId' | 'id' | 'amountMinor' | 'succeededAt' | 'status'>>): Promise<void> {
     if(payment.payableKind==='table_prepayment')return
     if (payment.payableKind !== 'activity_registration' || payment.activityRegistrationId === null) {
       throw new TypeError('payment does not target an activity registration')
@@ -1475,14 +1511,7 @@ export class PaymentRepository {
     if (reference.payable_kind === 'order' && reference.order_id !== null) {
       // Provider callbacks have no employee access pre-lock. Keep the same
       // parent-first order as refunds, closure and the batch path above.
-      const session = await this.transaction.query<{id:string}>(`SELECT session.id
-        FROM mbox.orders original JOIN mbox.table_sessions session
-          ON (session.tenant_id,session.store_id,session.id)=(original.tenant_id,original.store_id,original.table_session_id)
-        WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=$3
-        FOR SHARE OF session`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,reference.order_id])
-      if(session.rowCount!==1)throw new PaymentNotFoundError('order session missing')
-      const order=await this.lockOrder(reference.order_id)
-      if(order.table_session_id!==session.rows[0]!.id)throw new OrderNotPayableError(reference.order_id,'order table changed; retry the verified payment result')
+      await this.lockReceiptOrder(reference.order_id)
       return
     }
     if (reference.payable_kind === 'activity_registration' && reference.activity_registration_id !== null) {
@@ -1496,10 +1525,22 @@ export class PaymentRepository {
     throw new PaymentNotFoundError('invalid payable target')
   }
 
+  private async lockReceiptOrder(orderId: string): Promise<OrderRow> {
+    const session = await this.transaction.query<{id:string}>(`SELECT session.id
+      FROM mbox.orders original JOIN mbox.table_sessions session
+        ON (session.tenant_id,session.store_id,session.id)=(original.tenant_id,original.store_id,original.table_session_id)
+      WHERE original.tenant_id=$1 AND original.store_id=$2 AND original.id=$3
+      FOR SHARE OF session`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,orderId])
+    if(session.rowCount!==1)throw new PaymentNotFoundError('order session missing')
+    const order=await this.lockOrder(orderId)
+    if(order.table_session_id!==session.rows[0]!.id)throw new OrderNotPayableError(orderId,'order table changed; retry the verified payment result')
+    return order
+  }
+
   private async lockOrder(orderId: string): Promise<OrderRow> {
     const result = await this.transaction.query<OrderRow>(`
       SELECT id, table_session_id, total_amount_minor, currency, status,
-        EXISTS(SELECT 1 FROM mbox.table_credit_order_links link JOIN mbox.payments credit ON(credit.tenant_id,credit.store_id,credit.prepaid_table_session_id)=(link.tenant_id,link.store_id,link.table_session_id) WHERE(link.tenant_id,link.store_id,link.order_id)=(orders.tenant_id,orders.store_id,orders.id) AND credit.status IN('created','pending')) AS pending_table_credit
+        ${orderHasPendingTableCreditSql} AS pending_table_credit
       FROM mbox.orders
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid

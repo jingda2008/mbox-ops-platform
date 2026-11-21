@@ -123,7 +123,7 @@ function hasTableCollectionPermission(permissions: readonly string[]): boolean {
 }
 
 export function tableFinancialLabel(state: StaffTableFinancialState): string {
-  if (state === 'payment_exception') return '支付异常'
+  if (state === 'payment_exception') return '取消单已收款，待核对'
   if (state === 'refund_pending') return '退款待办'
   if (state === 'payment_pending') return '支付确认中'
   if (state === 'unpaid') return '待支付'

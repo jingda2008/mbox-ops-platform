@@ -135,6 +135,8 @@ describe('staff actions model', () => {
         ...(refundProcessingCount === undefined ? {} : { refundProcessingCount }),
       },
     })
+    const captureOnly = withSession('late', 'payment_exception', 0, 0, 0)
+    expect(visibleStaffTables([captureOnly], 'unpaid', '')).toEqual([])
     expect(staffTableFinancialSummary([
       withSession('unpaid', 'unpaid', 1, 0, 0),
       withSession('processing', 'payment_pending', 0, 2, 0),
@@ -143,7 +145,7 @@ describe('staff actions model', () => {
       withSession('refund-processing', 'refund_pending', 0, 0, 1, 0, 1),
       withSession('paid', 'paid', 0, 0, 0),
       table,
-    ])).toEqual({ paymentDue: 3, refunds: 2, refundActions: 1, refundsProcessing: 1, exceptions: 3 })
+    ])).toEqual({ paymentDue: 2, refunds: 2, refundActions: 1, refundsProcessing: 1, exceptions: 3 })
   })
 
   it('builds one busy-time queue: complaint, overdue, delivery, assigned service, production', () => {

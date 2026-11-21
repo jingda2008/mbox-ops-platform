@@ -1,3 +1,5 @@
+import { PaymentRepository } from './payment-repository.js'
+import { unpostedCaptureSql } from './verified-capture-sql.js'
 import { expireRecollectionAuthorizations } from './recollection-expiry.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -6,6 +8,7 @@ interface DueActivityRegistration extends Record<string, unknown> {
   public_id: string
   payment_id: string | null
   payment_state: 'none' | 'terminal' | 'unknown' | 'captured' | 'amount_mismatch'
+  succeeded_at: string | null
   captured_amount_minor: string | number | null
 }
 
@@ -43,17 +46,32 @@ export class ActivityRegistrationExpiryWorker {
           continue
         }
         if (registration.payment_state === 'captured') {
-          const capturedAmount = money(registration.captured_amount_minor)
-          await transaction.query(`
-            UPDATE mbox.community_activity_registrations
-            SET status = 'confirmed', payment_status = 'paid', amount_due_minor = 0,
-              paid_amount_minor = LEAST(fee_amount_minor, $4::bigint), updated_at = clock_timestamp()
-            WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND id = $3::uuid
-              AND status = 'payment_pending' AND payment_status = 'pending'
-          `, [transaction.scope.tenantId, transaction.scope.storeId, registration.id, capturedAmount])
+          await new PaymentRepository(transaction).syncActivityRegistrationPaymentStatus({
+            id: registration.payment_id!, payableKind: 'activity_registration', activityRegistrationId: registration.id,
+            status: 'succeeded', amountMinor: money(registration.captured_amount_minor), succeededAt: registration.succeeded_at,
+          })
+          const state = await transaction.query<{status:string}>(
+            'SELECT status FROM mbox.community_activity_registrations WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+            [scope.tenantId, scope.storeId, registration.id])
+          if (state.rows[0]?.status !== 'confirmed') {
+            reviewRegistrationIds.push(registration.id)
+            await recordReview(transaction, registration, workerId, 'late_capture')
+            continue
+          }
           confirmedRegistrationIds.push(registration.id)
           await recordResolution(transaction, registration, workerId, 'confirmed')
           continue
+        }
+        if (registration.payment_id) {
+          const params = [transaction.scope.tenantId, transaction.scope.storeId, registration.payment_id]
+          await transaction.query('SELECT id FROM mbox.payments WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE', params)
+          const captured = await transaction.query(`SELECT 1 FROM mbox.payments payment
+            WHERE payment.tenant_id=$1 AND payment.store_id=$2 AND payment.id=$3 AND ${unpostedCaptureSql}`, params)
+          if (captured.rowCount) {
+            reviewRegistrationIds.push(registration.id)
+            await recordReview(transaction, registration, workerId, 'unknown')
+            continue
+          }
         }
         await transaction.query(`
           UPDATE mbox.payments payment
@@ -89,16 +107,18 @@ async function claimDue(transaction: ScopedTransaction, batchSize: number): Prom
   const result = await transaction.query<DueActivityRegistration>(`
     SELECT registration.id, registration.public_id, registration.payment_id,
       CASE
+        WHEN ${unpostedCaptureSql} THEN 'unknown'
         WHEN payment.status = 'succeeded' AND payment.amount_minor >= registration.amount_due_minor THEN 'captured'
         WHEN payment.status = 'succeeded' THEN 'amount_mismatch'
         WHEN payment.status IN ('created', 'pending') AND provider_action.state IS NULL THEN 'none'
         WHEN payment.status IN ('created', 'pending')
           AND provider_action.state IN ('creating','ready','unknown') THEN 'unknown'
-        WHEN payment.status = 'partially_refunded' THEN 'captured'
+        WHEN payment.status = 'partially_refunded' THEN 'amount_mismatch'
         WHEN payment.status = 'refunded' THEN 'terminal'
         WHEN payment.id IS NOT NULL THEN 'terminal'
         ELSE 'none'
       END AS payment_state,
+      payment.succeeded_at::text,
       CASE WHEN payment.status = 'succeeded'
         THEN payment.amount_minor ELSE NULL END AS captured_amount_minor
     FROM mbox.community_activity_registrations AS registration
@@ -124,7 +144,7 @@ async function recordReview(
   transaction: ScopedTransaction,
   registration: Readonly<Pick<DueActivityRegistration, 'id' | 'public_id'>>,
   workerId: string,
-  reason: 'unknown' | 'amount_mismatch',
+  reason: 'unknown' | 'amount_mismatch' | 'late_capture',
 ): Promise<void> {
   await transaction.query(`
     INSERT INTO mbox.audit_events (

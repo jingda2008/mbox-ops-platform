@@ -236,6 +236,53 @@ integration('customer-left table turnover', () => {
   })
 
   for (const mode of ['customer-left', 'automatic-cutoff'] as const) {
+    it(`preserves an invoice covered by verified pending money through ${mode}`, async () => {
+      const f=await createFixture()
+      const scope={tenantId,storeId}
+      const runner=new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool)
+      let evidencePaymentId = f.paymentId
+      let partialOrderId: string | undefined
+      if (mode === 'automatic-cutoff') {
+        const batchId = randomUUID()
+        evidencePaymentId = randomUUID()
+        partialOrderId = randomUUID()
+        await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+          subtotal_amount_minor,total_amount_minor,created_by_employee_id,submitted_at)
+          VALUES ($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',200,200,$6,now())`,
+          [partialOrderId,tenantId,storeId,f.sessionId,randomUUID(),employeeId])
+        await pool.query(`INSERT INTO mbox.order_payment_batches(id,tenant_id,store_id,table_session_id,created_by_employee_id,amount_minor,currency)
+          VALUES ($1,$2,$3,$4,$5,300,'CNY')`,[batchId,tenantId,storeId,f.sessionId,employeeId])
+        await pool.query(`INSERT INTO mbox.order_payment_allocations(tenant_id,store_id,batch_id,order_id,amount_minor,outstanding_at_creation_minor,position)
+          VALUES ($1,$2,$3,$4,200,200,0),($1,$2,$3,$5,100,200,1)`,[tenantId,storeId,batchId,f.orderId,partialOrderId])
+        await pool.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,payable_kind,order_batch_id,public_id,provider,method,status,amount_minor,currency)
+          VALUES ($1,$2,$3,'order_batch',$4,$5,'postar','auth_code','pending',300,'CNY')`,[evidencePaymentId,tenantId,storeId,batchId,randomUUID()])
+      }
+      await pool.query(`INSERT INTO mbox.verified_provider_observations
+        (tenant_id,store_id,provider,subject_kind,payment_id,verification_kind,provider_event_id,integration_ref,
+         observed_status,provider_transaction_id,reported_amount_minor,reported_currency,evidence_sha256,occurred_at)
+        SELECT tenant_id,store_id,provider,'payment',id,'callback_signature',$4 || '-' || n,'postar-callback','payment_succeeded',
+          $4,amount_minor,currency,repeat('a',64),now() FROM mbox.payments CROSS JOIN generate_series(1,2) n
+        WHERE (tenant_id,store_id,id)=($1,$2,$3)`, [tenantId,storeId,evidencePaymentId,randomUUID()])
+      if (partialOrderId) {
+        const covered = await runner.run(scope, tx => tx.query(
+          'SELECT mbox.tab_covered_by_unposted_capture($1,$2,$3) AS covered',[tenantId,storeId,partialOrderId]))
+        expect(covered.rows[0]?.covered).toBe(false)
+      }
+      if(mode==='automatic-cutoff') await pool.query('UPDATE mbox.table_sessions SET business_date=$2::date-1 WHERE id=$1',[f.sessionId,businessDate])
+      const input={scope,tableSessionId:f.sessionId,employeeId,businessDate,reasonNote:'支付已确认，翻台保留原单',idempotencyKey:randomUUID()}
+      const close=()=>runner.run(scope,tx=>mode==='customer-left'
+        ? new PostgresTableCustomerLeftTurnoverRepository(tx).close(input)
+        : new PostgresAutomaticTableTurnoverRepository(tx).close(input))
+      await close()
+      expect((await close()).replayed).toBe(true)
+      const facts=await pool.query(`SELECT s.status AS session,o.status AS ordering,p.status AS payment,
+        (SELECT count(*)::int FROM mbox.order_carryover_debts d WHERE d.order_id=o.id) AS debts,
+        (SELECT count(*)::int FROM mbox.order_cancellation_events c WHERE c.order_id=o.id) AS cancellations
+        FROM mbox.orders o JOIN mbox.table_sessions s ON s.id=o.table_session_id JOIN mbox.payments p ON p.order_id=o.id
+        WHERE o.id=$1`,[f.orderId])
+      expect(facts.rows).toEqual([{session:'closed',ordering:'submitted',payment:'pending',debts:0,cancellations:0}])
+    })
+
     it(`preserves a complaint through ${mode} for authorized manager resolution`, async () => {
       const runtimeUrl = process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL
       if (!runtimeUrl) throw new Error('This acceptance requires a real restricted LOGIN')

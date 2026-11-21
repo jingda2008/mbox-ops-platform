@@ -26,7 +26,7 @@ function canAbandonPendingGuestPayment(pendingPayment, tableScope) {
       && pendingPayment.tableScope === tableScope
       && pendingPayment.wechatAcceptedAt === undefined
       && pendingPayment.paymentPresentationInFlight !== true
-      && ['ready_not_presented', 'action_failed', 'cancelled', 'result_unknown']
+      && ['ready_not_presented', 'action_failed', 'cancelled']
         .includes(presentationState),
   )
 }
@@ -56,6 +56,7 @@ function isRetryableGuestPaymentAbandonment(record, tableScope, order) {
       && record.idempotencyKey.length >= 8
       && record.tableScope === tableScope
       && record.state !== 'reconciliation_required'
+      && record.reason !== 'result_unknown'
       && order
       && order.publicId === record.orderPublicId
       && Number(order.payableAmountMinor || 0) > 0

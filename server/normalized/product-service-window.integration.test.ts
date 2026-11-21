@@ -1,9 +1,13 @@
+import {PaymentRepository} from './payment-repository.js'
+import {VerifiedProviderObservationService} from './provider-verification-observation.js'
+import {PaymentReservationExpiryWorker} from './payment-reservation-expiry-worker.js'
 import {randomUUID} from 'node:crypto'
 import {Pool} from 'pg'
 import {beforeAll,afterAll,describe,it,expect} from 'vitest'
 import {runNormalizedMigrations} from '../migrate-normalized.js'
 import {ScopedPostgresTransactionRunner} from './transaction-runner.js'
 import {saveProductServiceWindow,readProductServiceWindow} from './product-service-window-repository.js'
+import { readTables } from './operations-query-service.js'
 import {OrderRepository} from './order-repository.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
 import {validateProductPaymentWindow} from './product-payment-window.js'
@@ -117,7 +121,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const order=await runner.run(scope,tx=>new OrderRepository(tx,customer).createSubmitted({tableSessionId:session,publicId:randomUUID(),channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:customer,lines}))
   await admin.query("INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status) VALUES($1::uuid,$2,$3,$4,$1::text,$5,$6,1000,'pending')",[payment,scope.tenantId,scope.storeId,order.id,simulation?'simulation':'postar',simulation?'native_qr':'jsapi'])
   await admin.query("INSERT INTO mbox.payment_provider_actions(payment_id,tenant_id,store_id,presentation,initiated_by_type,initiated_by_ref,state,expires_at) VALUES($1,$2,$3,$5,$6,$4,'creating',clock_timestamp()+interval '5 minutes')",[payment,scope.tenantId,scope.storeId,simulation?employee:customer,simulation?'qr':'jsapi',simulation?'employee':'guest'])
-  return {p,order,payment,child,quote}
+  return {p,order,payment,child,quote,session}
  }
  it('checks the real persisted quote on a new payment and refuses a subsequent product stop',async()=>{
   const f=await paymentOrder(),expiry=new Date(Date.now()+5*60_000).toISOString()
@@ -129,12 +133,72 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const f=await paymentOrder()
   await admin.query("UPDATE mbox.payment_provider_actions SET expires_at=clock_timestamp()-interval '1 minute' WHERE payment_id=$1",[f.payment])
   await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id=$1::text,succeeded_at=clock_timestamp()-make_interval(mins=>$2) WHERE id=$1",[f.payment,late?0:2])
+  await admin.query(`INSERT INTO mbox.verified_provider_observations
+    (tenant_id,store_id,provider,subject_kind,payment_id,verification_kind,provider_event_id,integration_ref,observed_status,
+     provider_transaction_id,reported_amount_minor,reported_currency,evidence_sha256,occurred_at)
+    SELECT tenant_id,store_id,provider,'payment',id,'callback_signature',$2,'postar-callback','payment_succeeded',
+      provider_transaction_id,amount_minor,currency,repeat('a',64),succeeded_at FROM mbox.payments WHERE id=$1`,[f.payment,randomUUID()])
   // Product changes after a valid action must not revoke its original promise.
   await admin.query("UPDATE mbox.products SET status='sold_out' WHERE id=$1",[f.p])
   const activation=await runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).activatePaidOrder(f.order.id,{paymentId:f.payment}))
   expect(activation.activated).toBe(!late)
+  if (late) {
+    const tables=await runner.run(scope,tx=>readTables(tx,employee,true))
+    expect(tables.find(row=>row.activeSession?.id===f.session)?.activeSession).toMatchObject({
+      financialState:'payment_exception', refundAttentionCount:0,
+    })
+  }
   expect((await admin.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].fulfillment_state).toBe(late?'cancelled':'active')
   expect((await admin.query('SELECT status FROM mbox.payments WHERE id=$1',[f.payment])).rows[0].status).toBe('succeeded')
+ })
+ it.each([true,false])('rechecks the payment deadline during background fulfillment recovery (late=%s)',async late=>{
+  const f=await paymentOrder()
+  await admin.query("UPDATE mbox.order_items SET fulfillment_station='bar' WHERE order_id=$1",[f.order.id])
+  await admin.query("UPDATE mbox.orders SET fulfillment_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1",[f.order.id])
+  await admin.query("UPDATE mbox.payment_provider_actions SET expires_at=clock_timestamp()-interval '1 minute' WHERE payment_id=$1",[f.payment])
+  await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id=$1::text,succeeded_at=clock_timestamp()-make_interval(mins=>$2) WHERE id=$1",[f.payment,late?0:2])
+  const batch=await new PaymentReservationExpiryWorker(runner).runBatch(scope,'deadline-recovery')
+  expect(batch.activatedOrderIds.includes(f.order.id)).toBe(!late)
+  expect((await admin.query('SELECT fulfillment_state FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].fulfillment_state).toBe(late?'cancelled':'active')
+  await new PaymentReservationExpiryWorker(runner).runBatch(scope,'deadline-recovery-replay')
+  const sources=await admin.query(`SELECT
+    (SELECT count(*)::int FROM mbox.kds_tasks k JOIN mbox.order_items i ON i.id=k.order_item_id WHERE i.order_id=$1) AS tasks,
+    (SELECT count(*)::int FROM mbox.print_source_jobs WHERE aggregate_id=$1 AND ticket_kind='production') AS tickets`,[f.order.id])
+  expect(sources.rows[0]).toEqual({tasks:late?0:1,tickets:late?0:1})
+ })
+ it('blocks replacement collections and preserves the original stock hold after verified success',async()=>{
+  const f=await paymentOrder()
+  await new VerifiedProviderObservationService(runner).recordPayment({scope,provider:'postar',verificationKind:'active_query_binding',
+    paymentPublicId:f.payment,providerEventId:randomUUID(),integrationRef:'isolated-retry-test',
+    providerTransactionId:randomUUID(),reportedAmountMinor:1000,reportedCurrency:'CNY',status:'succeeded',occurredAt:new Date().toISOString()})
+  await expect(new OnlinePaymentService(runner,'isolated-capture-before-presentation',null).create({
+    scope,paymentId:f.payment,principal:{type:'employee',employeeId:employee},clientIp:'127.0.0.1',operatorId:'MBOX',
+  })).rejects.toMatchObject({code:'PAYMENT_CAPTURE_PENDING'})
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).releaseUnresolvedForRetry({
+    paymentId:f.payment,employeeId:employee,idempotencyKey:randomUUID(),reason:'改用收银台付款',
+  }))).rejects.toThrow('渠道已确认')
+  await admin.query("UPDATE mbox.orders SET fulfillment_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1",[f.order.id])
+  await runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).ensureReservationBeforePayment(f.order.id))
+  expect((await admin.query('SELECT fulfillment_expires_at<clock_timestamp() AS original FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0].original).toBe(true)
+  const request={publicId:randomUUID(),provider:'cash' as const,method:'cash' as const,initialStatus:'succeeded' as const,
+    evidence:{collectedByEmployeeId:employee,receiptReference:randomUUID()},principal:{type:'employee' as const,employeeId:employee}}
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).createForOrder({...request,orderId:f.order.id}))).rejects.toThrow('渠道已确认')
+  await expect(runner.run(scope,tx=>new PaymentRepository(tx).createForOrders({...request,orderIds:[f.order.id]}))).rejects.toThrow('渠道已确认')
+ })
+ it('holds the reservation for a pending sibling and retains late funds if stock was already released',async()=>{
+  const f=await paymentOrder()
+  const release=()=>runner.run(scope,tx=>new PaymentFulfillmentRepository(tx).releaseAfterDefinitiveFailure(f.order.id,'付款尝试已关闭'))
+  expect((await release()).released).toBe(false)
+  await admin.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[f.payment])
+  expect((await release()).released).toBe(true)
+  await runner.run(scope,async tx=>{
+    const repo=new PaymentRepository(tx)
+    await repo.applySucceededCallback({paymentPublicId:f.payment,provider:'postar',providerTransactionId:randomUUID(),
+      reportedAmountMinor:1000,reportedCurrency:'CNY',succeededAt:new Date().toISOString()})
+    await repo.syncOrderPaymentStatus(f.order.id)
+    expect((await new PaymentFulfillmentRepository(tx).activatePaidOrder(f.order.id,{paymentId:f.payment})).activated).toBe(false)
+  })
+  expect((await admin.query('SELECT fulfillment_state,payment_status FROM mbox.orders WHERE id=$1',[f.order.id])).rows[0]).toEqual({fulfillment_state:'cancelled',payment_status:'paid'})
  })
  it('blocks new quotes during preview while still making the dish visible',async()=>{
   const id=await product();await runner.run(scope,tx=>saveProductServiceWindow(tx,id,{...all,dateFrom:'2100-01-01',dateThrough:'2100-01-01',saleStartMinute:1200,saleEndMinute:1380,visibleStartMinute:1080,visibleEndMinute:1380}))

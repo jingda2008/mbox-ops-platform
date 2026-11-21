@@ -1,3 +1,4 @@
+import { PaymentCapturePendingError } from './payment-repository.js'
 import {lockCarryoverPaymentAdmission} from './carryover-payment-admission.js'
 import { validateProductPaymentWindow } from './product-payment-window.js'
 import { IdempotencyConflictError } from './command-executor.js'
@@ -844,6 +845,7 @@ export class OnlinePaymentService {
       const carryover=input.principal.type==='employee'&&await lockCarryoverPaymentAdmission(transaction,input.paymentId,input.principal.employeeId)
       const repository = new PaymentProviderActionRepository(transaction, this.secret)
       const context = await repository.resolvePaymentContext(input.paymentId, input.principal)
+      if (context.captureAwaitingPosting) throw new PaymentCapturePendingError()
       if (context.status !== 'pending' && context.status !== 'created') {
         if (['succeeded', 'partially_refunded', 'refunded', 'failed', 'closed'].includes(context.status)) {
           // The committed checkout receipt can contain an older pending snapshot.

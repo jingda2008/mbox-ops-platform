@@ -31,28 +31,22 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
   })
 }
 
-function guestPaymentAbandonmentModule() {
-  const PENDING_GUEST_PAYMENT_ABANDONMENT_KEY = 'mbox.pending.guest.payment.abandon.v1'
-  return {
-    PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
-    createGuestPaymentAbandonmentRecord(pending, tableScope, createIdempotencyKey) {
-      const legacy = pending && pending.checkoutKind === undefined
-        && typeof pending.retryIdempotencyKey === 'string'
-      const state = pending && (pending.paymentPresentationState || 'ready_not_presented')
-      if (!pending || !(pending.checkoutKind === 'guest_immediate_payment' || legacy)
-        || pending.tableScope !== tableScope || pending.wechatAcceptedAt !== undefined
-        || pending.paymentPresentationInFlight === true
-        || !['ready_not_presented', 'action_failed', 'cancelled', 'result_unknown'].includes(state)) return null
-      return {
-        version: 1, orderPublicId: pending.orderPublicId, tableScope,
-        idempotencyKey: pending.abandonmentIdempotencyKey || createIdempotencyKey(pending.orderPublicId),
-      }
-    },
-    isRetryableGuestPaymentAbandonment(record, tableScope, order) {
-      return Boolean(record && record.tableScope === tableScope && order
-        && order.publicId === record.orderPublicId && order.paymentStatus !== 'paid')
-    },
-  }
+function guestPaymentAbandonmentModule(platform = 'miniprogram') {
+  return loadMiniModule(new URL(`../${platform}/utils/guest-payment-abandonment.js`, import.meta.url))
+}
+
+for (const client of ['miniprogram', 'alipay-miniprogram']) {
+  test(client + ' preserves payments under review, including old queued exits', () => {
+    const policy = loadMiniModule(new URL('../' + client + '/utils/guest-payment-abandonment.js', import.meta.url))
+    const pending = { tableScope: 'scope', orderPublicId: 'test-order-0001', checkoutKind: 'guest_immediate_payment' }
+    for (const state of ['result_unknown', 'recovered_from_bill', 'presenting']) {
+      assert.equal(policy.createGuestPaymentAbandonmentRecord({ ...pending, paymentPresentationState: state }, 'scope', () => 'abandon-key'), null)
+    }
+    const record = policy.createGuestPaymentAbandonmentRecord({ ...pending, paymentPresentationState: 'cancelled' }, 'scope', () => 'abandon-key')
+    const order = { publicId: pending.orderPublicId, payableAmountMinor: 15800, paymentStatus: 'pending', paymentAccess: 'payment_in_progress' }
+    assert.equal(policy.isRetryableGuestPaymentAbandonment(record, 'scope', order), true)
+    assert.equal(policy.isRetryableGuestPaymentAbandonment({ ...record, reason: 'result_unknown' }, 'scope', order), false)
+  })
 }
 
 function scope(session) {
@@ -419,7 +413,7 @@ async function loadAccountPage(state, platform = 'miniprogram') {
         }),
       }
       if (specifier === '../../utils/id') return { randomId: (prefix) => `${prefix}-scope-test` }
-      if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule()
+      if (specifier === '../../utils/guest-payment-abandonment') return guestPaymentAbandonmentModule(platform)
       if (specifier === '../../utils/format') return { ...actualMiniFormat, money: (value) => `¥${Number(value || 0) / 100}`, dateTime: (value) => String(value || '') }
       if (specifier === '../../utils/customer-error') return {
         customerErrorMessage: (error, fallback) => error && error.code === 'GUEST_ORDER_ACCESS_FORBIDDEN'
@@ -730,6 +724,24 @@ test('Order cancels a legacy pending checkout instead of retrying its old paymen
   assert.equal(page.data.error, '')
 })
 
+test('an unknown checkout result stays pending when the customer leaves the order page', async () => {
+  const state = {
+    session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
+    resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002', storage: new Map(),
+  }
+  const { page, calls } = await loadOrderPage(state)
+  await page.preparePage()
+  const pending = { orderPublicId: 'order-unknown-0001', retryIdempotencyKey: 'retry-unknown-0001',
+    checkoutKind: 'guest_immediate_payment', tableScope: 'cache.session:fixed-token:cart-scope-for-turn-b-000000002' }
+  state.storage.set(PENDING_PAYMENT_KEY, pending)
+  page.setData({ pendingPayment: pending })
+  await page.handlePaymentAction({ status: 'unknown', payload: null })
+  assert.equal(page.data.paymentResult.kind, 'pending')
+  page.onHide()
+  assert.equal(calls.abandonGuestCheckout.length, 0)
+  assert.equal(state.storage.get(PENDING_PAYMENT_KEY).paymentPresentationState, 'result_unknown')
+})
+
 for (const failure of ['slow', 'rejected']) {
   test(`Order permits a fresh cart while previous payment release is ${failure}, retaining its financial recovery`, async () => {
     const scope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
@@ -741,7 +753,7 @@ for (const failure of ['slow', 'rejected']) {
     }
     const { page, calls } = await loadOrderPage(state)
     await page.preparePage()
-    const pending = { orderPublicId: 'order-recovery-0001', retryIdempotencyKey: 'retry-recovery-0001', tableScope: scope, checkoutKind: 'guest_immediate_payment', paymentPresentationState: 'result_unknown' }
+    const pending = { orderPublicId: 'order-recovery-0001', retryIdempotencyKey: 'retry-recovery-0001', tableScope: scope, checkoutKind: 'guest_immediate_payment', paymentPresentationState: 'cancelled' }
     state.storage.set(PENDING_PAYMENT_KEY, pending)
     page.setData({ pendingPayment: pending })
     const allowed = await Promise.race([page.handlePendingPaymentBeforeCheckout(), new Promise(resolve => setTimeout(() => resolve('blocked'), 50))])

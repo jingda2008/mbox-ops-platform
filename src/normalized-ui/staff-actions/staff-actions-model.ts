@@ -208,8 +208,7 @@ export function staffTableFinancialSummary(
   return tables.reduce<StaffTableFinancialSummary>((summary, table) => {
     const session = table.activeSession
     if (session === null) return summary
-    if (session.unpaidOrderCount > 0 || session.pendingPaymentCount > 0
-      || session.financialState === 'payment_exception') summary.paymentDue += 1
+    if (session.unpaidOrderCount > 0 || session.pendingPaymentCount > 0) summary.paymentDue += 1
     if (session.refundAttentionCount > 0) summary.refunds += 1
     if ((session.refundActionCount ?? session.refundAttentionCount) > 0) summary.refundActions += 1
     if ((session.refundProcessingCount ?? 0) > 0) summary.refundsProcessing += 1
@@ -231,7 +230,8 @@ export function visibleStaffTables(
     if (!matchesQuery) return false
     if (scope === 'all') return true
     if (scope === 'unpaid') return table.activeSession !== null
-      && ['unpaid', 'payment_pending', 'payment_exception'].includes(table.activeSession.financialState)
+      && (['unpaid', 'payment_pending'].includes(table.activeSession.financialState)
+        || (table.activeSession.financialState === 'payment_exception' && table.activeSession.unpaidOrderCount > 0))
     if (scope === 'mine') return table.assignedToActor
     return table.activeSession !== null || table.assignedToActor || attentionTableIds.has(table.id)
   })

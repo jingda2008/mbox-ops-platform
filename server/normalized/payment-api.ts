@@ -18,7 +18,7 @@ import { HistoricalCollectionChangedError, type PaymentCommandService } from './
 import type { CashierWorkbenchView } from '../../src/shared/cashier-workbench-contracts.js'
 import type { CashierWorkbenchQueryInput } from './cashier-workbench-query.js'
 import {
-  OrderNotPayableError,
+  OrderNotPayableError, PaymentCapturePendingError,
   PaymentCallbackMismatchError,
   PaymentEvidenceError,
   PaymentNotFoundError,
@@ -1690,6 +1690,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   }
   if (error instanceof RefundRequiresCaseDecisionError) return apiError(409,error.code,error.message)
   if (error instanceof RefundNotFoundError) return apiError(404, 'REFUND_NOT_FOUND', error.message)
+  if (error instanceof PaymentCapturePendingError) return apiError(409, error.code, error.message)
   if (error instanceof OrderNotPayableError) return apiError(409, 'ORDER_NOT_PAYABLE', error.reason==='unpaid item stop requires settlement'?'本单有停止菜品尚未核定减免，请在商品售后待办处理后收款；其他订单可单独收款':error.reason==='the order has no outstanding balance'?'本单已足额收清，不能再次收款':error.reason==='status is cancelled'?'订单已取消，不能收款':error.reason==='status is draft'?'订单仍为草稿，请先提交订单':'当前订单未通过收款条件校验，请刷新订单核对桌次、归属和待收金额')
   if (error instanceof HistoricalCollectionChangedError) {
     return apiError(409, 'HISTORICAL_COLLECTION_CHANGED', error.message, 'not_committed')

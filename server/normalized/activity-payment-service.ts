@@ -1,3 +1,4 @@
+import { unpostedCaptureSql } from './verified-capture-sql.js'
 import { createHash } from 'node:crypto'
 import type { AuditActor, JsonObject } from './command-executor.js'
 import type { PublicCustomerExperienceContext, StaffCustomerExperienceContext } from './customer-experience-service.js'
@@ -64,6 +65,7 @@ interface ActivityPaymentRow extends Record<string, unknown> {
   payment_id: string | null
   payment_public_id: string | null
   payment_method: string | null
+  capture_awaiting_posting?: boolean
   authoritative_payment_status: string | null
   provider_action_state: 'creating' | 'ready' | 'unknown' | 'failed' | 'consumed' | null
   refund_status: string | null
@@ -352,7 +354,7 @@ async function ownedActivityPayment(
       activity.starts_at::text AS activity_starts_at,
       payment.id AS payment_id, payment.public_id AS payment_public_id,
       payment.method AS payment_method,
-      payment.status AS authoritative_payment_status,
+      payment.status AS authoritative_payment_status, ${unpostedCaptureSql} AS capture_awaiting_posting,
       provider_action.state AS provider_action_state,
       latest_refund.status AS refund_status, latest_refund.public_id AS refund_public_id,
       latest_refund.decision_reason AS refund_decision_reason,
@@ -423,7 +425,7 @@ async function staffActivityPayment(
       registration.amount_due_minor, registration.paid_amount_minor, registration.currency,
       registration.seat_hold_expires_at::text, activity.starts_at::text AS activity_starts_at,
       payment.id AS payment_id, payment.public_id AS payment_public_id,
-      payment.status AS authoritative_payment_status,
+      payment.status AS authoritative_payment_status, ${unpostedCaptureSql} AS capture_awaiting_posting,
       provider_action.state AS provider_action_state, latest_refund.status AS refund_status, latest_refund.public_id AS refund_public_id
     FROM mbox.community_activity_registrations registration
     JOIN mbox.community_activities activity ON activity.tenant_id=registration.tenant_id
@@ -515,6 +517,7 @@ function resolution(row: Readonly<ActivityPaymentRow>): ActivityPaymentResolutio
   if (row.payment_status === 'not_required') return 'not_required'
   if (row.payment_status === 'paid' || row.authoritative_payment_status === 'succeeded'
     || row.authoritative_payment_status === 'partially_refunded') return 'confirmed'
+  if (row.capture_awaiting_posting) return 'unknown'
   if (row.payment_status === 'expired' || row.authoritative_payment_status === 'closed') return 'expired'
   if (row.authoritative_payment_status === 'failed' || row.provider_action_state === 'failed') return 'failed'
   if (row.provider_action_state === 'unknown') return 'unknown'

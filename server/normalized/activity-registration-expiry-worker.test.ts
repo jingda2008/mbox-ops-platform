@@ -23,9 +23,11 @@ class ActivityExpiryClient implements PostgresPoolClient {
         public_id: 'activity-registration-test-0001',
         payment_id: this.state === 'none' ? null : '81000000-0000-4000-8000-000000000004',
         payment_state: this.state,
+        succeeded_at: this.state === 'captured' ? new Date().toISOString() : null,
         captured_amount_minor: this.state === 'captured' ? '10000' : null,
       }])
     }
+    if (normalized.startsWith('SELECT status FROM mbox.community_activity_registrations')) return result([{status:'confirmed'}])
     if (normalized.startsWith('UPDATE mbox.community_activity_registrations')) return result([{}])
     if (normalized.startsWith('INSERT INTO mbox.audit_events')) return result([{}])
     if (normalized.startsWith('INSERT INTO mbox.outbox_messages')) return result([{}])
@@ -88,7 +90,7 @@ describe('ActivityRegistrationExpiryWorker', () => {
     const batch = await workerFor(client).runBatch(scope, 'activity-expiry-test')
     expect(batch.confirmedRegistrationIds).toEqual([registrationId])
     expect(client.calls).toEqual(expect.arrayContaining([
-      expect.stringContaining("SET status = 'confirmed', payment_status = 'paid'"),
+      expect.stringContaining("SET status='confirmed', payment_status='paid'"),
     ]))
   })
 })

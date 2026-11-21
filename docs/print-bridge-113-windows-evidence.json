@@ -1,0 +1,20 @@
+{
+  "windowsNativeVerified": true,
+  "physicalVerified": false,
+  "os": "Microsoft Windows NT 10.0.20348.0",
+  "powershell": "5.1.20348.5773",
+  "tests": [
+    "real WinSW service runs original 1.0.11 and completes loopback heartbeat",
+    "all packaged PowerShell parses on Windows 5.1",
+    "tampered package rejected before changing service files",
+    "unknown installed baseline rejected",
+    "in-flight journal blocks upgrade and remains unchanged",
+    "corrupt journal rejected without clearing records",
+    "real new-service heartbeat rejection restores old files, absent module and running state",
+    "real service upgrades 1.0.11 to 1.0.13 with fresh heartbeat; config and journal unchanged",
+    "repeated upgrade is idempotent",
+    "real Open/Start/Write/End/Close Windows spooler preserves RAW bytes and rejects invalid queue"
+  ],
+  "commit": "96d87e60f85f652afb2400d1830e7558cfbb9f88",
+  "archiveSha256": "8c8fbf461f28df6ef95ef8b9df73d6130d906b5985c6167c001eaf1e9c85558a"
+}

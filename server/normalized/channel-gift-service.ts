@@ -10,6 +10,7 @@ import type { ScopedTransaction } from './transaction-runner.js'
 export async function fulfillChannelGift(tx:ScopedTransaction,commerce:Pick<CommerceCommandService,'submitOrderInTransaction'>,input:{claimId:string;tableSessionId:string;employeeId:string;businessDate:string}){
  const repo=new ChannelDistributionRepository(tx);await repo.lockIdentity()
  await assertEmployeeTableSessionAccess(tx,{employeeId:input.employeeId,tableSessionId:input.tableSessionId,requiredPermissionCodes:['channel.activate','order.create'],lockTableSession:true})
+ await new ChannelGiftInventory(tx).prepareOnUse(input.claimId,input.tableSessionId)
  const args=[tx.scope.tenantId,tx.scope.storeId]
  const promise=(await tx.query<{product_id:string;quantity:number;order_id:string|null;state:string}>(`SELECT g.product_id,g.quantity,g.order_id,g.state FROM mbox.channel_gift_promises g
   JOIN mbox.channel_activations a ON (a.tenant_id,a.store_id,a.claim_id)=(g.tenant_id,g.store_id,g.claim_id)

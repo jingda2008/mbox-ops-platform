@@ -31,3 +31,9 @@ it('uses the same Beijing date boundary for the authoritative refund todo count'
  const html=renderToStaticMarkup(createElement(StaffTodoPanel,{api:{} as NormalizedApiClient,bootstrap}))
  expect(html).toContain('截至 2027-01-01 00:00（北京时间）');expect(html).toContain('等待处理 1 项');expect(html).not.toContain('+00')
 })
+
+it('explains bank and Alipay account references and independent verification without promising automatic transfers',()=>{
+ vi.mocked(useState).mockImplementation(initial=>[initial==='reconcile'?'account':initial,vi.fn()] as never)
+ const html=renderToStaticMarkup(createElement(ChannelFinancePanel,{api:{} as NormalizedApiClient,auth:{session:{id:'s'},permissions:['channel.settle']} as StaffAuthView,partners:[]}))
+ for(const text of ['资料A001','银行卡','支付宝','账号在此脱敏','另一人核实','不会绑定或自动打款'])expect(html).toContain(text)
+})

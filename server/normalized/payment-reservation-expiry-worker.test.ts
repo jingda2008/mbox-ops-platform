@@ -52,7 +52,7 @@ class ExpiryClient implements PostgresPoolClient {
         movement_id: null,
       }])
     }
-    if (normalized.startsWith('SELECT inventory_item_id FROM mbox.inventory_balances')) {
+    if (normalized.startsWith('SELECT inventory_item_id,weighted_unit_cost_minor::text FROM mbox.inventory_balances')) {
       return result([{ inventory_item_id: inventoryItemId }])
     }
     if (normalized.startsWith('SELECT mbox.release_reserved_order_fulfillment_capacity')) {

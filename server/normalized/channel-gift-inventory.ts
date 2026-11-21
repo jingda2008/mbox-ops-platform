@@ -1,34 +1,55 @@
 import type { ScopedTransaction } from './transaction-runner.js'
-import type { ChannelRule } from '../../src/shared/channel-distribution.js'
+import { channelOfferSchema, type ChannelRule } from '../../src/shared/channel-distribution.js'
 import { ChannelDistributionError, ChannelBusinessError } from './channel-distribution-policy.js'
 
 /** Marketing commitment is backed by the SAME balances ordinary orders use. */
 export class ChannelGiftInventory {
  constructor(private readonly tx:ScopedTransaction){}
  private get scope(){return[this.tx.scope.tenantId,this.tx.scope.storeId]}
+ /** Called only inside the gift order transaction, after authenticating its current table. */
+ async prepareOnUse(claimId:string,tableSessionId:string){
+  const claim=(await this.tx.query<{fulfillment_policy:string;offer:unknown}>(`SELECT q.fulfillment_policy,COALESCE(q.gift_selection,b.rule_snapshot->'offer') AS offer
+   FROM mbox.channel_claims q JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(q.tenant_id,q.store_id,q.batch_id)
+   JOIN mbox.channel_activations a ON (a.tenant_id,a.store_id,a.claim_id)=(q.tenant_id,q.store_id,q.id)
+   JOIN mbox.channel_visit_tables t ON (t.tenant_id,t.store_id,t.visit_id)=(a.tenant_id,a.store_id,a.visit_id)
+   WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.id=$3 AND NOT q.voided AND q.status IN('active','fulfilled')
+    AND a.status IN('active','fulfilled') AND t.table_session_id=$4 AND t.detached_at IS NULL FOR UPDATE OF q`,[...this.scope,claimId,tableSessionId])).rows[0]
+  if(!claim)throw new ChannelDistributionError('OWNERSHIP',403)
+  if(claim.fulfillment_policy!=='on_use')return
+  const existing=(await this.tx.query(`SELECT claim_id FROM mbox.channel_gift_promises WHERE tenant_id=$1 AND store_id=$2 AND claim_id=$3`,[...this.scope,claimId])).rows[0]
+  if(existing)return // The existing order/promise decides replay; never reserve twice.
+  const offer=channelOfferSchema.parse(claim.offer)
+  if(offer.kind!=='gift')throw new ChannelDistributionError('NOT_REVERSIBLE')
+  const product=(await this.tx.query<{cost:string|null;name:string}>(`SELECT cost_amount_minor::text AS cost,name FROM mbox.products WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='active' FOR UPDATE`,[...this.scope,offer.productId])).rows[0]
+  if(!product||product.cost===null)throw new ChannelDistributionError('GIFT_CONFIGURATION')
+  // Use the authoritative cost at ordering. A marketing estimate is not a cost ceiling.
+  const current=channelOfferSchema.parse({...offer,costMinor:Number(product.cost)*offer.quantity,productName:product.name})
+  if(current.kind!=='gift')throw new ChannelDistributionError('NOT_REVERSIBLE')
+  await this.reserve(claimId,current)
+ }
  async reserve(claimId:string,offer:Extract<ChannelRule['offer'],{kind:'gift'}>){
   const old=(await this.tx.query<{state:string;generation:number}>(`SELECT state,generation FROM mbox.channel_gift_promises WHERE tenant_id=$1 AND store_id=$2 AND claim_id=$3 FOR UPDATE`,[...this.scope,claimId])).rows[0]
   if(old&&old.state!=='released')throw new ChannelDistributionError('NOT_REVERSIBLE')
   const generation=(old?.generation??0)+1
   const product=(await this.tx.query<{sale_remaining_quantity:number|null;sale_quantity_generation:string;cost_amount_minor:string|null}>(`SELECT sale_remaining_quantity,sale_quantity_generation::text,cost_amount_minor::text FROM mbox.products
    WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status='active' AND product_kind='single' AND inventory_control_mode='tracked' FOR UPDATE`,[...this.scope,offer.productId])).rows[0]
-  if(!product||product.cost_amount_minor===null||BigInt(product.cost_amount_minor)*BigInt(offer.quantity)>BigInt(offer.costMinor))throw new ChannelDistributionError('CAPACITY')
+  if(!product||product.cost_amount_minor===null||BigInt(product.cost_amount_minor)*BigInt(offer.quantity)>BigInt(offer.costMinor))throw new ChannelDistributionError('GIFT_CONFIGURATION')
   const recipe=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.recipes WHERE tenant_id=$1 AND store_id=$2 AND product_id=$3 AND status='active' AND effective_at<=clock_timestamp() FOR SHARE`,[...this.scope,offer.productId])).rows[0]
-  if(!recipe)throw new ChannelDistributionError('CAPACITY')
+  if(!recipe)throw new ChannelDistributionError('GIFT_CONFIGURATION')
   const demand=(await this.tx.query<{inventory_item_id:string;quantity:string}>(`SELECT i.inventory_item_id,(((i.quantity+i.expected_waste_quantity)*$4::integer)/r.yield_quantity)::numeric(18,6)::text AS quantity
    FROM mbox.recipe_items i JOIN mbox.recipes r ON (r.tenant_id,r.store_id,r.id)=(i.tenant_id,i.store_id,i.recipe_id)
    JOIN mbox.inventory_items n ON (n.tenant_id,n.store_id,n.id)=(i.tenant_id,i.store_id,i.inventory_item_id) AND n.status='active'
    WHERE i.tenant_id=$1 AND i.store_id=$2 AND i.recipe_id=$3 ORDER BY i.inventory_item_id FOR SHARE OF i,n`,[...this.scope,recipe.id,offer.quantity])).rows
   const recipeCount=(await this.tx.query<{n:number}>(`SELECT count(*)::integer AS n FROM mbox.recipe_items WHERE tenant_id=$1 AND store_id=$2 AND recipe_id=$3`,[...this.scope,recipe.id])).rows[0]!.n
-  if(!demand.length||demand.length!==recipeCount||demand.some(d=>Number(d.quantity)<=0))throw new ChannelDistributionError('CAPACITY')
+  if(!demand.length||demand.length!==recipeCount||demand.some(d=>Number(d.quantity)<=0))throw new ChannelDistributionError('GIFT_CONFIGURATION')
   if(product.sale_remaining_quantity!==null){
    const changed=await this.tx.query(`UPDATE mbox.products SET sale_remaining_quantity=sale_remaining_quantity-$4,sale_quantity_version=sale_quantity_version+1 WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND sale_remaining_quantity>=$4`,[...this.scope,offer.productId,offer.quantity])
-   if(changed.rowCount!==1)throw new ChannelDistributionError('CAPACITY')
+   if(changed.rowCount!==1)throw new ChannelDistributionError('GIFT_STOCK')
   }
   await this.tx.query(`INSERT INTO mbox.channel_gift_promises(tenant_id,store_id,claim_id,product_id,recipe_id,quantity,cost_minor,sale_generation,generation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(tenant_id,store_id,claim_id) DO UPDATE SET product_id=EXCLUDED.product_id,recipe_id=EXCLUDED.recipe_id,quantity=EXCLUDED.quantity,cost_minor=EXCLUDED.cost_minor,sale_generation=EXCLUDED.sale_generation,generation=EXCLUDED.generation,state='reserved',completed_at=NULL`,[...this.scope,claimId,offer.productId,recipe.id,offer.quantity,offer.costMinor,product.sale_remaining_quantity===null?null:product.sale_quantity_generation,generation])
   for(const d of demand){
    const changed=await this.tx.query(`UPDATE mbox.inventory_balances SET reserved_quantity=reserved_quantity+$4::numeric,updated_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND inventory_item_id=$3 AND on_hand_quantity-reserved_quantity>=$4::numeric`,[...this.scope,d.inventory_item_id,d.quantity])
-   if(changed.rowCount!==1)throw new ChannelDistributionError('CAPACITY')
+   if(changed.rowCount!==1)throw new ChannelDistributionError('GIFT_STOCK')
    await this.tx.query(`INSERT INTO mbox.channel_gift_stock(tenant_id,store_id,claim_id,inventory_item_id,quantity,generation) VALUES($1,$2,$3,$4,$5,$6)`,[...this.scope,claimId,d.inventory_item_id,d.quantity,generation])
   }
   await this.tx.query(`INSERT INTO mbox.channel_gift_versions(tenant_id,store_id,claim_id,generation,snapshot) VALUES($1,$2,$3,$4,$5::jsonb)`,[...this.scope,claimId,generation,JSON.stringify({offer,recipeId:recipe.id,demand})])

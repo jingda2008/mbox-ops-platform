@@ -13,6 +13,8 @@ export const channelCouponViewSchema = z.object({
   status: z.enum(['available','active','fulfilled','expired','revoked']), offer,
   useFrom: z.string(), useUntil: z.string(), sourceLabel: z.string(), minimumMinor: z.number(),
   allowStacking:z.boolean().default(false),visitDiscountCapMinor:z.number().nullable().default(null),
+  fulfillmentPolicy: z.enum(['reserved','on_use']).default('reserved'),
+  eligibleProductScope: z.enum(['all','selected']).default('selected'),
   perCustomerClaims: z.number(), perVisitUses: z.number(), eligibleProducts: products.nullable().transform(v=>v??[]),
 })
 export const publicChannelOffer = (value: unknown) => offer.parse(value)
@@ -20,7 +22,7 @@ export function publicChannelRule(value: unknown) {
   const rule=channelRuleSchema.parse(value)
   return { title:rule.title, totalClaims:rule.totalClaims, perCustomerClaims:rule.perCustomerClaims, perVisitUses:rule.perVisitUses,allowStacking:rule.allowStacking,visitDiscountCapMinor:rule.visitDiscountCapMinor,
     claimFrom:rule.claimFrom, claimUntil:rule.claimUntil, useFrom:rule.useFrom, useUntil:rule.useUntil,
-    minimumMinor:rule.minimumMinor, eligibleProducts:products.parse(rule.eligibleProductNames??[]), offer:publicChannelOffer(rule.offer),
+    minimumMinor:rule.minimumMinor, eligibleProductScope:rule.eligibleProductScope??'selected', eligibleProducts:products.parse(rule.eligibleProductNames??[]), offer:publicChannelOffer(rule.offer),
     commissionBps:rule.commissionBps, observationDays:rule.observationDays }
 }
 export interface ChannelWalletQuery { limit?: number; cursor?: string; status?: 'all'|'available'|'active'|'fulfilled'|'expired'|'revoked'; code?: string; claimId?: string }

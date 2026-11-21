@@ -1952,12 +1952,13 @@ export class InventoryRepository {
     const reservations = await this.readRemakeReservations(remakeTaskId, true);
     const reserved = reservations.filter((row) => row.status === "reserved");
     if (reserved.length === 0) return [];
-    await this.lockRemakeReservationBalances(reserved);
+    const costs=await this.lockRemakeReservationBalances(reserved);
     const results: InventoryConsumption[] = [];
     for (const reservation of reserved) {
       const movement = await this.insertMovement({
         inventoryItemId: reservation.inventory_item_id,
         movementType: "waste",
+        unitCostMinor: costs.get(reservation.inventory_item_id) ?? null,
         quantityDelta: `-${normalizeDecimal(reservation.quantity)}`,
         referenceType: "kds_remake",
         referenceId: remakeTaskId,
@@ -2045,12 +2046,13 @@ export class InventoryRepository {
     if (!reservations.every((row) => row.status === "reserved")) {
       throw new InventoryConflictError("Only reserved inventory can be consumed after payment");
     }
-    await this.lockReservationBalances(reservations);
+    const costs=await this.lockReservationBalances(reservations);
     const results: InventoryConsumption[] = [];
     for (const reservation of reservations) {
       const movement = await this.insertMovement({
         inventoryItemId: reservation.inventory_item_id,
         movementType: "sale",
+        unitCostMinor: costs.get(reservation.inventory_item_id) ?? null,
         quantityDelta: `-${normalizeDecimal(reservation.quantity)}`,
         referenceType: "order_item",
         referenceId: reservation.order_item_id,
@@ -2193,10 +2195,10 @@ export class InventoryRepository {
 
   private async lockReservationBalances(
     reservations: readonly InventoryOrderReservationRow[],
-  ): Promise<void> {
+  ): Promise<Map<string,string|null>> {
     const inventoryItemIds = [...new Set(reservations.map((row) => row.inventory_item_id))].sort();
-    const locked = await this.transaction.query(`
-      SELECT inventory_item_id
+    const locked = await this.transaction.query<{inventory_item_id:string;weighted_unit_cost_minor:string|null}>(`
+      SELECT inventory_item_id,weighted_unit_cost_minor::text
       FROM mbox.inventory_balances
       WHERE tenant_id = $1::uuid AND store_id = $2::uuid
         AND inventory_item_id = ANY($3::uuid[])
@@ -2206,14 +2208,15 @@ export class InventoryRepository {
     if (locked.rowCount !== inventoryItemIds.length) {
       throw new InventoryBalanceMissingError(inventoryItemIds[0] ?? "unknown");
     }
+    return new Map(locked.rows.map(row=>[row.inventory_item_id,row.weighted_unit_cost_minor??null]));
   }
 
   private async lockRemakeReservationBalances(
     reservations: readonly InventoryRemakeReservationRow[],
-  ): Promise<void> {
+  ): Promise<Map<string,string|null>> {
     const inventoryItemIds = [...new Set(reservations.map((row) => row.inventory_item_id))].sort();
-    const locked = await this.transaction.query(`
-      SELECT inventory_item_id
+    const locked = await this.transaction.query<{inventory_item_id:string;weighted_unit_cost_minor:string|null}>(`
+      SELECT inventory_item_id,weighted_unit_cost_minor::text
       FROM mbox.inventory_balances
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND inventory_item_id=ANY($3::uuid[])
       ORDER BY inventory_item_id
@@ -2222,6 +2225,7 @@ export class InventoryRepository {
     if (locked.rowCount !== inventoryItemIds.length) {
       throw new InventoryBalanceMissingError(inventoryItemIds[0] ?? "unknown");
     }
+    return new Map(locked.rows.map(row=>[row.inventory_item_id,row.weighted_unit_cost_minor??null]));
   }
 
   private async transitionStockCount(

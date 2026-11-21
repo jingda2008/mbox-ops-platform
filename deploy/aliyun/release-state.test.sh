@@ -54,3 +54,9 @@ test "$(release_contract_boundary_between 312 313)" = 313
 test "$(release_contract_boundary_between 313 313)" = 0
 test "$(release_contract_boundary_between 313 314)" = 314
 test "$(release_contract_boundary_between 305 314)" = 314
+
+# On-use claims require compatible gift writers even though schema320 is additive.
+test "$(release_contract_boundary_between 319 320)" = 320
+test "$(release_contract_boundary_between 314 320)" = 320
+test "$(release_contract_boundary_between 320 320)" = 0
+test "$(release_contract_boundary_between 314 319)" = 0

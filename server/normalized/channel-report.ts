@@ -15,7 +15,7 @@ export async function readChannelReport(tx:ScopedTransaction){
   SELECT tenant_id,store_id,order_id,provider,status,succeeded_at
   FROM mbox.order_payment_facts WHERE tenant_id=$1 AND store_id=$2
  ), item_costs AS MATERIALIZED(
-  SELECT a.batch_id,CASE
+  SELECT a.batch_id,EXISTS(SELECT 1 FROM mbox.pricing_authorizations z WHERE (z.tenant_id,z.store_id,z.order_id)=(i.tenant_id,i.store_id,i.order_id) AND z.status='consumed' AND z.kind='gift') AS is_gift,CASE
    WHEN EXISTS(SELECT 1 FROM mbox.inventory_movements m WHERE (m.tenant_id,m.store_id,m.order_item_id)=(i.tenant_id,i.store_id,i.id)) THEN
     (SELECT CASE WHEN count(*) FILTER(WHERE m.unit_cost_minor IS NULL)>0 THEN NULL ELSE round(-sum(m.quantity_delta*m.unit_cost_minor)) END FROM mbox.inventory_movements m WHERE (m.tenant_id,m.store_id,m.order_item_id)=(i.tenant_id,i.store_id,i.id))
    WHEN i.status='delivered' AND i.product_snapshot->>'inventoryControlMode'='not_managed' AND i.cost_source<>'included_in_parent' THEN i.total_cost_minor_at_submission
@@ -27,7 +27,8 @@ export async function readChannelReport(tx:ScopedTransaction){
 
  ), batch_costs AS MATERIALIZED(
   SELECT batch_id,CASE WHEN count(*) FILTER(WHERE value IS NULL)>0 THEN NULL ELSE COALESCE(sum(value),0)::text END AS amount,
-    count(*) FILTER(WHERE value IS NULL)::integer AS missing
+    count(*) FILTER(WHERE value IS NULL)::integer AS missing,
+    CASE WHEN count(*) FILTER(WHERE is_gift AND value IS NULL)>0 THEN NULL ELSE COALESCE(sum(value) FILTER(WHERE is_gift),0)::text END AS gift_amount
   FROM item_costs GROUP BY batch_id
  ), identities AS MATERIALIZED(
   SELECT tenant_id,store_id,table_session_id,mbox.canonical_customer_id(tenant_id,store_id,customer_id) AS customer_id
@@ -49,6 +50,7 @@ export async function readChannelReport(tx:ScopedTransaction){
  ) SELECT b.id,b.offer_code AS "offerCode",b.rule_snapshot->>'title' AS title,r.name AS "promoterName",
   (SELECT count(*)::integer FROM mbox.channel_claims q WHERE (q.tenant_id,q.store_id,q.batch_id)=(b.tenant_id,b.store_id,b.id) AND NOT q.voided AND q.entry='staff') AS "staffClaims",
   (SELECT count(*)::integer FROM mbox.channel_claims q WHERE (q.tenant_id,q.store_id,q.batch_id)=(b.tenant_id,b.store_id,b.id) AND NOT q.voided AND q.entry='self') AS "selfClaims",
+  (SELECT count(*)::integer FROM mbox.channel_claims q WHERE (q.tenant_id,q.store_id,q.batch_id)=(b.tenant_id,b.store_id,b.id) AND NOT q.voided AND q.status='fulfilled') AS "fulfilledClaims",
   (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND v.arrival_confirmed_at IS NOT NULL) AS "arrivedVisits",
   (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND (v.source_review_required OR EXISTS(SELECT 1 FROM mbox.channel_visit_tables t JOIN mbox.reservation_seating_sessions seating ON (seating.tenant_id,seating.store_id,seating.table_session_id)=(t.tenant_id,t.store_id,t.table_session_id) WHERE (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,COALESCE(v.reporting_root_id,v.id))))) AS "priorReservationVisits",
   (SELECT count(DISTINCT COALESCE(v.reporting_root_id,v.id))::integer FROM mbox.channel_visits v WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND EXISTS(SELECT 1 FROM returning_visits prior_visit WHERE prior_visit.id=v.id)) AS "knownReturningVisits",
@@ -57,13 +59,13 @@ export async function readChannelReport(tx:ScopedTransaction){
   COALESCE((SELECT sum((o->>'netReceipt')::bigint) FROM mbox.channel_financial_positions p CROSS JOIN LATERAL jsonb_array_elements(p.evidence) o WHERE (p.tenant_id,p.store_id,p.batch_id)=(b.tenant_id,b.store_id,b.id)),0)::text AS "netReceiptsMinor",
   (SELECT min(p.checked_at)::text FROM mbox.channel_financial_positions p WHERE (p.tenant_id,p.store_id,p.batch_id)=(b.tenant_id,b.store_id,b.id)) AS "checkedAt",
   EXISTS(SELECT 1 FROM mbox.channel_visits v LEFT JOIN mbox.channel_financial_positions p ON (p.tenant_id,p.store_id,p.visit_id)=(v.tenant_id,v.store_id,v.id) WHERE (v.tenant_id,v.store_id,v.source_batch_id)=(b.tenant_id,b.store_id,b.id) AND (p.visit_id IS NULL OR p.frozen OR clock_timestamp()-p.checked_at>interval '60 seconds')) AS pending,
-  CASE WHEN costs.batch_id IS NULL THEN '0' ELSE costs.amount END AS "costMinor",COALESCE(costs.missing,0) AS "missingCostItems"
+  CASE WHEN costs.batch_id IS NULL THEN '0' ELSE costs.amount END AS "costMinor",CASE WHEN costs.batch_id IS NULL THEN '0' ELSE costs.gift_amount END AS "giftCostMinor",COALESCE(costs.missing,0) AS "missingCostItems"
  FROM mbox.channel_batches b JOIN mbox.channel_promoters r ON (r.tenant_id,r.store_id,r.id)=(b.tenant_id,b.store_id,b.promoter_id)
  LEFT JOIN batch_costs costs ON costs.batch_id=b.id
  WHERE b.tenant_id=$1 AND b.store_id=$2 ORDER BY b.created_at DESC,b.id LIMIT 500`,scope)).rows.map(r=>({...r,contributionMinor:r.pending||r.costMinor==null?null:String(BigInt(String(r.netReceiptsMinor))-BigInt(String(r.costMinor))-BigInt(String(r.commissionMinor)))}))
 }
 export function channelReportCsv(rows:Record<string,unknown>[]){
- const fields=['offerCode','title','promoterName','staffClaims','selfClaims','arrivedVisits','priorReservationVisits','knownReturningVisits','qualifiedMinor','commissionMinor','netReceiptsMinor','costMinor','missingCostItems','contributionMinor','pending','checkedAt']
+ const fields=['offerCode','title','promoterName','staffClaims','selfClaims','fulfilledClaims','arrivedVisits','priorReservationVisits','knownReturningVisits','qualifiedMinor','commissionMinor','netReceiptsMinor','costMinor','giftCostMinor','missingCostItems','contributionMinor','pending','checkedAt']
  const cell=(value:unknown)=>{const s=value==null?'待核算':String(value);return '"'+(/^[=+\-@\t\r]/.test(s)?"'"+s:s).replaceAll('"','""')+'"'}
  return '\uFEFF'+[fields.map(cell).join(','),...rows.map(row=>fields.map(f=>cell(row[f])).join(','))].join('\r\n')
 }

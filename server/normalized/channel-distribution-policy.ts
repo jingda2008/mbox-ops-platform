@@ -14,13 +14,13 @@ export function requireChannelWindow(from: string, until: string, now: Date): vo
 }
 
 export function assertChannelClaimCapacity(input: {
-  rule: ChannelRule; issued: number; customerIssued: number; poolRemaining: number; capacityRemaining: number; paused: boolean; now: Date
+  rule: ChannelRule; issued: number; customerIssued: number; poolRemaining: number; capacityRemaining?: number; paused: boolean; now: Date
 }): void {
   requireChannelWindow(input.rule.claimFrom, input.rule.claimUntil, input.now)
   if (input.paused) throw new ChannelDistributionError('PAUSED')
   if (input.issued >= input.rule.totalClaims || input.poolRemaining < 1) throw new ChannelDistributionError('CLAIM_LIMIT')
   if (input.customerIssued >= input.rule.perCustomerClaims) throw new ChannelDistributionError('CUSTOMER_LIMIT')
-  if (input.capacityRemaining < 1) throw new ChannelDistributionError('CAPACITY')
+  if (input.capacityRemaining !== undefined && input.capacityRemaining < 1) throw new ChannelDistributionError('CAPACITY')
 }
 
 /** Called only for NEW activation: replay is returned before inspecting expiry.

@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { extname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import ts from 'typescript'
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url))
 const wechatRoot = join(repoRoot, 'miniprogram')
@@ -67,6 +68,14 @@ for (const file of alipayFiles) {
     assert(!/\bcatch\s*\{/.test(source), `支付宝编译器不支持省略 catch 参数: ${relative(alipayRoot, file)}`)
     assert(!/^[\t ]*(?:module\.exports|exports\s*(?:\.|\[))/m.test(source), `支付宝 2.x 源码必须使用 ESM 导出: ${relative(alipayRoot, file)}`)
     new vm.Script(syntaxCheckSource(source), { filename: relative(alipayRoot, file) })
+    if (source.includes('?.')) {
+      const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.JS)
+      const checkCompilerSyntax = (node) => {
+        assert(!node.questionDotToken, `支付宝官方编译器不支持可选链: ${relative(alipayRoot, file)}`)
+        ts.forEachChild(node, checkCompilerSyntax)
+      }
+      checkCompilerSyntax(ast)
+    }
   }
   if (source !== null && /appsecret\s*[:=]/i.test(source)) {
     throw new Error(`支付宝包禁止出现 AppSecret 配置: ${relative(alipayRoot, file)}`)

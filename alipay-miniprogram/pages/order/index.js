@@ -2523,7 +2523,13 @@ Page({
       }
       if (this.isCurrentTableRequest(guard)) await this.refreshSharedCart()
     } catch (error) {
-      if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt && runtime.getStorageSync(storageKey)?.key === attempt.key) { runtime.removeStorageSync(storageKey); await this.refreshSharedCart() }
+      if (error && error.code === 'TABLE_CREDIT_CHANGED' && this.isCurrentTableRequest(guard) && attempt) {
+        const savedAttempt = runtime.getStorageSync(storageKey)
+        if (savedAttempt && savedAttempt.key === attempt.key) {
+          runtime.removeStorageSync(storageKey)
+          await this.refreshSharedCart()
+        }
+      }
       if (this.isCurrentTableRequest(guard)) this.setData({ error: isAlipayCancellation(error) ? '本次支付已取消，预付款尚未确认；可继续原付款或联系员工取消' : customerErrorMessage(error, '预付款结果待核对，请继续原付款') })
     } finally { if (this.isCurrentTableRequest(guard)) this.setData({ prepaymentBusy: false }) }
   },

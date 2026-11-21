@@ -137,8 +137,8 @@ await financeForm.getByLabel('办理事项').selectOption('start-payment');asser
   await page.evaluate(mode=>{window.giftMode=true;window.giftUsed='0';window.giftCalls=[];window.tableResolvers=[];window.changeActivationSession('gift-'+mode)},olderResponse);
   await activation.getByText('本次客组：允许叠加 · 已占用优惠 ¥0.00 · 总上限 ¥25.00',{exact:false}).waitFor();
   await page.evaluate(()=>{window.deferTable=true});
-  await activation.getByRole('button',{name:'核对库存和门槛，确认赠送',exact:true}).nth(0).click();await page.waitForFunction(()=>window.tableResolvers.length===1);
-  await activation.getByRole('button',{name:'核对库存和门槛，确认赠送',exact:true}).nth(1).click();await page.waitForFunction(()=>window.tableResolvers.length===2);
+  await activation.getByRole('button',{name:'顾客用券，核销赠品',exact:true}).nth(0).click();await page.waitForFunction(()=>window.tableResolvers.length===1);
+  await activation.getByRole('button',{name:'顾客用券，核销赠品',exact:true}).nth(1).click();await page.waitForFunction(()=>window.tableResolvers.length===2);
   await page.evaluate(()=>window.tableResolvers[1]('2000'));
   await activation.getByText('本次客组：允许叠加 · 已占用优惠 ¥20.00 · 总上限 ¥25.00',{exact:false}).waitFor();
   await page.evaluate(value=>window.tableResolvers[0](value),olderResponse);
@@ -153,7 +153,7 @@ await financeForm.getByLabel('办理事项').selectOption('start-payment');asser
 
  await page.evaluate(()=>{window.giftUsed='0';window.changeActivationSession('gift-offline');window.loseGiftResponse=true;window.giftCalls=[]});
  await activation.getByText('已占用优惠 ¥0.00',{exact:false}).waitFor();
- await activation.getByRole('button',{name:'核对库存和门槛，确认赠送',exact:true}).nth(0).click();
+ await activation.getByRole('button',{name:'顾客用券，核销赠品',exact:true}).nth(0).click();
  await activation.getByRole('button',{name:'恢复原操作',exact:true}).waitFor();
  const lostGift=await page.evaluate(()=>window.giftCalls[0]);
  await page.reload();await page.getByText('周边店合作 · 核验绑定本桌',{exact:true}).click();

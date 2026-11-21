@@ -135,7 +135,7 @@ function ChannelGiftAction({claimId,sessionId,staffSessionId,orderId,onRefresh,a
  },undefined,true),[staffSessionId,claimId,sessionId,arrival])
  useEffect(()=>{try{setPending(command.pending()!==null)}catch(e){setError(e instanceof Error?e.message:'回执异常')}},[command])
  async function run(){if(busy)return;setBusy(true);setError('');try{if(pending)await command.recover();else await command.submit(arrival?{tableSessionId:sessionId,action:'arrival',reason:'员工现场核对本人已入座'}:{claimId,tableSessionId:sessionId});await command.refresh(onRefresh)}catch(e){setError(e instanceof Error?e.message:'请恢复原出品操作')}finally{setBusy(false);try{setPending(command.pending()!==null)}catch{setPending(true)}}}
- return <span>{orderId?` · 已生成赠品订单 ${orderId.slice(-8)}，制作状态见出品单`:''}{(!orderId||pending)&&<button type="button" disabled={busy} onClick={()=>void run()}>{pending?'恢复原操作':arrival?'现场确认顾客已到店':'核对库存和门槛，确认赠送'}</button>}{error&&<span role="alert">{error}</span>}</span>
+ return <span>{orderId?` · 已生成赠品订单 ${orderId.slice(-8)}，制作状态见出品单`:''}{(!orderId||pending)&&<button type="button" disabled={busy} onClick={()=>void run()}>{pending?'恢复原操作':arrival?'现场确认顾客已到店':'顾客用券，核销赠品'}</button>}{error&&<span role="alert">{error}</span>}</span>
 }
 
 function channelExpiryText(value: string) {

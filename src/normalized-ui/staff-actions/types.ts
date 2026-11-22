@@ -64,6 +64,8 @@ export interface StaffActionTable {
 }
 
 export interface StaffServiceTask {
+  sessionClosed?: boolean
+  assignedEmployeeName?: string | null
   originalOrderItemId?:string|null
   id: string
   taskType: string

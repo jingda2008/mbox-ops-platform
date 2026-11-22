@@ -124,6 +124,14 @@ export async function readOperatingDashboard(tx: ScopedTransaction, period: stri
     if(within&&amount>0)rows.push({id:r.public_id,kind:'outstanding',category:r.source_type,sourceType:r.source_type,publicId:r.public_id,
       label:'截至查询仍有效待收',businessDate:r.business_date,occurredAt:r.occurred_at,amountMinor:amount,missingCount:0})
   }
+  const stockCoverage = await tx.query<{missing: number}>(`
+    SELECT count(*)::int AS missing
+    FROM mbox.inventory_movements m JOIN mbox.stores s ON (s.tenant_id,s.id)=(m.tenant_id,m.store_id)
+    WHERE m.tenant_id=$1 AND m.store_id=$2 AND m.currency=$5
+      AND m.movement_type='sale' AND m.quantity_delta<0 AND m.unit_cost_minor IS NULL
+      AND m.occurred_at >= (($3::date + s.business_day_cutoff) AT TIME ZONE s.timezone)
+      AND m.occurred_at < ((($4::date + 1) + s.business_day_cutoff) AT TIME ZONE s.timezone)
+  `, values)
   const unreconciled = await tx.query<{amount:string}>(`
     SELECT COALESCE(sum(p.amount_minor),0)::text amount FROM mbox.payments p
     JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.activity_registration_id)
@@ -158,6 +166,7 @@ export async function readOperatingDashboard(tx: ScopedTransaction, period: stri
     trend:[...trend.values()],incomeBreakdown:breakdown(rows,'income'),costBreakdown:breakdown(rows,'cost'),
     coverage:['普通订单及合并支付','活动报名、加餐和单点按各自购买记录归属','按已入账数据计算；未录费用无法量化','历史成本不按当前成本回填；未知调整保留为待核对'],
     currentBusinessDate:range.currentBusinessDate,effectiveEndDate:range.endDate,requestedEndDate:range.requestedEndDate,incomeBasis:'purchase_business_date',
+    missingSaleMovementCostCount:stockCoverage.rows[0]!.missing,
     knownMissingCostCount:safeSum(rows.filter(r=>r.kind==='cost').map(r=>r.missingCount)),
     unassignedIncomeCount:safeSum(rows.filter(r=>r.kind==='income').map(r=>r.missingCount)),
     unreconciledActivityPaymentsMinor:money(unreconciled.rows[0]!.amount),

@@ -33,6 +33,21 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   }
   async function payment(registration:string,day:string,amount=5000,cycle=1){const id=randomUUID();await admin.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,payable_kind,activity_registration_id,activity_registration_cycle,public_id,provider,provider_transaction_id,method,amount_minor,currency,status,succeeded_at) VALUES($1::uuid,$2,$3,'activity_registration',$4,$6,$1::text,'simulation',$1::text,'native_qr',$5,'CNY','succeeded',clock_timestamp())`,[id,scope.tenantId,scope.storeId,registration,amount,cycle]);await admin.query(`INSERT INTO mbox.reconciliation_entries(tenant_id,store_id,payment_id,entry_type,provider,provider_reference,amount_minor,currency,business_date,occurred_at) VALUES($1,$2,$3::uuid,'payment','simulation',$3::text,$4,'CNY',$5::date,clock_timestamp())`,[scope.tenantId,scope.storeId,id,amount,day]);return id}
 
+  it('counts missing sale costs by operating day without counting known zero or adding another expense', async () => {
+    const material=randomUUID()
+    await admin.query(`INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit)
+      VALUES($1,$2,$3,$4,'原料','ingredient','ml')`,[material,scope.tenantId,scope.storeId,material])
+    for(const [at,cost] of [['2026-07-24 05:59:59+08',null],['2026-07-24 06:00:00+08',null],['2026-07-24 07:00:00+08','0']]){
+      await admin.query(`INSERT INTO mbox.inventory_movements(tenant_id,store_id,inventory_item_id,movement_type,quantity_delta,unit_cost_minor,reference_type,occurred_at)
+        VALUES($1,$2,$3,'sale',-1,$4,'order_item',$5)`,[scope.tenantId,scope.storeId,material,cost,at])
+    }
+    for(const day of ['2026-07-23','2026-07-24']){
+      const report=await service.getProfitReport(scope,'day',day)
+      expect(report.missingSaleMovementCostCount).toBe(1)
+      expect(report.dashboard?.totalCostMinor).toBe(0)
+    }
+  })
+
   it('runs reporting and new evidence capture with the restricted runtime role',async()=>{
     if(process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL)expect((await runtime.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0]).toEqual({rolsuper:false,rolbypassrls:false})
     const p=await product(123),r=await purchase('2026-07-01',[{productId:p,quantity:2}]);await payment(r,'2026-07-01')

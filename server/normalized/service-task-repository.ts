@@ -297,6 +297,8 @@ export class ServiceTaskRepository {
           AND store_id = $2::uuid
           AND id = $3::uuid
           AND status = ANY($6::text[])
+          AND (task_type <> 'guest.complaint' OR $4 <> 'acknowledged'
+            OR assigned_employee_id IS NULL OR assigned_employee_id = $5::uuid)
         FOR UPDATE
       ), updated AS (
       UPDATE mbox.service_tasks AS task

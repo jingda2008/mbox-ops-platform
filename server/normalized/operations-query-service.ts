@@ -62,6 +62,8 @@ export interface OperationsTableView {
 }
 
 export interface OperationsTaskView {
+  sessionClosed: boolean
+  assignedEmployeeName: string | null
   id: string
   publicId: string
   tableId: string
@@ -139,6 +141,8 @@ interface TableRow extends Record<string, unknown> {
 }
 
 interface TaskRow extends Record<string, unknown> {
+  session_closed: boolean
+  assigned_employee_name: string | null
   id: string
   public_id: string
   table_id: string
@@ -420,10 +424,10 @@ async function readTasks(
   target?: { taskId: string; tableSessionId: string },
 ): Promise<OperationsTaskView[]> {
   const result = await transaction.query<TaskRow>(`
-    SELECT task.id, task.public_id, session.table_id, venue_table.code AS table_code,
+    SELECT task.id, task.public_id, session.table_id, session.status='closed' AS session_closed, venue_table.code AS table_code,
       task.table_session_id, task.task_type, task.title, task.detail, task.priority,
       task.status, task.source, task.requested_role_code, task.assigned_employee_id,
-      task.backup_employee_id,
+      task.backup_employee_id, assignee.display_name AS assigned_employee_name,
       (SELECT original.order_item_id::text FROM mbox.quantity_redeliveries original WHERE original.tenant_id=task.tenant_id AND original.store_id=task.store_id AND original.service_task_id=task.id) AS original_order_item_id,
       (
         task.assigned_employee_id = $3::uuid
@@ -442,6 +446,8 @@ async function readTasks(
         THEN 'manager_resolution' ELSE 'quick_complete' END AS interaction_mode,
       task.due_at::text, task.escalate_at::text, task.created_at::text
     FROM mbox.service_tasks task
+    LEFT JOIN mbox.employees assignee ON task.task_type='guest.complaint'
+      AND (assignee.tenant_id,assignee.store_id,assignee.id)=(task.tenant_id,task.store_id,task.assigned_employee_id)
     JOIN mbox.table_sessions session
       ON session.tenant_id=task.tenant_id AND session.store_id=task.store_id
       AND session.id=task.table_session_id
@@ -492,6 +498,8 @@ async function readTasks(
     tableId: row.table_id,
     tableCode: row.table_code,
     tableSessionId: row.table_session_id,
+    sessionClosed: row.session_closed,
+    assignedEmployeeName: row.assigned_employee_name,
     taskType: row.task_type,
     title: row.title,
     detail: row.detail,

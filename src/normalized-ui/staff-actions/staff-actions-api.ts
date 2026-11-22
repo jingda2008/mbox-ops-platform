@@ -345,6 +345,7 @@ export interface StaffActionsApiPort {
   loadParticipantMovementHistory?(cursor?:string):Promise<ParticipantMovementHistory>
   sealParticipantMovement?():Promise<void>
   recoverParticipantMovement?():Promise<void>
+  acknowledgeComplaint(taskId: string): Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void>
   loadItemAfterSalesAccess?():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>
@@ -852,6 +853,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
   sealParticipantMovement():Promise<void> { return this.participantMovementRecovery.seal() }
   recoverParticipantMovement():Promise<void> { return this.participantMovementRecovery.recover() }
+
+  async acknowledgeComplaint(taskId: string): Promise<void> {
+    await this.command(`/api/service-tasks/${encodeURIComponent(taskId)}/acknowledge`, {}, 'idempotency-key')
+  }
 
   async completeServiceTask(taskId: string, note?: string): Promise<void> {
     await this.command(

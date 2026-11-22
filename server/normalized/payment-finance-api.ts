@@ -36,8 +36,12 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
     LEFT JOIN mbox.table_sessions visit ON visit.tenant_id=p.tenant_id AND visit.store_id=p.store_id AND visit.id=COALESCE(o.table_session_id,batch.table_session_id)
     LEFT JOIN mbox.tables t ON t.tenant_id=visit.tenant_id AND t.store_id=visit.store_id AND t.id=visit.table_id
     LEFT JOIN LATERAL(SELECT array_agg(DISTINCT signal.signal) AS signals FROM (SELECT signal FROM monitoring_signals signal
-      WHERE signal.tenant_id=p.tenant_id AND signal.store_id=p.store_id AND (signal.subject_id=p.id OR EXISTS(SELECT 1 FROM mbox.order_payment_facts fact WHERE fact.tenant_id=p.tenant_id AND fact.store_id=p.store_id AND fact.id=p.id AND fact.order_id=signal.subject_id))
-        AND signal.signal IN ('order_overcollected','cancelled_order_captured','succeeded_payment_missing_reconciliation')
+      WHERE signal.tenant_id=p.tenant_id AND signal.store_id=p.store_id AND (
+        (signal.signal='succeeded_payment_missing_reconciliation' AND signal.subject_id=p.id)
+        OR (signal.signal IN ('order_overcollected','cancelled_order_captured')
+          AND p.status IN ('succeeded','partially_refunded','refunded') AND p.succeeded_at IS NOT NULL
+          AND EXISTS(SELECT 1 FROM mbox.order_payment_facts fact
+            WHERE (fact.tenant_id,fact.store_id,fact.id,fact.order_id)=(p.tenant_id,p.store_id,p.id,signal.subject_id))))
       UNION ALL SELECT 'confirmed_payment_not_applied' WHERE p.status NOT IN ('succeeded','partially_refunded','refunded') AND EXISTS(
         SELECT 1 FROM mbox.verified_provider_observations v WHERE v.tenant_id=p.tenant_id AND v.store_id=p.store_id AND v.payment_id=p.id
           AND v.observed_status='payment_succeeded' AND v.consumed_at IS NULL)

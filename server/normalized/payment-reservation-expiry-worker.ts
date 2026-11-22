@@ -1,3 +1,4 @@
+import { retryUndispatchedProduction } from './order-production-recovery.js'
 import { appendOutboxMessage } from './command-executor.js'
 import { LoyaltyAccrualRepository } from './loyalty-accrual-repository.js'
 import { RecommendationFinancialAttributionRepository } from './recommendation-financial-attribution-repository.js'
@@ -103,6 +104,7 @@ export class PaymentReservationExpiryWorker {
         }
       }
 
+      await retryUndispatchedProduction(transaction, Math.min(5,batchSize))
       return {
         workerId,
         claimed: due.length,
@@ -150,7 +152,13 @@ async function claimExpiredPaymentReservations(
       AND order_row.store_id = $2::uuid
       AND order_row.settlement_mode = 'immediate_payment'
       AND order_row.fulfillment_state = 'awaiting_payment'
-      AND order_row.fulfillment_expires_at <= clock_timestamp()
+      AND (order_row.fulfillment_expires_at <= clock_timestamp() OR
+        (session.status='open' AND order_row.updated_at<=clock_timestamp()-interval '90 seconds'
+          AND EXISTS (SELECT 1 FROM mbox.outbox_messages src WHERE (src.tenant_id,src.store_id,src.aggregate_id)=(order_row.tenant_id,order_row.store_id,order_row.id)
+            AND src.message_type='order.submitted.v1' AND src.payload ? 'productionItemIds')
+          AND EXISTS (SELECT 1 FROM mbox.order_payment_facts receipt WHERE (receipt.tenant_id,receipt.store_id,receipt.order_id)=(order_row.tenant_id,order_row.store_id,order_row.id)
+            AND receipt.status='succeeded' AND receipt.succeeded_at IS NOT NULL)
+          AND mbox.order_consumption_settled(order_row.tenant_id,order_row.store_id,order_row.id)))
     ORDER BY
       CASE WHEN EXISTS (
         SELECT 1 FROM mbox.order_payment_facts AS pending_payment

@@ -58,6 +58,7 @@ await scenario('OP-01 and OP-14 cash recovery and action notice survive refresh,
     await table(page);
     await page.getByRole('button', { name: '协助点单', exact: true }).click();
     const order = page.getByRole('dialog', { name: 'W01协助点单', exact: true });
+    await order.getByRole('button', {name:'挂桌账',exact:true}).click();
     await order.getByLabel('搜索菜单商品').fill(fixture.orderableProductName);
     await order.getByRole('button', { name: '加入' + fixture.orderableProductName, exact: true }).click();
     await order.getByRole('button', { name: '查看已选', exact: true }).click();
@@ -65,7 +66,7 @@ await scenario('OP-01 and OP-14 cash recovery and action notice survive refresh,
     const financialRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/operations' && response.ok());
     await order.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单', exact: true }).click();
     await financialRefresh;
-    await expect(page.locator('.staff-actions-notice')).toContainText('订单已挂桌');
+    await expect(page.locator('.staff-actions-notice')).toContainText('已挂桌账，未收齐，已送制作');
     await page.getByRole('button', { name: '本桌收款', exact: true }).click();
     let cash = page.getByRole('dialog', { name: 'W01本桌收款', exact: true });
     await cash.getByLabel('本次收款金额（元）').fill('1');

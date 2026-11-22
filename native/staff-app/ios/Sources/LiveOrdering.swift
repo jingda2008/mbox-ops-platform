@@ -71,6 +71,7 @@ struct LiveOrderReceipt: Codable {
   let id: String?
   let totalAmountMinor: Int?
   let recovered: Bool
+  var productionMessage: String?
 }
 struct LiveOrderSubmission: Codable {
   let key: String
@@ -196,7 +197,7 @@ struct LiveOrderSubmission: Codable {
       let amount = value["totalAmountMinor"] as? Int, amount >= 0,
       let next = value["paymentNextStep"] as? [String: Any], next["orderId"] as? String == id
     else { throw StaffAPIError.invalid }
-    return LiveOrderReceipt(publicId: publicId, id: id, totalAmountMinor: amount, recovered: false)
+    return LiveOrderReceipt(publicId: publicId, id: id, totalAmountMinor: amount, recovered: false, productionMessage: value["productionMessage"] as? String)
   }
   func canReplay(_ identity: StaffIdentity, now: Date = Date()) -> Bool {
     // Never create a new identity or cross the server's 06:00 business day on a retry.

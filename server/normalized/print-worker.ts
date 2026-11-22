@@ -1,3 +1,4 @@
+import { productionPrintClaimSql } from './order-production-print-gate.js'
 import type { JsonObject } from './command-executor.js'
 import { normalizeHardwareFailureCode, type ConnectivityStatus, type HardwareStation } from './hardware-repository.js'
 import type { ScopedTransaction, StoreScope } from './transaction-runner.js'
@@ -139,7 +140,8 @@ async function claimJobs(
       JOIN mbox.printer_routes AS route ON route.tenant_id=job.tenant_id AND route.store_id=job.store_id
         AND route.id=job.printer_route_id AND route.status='active'
       WHERE job.tenant_id = $1::uuid AND job.store_id = $2::uuid
-        AND job.delivery_mode = 'cloud_adapter'
+        AND (${productionPrintClaimSql})
+          AND job.delivery_mode = 'cloud_adapter'
         AND job.attempts < job.max_attempts
         AND job.status IN ('pending', 'failed') AND job.available_at <= clock_timestamp()
       ORDER BY job.contains_priority_note DESC, job.available_at, job.created_at, job.id

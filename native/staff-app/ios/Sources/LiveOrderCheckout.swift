@@ -8,7 +8,7 @@ struct LiveOrderCheckout: View {
   @State private var gift = false
   @State private var reason = ""
   @State private var note = ""
-  @State private var settlement = "table_tab"
+  @State private var settlement = "immediate_payment"
   @State private var proposedIDs: [String]?
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -24,7 +24,7 @@ struct LiveOrderCheckout: View {
           Text("挂本桌账单").tag("table_tab")
           Text("先付款后出品").tag("immediate_payment")
         }.pickerStyle(.segmented)
-        Text(settlement == "table_tab" ? "订单计入本桌，按门店规则进入出品。" : "订单创建后需在原订单收款；未支付不会进入出品。").font(
+        Text(settlement == "table_tab" ? "挂桌账立即送制作，未收齐须跟进。" : "本单收齐后送制作，支付中请先查原付款。").font(
           .caption
         ).foregroundStyle(.secondary)
       }

@@ -234,6 +234,7 @@ function fixture(input: {
           table_session_id: tableSessionId,
           table_id: tableId,
           table_code: 'VIP1',
+          production_allowed: true,
           expires_at: '2026-08-11T12:15:00.000Z',
         }]) as PostgresQueryResult<Row>
       }
@@ -318,6 +319,7 @@ function fixture(input: {
           table_session_id: tableSessionId,
           table_id: tableId,
           table_code: 'VIP1',
+          production_allowed: true,
           product_id: productId,
           product_name: '精酿啤酒',
           specification: '330ml',

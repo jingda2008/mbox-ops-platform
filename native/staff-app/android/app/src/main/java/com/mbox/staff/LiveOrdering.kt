@@ -157,6 +157,7 @@ data class LiveOrderReceipt(
     val id: String?,
     val amount: Long?,
     val recovered: Boolean,
+    val productionMessage: String? = null,
 ) {
     fun json() =
         JSONObject()
@@ -164,6 +165,7 @@ data class LiveOrderReceipt(
             .put("id", id ?: JSONObject.NULL)
             .put("amount", amount ?: JSONObject.NULL)
             .put("recovered", recovered)
+            .put("productionMessage", productionMessage ?: JSONObject.NULL)
 
     companion object {
         fun parse(j: JSONObject) =
@@ -172,6 +174,7 @@ data class LiveOrderReceipt(
                 if (j.isNull("id")) null else j.getString("id"),
                 if (j.isNull("amount")) null else j.getLong("amount"),
                 j.getBoolean("recovered"),
+                if (j.isNull("productionMessage")) null else j.getString("productionMessage"),
             )
     }
 }
@@ -262,7 +265,8 @@ data class LiveOrderSubmission(
                 j.getJSONObject("paymentNextStep").getString("orderId") != j.getString("id")
         )
             invalidResponse()
-        return LiveOrderReceipt(publicId, j.getString("id"), j.getLong("totalAmountMinor"), false)
+        return LiveOrderReceipt(publicId, j.getString("id"), j.getLong("totalAmountMinor"), false,
+            if (j.isNull("productionMessage")) null else j.getString("productionMessage"))
     }
 
     fun canReplay(identity: StaffIdentity, now: Instant = Instant.now()): Boolean {

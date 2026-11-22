@@ -190,7 +190,8 @@ export class KdsRepository {
           AND task.store_id = $2::uuid
           AND task.station_code = $3
           AND task.status = 'pending'
-          AND task.order_item_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.id)=(task.tenant_id,task.store_id,task.order_item_id)
+            AND mbox.order_production_allowed(i.tenant_id,i.store_id,i.order_id))
           AND (task.assigned_employee_id IS NULL OR task.assigned_employee_id = $5::uuid)
           AND task.next_action_at <= clock_timestamp()
         ORDER BY task.priority DESC, task.next_action_at, task.created_at, task.id

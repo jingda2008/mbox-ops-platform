@@ -1,3 +1,4 @@
+import { seedProductionReceipt } from './production-receipt.test-helper.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
@@ -525,11 +526,11 @@ async function seedIntegrationData(pool: Pool, id: IntegrationIds): Promise<void
   `, [id.barProductId, id.kitchenProductId, tenantId, storeId])
   await pool.query(`
     INSERT INTO mbox.orders(
-      id, tenant_id, store_id, table_session_id, public_id, channel, status, note
+      id, tenant_id, store_id, table_session_id, public_id, channel, status, note,subtotal_amount_minor,total_amount_minor
     ) VALUES
-      ($1, $4, $5, $6, 'FQ-ORDER-BAR-01', 'guest_qr', 'fulfilling', '整单一起上'),
-      ($2, $4, $5, $6, 'FQ-ORDER-READY-01', 'staff_assisted', 'fulfilling', NULL),
-      ($3, $4, $5, $7, 'FQ-ORDER-KITCHEN-01', 'guest_qr', 'fulfilling', NULL)
+      ($1, $4, $5, $6, 'FQ-ORDER-BAR-01', 'guest_qr', 'fulfilling', '整单一起上',17600,17600),
+      ($2, $4, $5, $6, 'FQ-ORDER-READY-01', 'staff_assisted', 'fulfilling', NULL,8800,8800),
+      ($3, $4, $5, $7, 'FQ-ORDER-KITCHEN-01', 'guest_qr', 'fulfilling', NULL,12800,12800)
   `, [id.barOrderId, id.readyOrderId, id.kitchenOrderId, tenantId, storeId, id.sessionOneId, id.sessionTwoId])
   await pool.query(`
     INSERT INTO mbox.order_items(
@@ -540,6 +541,7 @@ async function seedIntegrationData(pool: Pool, id: IntegrationIds): Promise<void
       ($2, $7, $8, $5, $9, 1, 8800, 8800, 'bar', '{}', 'ready', '柠檬另放'),
       ($3, $7, $8, $6, $10, 1, 12800, 12800, 'kitchen', '{}', 'submitted', NULL)
   `, [id.barItemId, id.readyItemId, id.kitchenItemId, id.barOrderId, id.readyOrderId, id.kitchenOrderId, tenantId, storeId, id.barProductId, id.kitchenProductId])
+  for (const order of [id.barOrderId,id.readyOrderId,id.kitchenOrderId]) await seedProductionReceipt(pool,order)
   await pool.query(`
     INSERT INTO mbox.kds_tasks(
       id, tenant_id, store_id, order_item_id, station_code, status,

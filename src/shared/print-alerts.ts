@@ -7,7 +7,16 @@ export interface PrintAlert {
   newestKey: string
   escalated: boolean
 }
+export interface OrderProductionNotice {
+  orderNumber: string
+  tableCode: string
+  issue: 'blocked' | 'missing' | 'tab' | 'collect' | 'balance' | 'proof'
+  dueMinor: number | null
+  checkPayment: boolean
+  stations: string[]
+}
 export interface PrintAlertSnapshot {
+  orders?: OrderProductionNotice[]
   alerts: PrintAlert[]
   asOf: string
   manager: boolean

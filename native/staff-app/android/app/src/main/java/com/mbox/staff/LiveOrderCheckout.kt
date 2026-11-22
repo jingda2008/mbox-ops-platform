@@ -17,7 +17,7 @@ fun LiveOrderCheckout(
     var gift by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
-    var settlement by remember { mutableStateOf("table_tab") }
+    var settlement by remember { mutableStateOf("immediate_payment") }
     var proposedIDs by remember { mutableStateOf<List<String>?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         LivePendingView(m)
@@ -43,7 +43,7 @@ fun LiveOrderCheckout(
                 )
             }
             Text(
-                if (settlement == "table_tab") "订单计入本桌，按门店规则进入出品。" else "订单创建后需在原订单收款；未支付不会进入出品。",
+                if (settlement == "table_tab") "挂桌账立即送制作，未收齐须跟进。" else "本单收齐后送制作，支付中请先查原付款。",
                 fontSize = 12.sp,
             )
         }

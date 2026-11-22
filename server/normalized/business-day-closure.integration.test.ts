@@ -141,6 +141,11 @@ integration('business-day closure',()=>{
       VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',1000,1000,0)`,[order,tenantId,storeId,session,`gift-${order}`])
     await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,discount_amount_minor,total_amount_minor,fulfillment_station,status,product_snapshot,cost_snapshot)
       VALUES($1,$2,$3,$4,$5,1,1000,1000,0,'bar','submitted','{}','{}')`,[item,tenantId,storeId,order,productId])
+    const approval = randomUUID()
+    await pool.query(`INSERT INTO mbox.pricing_authorizations(tenant_id,store_id,table_session_id,order_id,source_type,
+      source_id,kind,amount_minor,maximum_amount_minor,currency,authorized_by_employee_id,capability,role_approval_limit_id,status,consumed_at)
+      VALUES($1,$2,$3,$4,'employee',$5,'gift',1000,1000,'CNY',$6,'order.gift',$5,'consumed',clock_timestamp())`,
+      [tenantId,storeId,session,order,approval,employeeId])
     const state=await transactions.run({tenantId,storeId},tx=>readTableSessionClosureState(tx,session))
     expect(state.blockers.map(row=>row.code)).not.toContain('ORDER_UNSETTLED')
     expect(state.blockers.map(row=>row.code)).toContain('ORDER_ITEM_UNRESOLVED')

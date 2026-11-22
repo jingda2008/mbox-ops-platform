@@ -112,7 +112,8 @@ release_contract_boundary_between() {
   [[ "${from_schema}" =~ ^[0-9]+$ ]] || return 2
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
   # 314 removes customer-authenticated partner access and adds website-only private projections.
-  for boundary in 96 275 300 301 302 303 304 305 313 314 320; do
+  # 321 requires the payment-aware print worker and bridge for existing tickets.
+  for boundary in 96 275 300 301 302 303 304 305 313 314 320 321; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

@@ -1,0 +1,12 @@
+.session-money-summary {
+  display: grid;
+  gap: .15rem;
+  overflow-wrap: anywhere;
+  font-size: .85rem;
+  line-height: 1.4;
+}
+.cashier-original-money {
+  padding: 0 1rem .5rem;
+  overflow-wrap: anywhere;
+}
+.cashier-original-money small { display: block; }

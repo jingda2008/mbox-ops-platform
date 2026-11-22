@@ -1,3 +1,12 @@
+import {PostgresCashierWorkbenchQuery} from './cashier-workbench-query.js'
+import {readTables} from './operations-query-service.js'
+import { seedProductionReceipt } from './production-receipt.test-helper.js'
+import { appendOutboxMessage } from './command-executor.js'
+import { HardwareRepository } from './hardware-repository.js'
+import { productionPrintClaimSql } from './order-production-print-gate.js'
+import { retryUndispatchedProduction } from './order-production-recovery.js'
+import { readOrderProductionNotices } from './order-production-notices.js'
+import { PrintTicketSourceRepository } from './print-ticket-source.js'
 import {AssistedOrderContextRepository} from './assisted-order-context.js'
 import {recoverCommittedStaffCommand} from './staff-recovery.test-helper.js'
 import { randomUUID } from 'node:crypto'
@@ -333,6 +342,27 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   let pool: Pool
   let service: CommerceCommandService
 
+  const leaseId=randomUUID(), staffSessionId=randomUUID()
+  async function staffTab(...args: Parameters<typeof command>) {
+    const base = command(...args)
+    const binding = { employeeId, staffSessionId, deviceAccessLeaseId: leaseId }
+    const context = await new ScopedPostgresTransactionRunner(asPool(pool)).run({tenantId,storeId},
+      tx => new AssistedOrderContextRepository(tx).issue({...binding, tableSessionId:base.tableSessionId}))
+    return {...base, channel:'staff_assisted' as const, settlementMode:'table_tab' as const,
+      actor:{type:'employee' as const,employeeId},createdByEmployeeId:employeeId,assistedOrderContext:{...binding,token:context.token}}
+  }
+  function cashierService() {
+    const paymentAuthorization: PaymentCapabilityAuthorizationPort = {
+      assertEmployeeCapability: async () => undefined,
+      assertEmployeeOrderAccess: async () => undefined,
+      assertRefundRequestLimit: async () => undefined,
+      assertRefundApproval: async () => undefined,
+    }
+    return new PaymentCommandService(
+      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
+      paymentAuthorization,
+    )
+  }
   beforeAll(async () => {
     await runNormalizedMigrations(databaseUrl!)
     pool = new Pool({ connectionString: databaseUrl, max: 12 })
@@ -340,6 +370,14 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
     )
     await seed(pool)
+    const credentialId=randomUUID()
+    await pool.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$recovery-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,tenantId,storeId,employeeId])
+    await pool.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat('a',64),repeat('b',64),clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,tenantId,storeId,credentialId])
+    await pool.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,repeat('c',64),statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,tenantId,storeId,employeeId,leaseId])
+    for(const code of ['order.create','table.view_all']){
+      const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
+      await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,kdsRoleId,permission])
+    }
   })
 
   afterAll(async () => {
@@ -375,17 +413,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   })
 
   it('replays the same submitted order without duplicate rows, stock, audit or outbox', async () => {
-    const credentialId=randomUUID(),leaseId=randomUUID(),staffSessionId=randomUUID()
-    await pool.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$recovery-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,tenantId,storeId,employeeId])
-    await pool.query("INSERT INTO mbox.store_device_access_leases(id,tenant_id,store_id,daily_credential_id,business_date,device_key_hash,lease_token_hash,issued_at,expires_at) VALUES($1,$2,$3,$4,current_date,repeat('a',64),repeat('b',64),clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours')",[leaseId,tenantId,storeId,credentialId])
-    await pool.query("INSERT INTO mbox.staff_sessions(id,tenant_id,store_id,employee_id,device_access_lease_id,session_token_hash,issued_at,expires_at,online_lease_until) VALUES($1,$2,$3,$4,$5,repeat('c',64),statement_timestamp(),statement_timestamp()+interval '6 hours',statement_timestamp()+interval '30 minutes')",[staffSessionId,tenantId,storeId,employeeId,leaseId])
-    for(const code of ['order.create','table.view_all']){
-      const permission=(await pool.query("INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name,category) VALUES($1,$2,$3,$3,'operations') ON CONFLICT(tenant_id,store_id,code) DO UPDATE SET name=EXCLUDED.name RETURNING id",[tenantId,storeId,code])).rows[0].id
-      await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[tenantId,storeId,kdsRoleId,permission])
-    }
-    const binding={employeeId,staffSessionId,deviceAccessLeaseId:leaseId}
-    const context=await new ScopedPostgresTransactionRunner(asPool(pool)).run({tenantId,storeId},tx=>new AssistedOrderContextRepository(tx).issue({...binding,tableSessionId:sessionOneId}))
-    const input = {...command('integration-idempotent-order', sessionOneId, productAId, 1, 'integration-idempotent-0001'),channel:'staff_assisted' as const,actor:{type:'employee' as const,employeeId},createdByEmployeeId:employeeId,assistedOrderContext:{...binding,token:context.token}}
+    const input = await staffTab('integration-idempotent-order', sessionOneId, productAId, 1, 'integration-idempotent-0001')
     const {first,recovered:replay}=await recoverCommittedStaffCommand(idempotencyKey=>{input.idempotencyKey=idempotencyKey;return service.submitOrder(input)})
     expect(first.replayed).toBe(false)
     expect(replay).toEqual({ value: first.value, replayed: true })
@@ -608,6 +636,206 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
     expect(evidence.rows[0]).toEqual({ orders: '0', events: '0', reserved: '0.000000' })
   })
 
+  it('keeps VIP5-style employee tabs distinct from employee checkout and guest orders on the same table', async () => {
+    const tabInput = await staffTab('vip5-employee-tab',sessionOneId,productBId,1,'vip5-tab-retry-0001')
+    tabInput.lines.push({productId:productKitchenId,quantity:1})
+    const tab = await service.submitOrder(tabInput)
+    const retry = await service.submitOrder(tabInput)
+    expect(tab.value.kdsTasks.map(t=>t.stationCode).sort()).toEqual(['bar','kitchen'])
+    expect(retry.value.kdsTasks[0]!.id).toBe(tab.value.kdsTasks[0]!.id)
+    const assisted = await staffTab('vip5-employee-checkout',sessionOneId,productBId,1,'vip5-counter-0001')
+    const ordinary = await service.submitOrder({...assisted,settlementMode:undefined})
+    const self = guestCommand('vip5-guest-checkout',customerId,productAId,2,'vip5-guest-0001')
+    await expect(service.submitOrder({...self,settlementMode:'table_tab'})).rejects.toThrow('仅员工')
+    const guest = await service.submitOrder(self)
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    await pool.query(`INSERT INTO mbox.payments(tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status)
+      VALUES($1,$2,$3,'vip5-unknown-original','postar','native_qr',50000,'pending')`,[tenantId,storeId,ordinary.value.order.id])
+    await runner.run({tenantId,storeId},async tx => {
+      for (const station of ['bar','kitchen'] as const) {
+        const hw = new HardwareRepository(tx)
+        const printer = await hw.createDevice({code:'vip5-'+station,name:station,deviceType:'printer',stationCode:station})
+        await hw.upsertPrinterRoute({code:'vip5-'+station,name:station,stationCode:station,printerDeviceId:printer.id})
+      }
+      const source = (await tx.query<{id:string}>(`SELECT id FROM mbox.outbox_messages WHERE tenant_id=$1 AND store_id=$2 AND aggregate_id=$3 AND message_type='order.submitted.v1'`,
+        [tenantId,storeId,tab.value.order.id])).rows[0]!.id
+      const tickets = new PrintTicketSourceRepository(tx)
+      await tickets.materializeOrderProduction(source,tab.value.order.id)
+      await tickets.materializeOrderProduction(source,tab.value.order.id)
+      const jobs = await tx.query<{station_code:string;subtitle:string;allowed:boolean}>(`SELECT station_code,print_snapshot->>'subtitle' AS subtitle,
+        (${productionPrintClaimSql}) AS allowed FROM mbox.print_jobs job WHERE tenant_id=$1 AND store_id=$2 AND source_outbox_message_id=$3 ORDER BY station_code`,[tenantId,storeId,source])
+      expect(jobs.rows.map(j=>j.station_code)).toEqual(['bar','kitchen'])
+      expect(jobs.rows.every(j=>j.allowed && j.subtitle.includes('制票时待收'))).toBe(true)
+    })
+    for (const held of [ordinary,guest]) {
+      expect(held.value.kdsTasks).toHaveLength(0)
+      await runner.run({tenantId,storeId}, async tx => {
+        const source = new PrintTicketSourceRepository(tx)
+        expect(await source.materializeOrderProduction(randomUUID(),held.value.order.id)).toEqual([])
+        expect(source.skipReason).toBe('print_order_payment_required')
+      })
+    }
+    const alerts = (stations:string[],cashier=false) => runner.run({tenantId,storeId}, tx =>
+      readOrderProductionNotices(tx,employeeId,{stations,cashier,manager:false,service:false}))
+    const cashier = await alerts([],true)
+    expect(cashier).toEqual(expect.arrayContaining([expect.objectContaining({orderNumber:tabInput.publicId,issue:'tab',dueMinor:tab.value.order.totalAmountMinor}),
+      expect.objectContaining({orderNumber:self.publicId,issue:'collect'}),expect.objectContaining({orderNumber:assisted.publicId,issue:'collect',checkPayment:true})]))
+    const bar = await alerts(['bar'])
+    expect(bar.filter(a=>a.orderNumber===tabInput.publicId)).toEqual([expect.objectContaining({issue:'tab',dueMinor:null})])
+    expect(bar.some(a=>a.orderNumber===self.publicId||a.orderNumber===assisted.publicId)).toBe(false)
+    // Even a forged production snapshot for the unpaid original must stay off the worker and bridge.
+    const heldPrint = await pool.query(`SELECT (${productionPrintClaimSql}) AS allowed FROM
+      (SELECT $1::uuid AS tenant_id,$2::uuid AS store_id,$3::uuid AS source_outbox_message_id,
+        jsonb_build_object('kind','bar_production','ticketReference',$4::text) AS print_snapshot) job`,[tenantId,storeId,randomUUID(),assisted.publicId])
+    expect(heldPrint.rows[0].allowed).toBe(false)
+    // Simulate a historical task with no remaining evidence of the staff-tab exception.
+    await pool.query('UPDATE mbox.orders SET created_by_employee_id=NULL WHERE id=$1',[tab.value.order.id])
+    const manager = await runner.run({tenantId,storeId},tx=>readOrderProductionNotices(tx,employeeId,{cashier:false,service:false,manager:true,stations:[]}))
+    expect(manager.filter(n=>n.orderNumber===tabInput.publicId)).toMatchObject([{issue:'blocked',stations:['bar','kitchen']}])
+    await expect(pool.query("UPDATE mbox.kds_tasks SET status='accepted',accepted_at=now(),assigned_employee_id=$2 WHERE id=$1",
+      [tab.value.kdsTasks[0]!.id,employeeId])).rejects.toMatchObject({code:'23514'})
+    expect((await pool.query(`SELECT count(*) FROM mbox.print_jobs job WHERE tenant_id=$1 AND store_id=$2 AND
+      print_snapshot->>'ticketReference'=$3 AND (${productionPrintClaimSql})`,[tenantId,storeId,tabInput.publicId])).rows[0].count).toBe('0')
+  })
+
+  it('releases only the fully covered original in a split collection and never doubles station work', async () => {
+    const submit = async (suffix:string) => {
+      const input = await staffTab('split-'+suffix,sessionOneId,productBId,1,'vip5-split-'+suffix)
+      input.lines.push({productId:productKitchenId,quantity:1})
+      return (await service.submitOrder({...input,settlementMode:'immediate_payment'})).value.order
+    }
+    const first = await submit('original-first'), second = await submit('original-second')
+    const cash = cashierService()
+    const command = {scope:{tenantId,storeId}, actor:{type:'employee' as const,employeeId}, businessDate:'2026-08-11',
+      provider:'cash' as const, method:'cash' as const, occurredAt:'2026-08-11T12:05:00.000Z',
+      evidence:{collectedByEmployeeId:employeeId,receiptReference:'VIP5-SPLIT-1'}, orderId:first.id,
+      orderIds:[second.id,first.id], amountMinor:first.totalAmountMinor+100, publicId:'vip5-split-cash-1',
+      idempotencyKey:'vip5-split-first-receipt',requestFingerprint:'e'.repeat(64)}
+    await cash.recordManual(command)
+    await cash.recordManual(command)
+    const tasks = async (id:string) => (await pool.query(`SELECT k.station_code FROM mbox.kds_tasks k
+      JOIN mbox.order_items i ON i.id=k.order_item_id WHERE i.order_id=$1 ORDER BY k.station_code`,[id])).rows.map(r=>r.station_code)
+    expect(await tasks(first.id)).toEqual(['bar','kitchen'])
+    expect(await tasks(second.id)).toEqual([])
+    const remaining = {...command,orderId:second.id,orderIds:[second.id],amountMinor:second.totalAmountMinor-100,
+      publicId:'vip5-split-cash-2',idempotencyKey:'vip5-split-final-receipt',requestFingerprint:'f'.repeat(64),
+      evidence:{collectedByEmployeeId:employeeId,receiptReference:'VIP5-SPLIT-2'}}
+    await cash.recordManual(remaining)
+    await cash.recordManual(remaining)
+    expect(await tasks(first.id)).toEqual(['bar','kitchen'])
+    expect(await tasks(second.id)).toEqual(['bar','kitchen'])
+  })
+
+  it('reconciles VIP8 receipts, refunds and one cash split across four originals on both staff reads', async () => {
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const scope = {tenantId,storeId}
+    const visit = randomUUID(), table = randomUUID()
+    await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,'VIP8','VIP8 fixture',8)",[table,tenantId,storeId,areaId])
+    await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1,$2,$3,$4,'vip8-fixture','2026-08-11',2,'open')",[visit,tenantId,storeId,table])
+    const insertOrder = async (yuan:number) => {
+      const id = randomUUID()
+      await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+        created_by_employee_id,settlement_mode,subtotal_amount_minor,total_amount_minor,submitted_at)
+        VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',$6,'table_tab',$7,$7,clock_timestamp())`,
+        [id,tenantId,storeId,visit,'vip8-'+id,employeeId,yuan*100])
+      await pool.query(`INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot)
+        VALUES($1,$2,$3,$4,1,$5,$5,'bar','{"inventoryControlMode":"not_managed"}')`,[tenantId,storeId,id,productBId,yuan*100])
+      return id
+    }
+    const receipts = []
+    for (const yuan of [352,321,88,264,176]) {
+      const id = await insertOrder(yuan)
+      const payment = randomUUID()
+      await pool.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status,succeeded_at,provider_transaction_id)
+        VALUES($1,$2,$3,$4,$5,'postar','native_qr',$6,'succeeded',clock_timestamp(),$5)`,[payment,tenantId,storeId,id,'scan-'+payment,yuan*100])
+      receipts.push({payment,yuan})
+    }
+    const other = []
+    for (const amount of [264,352,176]) other.push(await insertOrder(amount))
+    const workbench = new PostgresCashierWorkbenchQuery(runner)
+    const verify = async (gross:number,refund:number,due:number,count:number,cash:number) => {
+      const floor = await runner.run(scope,tx=>readTables(tx,employeeId,true))
+      const session = floor.find(t=>t.id===table)!.activeSession!
+      const page = await workbench.get({scope,employeeId,capabilities:['reconciliation.view','payment.collect.all_tables'],query:'VIP8',limit:1,businessDate:'2026-08-11'})
+      const expected = {grossCollectedAmountMinor:gross*100,refundedAmountMinor:refund*100,outstandingAmountMinor:due*100,
+        unpaidOrderCount:count,cashPaymentCount:cash>0?1:0,cashAmountMinor:cash*100}
+      expect(session).toMatchObject({...expected,netCollectedAmountMinor:(gross-refund)*100})
+      expect(page.orders).toHaveLength(1)
+      expect(page.selectedTable).toMatchObject({tableCode:'VIP8',sessionId:visit,money:expected})
+    }
+    await verify(1201,0,792,3,0)
+    for(const {payment,yuan} of receipts) {
+      const refund = randomUUID()
+      await pool.query(`INSERT INTO mbox.refunds(id,tenant_id,store_id,payment_id,public_id,provider_refund_id,
+        amount_minor,currency,status,reason,requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at)
+        VALUES($1,$2,$3,$4,$5,$5,$6,'CNY','succeeded','isolated refund',$7,$8,'isolated approval',clock_timestamp())`,
+        [refund,tenantId,storeId,payment,'refund-'+refund,yuan*100,employeeId,checkoutRuleDrafterId])
+    }
+    await verify(1201,1201,792,3,0)
+    other.push(await insertOrder(1180))
+    const cash = {scope,actor:{type:'employee' as const,employeeId},businessDate:'2026-08-11',provider:'cash' as const,method:'cash' as const,
+      occurredAt:'2026-08-11T16:17:48.000Z',evidence:{collectedByEmployeeId:employeeId,receiptReference:'VIP8-SYNTHETIC'},
+      orderId:other[0]!,orderIds:other,amountMinor:197200,publicId:'vip8-cash',idempotencyKey:'vip8-cash-split-retry',requestFingerprint:'a'.repeat(64)}
+    await cashierService().recordManual(cash)
+    await cashierService().recordManual(cash)
+    await verify(3173,1201,0,0,1972)
+    const allOriginals=await workbench.get({scope,employeeId,businessDate:'2026-08-11',capabilities:['reconciliation.view'],query:'VIP8',limit:20})
+    expect(allOriginals.summary.capturedPaymentCount).toBe(6)
+    const cashShares=allOriginals.orders.flatMap(o=>o.payments.filter(p=>p.provider==='cash'))
+    expect(new Set(cashShares.map(p=>p.id)).size).toBe(1)
+    expect(cashShares.map(p=>p.amountMinor).sort((a,b)=>a-b)).toEqual([17600,26400,35200,118000])
+    // A second unresolved scan for a settled original is a reconciliation item.
+    await pool.query(`INSERT INTO mbox.payments(tenant_id,store_id,order_id,public_id,provider,method,amount_minor,status,provider_transaction_id)
+      VALUES($1,$2,$3,'vip8-old-scan','postar','native_qr',26400,'pending','vip8-pending-original')`,[tenantId,storeId,other[0]])
+    const readMoney = async () => (await runner.run(scope,tx=>readTables(tx,employeeId,true))).find(t=>t.id===table)!.activeSession!
+    expect(await readMoney()).toMatchObject({pendingPaymentCount:1,outstandingAmountMinor:0,netCollectedAmountMinor:197200})
+    const prepayment = randomUUID()
+    await pool.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,public_id,provider,method,payable_kind,prepaid_table_session_id,
+      prepaid_customer_id,amount_minor,status,succeeded_at,provider_transaction_id,provider_snapshot)
+      VALUES($1,$2,$3,'vip8-prepaid','postar','native_qr','table_prepayment',$4,$5,10000,'succeeded',clock_timestamp(),'vip8-prepaid-ref','{"sharedTableConsent":"v1"}')`,
+      [prepayment,tenantId,storeId,visit,customerId])
+    expect(await readMoney()).toMatchObject({prepaidReceivedMinor:10000,prepaidAvailableMinor:10000,grossCollectedAmountMinor:317300})
+    const creditOrder=await insertOrder(60)
+    await pool.query('INSERT INTO mbox.table_prepayment_allocations(tenant_id,store_id,payment_id,order_id,amount_minor) VALUES($1,$2,$3,$4,6000)',
+      [tenantId,storeId,prepayment,creditOrder])
+    expect(await readMoney()).toMatchObject({prepaidReceivedMinor:10000,prepaidAvailableMinor:4000,grossCollectedAmountMinor:323300,outstandingAmountMinor:0})
+    const lookup={scope,employeeId,businessDate:'2026-08-11',capabilities:['reconciliation.view'],query:'VIP8',limit:1}
+    const offPage=await workbench.get({...lookup,page:15})
+    expect(offPage.orders).toHaveLength(0)
+    expect(offPage.selectedTable?.money).toMatchObject({prepaidAvailableMinor:4000,grossCollectedAmountMinor:323300,pendingPaymentCount:1})
+    const unauthorized=await workbench.get({...lookup,employeeId:checkoutRuleDrafterId,capabilities:['payment.manual.cash.record']})
+    expect(unauthorized.orders).toHaveLength(0)
+    expect(unauthorized.selectedTable).toBeUndefined()
+  })
+
+  it('recovers only the paid original line and retains one task and one print source on retry', async () => {
+    const order = randomUUID(), item = randomUUID()
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+      subtotal_amount_minor,total_amount_minor,submitted_at,updated_at)
+      VALUES($1,$2,$3,$4,'vip5-paid-missing-task','guest_qr','submitted',1000,1000,now()-interval '3 minutes',now()-interval '3 minutes')`,
+      [order,tenantId,storeId,sessionOneId])
+    await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot)
+      VALUES($1,$2,$3,$4,$5,1,1000,1000,'bar','{"inventoryControlMode":"not_managed"}')`,[item,tenantId,storeId,order,productBId])
+    const runner = new ScopedPostgresTransactionRunner(asPool(pool))
+    const tasks = async () => (await pool.query('SELECT id FROM mbox.kds_tasks WHERE order_item_id=$1',[item])).rows
+    await runner.run({tenantId,storeId},tx=>retryUndispatchedProduction(tx,5))
+    expect(await tasks()).toEqual([])
+    await seedProductionReceipt(pool,order)
+    const issue = () => runner.run({tenantId,storeId},tx=>readOrderProductionNotices(tx,employeeId,{cashier:false,service:false,manager:true,stations:[]}))
+    expect((await issue()).filter(n=>n.orderNumber==='vip5-paid-missing-task')).toMatchObject([{issue:'missing',stations:['bar']}])
+    await runner.run({tenantId,storeId},tx=>retryUndispatchedProduction(tx,5))
+    expect(await tasks()).toEqual([]) // Historical orders have no original retry instruction.
+    await runner.run({tenantId,storeId},tx=>appendOutboxMessage(tx,{aggregateType:'order',aggregateId:order,aggregateVersion:1,
+      eventType:'order.submitted.v1',payload:{productionItemIds:[item]}}))
+    await Promise.all([1,2].map(()=>runner.run({tenantId,storeId},tx=>retryUndispatchedProduction(tx,5))))
+    const first = await tasks()
+    expect(first).toHaveLength(1)
+    await runner.run({tenantId,storeId},tx=>retryUndispatchedProduction(tx,5))
+    expect(await tasks()).toEqual(first)
+    expect((await issue()).some(n=>n.orderNumber==='vip5-paid-missing-task')).toBe(false)
+    expect((await pool.query("SELECT id FROM mbox.print_source_jobs WHERE aggregate_id=$1 AND ticket_kind='production'",[order])).rowCount).toBe(1)
+  })
+
   it('keeps an immediate-payment order out of inventory consumption and KDS until trusted payment succeeds', async () => {
     const publicId = 'integration-payment-gated-order'
     const order = await service.submitOrder({
@@ -657,16 +885,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'bar', 100, 1)
     `, [randomUUID(), tenantId, storeId, orderItemId])).rejects.toMatchObject({ code: '23514' })
 
-    const paymentAuthorization: PaymentCapabilityAuthorizationPort = {
-      assertEmployeeCapability: async () => undefined,
-      assertEmployeeOrderAccess: async () => undefined,
-      assertRefundRequestLimit: async () => undefined,
-      assertRefundApproval: async () => undefined,
-    }
-    const payment = new PaymentCommandService(
-      new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
-      paymentAuthorization,
-    )
+    const payment = cashierService()
     const operationalControl = new LoyaltyOperationalControlService(
       new ScopedPostgresTransactionRunner(asPool(pool)),
       new NormalizedCommandExecutor(new ScopedPostgresTransactionRunner(asPool(pool))),
@@ -850,7 +1069,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
 
   it('persists settlement mode and treats a changed settlement mode as an idempotency conflict', async () => {
     const input = {
-      ...command('integration-settlement-order', sessionOneId, productBId, 1, 'integration-settlement-0001'),
+      ...(await staffTab('integration-settlement-order', sessionOneId, productBId, 1, 'integration-settlement-0001')),
       settlementMode: 'table_tab' as const,
     }
     const first = await service.submitOrder(input)
@@ -905,7 +1124,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   })
 
   it('charges a bundle once while routing its components to separate KDS stations and inventory recipes', async () => {
-    const submitted = await service.submitOrder(command(
+    const submitted = await service.submitOrder(await staffTab(
       'integration-bundle-order',
       sessionOneId,
       bundleProductId,
@@ -993,7 +1212,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       ) VALUES($1,$2,$3,$4,1,10)
     `,[tenantId,storeId,choiceGroupId,productBId])
     try{
-      const input=command('integration-bundle-choice-order',sessionOneId,bundleProductId,1,
+      const input=await staffTab('integration-bundle-choice-order',sessionOneId,bundleProductId,1,
         'integration-bundle-choice-0001')
       const submitted=await service.submitOrder({ ...input,lines:[{
         productId:bundleProductId,quantity:1,bundleSelections:[{ groups:[{
@@ -1033,7 +1252,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
       ) VALUES($1,$2,$3,$4,1,10),($1,$2,$3,$5,1,20)
     `,[tenantId,storeId,choiceGroupId,productAId,productBId])
     try{
-      const input=command('integration-bundle-two-distinct-choices',sessionOneId,bundleProductId,2,
+      const input=await staffTab('integration-bundle-two-distinct-choices',sessionOneId,bundleProductId,2,
         'integration-bundle-two-distinct-choices-0001')
       const submitted=await service.submitOrder({ ...input,lines:[{
         productId:bundleProductId,quantity:2,bundleSelections:[
@@ -1130,8 +1349,8 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
 
   it('serializes concurrent deductions of one ingredient so stock cannot go negative', async () => {
     const results = await Promise.allSettled([
-      service.submitOrder(command('integration-race-one', sessionOneId, productAId, 4, 'integration-race-one-0001')),
-      service.submitOrder(command('integration-race-two', sessionTwoId, productAId, 4, 'integration-race-two-0001')),
+      service.submitOrder(await staffTab('integration-race-one', sessionOneId, productAId, 4, 'integration-race-one-0001')),
+      service.submitOrder(await staffTab('integration-race-two', sessionTwoId, productAId, 4, 'integration-race-two-0001')),
     ])
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
@@ -1263,7 +1482,7 @@ integration('CommerceCommandService PostgreSQL concurrency', () => {
   })
 
   it('records each KDS production transition as an event without updating order-item status', async () => {
-    const submitted = await service.submitOrder(command('integration-kds-events', sessionOneId, productBId, 1, 'integration-kds-events-0001'))
+    const submitted = await service.submitOrder(await staffTab('integration-kds-events', sessionOneId, productBId, 1, 'integration-kds-events-0001'))
     const taskId = submitted.value.kdsTasks[0]!.id
     const orderItemId = submitted.value.order.items[0]!.id
     const runner = new ScopedPostgresTransactionRunner(asPool(pool))

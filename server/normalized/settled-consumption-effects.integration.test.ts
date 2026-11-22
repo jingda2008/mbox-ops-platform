@@ -69,7 +69,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
       await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,8)",[table,scope.tenantId,scope.storeId,area,`T${table.slice(0,8)}`])
       await pool.query('INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,$5,$6,4)',[session,scope.tenantId,scope.storeId,table,session,date])
     }
-    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),4000,4000)",[order,scope.tenantId,scope.storeId,session,order])
+    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted',clock_timestamp(),4000,4000)",[order,scope.tenantId,scope.storeId,session,order])
     if(bundle)await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot) VALUES($1,$2,$3,$4,$5,1,4000,4000,'none','{"name":"40元套餐","inventoryControlMode":"not_managed"}')`,[parent,scope.tenantId,scope.storeId,order,product])
     await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,parent_order_item_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot) VALUES($1,$2,$3,$4,$5,$6,5,$7,$8,'bar','{"name":"水","singlePriceReferenceMinor":800,"inventoryControlMode":"not_managed"}')`,[item,scope.tenantId,scope.storeId,order,product,bundle?parent:null,bundle?0:800,bundle?0:4000])
     await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'bar',5,'pending')",[task,scope.tenantId,scope.storeId,item])
@@ -87,9 +87,9 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
       await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) VALUES($1,$2,$3,$4,'Second product','drink','bar')",[secondProduct,scope.tenantId,scope.storeId,secondProduct])
       await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,loyalty_eligible_at_submission,loyalty_eligibility_source) VALUES($1,$2,$3,$4,$5,1,800,800,$7,'{"name":"Second product","inventoryControlMode":"not_managed"}',$6,'catalog_product')`,[second,scope.tenantId,scope.storeId,order,secondProduct,wholeLineReturn,wholeLineReturn?'bar':'none'])
     }
+    if (wholeLineReturn) await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'bar',1,'pending')",[randomUUID(),scope.tenantId,scope.storeId,second])
     const member=await seedMember(order,item,session)
     if(wholeLineReturn){
-      await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'bar',1,'pending')",[randomUUID(),scope.tenantId,scope.storeId,second])
       const option=randomUUID()
       await pool.query(`INSERT INTO mbox.recommendation_options(id,tenant_id,store_id,recommendation_session_id,policy_version_id,product_id,rank,tier,amount_minor,cost_amount_minor,currency,total_score,explanation)
         SELECT $1,o.tenant_id,o.store_id,o.recommendation_session_id,o.policy_version_id,i.product_id,2,o.tier,800,0,o.currency,100,'独立8元推荐行'
@@ -165,7 +165,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     await pool.query('INSERT INTO mbox.loyalty_accounts(id,tenant_id,store_id,membership_id,customer_id) VALUES($1,$2,$3,$4,$5)',[account,scope.tenantId,scope.storeId,membership,customer])
     await pool.query(`INSERT INTO mbox.loyalty_policy_versions(id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason)
       VALUES($1,$2,$3,$7,1,'published',1,100,1,100,'floor',18,'2026-08-01',$4,$5,'2026-08-01',$6,'2026-08-01','separated','既有一元一积分成长规则')`,[policy,scope.tenantId,scope.storeId,requester,cashier,publisher,'P'+policy.replaceAll('-','').toUpperCase()])
-    await pool.query('UPDATE mbox.orders SET created_by_customer_id=$2,loyalty_policy_version_id=$3,loyalty_points_multiplier_numerator=1,loyalty_points_multiplier_denominator=1 WHERE id=$1',[order,customer,policy])
+    await pool.query('UPDATE mbox.orders SET created_by_employee_id=NULL,created_by_customer_id=$2,loyalty_policy_version_id=$3,loyalty_points_multiplier_numerator=1,loyalty_points_multiplier_denominator=1 WHERE id=$1',[order,customer,policy])
     await pool.query("UPDATE mbox.order_items SET loyalty_eligible_at_submission=true,loyalty_eligibility_source='catalog_product' WHERE id=$1",[item])
     const recommendation=randomUUID(),option=randomUUID(),recommendPolicy=randomUUID()
     await pool.query("INSERT INTO mbox.recommendation_policy_versions(id,tenant_id,store_id,public_id,policy_code,version,status,created_by_employee_id,draft_reason) VALUES($1::uuid,$2,$3,$1::text,$4,1,'draft',$5,'归属事实隔离夹具')",[recommendPolicy,scope.tenantId,scope.storeId,'R'+recommendPolicy.replaceAll('-','').toUpperCase(),publisher])
@@ -275,7 +275,7 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   })
 
   it.each(['partial','pending','expired'] as const)('keeps the confirmed ordinary recollection debt after payment permission becomes %s',async mode=>{
-    const f=await fixture();await compensate(f,2000,'price_adjustment')
+    const f=await fixture();await deliver(f,5);await compensate(f,2000,'price_adjustment')
     expect(await summary(f.order)).toMatchObject({due:0,net:2000})
     const before=Number((await daySummary()).outstandingMinor)
     const authorization=(await authorize(f)).value
@@ -296,7 +296,6 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
     expect(await runner.run(scope,tx=>readBusinessDayBlockerFacts(tx,f.session,'ORDER_UNSETTLED'))).toEqual(expect.arrayContaining([expect.objectContaining({orderId:f.order,amountMinor:expected})]))
     expect((await runner.run(scope,tx=>tx.query<{needs:boolean}>(`SELECT ${orderNeedsCollectionSql('ordering')} AS needs FROM mbox.orders ordering WHERE id=$1`,[f.order]))).rows[0].needs).toBe(true)
     expect(Number((await daySummary()).outstandingMinor)-before).toBe(expected)
-    await deliver(f,5)
     await expect(closeSession(f.session)).rejects.toThrow()
     if(mode!=='pending'){
       expect((await authorize(f)).value.amountMinor).toBe(expected);await collect(f)

@@ -56,6 +56,7 @@ export async function readKitchenSources(tx:ScopedTransaction, employeeId:string
     ) portions ON true
     WHERE task.tenant_id=$1 AND task.store_id=$2 AND task.station_code=$5
       AND task.status IN ('pending','accepted','preparing','ready','failed')
+      AND mbox.order_production_allowed(original.tenant_id,original.store_id,original.id)
       AND original.status IN ('submitted','confirmed','fulfilling','completed')
       AND session.status IN ('open','closing') AND item.status NOT IN ('cancelled','delivered')
     ORDER BY original.created_at,original.id,task.id

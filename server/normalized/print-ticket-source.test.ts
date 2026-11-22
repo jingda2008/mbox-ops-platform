@@ -20,7 +20,7 @@ describe('PrintTicketSourceRepository', () => {
             rowCount: 1,
             rows: [{
               order_id: '30000000-0000-4000-8000-000000000001',
-              order_public_id: 'order-print-source-0001', order_note: '与首轮酒水同步',
+              production_allowed:true, unpaid_tab_due:'22400', order_public_id: 'order-print-source-0001', order_note: '与首轮酒水同步',
               total_amount_minor: '22400', currency: 'CNY', payment_status: 'unpaid',
               table_code: 'V08', guest_count: 3, business_date: '2026-08-22',
               submitted_at: '2026-08-22T14:00:00.000Z',

@@ -15,6 +15,11 @@ export function validatePrintAlertSnapshot(value: unknown): value is import('../
   const data = value as Record<string, unknown>
   if (typeof data.manager !== 'boolean' || typeof data.asOf !== 'string' || !Number.isFinite(Date.parse(data.asOf))
     || !Array.isArray(data.alerts) || data.alerts.length > 5) return false
+  if (data.orders !== undefined && (!Array.isArray(data.orders) || !data.orders.every(order => order &&
+    typeof order.orderNumber === 'string' && typeof order.tableCode === 'string' &&
+    ['collect','tab','missing','blocked','balance','proof'].includes(order.issue) && typeof order.checkPayment === 'boolean' &&
+    (order.dueMinor === null || Number.isSafeInteger(order.dueMinor) && order.dueMinor >= 0) &&
+    Array.isArray(order.stations) && order.stations.every((s: unknown) => s === 'bar' || s === 'kitchen')))) return false
   const stations = new Set<string>()
   return data.alerts.every((item: unknown) => {
     if (!item || typeof item !== 'object') return false

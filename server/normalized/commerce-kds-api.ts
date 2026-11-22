@@ -1,3 +1,4 @@
+import type {OriginalReceiptSummary} from '../../src/shared/cashier-workbench-contracts.js'
 import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import {IdempotencyReceiptUnavailableError} from './command-executor.js'
 import { reauthorizingCommands } from './staff-authorized-command.js'
@@ -134,6 +135,7 @@ type KdsAction =
   | 'fail'
 
 interface KdsCommandTarget {
+  productionAllowed: boolean
   quantityManaged?:boolean
   task: KdsTask
   orderItemId: string
@@ -191,6 +193,7 @@ interface KdsTaskLockRow extends Record<string, unknown> {
 }
 
 interface KdsTargetDetailRow extends Record<string, unknown> {
+  production_allowed: boolean
   quantity_managed?:boolean
   order_item_id: string
   order_id: string
@@ -257,6 +260,10 @@ export type StaffTableOrderItemFulfillmentStatus =
   | 'attention'
 
 export interface StaffTableOrderDetailView {
+  receipts?: OriginalReceiptSummary[]
+  productionMessage?: string
+  collectionSettled?: boolean
+  outstandingAmountMinor?: number
   publicId: string
   paymentStatus?: string
   totalAmountMinor?: number
@@ -278,6 +285,10 @@ export interface StaffTableOrderDetailView {
 }
 
 interface StaffTableOrderDetailRow extends Record<string, unknown> {
+  production_message?: string
+  receipts?: OriginalReceiptSummary[]
+  collection_settled?: boolean
+  outstanding_amount_minor?: string | number
   order_id: string
   order_public_id: string
   replacement_source?:{orderPublicId:string;orderItemId:string}|null
@@ -303,7 +314,31 @@ export async function listTableOrderDetailsForSession(
   tableSessionId: string,
 ): Promise<StaffTableOrderDetailView[]> {
   const result = await transaction.query<StaffTableOrderDetailRow>(`
-    SELECT order_header.id AS order_id,order_header.public_id AS order_public_id,
+    WITH balances AS MATERIALIZED (
+      SELECT o.*, (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'publicId',p.public_id,'provider',p.provider,'amountMinor',p.amount_minor,'shared',p.payable_kind IN ('order_batch','table_prepayment'),
+        'refundMinor',COALESCE((SELECT sum(r.amount_minor) FROM mbox.order_refund_facts r WHERE
+          (r.tenant_id,r.store_id,r.order_id,r.payment_id)=(o.tenant_id,o.store_id,o.id,p.id) AND r.status='succeeded'),0))
+        ORDER BY p.created_at,p.id),'[]'::jsonb) FROM mbox.order_payment_facts p WHERE
+          (p.tenant_id,p.store_id,p.order_id)=(o.tenant_id,o.store_id,o.id)
+          AND p.status IN ('succeeded','partially_refunded','refunded')) AS receipts,
+        mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id) AS collection_settled,
+        mbox.order_collection_due_amount_for_mode(o.tenant_id,o.store_id,o.id,true) AS outstanding_amount_minor
+      FROM mbox.orders o WHERE (o.tenant_id,o.store_id,o.table_session_id)=($1,$2,$3)
+    ), originals AS (
+      SELECT o.*, CASE WHEN o.status='cancelled' THEN NULL
+        WHEN o.fulfillment_state='active' AND o.collection_settled
+          AND EXISTS (SELECT 1 FROM mbox.order_items i JOIN mbox.kds_tasks k ON (k.tenant_id,k.store_id,k.order_item_id)=(i.tenant_id,i.store_id,i.id)
+            WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.fulfillment_station IN ('bar','kitchen') AND k.status NOT IN ('cancelled','failed'))
+          AND NOT EXISTS (SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id)
+            AND i.fulfillment_station IN ('bar','kitchen') AND i.status<>'cancelled' AND NOT EXISTS (
+              SELECT 1 FROM mbox.kds_tasks k WHERE (k.tenant_id,k.store_id,k.order_item_id)=(i.tenant_id,i.store_id,i.id) AND k.status NOT IN ('cancelled','failed')))
+          THEN '已结清，已送制作'
+        WHEN o.total_amount_minor>0 AND o.channel='staff_assisted' AND o.created_by_employee_id IS NOT NULL AND o.settlement_mode='table_tab'
+          AND o.outstanding_amount_minor>0 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(o.receipts) receipt WHERE (receipt->>'refundMinor')::bigint>0) THEN '员工挂桌账，未收齐，可制作'
+        END AS production_message FROM balances o
+    )
+    SELECT order_header.receipts,order_header.collection_settled,order_header.outstanding_amount_minor,order_header.production_message,order_header.id AS order_id,order_header.public_id AS order_public_id,
       order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
       order_header.payment_status AS order_payment_status,
       order_header.total_amount_minor AS order_total_amount_minor,
@@ -326,7 +361,7 @@ export async function listTableOrderDetailsForSession(
       item.id AS item_id,
       COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
       item.quantity,item.unit_price_minor,item.total_amount_minor,item.parent_order_item_id,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
-    FROM mbox.orders order_header
+    FROM originals order_header
     JOIN mbox.order_items item
       ON item.tenant_id=order_header.tenant_id AND item.store_id=order_header.store_id
      AND item.order_id=order_header.id
@@ -359,6 +394,9 @@ export async function listTableOrderDetailsForSession(
     const order = orders.get(row.order_id) ?? {
       publicId: row.order_public_id,
       ...(row.replacement_source?{replacementSource:row.replacement_source}:{}),
+      ...(typeof row.collection_settled === 'boolean' ? {collectionSettled:row.collection_settled,outstandingAmountMinor:Number(row.outstanding_amount_minor)} : {}),
+      ...(row.receipts ? {receipts:row.receipts} : {}),
+      ...(row.production_message ? {productionMessage:row.production_message} : {}),
       paymentStatus: row.order_payment_status,
       totalAmountMinor: row.order_total_amount_minor == null ? undefined : Number(row.order_total_amount_minor),
       ...(Number(row.stopped_amount_minor??0)>0?{stoppedAmountMinor:Number(row.stopped_amount_minor)}:Number(row.stopped_amount_minor??0)<0?{receivableIncreaseMinor:-Number(row.stopped_amount_minor)}:{}),
@@ -809,6 +847,9 @@ export async function performKdsAction(
       stationCode: target.task.stationCode,
       tableId: target.tableId,
     })
+    if (['accept','start','complete'].includes(action) && !target.productionAllowed) {
+      throw new CommerceKdsRequestError('ORDER_PRODUCTION_BLOCKED','本单待核对，已拦截制作。请联系值班经理核对原单。',409)
+    }
     const kds = options.createKdsRepository(transaction)
     const order = options.createOrderRepository(transaction)
     const transitionInput = (suffix: string) => ({
@@ -1304,6 +1345,7 @@ async function lockKdsCommandTarget(
 
   const selectedDetail = await transaction.query<KdsTargetDetailRow>(`
     SELECT EXISTS(SELECT 1 FROM mbox.order_item_quantity_units unit WHERE unit.tenant_id=item.tenant_id AND unit.store_id=item.store_id AND unit.order_item_id=item.id) AS quantity_managed,
+      mbox.order_production_allowed(ordering.tenant_id,ordering.store_id,ordering.id) AS production_allowed,
       item.id AS order_item_id, ordering.id AS order_id,
       ordering.table_session_id, table_session.table_id,
       venue_table.code AS table_code, item.product_id,
@@ -1338,6 +1380,7 @@ async function lockKdsCommandTarget(
   const detailRow = selectedDetail.rows[0]
   if (selectedDetail.rowCount !== 1 || detailRow === undefined) throw new KdsTaskNotFoundError(taskId)
   return {
+    productionAllowed:detailRow.production_allowed,
     quantityManaged:detailRow.quantity_managed===true,
     orderItemId: detailRow.order_item_id,
     orderId: detailRow.order_id,
@@ -1464,7 +1507,7 @@ function readOrderInput(body: JsonObject) {
   return {
     lines,
     note: readOptionalString(body.fulfillmentNote ?? body.note, 'fulfillmentNote', 500),
-    settlementMode: (settlementMode ?? 'table_tab') as 'immediate_payment' | 'table_tab',
+    settlementMode: (settlementMode ?? 'immediate_payment') as 'immediate_payment' | 'table_tab',
     orderMode: orderMode as 'paid' | 'gift',
     giftReason,
     kdsOverride: readKdsOverride(body.kdsOverride),
@@ -1530,6 +1573,16 @@ function readKdsAction(value: unknown): KdsAction {
   return value as KdsAction
 }
 
+function submissionProductionMessage(result: SubmittedCommerceResult, mode: 'paid' | 'gift'): string {
+  const items = result.order.items.filter(i => i.fulfillmentStation === 'bar' || i.fulfillmentStation === 'kitchen')
+  const sent = items.length > 0 && items.every(i => result.kdsTasks.some(k => k.orderItemId === i.id))
+  if (result.paymentNextStep.status === 'required') return result.order.totalAmountMinor === 0 ? '零应收，待核验制作凭据' : '待收款，未送制作'
+  const payment = mode === 'gift' && result.order.totalAmountMinor === 0 ? '赠送已核准'
+    : result.paymentNextStep.status === 'settled' ? '已结清'
+    : result.order.totalAmountMinor === 0 ? '本单零应收' : '已挂桌账，未收齐'
+  return payment + (sent ? '，已送制作' : items.length ? '，请核对制作任务' : '，无需制作')
+}
+
 function commerceResponse(
   execution: CommandExecution<SubmittedCommerceResult>,
   orderMode: 'paid' | 'gift' = 'paid',
@@ -1538,6 +1591,7 @@ function commerceResponse(
   const kdsByItem = new Map(execution.value.kdsTasks.map((task) => [task.orderItemId, task]))
   return {
     id: order.id,
+    productionMessage: submissionProductionMessage(execution.value,orderMode),
     tableSessionId: order.tableSessionId,
     publicId: order.publicId,
     channel: order.channel,

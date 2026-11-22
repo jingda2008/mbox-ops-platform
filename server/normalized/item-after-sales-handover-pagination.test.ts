@@ -39,7 +39,7 @@ integration('quantity after-sales handover pagination',()=>{
 
   async function pausedCase(requesterId:string){
     const orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID()
-    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),4000,4000)",[orderId,tenantId,storeId,sessionId,`pagination-${orderId}`])
+    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted',clock_timestamp(),4000,4000)",[orderId,tenantId,storeId,sessionId,`pagination-${orderId}`])
     await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot) VALUES($1,$2,$3,$4,$5,5,800,4000,'bar','{"name":"水","inventoryControlMode":"not_managed"}')`,[itemId,tenantId,storeId,orderId,productId])
     await pool.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status) VALUES($1,$2,$3,$4,'bar',5,'pending')",[taskId,tenantId,storeId,itemId])
     return runner.run(scope,tx=>new ItemQuantityRepository(tx).hold({orderItemId:itemId,quantity:1,kind:'paid_return',employeeId:requesterId,businessDate:'2026-09-12',reason:'上个营业日遗留暂停'}))

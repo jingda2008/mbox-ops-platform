@@ -334,6 +334,7 @@ async function readFulfillmentRows(
         )
       )
       AND (item.status IN ('submitted', 'accepted', 'preparing', 'ready') OR remake.id IS NOT NULL AND item.status='delivered')
+      AND mbox.order_production_allowed(customer_order.tenant_id,customer_order.store_id,customer_order.id)
       AND (customer_order.status IN ('submitted', 'confirmed', 'fulfilling') OR remake.id IS NOT NULL AND customer_order.status='completed')
       AND (remake.id IS NULL OR session.status IN ('open','closing') AND portions.unmade+portions.started+portions.ready+portions.held>0)
       AND (

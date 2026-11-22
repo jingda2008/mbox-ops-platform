@@ -1,3 +1,4 @@
+import { productionPrintClaimSql } from './order-production-print-gate.js'
 import { PrintDiagnosticsRepository, type DiagnosticEvent } from './print-diagnostics.js'
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { appendAuditEvent, type JsonObject } from './command-executor.js'
@@ -339,6 +340,7 @@ export class PrintBridgeRepository {
           ON route.tenant_id=job.tenant_id AND route.store_id=job.store_id
          AND route.id=job.printer_route_id AND route.status='active'
         WHERE job.tenant_id=$1::uuid AND job.store_id=$2::uuid
+          AND (${productionPrintClaimSql})
           AND job.delivery_mode='bridge_pull' AND job.print_bridge_id=$3::uuid
           AND candidate_device.status='active' AND candidate_device.print_bridge_id=$3::uuid
           AND job.attempts<job.max_attempts AND (

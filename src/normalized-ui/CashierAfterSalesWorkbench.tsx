@@ -1,3 +1,4 @@
+import {SessionMoneySummary} from './SessionMoneySummary'
 import {refundReviewBlockReason} from '../shared/refund-review-availability'
 import {StaffTableCreditPanel} from './staff-actions/StaffTableCreditPanel'
 import {CarryoverTabReviewPanel} from './CarryoverTabReviewPanel'
@@ -104,6 +105,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState<string | null>(null)
   const [view, setView] = useState<CashierWorkbenchView | null>(null)
+  const [lastReadAt,setLastReadAt] = useState<Date | null>(null)
   const [activitySummary, setActivitySummary] = useState<ActivityTodoSummary | null>(null)
   const requestedActivityFilter = new URLSearchParams(staffLocationSearch()).get('activityFilter')
   const activityFilter = ['unpaid', 'requested', 'processing'].includes(requestedActivityFilter ?? '') ? requestedActivityFilter! : 'all'
@@ -145,6 +147,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       setActivitySummary(completeSummary)
       setMessage(null)
       setView(response.data)
+      setLastReadAt(new Date())
       setAreaOptions((current) => {
         const next = new Map(current.map((area) => [area.id, area.name]))
         for (const order of response.data.orders) {
@@ -318,18 +321,21 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 
   const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
   return <><nav className="cashier-action-row" aria-label="账款范围">{([['workbench','收银待办'],['unsettled','未结账款'],['history','历史账单']] as const).map(([scope,label])=><button key={scope} type="button" className={collectionScope===scope?'cashier-primary-action':'cashier-secondary-action'} aria-pressed={collectionScope===scope} disabled={busyKey!==null} onClick={()=>{setCollectionScope(scope);setDebtPage(0);setPaymentState('all');setQuery('');setFromDate('');setToDate('')}}>{label}</button>)}</nav>
+    {view?.selectedTable && view.query===query.trim()
+      && <section aria-label="查询桌次实收"><b>{view.selectedTable.tableCode} · 当前桌次（{view.selectedTable.businessDate}）</b><SessionMoneySummary money={view.selectedTable.money}/>
+        {phase==='error'&&<strong role="status">当前结果待核对。上次读取 {lastReadAt?.toLocaleTimeString('zh-CN',{hour12:false})}，请先查原付款。</strong>}</section>}
     <CashierPageUpdateNotice blocked={busyKey!==null||mutationCoordinator.current.hasPending()}/>
     {collectionScope!=='workbench'&&<div className="cashier-action-row"><label className="cashier-field"><span>起始营业日（留空不限）</span><input type="date" value={fromDate} onChange={event=>{setFromDate(event.target.value);setDebtPage(0)}}/></label><label className="cashier-field"><span>结束营业日（留空不限）</span><input type="date" value={toDate} onChange={event=>{setToDate(event.target.value);setDebtPage(0)}}/></label><p>按原营业日和原账单查询；已关闭桌次的欠款不会转给新客。</p></div>}
-    {view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}
+
     {!view&&<CashierReadState phase={phase} message={message} onReload={()=>void load(query)}/>}
-    {collectionScope==='workbench'&&financePanel}
+
     {view&&<CashierAfterSalesWorkbenchView
       initialExpandedOrderId={new URLSearchParams(staffLocationSearch()).get('orderId')}
     auth={auth}
     view={view}
     phase={phase}
     message={message}
-    busyKey={busyKey}
+    busyKey={phase==='ready'?busyKey:'awaiting-fresh-read'}
     notice={notice}
     noticeRef={noticeRef}
     businessDayClosure={businessDayClosure}
@@ -348,6 +354,8 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     onNavigate={onNavigate}
   />}
     {view?.pagination&&<div className="cashier-action-row" aria-label="账款分页"><span>筛选结果 {view.pagination.totalCount} 单 · 账款余额 ¥{formatAmount(view.pagination.totalOutstandingMinor)}（未确认挂桌账不计入） · 第 {debtPage+1} 页</span><button type="button" className="cashier-secondary-action" disabled={debtPage===0||busyKey!==null} onClick={()=>setDebtPage(page=>page-1)}>上一页</button><button type="button" className="cashier-secondary-action" disabled={(debtPage+1)*view.pagination.pageSize>=view.pagination.totalCount||busyKey!==null} onClick={()=>setDebtPage(page=>page+1)}>下一页</button></div>}
+    {view && auth.permissions.includes('reconciliation.view') && <CashierDaySummary api={api} businessDate={view.businessDate} revision={view} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined}/>}
+    {collectionScope==='workbench'&&financePanel}
     {view && auth.permissions.includes('reconciliation.view') && <OperatingHistoryPanel key={auth.employee.id} api={api} businessDate={view.businessDate} />}
   </>
 }
@@ -549,6 +557,17 @@ export function CashierAfterSalesWorkbenchView({
       <span>{notice.text}</span>
     </div>}
 
+    <form className="cashier-workbench-search" role="search" onSubmit={submitSearch}>
+      <Search size={18} aria-hidden="true" />
+      <input
+        type="search"
+        value={searchDraft}
+        onChange={(event) => setSearchDraft(event.target.value)}
+        placeholder="完整桌号优先，也可查单号或金额"
+        aria-label="查找收银订单"
+      />
+      <button type="submit">查找</button>
+    </form>
     {auth.permissions.includes('business_day.close') && <section className="cashier-business-day-close" aria-label="上一营业日结束处理">
       <div><strong>上一营业日结束处理</strong><small>只关闭已经结清、出品和服务均完成的桌台；有未完成事项会保留并说明原因。</small></div>
       {onClosePendingBusinessDays && <button type="button" disabled={busyKey !== null} onClick={() => void onClosePendingBusinessDays()}>
@@ -597,17 +616,7 @@ export function CashierAfterSalesWorkbenchView({
       </div> : null}
     </section>}
 
-    <form className="cashier-workbench-search" role="search" onSubmit={submitSearch}>
-      <Search size={18} aria-hidden="true" />
-      <input
-        type="search"
-        value={searchDraft}
-        onChange={(event) => setSearchDraft(event.target.value)}
-        placeholder="完整桌号优先，也可查单号或金额"
-        aria-label="查找收银订单"
-      />
-      <button type="submit">查找</button>
-    </form>
+
 
     <div className="cashier-workbench-filters" aria-label="订单筛选">
       <label><span>区域</span><select value={areaId} onChange={(event) => onAreaId?.(event.target.value)}>
@@ -666,6 +675,10 @@ export function CashierAfterSalesWorkbenchView({
       ? <div className="cashier-workbench-state"><ReceiptText /><strong>{view.query || summaryFilter !== 'all' || areaId !== 'all' || paymentState !== 'all' ? '没有找到对应订单' : '本营业日暂无可处理订单'}</strong><p>可按桌号、订单号、金额、区域或支付状态查找，或切换上方筛选。</p></div>
       : <div className="cashier-order-list">
           {filteredOrders.map((order) => {
+            const action = orderListAction(order,view.actions)
+            const captured = order.payments.filter(p => ['succeeded','partially_refunded','refunded'].includes(p.status))
+            const gross = captured.reduce((sum,p)=>sum+p.amountMinor,0)
+            const refunded = order.payments.reduce((sum,p)=>sum+p.refunds.reduce((total,r)=>total+(r.status==='succeeded'?r.amountMinor:0),0),0)
             const expanded = expandedOrderId === order.id
             const cancelledWithoutCollection = order.tableSessionStatus === 'closed'
               && order.status === 'cancelled' && order.paymentStatus === 'unpaid'
@@ -682,10 +695,13 @@ export function CashierAfterSalesWorkbenchView({
                 <span><strong>{cancelledWithoutCollection || order.carryoverReview ? '原单 ¥' : '¥'}{formatAmount(cancelledWithoutCollection || order.carryoverReview ? order.originalAmountMinor ?? order.totalAmountMinor : order.totalAmountMinor)}</strong>{cancelledWithoutCollection && <small>当前可收 ¥0.00</small>}<em>{order.carryoverReview ? (order.carryoverReview.canCollect?'未支付':'挂账待核对') : cancelledWithoutCollection ? '已取消 · 未收款' : order.totalAmountMinor === 0 && order.status !== 'cancelled' ? '无需收款' : paymentStatusLabel(order.paymentStatus)}</em>{order.points&&<small>积分{order.points.state==='held'?'占用':'抵扣'} {order.points.used} 分 / ¥{formatAmount(order.points.used*100)}；已返 {order.points.credited} 分{order.points.restored>order.points.credited?`，${order.points.restored-order.points.credited} 分原批次已过期`:''}。不计入现金实收。</small>}{(order.receivableIncreaseMinor??0)>0&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 套餐按单点价补差 ¥{formatAmount(order.receivableIncreaseMinor!)}</small>}{(order.stoppedAmountMinor??0)>0&&!order.carryoverReviewDecision&&<small>原单 ¥{formatAmount(order.originalAmountMinor??order.totalAmountMinor)} · 已停止减免 ¥{formatAmount(order.stoppedAmountMinor!)}</small>}{(order.couponRefundReviewCount??0)>0&&<small>权益待复核 {order.couponRefundReviewCount} 项</small>}</span>
                 <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
               </button>
-              {(order.carryoverReview||order.outstandingAmountMinor>0)&&<div className="cashier-action-row" style={{padding:'0 16px 12px'}}>
-                <button type="button" className="cashier-primary-action" disabled={busyKey!==null}
-                  onClick={()=>setExpandedOrderId(order.id)}>{order.carryoverReview?.canCollect?'收款':order.carryoverReview?'查看原单':order.tableSessionStatus==='closed'?'查看补收入口':'收款'}</button>
-                <span>{order.carryoverReview?(order.carryoverReview.canCollect?'可直接发起收款，无需先完成制作或单独核对。':'请查看原单金额和收款权限说明。'):order.tableSessionStatus==='closed'?'按原单核对补收条件。':'可在制作完成前收款，出品进度保持独立。'}</span>
+              <div className="cashier-original-money">本单已收 ¥{formatAmount(gross)} · 已退 ¥{formatAmount(refunded)} · 净收 ¥{formatAmount(gross-refunded)}
+                {captured.map(p=><small key={p.id}>{providerLabel(p.provider)}{p.provider==='cash'?'（收银登记）':''} · {shortReference(p.publicId)} · {p.payableKind==='table_prepayment'?'本单预收抵扣 ':p.payableKind==='order_batch'?'本单分摊 ':''}¥{formatAmount(p.amountMinor)}</small>)}
+              </div>
+              {action && <div className="cashier-action-row" style={{padding:'0 16px 12px'}}>
+                <button type="button" className={action.label==='收款' && phase==='ready' ? 'cashier-primary-action' : 'cashier-secondary-action'} disabled={busyKey!==null}
+                  onClick={()=>setExpandedOrderId(order.id)}>{action.label==='收款' && phase!=='ready'?'查看上次记录':action.label}</button>
+                <span>{action.hint}</span>
               </div>}
               {expanded && <div className="cashier-order-detail">
                 {order.carryover && <p className="cashier-guidance">{order.carryoverReview
@@ -915,6 +931,40 @@ export function CashierAfterSalesWorkbenchView({
   </div>
 }
 
+function unresolvedOriginalPayment(order: CashierWorkbenchOrder) {
+  return order.payments.find((payment) => (
+    (payment.provider === 'postar' || payment.provider === 'wechat' || payment.provider === 'simulation')
+    && (payment.status === 'created' || payment.status === 'pending')
+    && payment.retryReleasedAt === null
+    && (payment.providerTransactionId !== null
+      || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
+  ))
+}
+
+function hasCompletedOrderRefund(order: CashierWorkbenchOrder) {
+  return ['refunded','partially_refunded'].includes(order.paymentStatus)
+    || order.payments.some(payment => ['refunded','partially_refunded'].includes(payment.status)
+      || payment.refunds.some(refund => refund.status === 'succeeded'))
+}
+
+function needsRefundAuthorization(order: CashierWorkbenchOrder) {
+  if (order.tableSessionStatus === 'closed') return order.closedDebtRecovery?.status === 'authorization_required'
+  return hasCompletedOrderRefund(order) && !(order.recollectionAuthorization && order.recollectionAuthorization.amountMinor === order.outstandingAmountMinor
+      && Date.parse(order.recollectionAuthorization.expiresAt) > Date.now())
+}
+
+function orderListAction(order: CashierWorkbenchOrder, actions:CashierWorkbenchView['actions']) {
+  if (hasCompletedOrderRefund(order) && (needsRefundAuthorization(order) || order.tableSessionStatus==='closed' && order.closedDebtRecovery?.status!=='available')) return {label:'查看退款记录',hint:'退款已完成，重新收款须先核对并授权。'}
+  if (unresolvedOriginalPayment(order)) return {label:'查询原付款',hint:'原付款结果待确认，请先核对渠道。'}
+  if (order.carryoverReview) return order.carryoverReview.canCollect
+    ? {label:'收款',hint:'可按原单金额发起收款。'} : {label:'查看原单',hint:'请查看原单金额和收款权限说明。'}
+  if (order.outstandingAmountMinor<=0 || order.status==='cancelled' && !order.closedDebtRecovery) return null
+  if (order.tableSessionStatus==='closed') return {label:'查看补收入口',hint:'按原单核对补收条件。'}
+  if (!actions.canRecordManualCash && !actions.canRecordManualPos && !actions.canRecordManualExternal
+    && !(actions.canInitiateOnlinePayment && actions.onlinePaymentProvider)) return {label:'查看原单',hint:'请交有收款权限的员工处理。'}
+  return {label:'收款',hint:'按本单剩余应收收款。'}
+}
+
 function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutation, onCreateOnlinePayment }: {
   order: CashierWorkbenchOrder
   actions: CashierWorkbenchView['actions']
@@ -949,23 +999,14 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
   useEffect(() => {
     if (!selectedProviderAllowed) { setProvider(null); setConfirmed(false) }
   }, [selectedProviderAllowed])
-  const activeOnlinePayment = order.payments.find((payment) => (
-    (payment.provider === 'postar' || payment.provider === 'wechat')
-    && (payment.status === 'created' || payment.status === 'pending')
-    && payment.retryReleasedAt === null
-    && (payment.providerTransactionId !== null
-      || (payment.providerActionState !== null && payment.providerActionState !== 'failed'))
-  ))
+  const activeOnlinePayment = unresolvedOriginalPayment(order)
   const canCreateOnline = actions.canInitiateOnlinePayment
     && (!closedTableSession || consumptionDebt && recovery?.status==='available')
     && actions.onlinePaymentProvider !== null
     && onCreateOnlinePayment !== undefined
-  const hasCompletedRefund = order.payments.some((payment) => payment.refunds.some((refund) => refund.status === 'succeeded'))
-  const requiresRecollectionAuthorization = closedTableSession
-    ? recovery?.status === 'authorization_required'
-    : hasCompletedRefund && order.outstandingAmountMinor > 0
+  const requiresRecollectionAuthorization = needsRefundAuthorization(order) && order.outstandingAmountMinor > 0
   const canCollect = (order.status !== 'cancelled'||consumptionDebt) && order.outstandingAmountMinor > 0
-    && (closedTableSession ? recovery?.status === 'available' : !requiresRecollectionAuthorization || order.recollectionAuthorization !== null)
+    && (closedTableSession ? recovery?.status === 'available' : !requiresRecollectionAuthorization)
     && (canCreateOnline || actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
   if (closedTableSession && order.outstandingAmountMinor > 0 && recovery?.status !== 'available' && recovery?.status !== 'authorization_required') {
     const guidance = recovery?.status === 'pending_payment'
@@ -980,7 +1021,7 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
       <p className="cashier-guidance" role="status">{guidance}</p>
     </div>
   }
-  if (requiresRecollectionAuthorization && (closedTableSession || order.recollectionAuthorization === null)) {
+  if (requiresRecollectionAuthorization) {
     const canAuthorize = actions.canAuthorizeRecollection === true
     const authorizationKey = `refund-recollection-authorize-${order.id}`
     const authorize = async () => {
@@ -1077,7 +1118,7 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
     && typeof onlineAction.payload?.qrCodeUrl === 'string' ? onlineAction.payload.qrCodeUrl : null
 
   return <div className="cashier-manual-collection">
-    <div><strong>{closedTableSession ? '已关桌订单补收' : '现场收款'}</strong><small>{directBasis?'按原单金额发起收款 ¥':'剩余应收 ¥'}{formatAmount(order.outstandingAmountMinor)}；{closedTableSession ? recoveryDescription : order.recollectionAuthorization !== null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
+    <div><strong>{closedTableSession ? '已关桌订单补收' : '现场收款'}</strong><small>{directBasis?'按原单金额发起收款 ¥':'剩余应收 ¥'}{formatAmount(order.outstandingAmountMinor)}；{closedTableSession ? recoveryDescription : order.recollectionAuthorization != null ? '退款后重新收款授权已生效，请在到期前完成一次实际收款。' : '可让顾客扫二维码、扫顾客付款码，或登记已实际收到的现金/POS/其他款项。'}</small></div>
     {directBasis&&<p className="cashier-guidance">发起收款将按上方原单金额保留应收，可分次支付；无需先完成制作或核对流程。原订单商品及桌次状态保持。{directBasis.orderNote?`原单备注：${directBasis.orderNote}`:''}</p>}
     {consumptionDebt&&<label className="cashier-field"><span>本次收款金额（元，留空收取全部剩余欠款）</span><input inputMode="decimal" value={collectionAmount} placeholder={formatAmount(order.outstandingAmountMinor)} onChange={event=>{setCollectionAmount(event.target.value);setConfirmed(false);setOnlineAction(null)}}/>{!validAmount&&<small role="alert">请输入不超过剩余欠款的正数金额</small>}</label>}
     {(!closedTableSession||consumptionDebt) && onlineAction !== null && onlineAction.status !== 'failed' ? <div className="cashier-manual-result" aria-live="polite">

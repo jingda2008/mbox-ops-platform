@@ -1,3 +1,4 @@
+import {SessionMoneySummary} from '../SessionMoneySummary'
 import {beijingDisplayTime} from '../beijing-display-time'
 import { TableGuestCountEditor } from './TableGuestCountEditor'
 import type { GuestCountChange } from './staff-actions-api'
@@ -1237,8 +1238,9 @@ export function StaffActionsPanel({
                       <strong>{table.code}</strong>
                       <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${`${table.activeSession.status === 'closing' ? '结台中 · ' : ''}${tableFinancialLabel(table.activeSession.financialState)}`}`}</span>
                       {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
-                      {table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
+                      {table.activeSession?.grossCollectedAmountMinor === undefined && table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
                       {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
+                      {table.activeSession && (table.activeSession.orderCount > 0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
                       {mood !== null && (
@@ -1975,6 +1977,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
+      {table.activeSession && !sessionSyncing && (table.activeSession.orderCount>0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
       {table.activeSession&&!sessionSyncing&&(
           <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
             {hasTableCollectionPermission(props.permissions) && (

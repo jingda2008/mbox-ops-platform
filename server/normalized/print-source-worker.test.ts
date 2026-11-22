@@ -81,7 +81,8 @@ integration('asynchronous print sources: committed events, isolation and recover
     await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,'AP01','AP01',4)",[table,scope.tenantId,scope.storeId,area])
     await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status) VALUES($1,$2,$3,$4,'async-print-session',CURRENT_DATE,2,'open')",[session,scope.tenantId,scope.storeId,table])
     await pool.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station) VALUES($1,$3,$4,'AP-DRINK','测试酒','drink','bar'),($2,$3,$4,'AP-SNACK','测试小食','food','kitchen')",[drink,snack,scope.tenantId,scope.storeId])
-    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,submitted_at) VALUES($1,$2,$3,$4,'async-print-order','staff_assisted','fulfilling','paid',1500,1500,clock_timestamp())",[order,scope.tenantId,scope.storeId,session])
+    await pool.query("INSERT INTO mbox.employees(tenant_id,store_id,employee_code,display_name) VALUES($1,$2,'TAB','点单员工')",[scope.tenantId,scope.storeId])
+    await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,payment_status,subtotal_amount_minor,total_amount_minor,submitted_at) VALUES($1,$2,$3,$4,'async-print-order',(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','fulfilling','paid',1500,1500,clock_timestamp())",[order,scope.tenantId,scope.storeId,session])
     await pool.query(`INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,status)
       VALUES($1,$2,$3,$4,1,1000,1000,'bar','{"name":"测试酒","productKind":"single"}','preparing'),
       ($1,$2,$3,$5,4,125,500,'kitchen','{"name":"测试小食","productKind":"single"}','preparing')`,[scope.tenantId,scope.storeId,order,drink,snack])
@@ -281,9 +282,9 @@ integration('asynchronous print sources: committed events, isolation and recover
     await pool.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,status)
       SELECT $3,$1,$2,id,'range-test-session',CURRENT_DATE,1,'open' FROM mbox.tables WHERE tenant_id=$1 AND store_id=$2 LIMIT 1`,
       [scope.tenantId,scope.storeId,session])
-    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,
       payment_status,subtotal_amount_minor,total_amount_minor,submitted_at)
-      VALUES($3,$1,$2,$4,'old-unpaid-range-test','staff_assisted','submitted','unpaid',1234,1234,clock_timestamp())`,[scope.tenantId,scope.storeId,oldOrder,session])
+      VALUES($3,$1,$2,$4,'old-unpaid-range-test',(SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 ORDER BY id LIMIT 1),'staff_assisted','submitted','unpaid',1234,1234,clock_timestamp())`,[scope.tenantId,scope.storeId,oldOrder,session])
     const {start_date:start,end_date:end}=(await pool.query(`SELECT (max(business_date)+1)::text AS start_date,
       (max(business_date)+2)::text AS end_date FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2`,[scope.tenantId,scope.storeId])).rows[0]
     const jobs=await transactions.run(scope,async tx=>{

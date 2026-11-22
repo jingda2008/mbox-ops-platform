@@ -1,0 +1,45 @@
+name: print-bridge-queue-windows
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/print-bridge-table-queues-114']
+    paths: ['deploy/windows-print-bridge/**','scripts/build-print-bridge-114-upgrade.py','.github/workflows/print-bridge-queue-windows.yml']
+  pull_request:
+    paths: ['deploy/windows-print-bridge/release-1.0.14/**','scripts/build-print-bridge-114-upgrade.py']
+permissions:
+  contents: read
+jobs:
+  queue-observation:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@v6
+        with: {node-version: 22}
+      - name: Build, verify ticket bytes and inspect queues
+        shell: powershell
+        run: |
+          python scripts/build-print-bridge-113-upgrade.py
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+          python scripts/build-print-bridge-114-upgrade.py
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+          $dir='artifacts/print-bridge-1.0.14/MBOX-PrintBridge-1.0.14-OneClick-r1'
+          Expand-Archive -LiteralPath ($dir+'.zip') -DestinationPath $dir
+          python scripts/verify-print-bridge-113-package.py --package $dir --pwsh powershell.exe
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+          & ./deploy/windows-print-bridge/release-1.0.14/observer.tests.ps1 -Package $dir
+          & ./deploy/windows-print-bridge/release-1.0.13/windows-native.tests.ps1 -QueueUpgrade
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MBOX-PrintBridge-1.0.14-Windows-verified
+          path: |
+            artifacts/print-bridge-1.0.14/*.zip
+            artifacts/print-bridge-1.0.14/*.sha256
+            artifacts/print-bridge-1.0.14/windows-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: queue-test-diagnostics
+          path: artifacts/print-bridge-native-evidence/

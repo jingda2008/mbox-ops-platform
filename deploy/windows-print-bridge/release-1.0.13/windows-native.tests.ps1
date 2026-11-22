@@ -1,6 +1,13 @@
-﻿$ErrorActionPreference='Stop'
+﻿param([switch]$QueueUpgrade)
+$ErrorActionPreference='Stop'
 $repo=(Get-Location).Path
-$package=Join-Path $repo 'artifacts\print-bridge-1.0.13\MBOX-PrintBridge-1.0.13-OneClick-r1'
+$version = if($QueueUpgrade){'1.0.14'}else{'1.0.13'}
+$previous = if($QueueUpgrade){'1.0.13'}else{'1.0.11'}
+$archiveBase = Join-Path $repo ("artifacts/print-bridge-$version/MBOX-PrintBridge-$version-OneClick-r1")
+$package = $archiveBase
+$oldFiles = @('bridge.mjs','print-ticket.ps1','list-printers.ps1')
+$addedFiles = @('diagnostic-events.mjs')
+if($QueueUpgrade){$oldFiles+='diagnostic-events.mjs';$addedFiles=@('read-queue.ps1','observe.mjs')}
 $evidence=Join-Path $repo 'artifacts\print-bridge-native-evidence'
 New-Item -ItemType Directory -Force $evidence | Out-Null
 $root='C:\MBOX Native 验证'
@@ -20,8 +27,8 @@ function Stop-Bridge {
 function Write-Config([string]$value) { [IO.File]::WriteAllText((Join-Path $data 'config.json'),$value,(New-Object Text.UTF8Encoding($false))) }
 function Reset-Old {
  Stop-Bridge
- foreach($n in @('bridge.mjs','print-ticket.ps1','list-printers.ps1')) {Copy-Item -LiteralPath (Join-Path $baseline $n) -Destination (Join-Path $install $n) -Force}
- Remove-Item -LiteralPath (Join-Path $install 'diagnostic-events.mjs') -ErrorAction SilentlyContinue
+ foreach($n in $oldFiles) {Copy-Item -LiteralPath (Join-Path $baseline $n) -Destination (Join-Path $install $n) -Force}
+ foreach($n in $addedFiles){Remove-Item -LiteralPath (Join-Path $install $n) -ErrorAction SilentlyContinue}
  [IO.File]::WriteAllText((Join-Path $data 'journal.json'),'{"version":1,"entries":{}}')
  [IO.File]::WriteAllText((Join-Path $data 'control.json'),'{}')
  Remove-Item -LiteralPath (Join-Path $data 'runtime-status.json') -ErrorAction SilentlyContinue
@@ -33,8 +40,8 @@ function Run-Upgrade([string]$directory=$package) {
  return $LASTEXITCODE
 }
 function Assert-Old {
- foreach($n in @('bridge.mjs','print-ticket.ps1','list-printers.ps1')) {Assert ((Get-FileHash -LiteralPath (Join-Path $install $n)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $baseline $n)).Hash) "old $n not restored"}
- Assert (-not (Test-Path -LiteralPath (Join-Path $install 'diagnostic-events.mjs'))) 'new module remained after rollback'
+ foreach($n in $oldFiles) {Assert ((Get-FileHash -LiteralPath (Join-Path $install $n)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $baseline $n)).Hash) "old $n not restored"}
+ foreach($n in $addedFiles){Assert (-not (Test-Path -LiteralPath (Join-Path $install $n))) 'new module remained after rollback'}
  Assert ((Get-Service MBoxPrintBridge).Status -eq 'Running') 'original service not running'
  Assert ((Get-FileHash -LiteralPath (Join-Path $data 'config.json')).Hash -eq $script:configHash) 'pairing changed'
 }
@@ -42,7 +49,8 @@ try {
  Assert (-not (Get-Service MBoxPrintBridge -ErrorAction SilentlyContinue)) 'test runner already has MBoxPrintBridge; refuse touching it'
  Assert (-not (Test-Path $root)) 'fixture directory already exists'
  New-Item -ItemType Directory -Force $root,$install,$data,$baseline | Out-Null
- Expand-Archive -LiteralPath (Join-Path $PSScriptRoot 'baseline-1.0.11.zip') -DestinationPath $baseline
+ $baselineZip = if($QueueUpgrade){Join-Path $repo 'artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1.zip'}else{Join-Path $PSScriptRoot 'baseline-1.0.11.zip'}
+ Expand-Archive -LiteralPath $baselineZip -DestinationPath $baseline
  Invoke-WebRequest -UseBasicParsing 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe' -OutFile $exe
  Assert ((Get-FileHash -LiteralPath $exe).Hash -eq '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da') 'WinSW digest mismatch'
  $xml='<service><id>MBoxPrintBridge</id><name>MBOX isolated upgrade test</name><description>Isolated CI service; no venue access</description><executable>'+[Security.SecurityElement]::Escape($node)+'</executable><arguments>&quot;%BASE%\bridge.mjs&quot; run</arguments><workingdirectory>%BASE%</workingdirectory><env name="MBOX_PRINT_BRIDGE_DATA" value="'+[Security.SecurityElement]::Escape($data)+'"/><log mode="roll"/><stoptimeout>20 sec</stoptimeout><startmode>Manual</startmode></service>'
@@ -56,8 +64,8 @@ try {
  Assert ($LASTEXITCODE -eq 0) 'WinSW service install failed'
  Reset-Old
  Start-Sleep -Seconds 8
- Assert ((Get-Content -LiteralPath (Join-Path $data 'requests.jsonl') -Raw) -match '1.0.11') 'original bridge heartbeat absent'
- Record 'real WinSW service runs original 1.0.11 and completes loopback heartbeat'
+ Assert ((Get-Content -LiteralPath (Join-Path $data 'requests.jsonl') -Raw) -match [regex]::Escape($previous)) 'original bridge heartbeat absent'
+ Record "real WinSW original $previous and loopback heartbeat"
  foreach($script in Get-ChildItem -LiteralPath $package -Filter '*.ps1') {
   $tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseFile($script.FullName,[ref]$tokens,[ref]$errors)
   Assert ($errors.Count -eq 0) ('PowerShell 5.1 parse: '+$script.Name)
@@ -81,7 +89,7 @@ try {
  Assert ((Run-Upgrade) -ne 0) 'corrupt journal accepted';Assert-Old
  Record 'corrupt journal rejected without clearing records'
  Reset-Old
- [IO.File]::WriteAllText((Join-Path $data 'control.json'),'{"rejectNewHeartbeat":true}')
+ [IO.File]::WriteAllText((Join-Path $data 'control.json'),(@{rejectVersion=$version}|ConvertTo-Json -Compress))
  Assert ((Run-Upgrade) -ne 0) 'new heartbeat failure not detected'
  $failure=Get-Content -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Raw | ConvertFrom-Json
  Assert ($failure.Result.Recovery -eq 'original-restored') 'rollback not confirmed';Assert-Old
@@ -96,7 +104,7 @@ try {
  Assert ((Get-FileHash -LiteralPath (Join-Path $data 'journal.json')).Hash -eq $journalHash) 'journal changed during upgrade'
  Assert ((Get-FileHash -LiteralPath (Join-Path $data 'config.json')).Hash -eq $script:configHash) 'pairing changed'
  Copy-Item -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Destination (Join-Path $evidence 'upgrade-result.json')
- Record 'real service upgrades 1.0.11 to 1.0.13 with fresh heartbeat; config and journal unchanged'
+ Record "real service upgrade $previous to $version with fresh heartbeat; config and journal unchanged"
  Assert ((Run-Upgrade) -eq 0) 'repeat install failed'
  $same=Get-Content -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Raw | ConvertFrom-Json
  Assert ($same.Result.State -eq 'already-current') 'repeat install is not idempotent'
@@ -119,8 +127,12 @@ try {
  $invalidFailed=$false;try{[MboxRawPrinter]::SendBytes('MBOX-NOT-EXIST','MBOX-CI-ONLY',$payload)}catch{$invalidFailed=$_.Exception.ToString().Contains('open_printer_failed')}
  Assert $invalidFailed 'nonexistent native queue did not fail closed'
  Record 'real Open/Start/Write/End/Close Windows spooler preserves RAW bytes and rejects invalid queue'
- $summary=[ordered]@{windowsNativeVerified=$true;physicalVerified=$false;os=[Environment]::OSVersion.VersionString;powershell=$PSVersionTable.PSVersion.ToString();tests=@($results);commit=$env:GITHUB_SHA;archiveSha256=(Get-FileHash 'artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1.zip').Hash.ToLowerInvariant()}
- $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $repo 'artifacts/print-bridge-1.0.13/windows-evidence.json') -Encoding UTF8
+ if ($QueueUpgrade) {
+   & (Join-Path $repo 'deploy/windows-print-bridge/release-1.0.14/native-queue.tests.ps1') -Package $package
+   Record 'real paused spooler job correlated by document fingerprint, drained queue, missing queue and reported state'
+ }
+ $summary=[ordered]@{windowsNativeVerified=$true;physicalVerified=$false;os=[Environment]::OSVersion.VersionString;powershell=$PSVersionTable.PSVersion.ToString();tests=@($results);commit=$env:GITHUB_SHA;archiveSha256=(Get-FileHash ($archiveBase+'.zip')).Hash.ToLowerInvariant()}
+ $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $repo "artifacts/print-bridge-$version/windows-evidence.json") -Encoding UTF8
 } finally {
  if(Test-Path $root){
   Stop-Bridge

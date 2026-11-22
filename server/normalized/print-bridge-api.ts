@@ -124,6 +124,7 @@ export const printBridgeApiPlugin: FastifyPluginAsync<PrintBridgeApiOptions> = a
       hostname: readString(body.hostname, 'hostname', 160),
       softwareVersion: readString(body.softwareVersion, 'softwareVersion', 64),
       queues,
+      ...(body.observeQueues === true ? {monitorQueues: true, queueObservations: body.queueObservations} : {}),
     })
     return data
   }))

@@ -4765,7 +4765,8 @@ class AppModel @JvmOverloads constructor(
         val amount =
             receipt.amount?.let { "¥" + String.format(java.util.Locale.CHINA, "%.2f", it / 100.0) }
                 ?: "待核对"
-        message = "订单已确认：${receipt.publicId} · $amount。收款状态请在原订单核对。"
+        message = "订单已确认：${receipt.publicId} · $amount · " +
+            (receipt.productionMessage?.let { "提交时：$it" } ?: "收款状态请在原订单核对。")
     }
 
     private suspend fun verifyReplacementReceipt(

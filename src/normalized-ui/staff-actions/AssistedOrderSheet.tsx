@@ -50,7 +50,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
     if(mode!=='gift'||!giftDraftKey||loadedGiftDraft.current!==giftDraftKey||giftDraftHandedOff.current)return
     saveStaffOrderDraft(giftDraftKey,{quantities,selections:{},notes:itemNotes,note,giftReason})
   },[mode,giftDraftKey,quantities,itemNotes,note,giftReason])
-  const [settlementMode, setSettlementMode] = useState<'immediate_payment' | 'table_tab'>('table_tab')
+  const [settlementMode, setSettlementMode] = useState<'immediate_payment' | 'table_tab'>('immediate_payment')
   const [paymentOrder, setPaymentOrder] = useState<AssistedOrderResult | null>(null)
   const [paymentAction, setPaymentAction] = useState<OnlinePaymentAction | null>(null)
   const [paymentStatus, setPaymentStatus] = useState<'pending' | 'succeeded' | 'failed' | 'closed'>('pending')
@@ -96,6 +96,45 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
     return () => controller.abort()
   }, [api,mode,table.activeSession.id])
 
+  const receiptNumber = paymentOrder?.publicId
+  const collectionCallbacks = useRef({onSubmitted,onClose})
+  useEffect(() => { collectionCallbacks.current = {onSubmitted,onClose} }, [onSubmitted,onClose])
+  useEffect(() => {
+    if (!receiptNumber || !api.loadTableOrderDetails) return
+    const controller = new AbortController()
+    let checking = false
+    const refresh = async () => {
+      if (checking || controller.signal.aborted || document.visibilityState !== 'visible') return
+      checking = true
+      try {
+        const orders = await api.loadTableOrderDetails!(table.activeSession.id,controller.signal)
+        const original = orders.find(order => order.publicId === receiptNumber)
+        if (!original || controller.signal.aborted) return
+        if (original.collectionSettled) {
+          controller.abort()
+          collectionCallbacks.current.onSubmitted(`${table.code} ${original.productionMessage ?? '本单已结清，请查看本桌点单状态'}`)
+          collectionCallbacks.current.onClose()
+          return
+        }
+        const remaining = original.outstandingAmountMinor
+        if (remaining !== undefined && remaining > 0) {
+          setPaymentOrder(current => current?.publicId === receiptNumber && current.paymentNextStep.amountMinor !== remaining
+            ? {...current,paymentNextStep:{...current.paymentNextStep,amountMinor:remaining}} : current)
+          if (paymentStatus === 'succeeded') {
+            setPaymentAction(null)
+            setManualPaymentRecorded(false)
+            setPaymentStatus('pending')
+          }
+        }
+      } catch { /* Keep the original receipt and amount until an authoritative read succeeds. */ }
+      finally { checking = false }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(),5000)
+    document.addEventListener('visibilitychange',refresh)
+    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange',refresh) }
+  },[api,receiptNumber,paymentStatus,table.activeSession.id,table.code])
+
   useEffect(() => {
     if (paymentAction === null || paymentStatus !== 'pending') return
     const controller = new AbortController()
@@ -108,7 +147,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
         setPaymentStatus(status)
         if (status === 'succeeded' && announcedPaymentId.current !== paymentAction.paymentId) {
           announcedPaymentId.current = paymentAction.paymentId
-          onSubmitted(`${table.code} 已确认到账，订单已提交出品；收银和出品打印将按门店配置进入队列`)
+          onSubmitted(`${table.code} 本笔到账已确认，请在本桌点单明细查看原单制作状态`)
         }
         if (status === 'failed' || status === 'closed') {
           setError('支付机构已确认本次未成功，可以重新发起收款。')
@@ -210,10 +249,6 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
 
   const submitPaidOrder = async (items: MenuCartItem[], options: MenuSubmitOptions) => {
     if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) throw new Error('当前不可提交，请重新核对点单权限和菜品')
-    if (settlementMode === 'immediate_payment' && !canSettleImmediately(access)) {
-      setError('当前岗位没有可用的线上或现场收款权限，请先挂桌账或联系收银负责人。')
-      throw new Error('当前岗位没有可用收款权限，请先挂桌账或联系收银负责人')
-    }
     setPhase('submitting')
     setError(null)
     try {
@@ -229,12 +264,22 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
         settlementMode,
       })
       if (result.paymentNextStep.status === 'required') {
+        if (result.totalAmountMinor === 0) {
+          onSubmitted(`${table.code} 零应收，待核验制作凭据。请值班经理核对原单`)
+          onClose()
+          return
+        }
+        if (!canSettleImmediately(access)) {
+          onSubmitted(`${table.code} 待收款，未送制作。请收银员收款`)
+          onClose()
+          return
+        }
         setPaymentOrder(result)
         setPhase('ready')
-        onSubmitted(`${table.code} 订单已同步到本桌，请选择收款方式`)
+        onSubmitted(`${table.code} 待收款，未送制作。请选择收款方式`)
         return
       }
-      onSubmitted(`${table.code} 订单已挂桌并发送出品`)
+      onSubmitted(`${table.code} ${result.productionMessage ?? '订单已确认，请查看本桌点单状态'}`)
       onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '订单没有提交成功，请重试')
@@ -271,7 +316,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
       setPaymentWaitingLong(false)
       setShowPaymentScanner(false)
       onSubmitted(method === 'native_qr'
-        ? `${table.code} 付款码已生成，请客人扫码；未确认时可保留此笔待核对并重新收款`
+        ? `${table.code} 付款码已生成，请客人扫码；结果未知时先查原付款，勿重复收款`
         : `${table.code} 付款已受理，到账结果以支付通知为准`)
       return true
     } catch (reason) {
@@ -302,7 +347,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
         setError('支付机构已确认本次未成功，可以重新发起收款。')
         return
       }
-      onSubmitted(`${table.code} 到账尚未确认，可保留旧单待核对并继续收款`)
+      onSubmitted(`${table.code} 到账尚未确认，请先查原付款，勿重复收款`)
     } catch (reason) {
       if (generation !== paymentGeneration.current) return
       setError(reason instanceof Error ? reason.message : '暂时无法核对到账，请到收银页面查看')
@@ -374,16 +419,15 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
           <button type="button" aria-label="关闭点单" onClick={onClose}><X size={21} /></button>
         </header>
         <div className="staff-order-settlement" aria-label="结算方式">
-          <button type="button" className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
+          <button type="button" aria-pressed={settlementMode === 'table_tab'} className={settlementMode === 'table_tab' ? 'is-active' : ''} onClick={() => setSettlementMode('table_tab')}>挂桌账</button>
           <button
             type="button"
-            disabled={!canImmediateSettle}
-            title={!canImmediateSettle ? '当前岗位没有可用收款权限' : undefined}
+            aria-pressed={settlementMode === 'immediate_payment'}
             className={settlementMode === 'immediate_payment' ? 'is-active' : ''}
             onClick={() => setSettlementMode('immediate_payment')}
           >立即结算</button>
         </div>
-        <p className="staff-order-payment-note">挂桌账可稍后结算；跨日时，已确认消费的欠款保留，未确认消费的挂账须由授权员工核对金额后再收款。立即结算可让客人扫码，或扫描客人的付款码。</p>
+        <p className="staff-order-payment-note">挂桌账会立即送制作，未收齐须跟进。跨日时，已确认消费的欠款保留，未确认消费的挂账须由授权员工核对金额后再收款。立即结算须本单收齐才送制作。</p>
         {immediatePaymentMessage !== null && <p className="staff-order-payment-note">{immediatePaymentMessage}{canImmediateSettle ? '；仍可使用下单后显示的已授权现场收款方式。' : ''}</p>}
         {access?.canReleaseMinimumSpend&&paymentOrder===null&&<p className="staff-order-payment-note">员工协助点单自动放行本单低消拦截，并记录员工与订单。整桌低消、应付款及预收款余额校验保持有效。</p>}
         {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
@@ -548,8 +592,8 @@ function StaffPaymentChoice({ action, amountMinor, currency, busy, queryBusy, st
     <div className="staff-payment-summary"><small>{tableCode} · 订单已同步本桌</small><strong>{money(amountMinor, currency)}</strong><span>只有确认足额到账才停止再次收款；未知结果不会锁住桌台。</span></div>
     {action !== null && status === 'pending' && <button type="button" className="staff-payment-query is-attention" disabled={busy} onClick={onRelease}>保留旧单待核对，继续收款</button>}
     {status === 'succeeded' ? <>
-      <span className="staff-payment-result is-succeeded"><Check /><strong>{manualPaymentRecorded ? '现场收款已登记' : '支付成功'}，已同步出品</strong></span>
-      <p>收款状态已更新；后厨、吧台和打印会按本单商品与门店配置继续处理。</p>
+      <span className="staff-payment-result is-succeeded"><Check /><strong>{manualPaymentRecorded ? '现场收款已登记' : '支付成功'}</strong></span>
+      <p>请在本桌点单明细查看制作状态。本单收齐后送制作。</p>
       <button type="button" className="staff-payment-done" onClick={onDone}><Check size={18} />完成</button>
     </> : status === 'failed' || status === 'closed' ? <>
       <span className="staff-payment-result"><X /><strong>本次付款未成功</strong></span>

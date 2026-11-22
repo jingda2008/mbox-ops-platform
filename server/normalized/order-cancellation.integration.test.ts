@@ -248,9 +248,9 @@ integration('unpaid order cancellation', () => {
       `D-${randomUUID().slice(0, 8)}`, `P-${randomUUID().slice(0, 8)}`,
     ])
     await pool.query(`INSERT INTO mbox.orders(
-      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,payment_status,
       subtotal_amount_minor,discount_amount_minor,total_amount_minor
-    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',$6,200,0,200)`, [
+    ) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted',$6,200,0,200)`, [
       orderId, tenantId, storeId, sessionId, publicId, paymentStatus,
     ])
     await pool.query(`INSERT INTO mbox.order_items(

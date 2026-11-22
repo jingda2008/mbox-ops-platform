@@ -20,7 +20,8 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
     SELECT tenant_id,store_id,subject_id,signal FROM mbox.payment_financial_monitoring_signals
     WHERE tenant_id=$1 AND store_id=$2
       AND signal IN ('order_overcollected','cancelled_order_captured','succeeded_payment_missing_reconciliation')
-   ) SELECT p.id,p.public_id AS "publicId",p.amount_minor::text AS "amountMinor",p.status,p.created_at::text AS "createdAt",
+   ), page_rows AS MATERIALIZED (
+    SELECT p.order_id, p.order_batch_id, p.id,p.public_id AS "publicId",p.amount_minor::text AS "amountMinor",p.status,p.created_at::text AS "createdAt",
     s.phase,s.stop_reason AS "stopReason",s.next_query_at::text AS "nextQueryAt",s.total_query_count AS "queryCount",
     c.status AS "caseStatus",c.note,
     (SELECT jsonb_build_object('orders',h.after_snapshot->'association'->'orders') FROM mbox.audit_events h WHERE h.tenant_id=p.tenant_id AND h.store_id=p.store_id
@@ -42,7 +43,21 @@ export const paymentFinanceApiPlugin:FastifyPluginAsync<Options>=async(app,optio
           AND v.observed_status='payment_succeeded' AND v.consumed_at IS NULL)
       ) signal) financial ON true
     WHERE p.tenant_id=$1 AND p.store_id=$2 AND (financial.signals IS NOT NULL OR p.status IN ('created','pending') OR c.status='reviewing')
-    ORDER BY (financial.signals IS NOT NULL) DESC,p.created_at,p.id LIMIT 101 OFFSET $3`,[context.scope.tenantId,context.scope.storeId,page*100])).rows
+    ORDER BY (financial.signals IS NOT NULL) DESC,
+      (s.stop_reason IS NOT DISTINCT FROM 'historical_system_attempt_review'),p.created_at,p.id LIMIT 101 OFFSET $3
+   )
+   SELECT page.id,page."publicId",page."amountMinor",page.status,page."createdAt",page.phase,page."stopReason",
+     page."nextQueryAt",page."queryCount",page."caseStatus",page.note,page."historicalAssociation",
+     page."ownerName",page."ownerEmployeeId",page."orderPublicId",page."tableCode",page."financialSignals",page."urgentCount",
+     balances.current_due::text AS "linkedOrdersDueMinor" FROM page_rows page
+   LEFT JOIN LATERAL (
+     SELECT sum(mbox.order_collection_due_amount($1,$2,linked.order_id)) AS current_due
+     FROM (SELECT page.order_id WHERE page.order_id IS NOT NULL
+       UNION SELECT a.order_id FROM mbox.order_payment_allocations a
+       WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.batch_id=page.order_batch_id) linked
+   ) balances ON true
+   ORDER BY (page."financialSignals" IS NOT NULL) DESC,
+     (page."stopReason" IS NOT DISTINCT FROM 'historical_system_attempt_review'),page."createdAt"::timestamptz,page.id`,[context.scope.tenantId,context.scope.storeId,page*100])).rows
   },{readOnly:true})
   return reply.send({data:data.slice(0,100),hasMore:data.length>100,urgentCount:data[0]?.urgentCount??0})
  })

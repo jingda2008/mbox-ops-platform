@@ -54,6 +54,7 @@ export interface OperatingDashboardProjection {
   effectiveEndDate: string
   requestedEndDate: string
   incomeBasis: 'purchase_business_date'
+  missingSaleMovementCostCount?: number
   knownMissingCostCount: number
   unassignedIncomeCount: number
   unreconciledActivityPaymentsMinor: number

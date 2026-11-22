@@ -69,6 +69,17 @@ describe("InventoryRepository", () => {
     );
   });
 
+  it.each(["0", "0.12500000", null])("captures the locked unit cost on immediate consumption: %s", async cost => {
+    const tx = new ScriptedTransaction([
+      { rows: [{ order_item_id: orderItemId }] }, { rows: [demandRow()] },
+      { rows: [{ ...balanceRow(false), unit_cost_minor: cost }] },
+      { rows: [{ id: movementId }] }, { rows: [{ on_hand_quantity: "8" }] },
+    ]);
+    await new InventoryRepository(tx).consumeForOrderItems([orderItem()]);
+    expect(tx.calls[2]?.sql).toContain("CASE WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor::text END");
+    expect(tx.calls[3]?.values[5]).toBe(cost);
+  });
+
   it("fails before any inventory write when aggregate stock is insufficient", async () => {
     const tx = new ScriptedTransaction([
       { rows: [{ order_item_id: orderItemId }] },

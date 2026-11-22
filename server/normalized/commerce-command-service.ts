@@ -160,7 +160,7 @@ export class CommerceCommandService {
         prepaymentSettlement:input.prepaymentSettlement,
         publicId: input.publicId,
         channel: input.channel,
-        settlementMode: input.settlementMode ?? 'table_tab',
+        settlementMode: input.settlementMode ?? 'immediate_payment',
         lines: effectiveLines,
         note: input.note,
         createdByEmployeeId: input.createdByEmployeeId,
@@ -348,7 +348,7 @@ async function selectCheckoutUpgrade(
   const publicId = input.checkoutUpgradeOfferPublicId?.trim() || null
   if (publicId === null) return null
   if (input.channel !== 'guest_qr' || !input.createdByCustomerId
-    || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+    || (input.settlementMode ?? 'immediate_payment') !== 'immediate_payment') {
     throw new TypeError('Checkout upgrades require an authenticated guest immediate-payment order')
   }
   return new CustomerExperienceRepository(transaction).selectCheckoutUpgrade({
@@ -563,6 +563,7 @@ function orderAuditSnapshot(
 ): JsonObject {
   return {
     id: result.order.id,
+    productionItemIds: result.order.items.filter(i => i.fulfillmentStation === 'bar' || i.fulfillmentStation === 'kitchen').map(i => i.id),
     tableSessionId: result.order.tableSessionId,
     tableCode: context.tableCode,
     publicId: result.order.publicId,
@@ -713,6 +714,9 @@ function validateCommand(input: Readonly<SubmitOrderCommand>): void {
   if (input.actor.type === 'employee' && input.createdByEmployeeId !== input.actor.employeeId) {
     throw new TypeError('createdByEmployeeId must match the employee audit actor')
   }
+  if (input.settlementMode === 'table_tab' && (input.channel !== 'staff_assisted' || input.actor.type !== 'employee')) {
+    throw new TypeError('仅员工代客点单可以选择挂桌账')
+  }
   if (input.channel === 'guest_qr' && (!input.createdByCustomerId || input.createdByEmployeeId)) {
     throw new TypeError('Guest QR orders require an authenticated guest creator')
   }
@@ -720,7 +724,7 @@ function validateCommand(input: Readonly<SubmitOrderCommand>): void {
     if (input.checkoutUpgradeOfferPublicId.trim().length < 8) {
       throw new TypeError('checkoutUpgradeOfferPublicId is invalid')
     }
-    if (input.channel !== 'guest_qr' || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+    if (input.channel !== 'guest_qr' || (input.settlementMode ?? 'immediate_payment') !== 'immediate_payment') {
       throw new TypeError('Checkout upgrades require a guest immediate-payment order')
     }
   }
@@ -734,7 +738,7 @@ function validateCommand(input: Readonly<SubmitOrderCommand>): void {
       throw new TypeError('selected recommendation product ID is invalid')
     }
     if (input.channel !== 'guest_qr' || !input.createdByCustomerId
-      || input.actor.type !== 'guest' || (input.settlementMode ?? 'table_tab') !== 'immediate_payment') {
+      || input.actor.type !== 'guest' || (input.settlementMode ?? 'immediate_payment') !== 'immediate_payment') {
       throw new TypeError('Recommendation attribution requires a guest immediate-payment order')
     }
   }
@@ -793,7 +797,7 @@ function canonicalSubmitFingerprint(input: Readonly<SubmitOrderCommand>): string
     assistedOrderDeviceLeaseId: input.assistedOrderContext?.deviceAccessLeaseId ?? null,
     publicId: input.publicId,
     channel: input.channel,
-    settlementMode: input.settlementMode ?? 'table_tab',
+    settlementMode: input.settlementMode ?? 'immediate_payment',
     lines: input.lines.map((line) => ({
       productId: line.productId,
       quantity: line.quantity,

@@ -314,7 +314,7 @@ integration('customer-left table turnover', () => {
       expect(result.cancelledServiceTaskCount).toBe(1) // ordinary service only
       expect((await close()).replayed).toBe(true)
       expect((await runner.run(scope, tx => new ServiceTaskRepository(tx).findById(task.id)))?.status).toBe('pending')
-      expect((await new OperationsQueryService(runner).getStaffView(scope,approverId)).tasks.some(row => row.id === task.id)).toBe(true)
+      expect((await new OperationsQueryService(runner).getStaffView(scope,approverId)).tasks.find(row => row.id === task.id)).toMatchObject({ sessionClosed: true, assignedEmployeeId: null })
       const app = Fastify()
       let actorId = employeeId
       await app.register(normalizedOperationsApiPlugin, {
@@ -329,8 +329,15 @@ integration('customer-left table turnover', () => {
       try {
         const request = () => app.inject({ method: 'POST', url: `/api/service-tasks/${task.id}/complete`,
           headers: { 'idempotency-key': `resolve-${key}` }, payload: { employeeId: actorId, note: '经理已核实并答复顾客，保留处理结果' } })
+        const claim = (claimKey: string) => app.inject({ method: 'POST', url: `/api/service-tasks/${task.id}/acknowledge`,
+          headers: { 'idempotency-key': claimKey }, payload: { employeeId: actorId } })
         expect((await request()).statusCode).toBe(403)
+        expect((await claim(`denied-${key}`)).statusCode).toBe(403)
         actorId = approverId
+        expect((await claim(`claim-${key}`)).statusCode).toBe(200)
+        expect((await claim(`claim-${key}`)).statusCode).toBe(200)
+        expect((await new OperationsQueryService(runner).getStaffView(scope,approverId)).tasks.find(row => row.id === task.id))
+          .toMatchObject({status: 'acknowledged', sessionClosed: true, assignedEmployeeId: approverId})
         for(const mutation of ["title='rewritten'", "request_snapshot='{"+ '"tampered":true' +"}'::jsonb", "table_session_id=gen_random_uuid()"]) {
           await expect(runner.run(scope,tx=>tx.query(`UPDATE mbox.service_tasks SET ${mutation} WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[tenantId,storeId,task.id]))).rejects.toMatchObject({code:'23514'})
         }
@@ -340,7 +347,7 @@ integration('customer-left table turnover', () => {
         expect((await request()).statusCode).toBe(200)
         expect((await runner.run(scope, tx => new ServiceTaskRepository(tx).findById(task.id)))?.status).toBe('completed')
         const events = (await pool.query('SELECT event_type FROM mbox.service_task_events WHERE service_task_id=$1 ORDER BY occurred_at', [task.id])).rows.map(row => row.event_type)
-        expect(events).toEqual(['task.created','task.completed'])
+        expect(events).toEqual(['task.created','task.acknowledged','task.completed'])
         await expect(runner.run(scope, tx => tx.query("UPDATE mbox.service_tasks SET status='pending',completed_at=NULL WHERE tenant_id=$1 AND store_id=$2 AND id=$3", [tenantId,storeId,task.id]))).rejects.toMatchObject({ code: '55000' })
         await expect(runner.run(scope, tx => new ServiceTaskRepository(tx).create({ tableId,tableSessionId:fixture.sessionId,publicId:randomUUID(),taskType:'guest.complaint',title:'不能在旧桌次建立新工作',priority:'urgent',source:'guest',actor:{type:'guest'} }))).rejects.toThrow()
       } finally { await app.close(); await lowPool.end() }

@@ -227,12 +227,13 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await orderManager.page.getByRole('button', { name: '现场', exact: true }).first().click()
   await orderManager.page.getByRole('button', { name: /^W1 \d+人 · / }).click()
   await orderManager.page.getByRole('button', { name: '协助点单' }).click()
+  await assistedOrder.getByRole('button',{name:'挂桌账',exact:true}).click()
   await assistedOrder.getByRole('button', { name: '查看已选' }).click()
   await expect(assistedCart.getByPlaceholder('如：少冰、不要香菜、酒水和小食一起上')).toHaveValue('营业日验收：酒水小食一起上')
   await expect(assistedCart.getByPlaceholder('如：少冰、不放香菜').first()).toHaveValue('草稿恢复逐行备注')
   await assistedCart.getByRole('button', { name: '核对无误，确认下单' }).click()
   await assistedOrder.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
-  await expect(orderManager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText('W1 订单已挂桌并发送出品')
+  await expect(orderManager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText('W1 已挂桌账，未收齐，已送制作')
   await orderManager.context.close()
 
   const bartender = await staffPage(browser, data, 'lengyanzhi')
@@ -295,6 +296,9 @@ test('one business-day order and guest requests flow through bartender, kitchen,
   await complaintCard.getByRole('button', { name: '记录并完成' }).click()
   await expect(manager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText('投诉需要值班经理简要记录')
   await expect(complaintCard).toBeVisible()
+  await complaintCard.getByRole('button', { name: '我来跟进' }).click()
+  await expect(complaintCard).toContainText('我已接手')
+  await expect(complaintCard.getByRole('button', { name: '我来跟进' })).toHaveCount(0)
   await complaintCard.getByRole('textbox').fill('已到桌沟通并调整音量，客人表示可以')
   await complaintCard.getByRole('button', { name: '记录并完成' }).click()
   await expect(manager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText('已完成')
@@ -793,6 +797,7 @@ for(const pauseNew of (process.env.NORMALIZED_E2E_RECOVERY_PEER==='true'?[true]:
   await manager.page.getByRole('button',{name:/^W1 \d+人 · /}).click()
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const dialog=manager.page.getByRole('dialog',{name:'W1协助点单'})
+  await dialog.getByRole('button',{name:'挂桌账',exact:true}).click()
   await dialog.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await dialog.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   for(let n=0;n<2;n++)await dialog.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -867,6 +872,7 @@ for(const paid of [false,true])test(`套餐停止一份按原单点价重算，�
   await manager.page.getByRole('button',{name:/^W1 \d+人 · /}).click()
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const order=manager.page.getByRole('dialog',{name:'W1协助点单'})
+  if (!paid) await order.getByRole('button',{name:'挂桌账',exact:true}).click()
   await order.getByLabel('搜索菜单商品').fill(data.bundleProductName)
   await order.getByRole('button',{name:`加入${data.bundleProductName}`}).click()
   await order.getByRole('dialog',{name:`${data.bundleProductName}商品详情`}).getByRole('button',{name:'加入购物车'}).click()
@@ -877,13 +883,24 @@ for(const paid of [false,true])test(`套餐停止一份按原单点价重算，�
   const orderResponse=manager.page.waitForResponse(response=>response.url().endsWith('/api/commerce/orders')&&response.request().method()==='POST')
   await order.getByRole('dialog',{name:'确认上单'}).getByRole('button',{name:'确认上单'}).click()
   const originalOrder=await (await orderResponse).json()
+  async function barTaskIds(page:Page):Promise<string[]> {
+    const response=await page.request.get('/api/commerce/fulfillment')
+    expect(response.ok()).toBe(true)
+    const {data}=await response.json() as {data:{workItems:{order:{id:string};stationCode:string;taskId:string}[]}}
+    return data.workItems.filter(task=>task.order.id===originalOrder.id && task.stationCode==='bar')
+      .map(task=>task.taskId).sort()
+  }
+  let initialTasks:string[]=[]
   if(paid){
     const collected=await manager.page.request.post('/api/payments/manual',{headers:{'idempotency-key':`qa-bundle-cash-${Date.now()}`},data:{orderId:originalOrder.id,provider:'cash',method:'cash',receiptReference:''}})
     expect(collected.ok(),await collected.text()).toBe(true)
+    initialTasks=await barTaskIds(manager.page)
+    expect(initialTasks.length).toBeGreaterThan(0)
   }
   await expect(order).toHaveCount(0)
   const details=manager.page.getByRole('region',{name:'W1本桌点单详情'})
-  const child=details.locator('.staff-table-order-status-item').filter({hasText:'吧台'}).filter({has:manager.page.getByRole('button',{name:'处理套餐内商品'})}).first()
+  const originalCard=details.locator('article').filter({has:manager.page.getByTitle(originalOrder.publicId,{exact:true})})
+  const child=originalCard.locator('.staff-table-order-status-item').filter({hasText:'吧台'}).filter({has:manager.page.getByRole('button',{name:'处理套餐内商品'})}).first()
   const loaded=manager.page.waitForResponse(response=>response.url().includes('/api/commerce/item-after-sales/items/')&&response.request().method()==='GET')
   await child.getByRole('button',{name:'处理套餐内商品'}).click()
   const original=(await (await loaded).json()).data.item as {name:string;quantity:number}
@@ -917,6 +934,27 @@ for(const paid of [false,true])test(`套餐停止一份按原单点价重算，�
   const bartender=await staffPage(browser,data,'lengyanzhi')
   await bartender.page.getByRole('button',{name:'吧台出品',exact:true}).first().click()
   const task=bartender.page.locator('.staff-action-card').filter({hasText:note}).filter({hasText:original.name}).first()
+  if (paid) {
+    // The retained components total ¥718 at their original single prices. The original cash receipt was ¥628.
+    expect(await barTaskIds(bartender.page)).toEqual([])
+    await expect(task).toHaveCount(0)
+    const deskRead=await manager.page.request.get(`/api/commerce/table-sessions/${originalOrder.tableSessionId}/order-details`)
+    expect(deskRead.ok()).toBe(true)
+    const deskOrders=await deskRead.json()
+    expect(deskOrders.data.find((entry:{publicId:string})=>entry.publicId===originalOrder.publicId)).toMatchObject({
+      productionMessage:'本单尚欠款，已暂停制作。请收银核对原单差额',outstandingAmountMinor:9000,
+    })
+    const alerts=await manager.page.request.get('/api/hardware/print-alerts')
+    expect(alerts.ok()).toBe(true)
+    expect((await alerts.json()).data.orders).toContainEqual(expect.objectContaining({orderNumber:originalOrder.publicId,issue:'blocked',dueMinor:9000}))
+    const balance=await manager.page.request.post('/api/payments/manual',{
+      headers:{'idempotency-key':`qa-bundle-difference-${originalOrder.id}`},
+      data:{orderId:originalOrder.id,provider:'cash',method:'cash',receiptReference:''},
+    })
+    expect(balance.ok(),await balance.text()).toBe(true)
+    expect((await balance.json()).data).toMatchObject({orderId:originalOrder.id,status:'succeeded',amountMinor:9000})
+    expect(await barTaskIds(bartender.page)).toEqual(initialTasks)
+  }
   await expect(task).toContainText('已停止 1')
   await task.getByRole('spinbutton').fill(String(original.quantity-1))
   await task.getByRole('button',{name:'制作完成',exact:true}).click()
@@ -957,6 +995,7 @@ for(const staffCode of ['liyan','tom']) test(`商品售后入口停止部分未�
   const initialUndelivered=Number((await initialDetails.innerText()).match(/未上 (\d+) 份/)?.[1]??0)
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const order=manager.page.getByRole('dialog',{name:'W1协助点单'})
+  await order.getByRole('button',{name:'挂桌账',exact:true}).click()
   await order.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await order.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   for(let n=0;n<2;n++)await order.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -1421,7 +1460,11 @@ test('换品新单丢回执后从原商品读回关联，不重复建单且旧�
   const successor=await successorResponse
   expect(successor.ok(),await successor.text()).toBe(true)
   expect(successor.request().postDataJSON().replacementPreviousOrderId).toBe(firstNewId)
-  expect((await successor.json()).id).not.toBe(firstNewId)
+  const nextOrder=await successor.json()
+  expect(nextOrder.id).not.toBe(firstNewId)
+  expect(nextOrder).toMatchObject({paymentStatus:'unpaid',settlementMode:'immediate_payment'})
+  await expect(panel.getByRole('status').filter({hasText:'待收款，未送制作'})).toBeVisible()
+  await sheet.getByRole('button',{name:'关闭点单'}).click()
   await expect(sheet).toHaveCount(0)
   await expect(panel).toContainText('暂停 1 · 已停止 0')
   await expect(panel.getByRole('button',{name:'重新换品，另开新单'})).toHaveCount(0)
@@ -1440,6 +1483,7 @@ test('原实物补送丢回执恢复原任务，手机按份数确认并取消�
   await expect(manager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText(`${tableCode} 已开台，2人`)
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const sheet=manager.page.getByRole('dialog',{name:`${tableCode}协助点单`})
+  await sheet.getByRole('button',{name:'挂桌账',exact:true}).click()
   await sheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await sheet.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   await sheet.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -1535,6 +1579,7 @@ test('岗位按份重做丢回执恢复，新批逐份完成并保留原金额',
   await expect(manager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText(`${tableCode} 已开台，2人`)
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const sheet=manager.page.getByRole('dialog',{name:`${tableCode}协助点单`})
+  await sheet.getByRole('button',{name:'挂桌账',exact:true}).click()
   await sheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await sheet.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   await sheet.getByRole('button',{name:`增加${data.orderableProductName}`}).click()
@@ -1597,6 +1642,7 @@ for(const decision of ['approved','rejected'] as const)test(`未付已制作商�
   await expect(manager.page.locator('.normalized-staff-action-shell').getByRole('status')).toContainText(`${tableCode} 已开台，2人`)
   await manager.page.getByRole('button',{name:'协助点单'}).click()
   const order=manager.page.getByRole('dialog',{name:`${tableCode}协助点单`})
+  await order.getByRole('button',{name:'挂桌账',exact:true}).click()
   await order.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await order.getByRole('button',{name:`加入${data.orderableProductName}`}).click()
   await order.getByRole('button',{name:`增加${data.orderableProductName}`}).click()

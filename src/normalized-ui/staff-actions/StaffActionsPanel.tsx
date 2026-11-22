@@ -1,3 +1,5 @@
+import {SessionMoneySummary} from '../SessionMoneySummary'
+import {beijingDisplayTime} from '../beijing-display-time'
 import { TableGuestCountEditor } from './TableGuestCountEditor'
 import type { GuestCountChange } from './staff-actions-api'
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
@@ -876,6 +878,24 @@ export function StaffActionsPanel({
     }
   }
 
+  const acknowledgeComplaint = async (task: StaffServiceTask) => {
+    const key = `service:${task.id}`
+    if (actionLocksRef.current.has(key)) return
+    actionLocksRef.current.add(key)
+    setPendingAction(key)
+    try {
+      await api.acknowledgeComplaint(task.id)
+      showNotice({ kind: 'success', message: '已接手客诉，处理后请记录结果' })
+    } catch (error) {
+      showNotice({ kind: 'error', message: actionError(error, '接手结果待核对，请查看最新负责人') })
+    } finally {
+      try { await load(true) } finally {
+        actionLocksRef.current.delete(key)
+        setPendingAction(null)
+      }
+    }
+  }
+
   const completeServiceTask = async (task: StaffServiceTask) => {
     if (operations === null) return
     if (!hasPermission(permissions, 'service.execute')) return revealPermissionGuidance('service.execute')
@@ -1218,8 +1238,9 @@ export function StaffActionsPanel({
                       <strong>{table.code}</strong>
                       <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${`${table.activeSession.status === 'closing' ? '结台中 · ' : ''}${tableFinancialLabel(table.activeSession.financialState)}`}`}</span>
                       {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
-                      {table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
+                      {table.activeSession?.grossCollectedAmountMinor === undefined && table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
                       {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
+                      {table.activeSession && (table.activeSession.orderCount > 0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
                       {mood !== null && (
@@ -1360,10 +1381,14 @@ export function StaffActionsPanel({
                 <strong>{task.tableCode} · {task.title}</strong>
                 {task.detail !== null && <p>{task.detail}</p>}
                 <small>{task.interactionMode === 'manager_resolution'
-                  ? '值班经理处理 · 需留结果'
+                  ? [task.sessionClosed ? `原桌次已结台 · ${beijingDisplayTime(task.createdAt)} 的客诉` : '值班经理处理', task.assignedEmployeeId === operations?.actor.id ? '我已接手' : task.assignedEmployeeId ? `跟进人：${task.assignedEmployeeName || '已指派'}` : '待接手', '需留结果'].join(' · ')
                   : task.assignedToActor
                     ? '我负责的桌台 · 一键完成'
                     : task.priority === 'urgent' ? '紧急' : task.priority === 'high' ? '优先处理' : '待处理'}</small>
+                {task.interactionMode === 'manager_resolution' && task.status === 'pending' && !task.assignedEmployeeId
+                  && permissions.includes('service.manage') && permissions.includes('service.execute') && (
+                  <button type="button" onClick={() => void acknowledgeComplaint(task)} disabled={pendingAction === `service:${task.id}`}>我来跟进</button>
+                )}
                 {task.interactionMode === 'manager_resolution' && (
                   <input
                     className="staff-resolution-note"
@@ -1952,6 +1977,7 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
+      {table.activeSession && !sessionSyncing && (table.activeSession.orderCount>0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
       {table.activeSession&&!sessionSyncing&&(
           <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
             {hasTableCollectionPermission(props.permissions) && (

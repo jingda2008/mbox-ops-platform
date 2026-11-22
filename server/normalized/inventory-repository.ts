@@ -187,6 +187,7 @@ interface DemandRow extends Record<string, unknown> {
 }
 
 interface LockedBalanceRow extends Record<string, unknown> {
+  unit_cost_minor: string | null;
   item_name?:string; base_unit?:string;
   inventory_item_id: string;
   sku: string;
@@ -1696,11 +1697,13 @@ export class InventoryRepository {
     if (demand.length === 0) return [];
     const locked = await this.lockRequiredBalances(demand);
     this.assertBalancesSufficient(demand, locked);
+    const costs = new Map(locked.map(balance => [balance.inventory_item_id, balance.unit_cost_minor]));
     const results: InventoryConsumption[] = [];
     for (const row of demand) {
       const movement = await this.insertMovement({
         inventoryItemId: row.inventory_item_id,
         movementType: "sale",
+        unitCostMinor: costs.get(row.inventory_item_id) ?? null,
         quantityDelta: `-${normalizeDecimal(row.required_quantity)}`,
         referenceType: "order_item",
         referenceId: row.order_item_id,
@@ -2606,6 +2609,7 @@ export class InventoryRepository {
       )
       SELECT balance.inventory_item_id, required.sku, inventory_item.name AS item_name,inventory_item.base_unit, balance.on_hand_quantity::text,
         balance.reserved_quantity::text, required.required_quantity::text,
+        CASE WHEN balance.cost_status='complete' THEN balance.weighted_unit_cost_minor::text END AS unit_cost_minor,
         (balance.on_hand_quantity - balance.reserved_quantity < required.required_quantity) AS insufficient
       FROM required
       JOIN mbox.inventory_balances AS balance ON balance.tenant_id = $1::uuid AND balance.store_id = $2::uuid

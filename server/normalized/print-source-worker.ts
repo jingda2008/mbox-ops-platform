@@ -63,6 +63,14 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
       delivery_batch: 'materializeDeliveryBatch',
     } as const
     const jobs = await repository[method[source.ticket_kind]](source.source_outbox_message_id, source.aggregate_id)
+    if (source.ticket_kind === 'production' && repository.skipReason === 'print_order_payment_required') {
+      // Keep the unique original source. A later receipt may activate this order.
+      await tx.query(`UPDATE mbox.print_source_jobs SET status='pending',next_attempt_at=clock_timestamp()+interval '1 minute',
+        last_error_code='print_order_payment_required' WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,
+        [tx.scope.tenantId,tx.scope.storeId,id])
+      await tx.query('RELEASE SAVEPOINT print_materialization')
+      return 'retrying'
+    }
     const status = jobs.length > 0 ? 'completed' : 'skipped'
     await tx.query(`UPDATE mbox.print_source_jobs SET status=$4,attempts=attempts+1,
       job_count=$5,completed_at=clock_timestamp(),last_error_code=$6

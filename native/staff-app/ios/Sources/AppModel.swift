@@ -1964,7 +1964,7 @@ import SwiftUI
     liveOrderPending = nil
     lastOrderReceipt = receipt
     message =
-      "订单已确认：" + receipt.publicId + " · " + money(receipt.totalAmountMinor) + "。收款状态请在原订单核对。"
+      "订单已确认：" + receipt.publicId + " · " + money(receipt.totalAmountMinor) + " · " + (receipt.productionMessage.map { "提交时：" + $0 } ?? "收款状态请在原订单核对。")
   }
   func verifyReplacementReceipt(_ command: LiveOrderSubmission) async throws -> LiveOrderSubmission
   {

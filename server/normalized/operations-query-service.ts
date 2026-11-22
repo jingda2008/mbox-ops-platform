@@ -1,6 +1,7 @@
 import {currentRefundAttemptSql} from './refund-attempt-sql.js'
 import {resolveFulfillmentAllowedStations} from './fulfillment-query-service.js'
-import { orderNeedsCollectionSql, orderReceivableSql } from './order-collection-sql.js'
+import {sessionMoneySql} from './session-money-sql.js'
+import { orderReceivableSql } from './order-collection-sql.js'
 import type { JsonObject } from './command-executor.js'
 import { orderHistoryAccess } from './order-history-access.js'
 import { readOperatingHistory, type OperatingHistoryFilter } from './operating-history-query.js'
@@ -54,6 +55,12 @@ export interface OperationsTableView {
     refundActionCount: number
     refundProcessingCount: number
     refundedAmountMinor: number
+    grossCollectedAmountMinor?: number
+    outstandingAmountMinor?: number
+    cashAmountMinor?: number
+    prepaidReceivedMinor?: number
+    prepaidAvailableMinor?: number
+    cashPaymentCount?: number
     netCollectedAmountMinor: number
     orderAmountMinor: number
     status: 'open' | 'closing'
@@ -62,6 +69,8 @@ export interface OperationsTableView {
 }
 
 export interface OperationsTaskView {
+  sessionClosed: boolean
+  assignedEmployeeName: string | null
   id: string
   publicId: string
   tableId: string
@@ -133,12 +142,19 @@ interface TableRow extends Record<string, unknown> {
   refund_processing_count: number | null
   refunded_amount_minor: string | number | null
   gross_collected_minor: string | number | null
+  due_minor: number | string | null
+  cash_minor: number | string | null
+  prepaid_received: string | number | null
+  prepaid_available: string | number | null
+  cash_count: number | null
   order_amount_minor: string | number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
 }
 
 interface TaskRow extends Record<string, unknown> {
+  session_closed: boolean
+  assigned_employee_name: string | null
   id: string
   public_id: string
   table_id: string
@@ -286,17 +302,17 @@ export async function readTables(
       CASE
         WHEN COALESCE(finance.payment_exception_count,0)>0 THEN 'payment_exception'
         WHEN COALESCE(finance.refund_attention_count,0)>0 THEN 'refund_pending'
-        WHEN COALESCE(finance.pending_payment_count,0)>0 THEN 'payment_pending'
-        WHEN COALESCE(finance.unpaid_order_count,0)>0 THEN 'unpaid'
-        WHEN COALESCE(finance.refunded_amount_minor,0)>0 AND finance.refunded_amount_minor>=finance.gross_collected_minor THEN 'refunded'
-        WHEN COALESCE(finance.refunded_amount_minor,0)>0 THEN 'partially_refunded'
+        WHEN COALESCE(money.pending_payment_count,0)>0 AND money.due_minor>0 THEN 'payment_pending'
+        WHEN COALESCE(money.unpaid_order_count,0)>0 THEN 'unpaid'
+        WHEN COALESCE(money.refunded_amount_minor,0)>0 AND money.refunded_amount_minor>=money.gross_collected_minor THEN 'refunded'
+        WHEN COALESCE(money.refunded_amount_minor,0)>0 THEN 'partially_refunded'
         WHEN COALESCE(finance.order_count,0)>0 THEN 'paid'
         WHEN COALESCE(finance.cancelled_order_count,0)>0 THEN 'cancelled'
         ELSE 'no_order'
       END AS financial_state,
-      finance.order_count,finance.unpaid_order_count,finance.pending_payment_count,
+      finance.order_count,money.unpaid_order_count,money.pending_payment_count,
       finance.refund_attention_count,finance.refund_action_count,finance.refund_processing_count,
-      finance.order_amount_minor, finance.refunded_amount_minor, finance.gross_collected_minor,
+      money.prepaid_received,money.prepaid_available,money.due_minor,money.cash_minor,money.cash_count,finance.order_amount_minor, money.refunded_amount_minor, money.gross_collected_minor,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -328,25 +344,11 @@ export async function readTables(
         (SELECT COALESCE(sum(${orderReceivableSql('ordering')}),0)::bigint FROM mbox.orders ordering
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
             AND ordering.table_session_id=session.id AND ordering.status NOT IN ('draft','cancelled')) AS order_amount_minor,
-        (SELECT count(*)::integer FROM mbox.orders ordering
-          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
-            AND ordering.table_session_id=session.id AND ${orderNeedsCollectionSql('ordering')}) AS unpaid_order_count,
         (SELECT count(*)::integer FROM mbox.orders ordering WHERE ordering.tenant_id=session.tenant_id
           AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id AND ordering.status='cancelled') AS cancelled_order_count,
-        (SELECT COALESCE(sum(payment.amount_minor),0)::bigint FROM mbox.order_payment_facts payment
-          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
-          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id
-            AND payment.status IN ('succeeded','partially_refunded','refunded')) AS gross_collected_minor,
-        (SELECT COALESCE(sum(refund.amount_minor),0)::bigint FROM mbox.refunds refund
-          JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id AND payment.store_id=refund.store_id
-            AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
-          JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
-          WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id AND ordering.table_session_id=session.id
-            AND refund.status='succeeded') AS refunded_amount_minor,
-        0::integer AS pending_payment_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id=payment.order_id OR (refund.order_id IS NULL AND payment.payable_kind='order'))
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
@@ -354,7 +356,7 @@ export async function readTables(
             AND refund.status IN ('requested','approved','processing','failed') AND ${currentRefundAttemptSql('refund')}) AS refund_attention_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id=payment.order_id OR (refund.order_id IS NULL AND payment.payable_kind='order'))
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
@@ -362,7 +364,7 @@ export async function readTables(
             AND refund.status IN ('requested','approved','failed') AND ${currentRefundAttemptSql('refund')}) AS refund_action_count,
         (SELECT count(*)::integer FROM mbox.refunds refund
           JOIN mbox.order_payment_facts payment ON payment.tenant_id=refund.tenant_id
-            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
+            AND payment.store_id=refund.store_id AND payment.id=refund.payment_id AND (refund.order_id=payment.order_id OR (refund.order_id IS NULL AND payment.payable_kind='order'))
           JOIN mbox.orders ordering ON ordering.tenant_id=payment.tenant_id
             AND ordering.store_id=payment.store_id AND ordering.id=payment.order_id
           WHERE ordering.tenant_id=session.tenant_id AND ordering.store_id=session.store_id
@@ -393,6 +395,7 @@ export async function readTables(
                          =(receipt.tenant_id,receipt.store_id,receipt.order_id,receipt.id)
                        AND r.status='succeeded'),0))) AS payment_exception_count
     ) finance ON session.id IS NOT NULL
+    LEFT JOIN LATERAL (${sessionMoneySql}) money ON session.id IS NOT NULL
     WHERE venue_table.tenant_id = $1::uuid
       AND venue_table.store_id = $2::uuid
       AND venue_table.status <> 'retired'
@@ -420,10 +423,10 @@ async function readTasks(
   target?: { taskId: string; tableSessionId: string },
 ): Promise<OperationsTaskView[]> {
   const result = await transaction.query<TaskRow>(`
-    SELECT task.id, task.public_id, session.table_id, venue_table.code AS table_code,
+    SELECT task.id, task.public_id, session.table_id, session.status='closed' AS session_closed, venue_table.code AS table_code,
       task.table_session_id, task.task_type, task.title, task.detail, task.priority,
       task.status, task.source, task.requested_role_code, task.assigned_employee_id,
-      task.backup_employee_id,
+      task.backup_employee_id, assignee.display_name AS assigned_employee_name,
       (SELECT original.order_item_id::text FROM mbox.quantity_redeliveries original WHERE original.tenant_id=task.tenant_id AND original.store_id=task.store_id AND original.service_task_id=task.id) AS original_order_item_id,
       (
         task.assigned_employee_id = $3::uuid
@@ -442,6 +445,8 @@ async function readTasks(
         THEN 'manager_resolution' ELSE 'quick_complete' END AS interaction_mode,
       task.due_at::text, task.escalate_at::text, task.created_at::text
     FROM mbox.service_tasks task
+    LEFT JOIN mbox.employees assignee ON task.task_type='guest.complaint'
+      AND (assignee.tenant_id,assignee.store_id,assignee.id)=(task.tenant_id,task.store_id,task.assigned_employee_id)
     JOIN mbox.table_sessions session
       ON session.tenant_id=task.tenant_id AND session.store_id=task.store_id
       AND session.id=task.table_session_id
@@ -492,6 +497,8 @@ async function readTasks(
     tableId: row.table_id,
     tableCode: row.table_code,
     tableSessionId: row.table_session_id,
+    sessionClosed: row.session_closed,
+    assignedEmployeeName: row.assigned_employee_name,
     taskType: row.task_type,
     title: row.title,
     detail: row.detail,
@@ -540,7 +547,8 @@ function mapTable(row: TableRow): OperationsTableView {
       refundActionCount: row.refund_action_count ?? 0,
       refundProcessingCount: row.refund_processing_count ?? 0,
       refundedAmountMinor: safeMinor(row.refunded_amount_minor),
-      netCollectedAmountMinor: Math.max(0, safeMinor(row.gross_collected_minor) - safeMinor(row.refunded_amount_minor)),
+      ...(row.due_minor != null ? {grossCollectedAmountMinor:safeMinor(row.gross_collected_minor), outstandingAmountMinor:safeMinor(row.due_minor), prepaidReceivedMinor:safeMinor(row.prepaid_received),prepaidAvailableMinor:safeMinor(row.prepaid_available),cashAmountMinor:safeMinor(row.cash_minor), cashPaymentCount:row.cash_count ?? 0} : {}),
+      netCollectedAmountMinor: safeMinor(row.gross_collected_minor) - safeMinor(row.refunded_amount_minor),
       orderAmountMinor: safeMinor(row.order_amount_minor),
       status: row.session_status!,
       openedAt: row.opened_at!,

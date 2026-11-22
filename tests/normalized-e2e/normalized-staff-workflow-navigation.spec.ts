@@ -338,3 +338,77 @@ test('return-state memory is cleared when another employee signs in', async ({ p
   await page.getByRole('button', { name: '现场', exact: true }).first().click()
   await expect(page.getByLabel('搜索桌号或区域')).toHaveValue('')
 })
+
+test('320px live table and cashier show the three VIP8 money snapshots without reopening a refunded order', async ({page}) => {
+  await page.setViewportSize({width:320,height:844})
+  await login(page)
+  const operations = await readOperations(page)
+  const source = operations.tables.find(t=>t.activeSession)
+  expect(source?.activeSession).toBeTruthy()
+  const baseline = (await (await page.request.get('/api/payments/workbench?limit=20')).json()).data
+  const now = new Date().toISOString()
+  const snapshots = [
+    {gross:1201,refund:0,due:792,count:3,cash:0},
+    {gross:1201,refund:1201,due:792,count:3,cash:0},
+    {gross:3173,refund:1201,due:0,count:0,cash:1972},
+  ]
+  let readFailed=false
+  let state = snapshots[0]!
+  const money = ()=>({grossCollectedAmountMinor:state.gross*100,refundedAmountMinor:state.refund*100,
+    netCollectedAmountMinor:(state.gross-state.refund)*100,outstandingAmountMinor:state.due*100,
+    unpaidOrderCount:state.count,pendingPaymentCount:0,cashAmountMinor:state.cash*100,cashPaymentCount:state.cash?1:0})
+  await page.route('**/api/operations',route=>route.fulfill({json:{data:{...operations,tables:[{...source,code:'VIP8',
+    activeSession:{...source!.activeSession,orderCount:8,financialState:state.due?'unpaid':'partially_refunded',...money()}}]}}}))
+  await page.route('**/api/payments/workbench?*',route=>{
+    if(readFailed) return route.fulfill({status:503,json:{error:{code:'UNAVAILABLE'}}})
+    const refund = {id:'vip8-refund',publicId:'refund-321',paymentId:'scan-321',amountMinor:32100,status:'succeeded',currency:'CNY',
+      providerSubmissionState:'submitted',requestedByEmployeeName:'测试服务员',reason:'隔离展示回放',completedAt:now,createdAt:now,allocations:[]}
+    const payment = {id:'scan-321',publicId:'SCAN-321',provider:'postar',method:'native_qr',amountMinor:32100,currency:'CNY',
+      status:state.refund?'refunded':'succeeded',createdAt:now,succeededAt:now,reservedRefundAmountMinor:0,remainingRefundableMinor:state.refund?0:32100,
+      providerTransactionId:'test-321',providerActionState:null,retryReleasedAt:null,refundableItems:[],refunds:state.refund?[refund]:[]}
+    const order = {id:'order-321',publicId:'VIP8-7339c7',tableCode:'VIP8',tableSessionId:source!.activeSession!.id,tableSessionStatus:'open',
+      channel:'staff_assisted',status:'submitted',paymentStatus:state.refund?'refunded':'paid',totalAmountMinor:32100,
+      outstandingAmountMinor:state.refund?32100:0,overCollectedAmountMinor:0,currency:'CNY',createdAt:now,submittedAt:now,
+      items:[],kdsTasks:[],payments:[payment]}
+    return route.fulfill({json:{data:{...baseline,query:'VIP8',selectedTable:{tableCode:'VIP8',sessionId:source!.activeSession!.id,businessDate:'2026-11-21',money:money()},orders:[order],activityRegistrations:[]}}})
+  })
+  for (const snapshot of snapshots) {
+    state=snapshot
+    await page.goto('/staff/live')
+    const tile=page.locator('.staff-table-tile').filter({hasText:'VIP8'})
+    await expect(tile).toBeVisible()
+    await tile.click()
+    const floor=page.getByRole('dialog',{name:/VIP8.*桌台操作/}).getByLabel('本桌次收退款')
+    await pageCheck(floor)
+    await page.goto('/staff/payments?query=VIP8')
+    const cashier=page.getByRole('region',{name:'查询桌次实收'})
+    await pageCheck(cashier)
+    if(state.refund) {
+      const original=page.locator('[data-cashier-order-id="order-321"]')
+      await expect(original.getByRole('button',{name:'收款',exact:true})).toHaveCount(0)
+      await expect(original.getByRole('button',{name:'查看退款记录'})).toBeVisible()
+      await expect(original).toContainText('本单已收 ¥321.00 · 已退 ¥321.00 · 净收 ¥0.00')
+    }
+  }
+
+  readFailed=true
+  await page.getByRole('button',{name:'刷新收银与退款'}).click()
+  const cashier=page.getByRole('region',{name:'查询桌次实收'})
+  await expect(cashier.getByRole('status')).toContainText('当前结果待核对')
+  await expect(cashier).toContainText('净收 ¥1972.00')
+  readFailed=false
+  await page.getByRole('button',{name:'重新读取订单',exact:true}).click()
+  await expect(cashier.getByRole('status')).toHaveCount(0)
+  await expect(cashier).toContainText('待收 ¥0.00')
+
+  async function pageCheck(region:ReturnType<Page['getByLabel']>) {
+    await expect(region).toContainText('累计已收 ¥'+state.gross.toFixed(2))
+    await expect(region).toContainText('已退 ¥'+state.refund.toFixed(2))
+    await expect(region).toContainText('净收 ¥'+(state.gross-state.refund).toFixed(2))
+    await expect(region).toContainText('待收 ¥'+state.due.toFixed(2)+'（'+state.count+' 单）')
+    if (state.cash) await expect(region).toContainText('收银登记 1 笔，共 ¥1972.00')
+    const rect=await region.boundingBox()
+    expect(rect!.y+rect!.height).toBeLessThanOrEqual(844)
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(320)
+  }
+})

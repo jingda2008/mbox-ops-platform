@@ -846,7 +846,7 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
     try{
       const list=await app.inject({method:'GET',url:'/payments/finance-review'})
       expect(list.statusCode).toBe(200)
-      expect(list.json().data.map((row:{id:string})=>row.id)).toContain(pending.id)
+      expect(list.json().data.find((row:{id:string})=>row.id===pending.id)?.linkedOrdersDueMinor).toBe('7300')
       const financeTransaction=`finance-tx-${randomUUID()}`
       const financeProof=await providerObservationRecorder.recordPayment({scope:{tenantId,storeId},provider:'postar',
         verificationKind:'active_query_binding',providerEventId:`finance-proof-${randomUUID()}`,integrationRef:'postar-active-query',

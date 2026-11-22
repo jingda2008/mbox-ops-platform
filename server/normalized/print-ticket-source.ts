@@ -38,6 +38,9 @@ interface OrderContextRow extends Record<string, unknown> {
   total_amount_minor: string | number
   currency: string
   payment_status: string
+  production_terminal?: boolean
+  production_allowed?: boolean
+  unpaid_tab_due?: string
   table_code: string
   guest_count: number
   business_date: string
@@ -480,8 +483,12 @@ export class PrintTicketSourceRepository {
     sourceOutboxMessageId: string,
     orderId: string,
   ): Promise<readonly PrintJob[]> {
-    const context = await this.loadOrderContext(orderId)
+    const context = await this.loadOrderContext(orderId, true)
     if (context.order_status === 'cancelled' || context.order_status === 'draft') {this.explicitSkipReason='print_order_not_active';return []}
+    if (!context.production_allowed) {
+      this.explicitSkipReason = context.production_terminal ? 'print_order_not_active' : 'print_order_payment_required'
+      return []
+    }
     const originals = await this.loadItems(orderId, true)
     const quantities=(await this.transaction.query<{order_item_id:string;quantity:number}>(`SELECT unit.order_item_id,count(*) FILTER(WHERE unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped AND unit.production_state IN ('unmade','started') AND NOT EXISTS(SELECT 1 FROM mbox.quantity_remake_units remake WHERE remake.tenant_id=unit.tenant_id AND remake.store_id=unit.store_id AND remake.unit_id=unit.id) AND NOT EXISTS(
       SELECT 1 FROM mbox.item_after_sales_case_units selected JOIN mbox.item_after_sales_events event ON event.tenant_id=selected.tenant_id AND event.store_id=selected.store_id AND event.case_id=selected.case_id AND event.event_type='operating.resume'
@@ -697,10 +704,14 @@ export class PrintTicketSourceRepository {
     return {...row,original_amount_minor:original,stopped_amount_minor:stopped,total_amount_minor:original-stopped}
   }
 
-  private async loadOrderContext(orderId: string): Promise<OrderContextRow> {
+  private async loadOrderContext(orderId: string, forProduction = false): Promise<OrderContextRow> {
     const result = await this.transaction.query<OrderContextRow>(`
       SELECT ordering.id AS order_id, ordering.public_id AS order_public_id,
         ordering.status AS order_status, ordering.settlement_mode, ordering.subtotal_amount_minor, ordering.discount_amount_minor,
+        ${forProduction ? `(session.status NOT IN ('open','closing') OR ordering.fulfillment_state IN ('released','cancelled')) AS production_terminal,
+        mbox.order_production_allowed(ordering.tenant_id,ordering.store_id,ordering.id) AS production_allowed,
+        CASE WHEN ordering.channel='staff_assisted' AND ordering.settlement_mode='table_tab' AND ordering.created_by_employee_id IS NOT NULL
+          THEN mbox.order_collection_due_amount_for_mode(ordering.tenant_id,ordering.store_id,ordering.id,true) ELSE 0 END AS unpaid_tab_due,` : ''}
         ordering.note AS order_note, ordering.total_amount_minor, ordering.currency,
         ordering.payment_status, venue_table.code AS table_code, session.guest_count,
         ordering.business_date::text, ordering.submitted_at::text
@@ -925,7 +936,7 @@ function productionSnapshot(
 ): PrintTicketSnapshot {
   return createPrintTicketSnapshot({
     kind: station === 'bar' ? 'bar_production' : 'kitchen_production',
-    subtitle: categoryCode === null ? 'M-BOX · 现场出品' : `M-BOX · ${categoryCode}`,
+    subtitle: [Number(context.unpaid_tab_due) > 0 ? `员工挂账 · 制票时待收 ¥${(Number(context.unpaid_tab_due) / 100).toFixed(2)}` : null, categoryCode ?? '现场出品'].filter(Boolean).join(' · ').slice(0,80),
     test: false,
     issuedAt: context.submitted_at,
     businessDate: context.business_date,

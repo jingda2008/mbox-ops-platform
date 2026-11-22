@@ -1,3 +1,4 @@
+import { seedProductionReceipt } from './production-receipt.test-helper.js'
 import {QuantityRemakeRepository} from './quantity-remake-repository.js'
 import {QuantityRemakeFulfillmentRepository} from './quantity-remake-fulfillment-repository.js'
 import { randomUUID } from 'node:crypto'
@@ -252,6 +253,7 @@ integration('Fulfillment capacity PostgreSQL concurrency and lifecycle', () => {
       new FulfillmentCapacityRepository(transaction).reserveForImmediatePaymentOrder(losingOrderId)
     ))).resolves.toBe(1)
 
+    await seedProductionReceipt(pool, losingOrderId)
     await pool.query(`
       UPDATE mbox.orders
       SET payment_status='paid', fulfillment_state='active',
@@ -328,6 +330,7 @@ integration('Fulfillment capacity PostgreSQL concurrency and lifecycle', () => {
     await pool.query("UPDATE mbox.fulfillment_capacity_policy_versions SET status='published',published_by_employee_id=$2 WHERE id=$1",[policy,capacityPublisherId])
     await insertImmediateOrder(pool,{...local,sessionId,orderId:original,itemId:item,productId:barProductId,station:'bar',suffix:`quantity-${original}`,quantity:5})
     await transactions.run(local,tx=>new FulfillmentCapacityRepository(tx).reserveForImmediatePaymentOrder(original))
+    await seedProductionReceipt(pool, original)
     await pool.query("UPDATE mbox.orders SET payment_status='paid',fulfillment_state='active',fulfillment_expires_at=NULL,fulfillment_activated_at=clock_timestamp() WHERE id=$1",[original])
     await transactions.run(local,tx=>new FulfillmentCapacityRepository(tx).activateForPaidOrder(original))
     await pool.query("UPDATE mbox.order_items SET product_snapshot='{\"name\":\"产能测试商品\",\"inventoryControlMode\":\"not_managed\"}' WHERE id=$1",[item])

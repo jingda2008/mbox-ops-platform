@@ -21,7 +21,7 @@ const STATUS_PRESENTATION: Record<StaffTableOrderItemFulfillmentStatus, {
   ready_for_delivery: { label: '待送达', detail: '已做好，等送上桌', className: 'is-ready' },
   preparing: { label: '制作中', detail: '正在制作', className: 'is-preparing' },
   pending: { label: '待制作', detail: '尚未开始制作', className: 'is-pending' },
-  awaiting_payment: { label: '待付款', detail: '付款后才会出品', className: 'is-pending' },
+  awaiting_payment: { label: '待收款，未送制作', detail: '本单收齐后送制作', className: 'is-pending' },
   not_required: { label: '无需出品', detail: '不需要送达', className: 'is-neutral' },
   cancelled: { label: '已取消', detail: '不再出品', className: 'is-neutral' },
   attention: { label: '待处理', detail: '请联系吧台或店长核对', className: 'is-attention' },
@@ -116,6 +116,9 @@ function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderSta
             <div className="staff-table-order-status-list">
               {orders.map((order) => <article key={order.publicId}>
                 <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.paymentStatus === 'refunded' ? '已退款 · ' : order.paymentStatus === 'partially_refunded' ? '含退款 · ' : ''}{order.items.length} 个商品</small></header>
+                {order.receipts?.map(r=><p key={r.publicId}>{({cash:'现金（收银登记）',physical_pos:'实体POS登记',external_manual:'其他线下登记',wechat:'微信支付',postar:'星驿支付',simulation:'模拟支付'})[r.provider]}
+                  {' · '}{shortOrderLabel(r.publicId)} · {r.shared?'本单分摊':'已收'} ¥{(r.amountMinor/100).toFixed(2)} · 已退 ¥{(r.refundMinor/100).toFixed(2)} · 净收 ¥{((r.amountMinor-r.refundMinor)/100).toFixed(2)}</p>)}
+                {order.productionMessage && <p>{order.productionMessage}</p>}
                 {order.replacementSource&&<p>换品新单 · 原单 {shortOrderLabel(order.replacementSource.orderPublicId)}；分别收退款。
                   {afterSalesAccess&&(afterSalesAccess.enabled||afterSalesAccess.recoveryAvailable)&&<button type="button" onClick={()=>openAfterSales(order.replacementSource!.orderItemId)}>查看换品原商品</button>}</p>}
                 {order.items.map((item) => {

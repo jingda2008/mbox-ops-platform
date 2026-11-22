@@ -45,6 +45,12 @@ export interface StaffActionTableSession {
   refundActionCount?: number
   refundProcessingCount?: number
   refundedAmountMinor?: number
+  grossCollectedAmountMinor?: number
+  outstandingAmountMinor?: number
+  prepaidReceivedMinor?: number
+  prepaidAvailableMinor?: number
+  cashPaymentCount?: number
+  cashAmountMinor?: number
   netCollectedAmountMinor?: number
   orderAmountMinor?: number
 }
@@ -64,6 +70,8 @@ export interface StaffActionTable {
 }
 
 export interface StaffServiceTask {
+  sessionClosed?: boolean
+  assignedEmployeeName?: string | null
   originalOrderItemId?:string|null
   id: string
   taskType: string
@@ -267,6 +275,10 @@ export type StaffTableOrderItemFulfillmentStatus =
   | 'attention'
 
 export interface StaffTableOrderDetail {
+  receipts?: import('../../shared/cashier-workbench-contracts.js').OriginalReceiptSummary[]
+  collectionSettled?: boolean
+  outstandingAmountMinor?: number
+  productionMessage?: string
   publicId: string
   paymentStatus?: string
   totalAmountMinor?: number

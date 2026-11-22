@@ -7,9 +7,10 @@ source "${root}/deploy/aliyun/release-state.sh"
 
 state_file=$(mktemp)
 contract_state_file=$(mktemp)
+contract_dir=$(mktemp -d)
 rm -f "${state_file}"
 rm -f "${contract_state_file}"
-trap 'rm -f "${state_file}" "${contract_state_file}"' EXIT
+trap 'rm -f "${state_file}" "${contract_state_file}"; rm -rf "${contract_dir}"' EXIT
 
 release_state_init "${state_file}" "$(printf 'a%.0s' {1..40})" "sha256:$(printf 'b%.0s' {1..64})"
 release_state_transition "${state_file}" frozen artifact_verified
@@ -60,3 +61,12 @@ test "$(release_contract_boundary_between 319 320)" = 320
 test "$(release_contract_boundary_between 314 320)" = 320
 test "$(release_contract_boundary_between 320 320)" = 0
 test "$(release_contract_boundary_between 314 319)" = 0
+
+# Existing production tickets must be claimed exclusively by payment-aware writers.
+test "$(release_contract_boundary_between 320 321)" = 321
+test "$(release_contract_boundary_between 319 321)" = 321
+test "$(release_contract_boundary_between 321 321)" = 0
+echo '{"migration":{"count":321}}' > "${contract_dir}/release-manifest.json"
+if release_assert_application_rollback_safe "${contract_dir}" 320; then exit 1; fi
+jq -e '.contractBoundary==321 and .targetSchema==320 and .status=="blocked"' \
+  "${contract_dir}/application-contract-rollback-guard.json" >/dev/null

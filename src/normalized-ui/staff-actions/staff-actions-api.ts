@@ -138,6 +138,8 @@ export interface AssistedOrderCatalogProduct {
 }
 
 export interface AssistedOrderResult {
+  publicId?:string
+  productionMessage?:string
   id: string
   orderMode: 'paid' | 'gift'
   totalAmountMinor: number
@@ -149,8 +151,8 @@ export interface AssistedOrderResult {
     payableAmount: number
   }
   paymentNextStep: {
-    status: 'required' | 'deferred'
-    action: 'create_payment_intent' | 'settle_table_later'
+    status: 'required' | 'deferred' | 'settled'
+    action: 'create_payment_intent' | 'settle_table_later' | 'none'
     orderId: string
     amountMinor: number
     currency: string
@@ -345,6 +347,7 @@ export interface StaffActionsApiPort {
   loadParticipantMovementHistory?(cursor?:string):Promise<ParticipantMovementHistory>
   sealParticipantMovement?():Promise<void>
   recoverParticipantMovement?():Promise<void>
+  acknowledgeComplaint(taskId: string): Promise<void>
   completeServiceTask(taskId: string, note?: string): Promise<void>
   runKdsAction(taskId: string, action: 'complete' | 'deliver' | 'remake', quantity?:number): Promise<void>
   loadItemAfterSalesAccess?():Promise<{enabled:boolean;recoveryAvailable?:boolean;employeeId:string}>
@@ -852,6 +855,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
   sealParticipantMovement():Promise<void> { return this.participantMovementRecovery.seal() }
   recoverParticipantMovement():Promise<void> { return this.participantMovementRecovery.recover() }
+
+  async acknowledgeComplaint(taskId: string): Promise<void> {
+    await this.command(`/api/service-tasks/${encodeURIComponent(taskId)}/acknowledge`, {}, 'idempotency-key')
+  }
 
   async completeServiceTask(taskId: string, note?: string): Promise<void> {
     await this.command(
@@ -1600,7 +1607,13 @@ function tableOrderDetail(value: unknown): StaffTableOrderDetail {
     }
   })
   return { publicId: value.publicId,
+    ...(Array.isArray(value.receipts) && value.receipts.every(r=>isObject(r) && typeof r.publicId==='string' && typeof r.provider==='string'
+      && Number.isSafeInteger(r.amountMinor) && Number.isSafeInteger(r.refundMinor) && typeof r.shared==='boolean')
+      ? {receipts:value.receipts as StaffTableOrderDetail['receipts']} : {}),
     ...(isObject(value.replacementSource)&&typeof value.replacementSource.orderPublicId==='string'&&typeof value.replacementSource.orderItemId==='string'?{replacementSource:{orderPublicId:value.replacementSource.orderPublicId,orderItemId:value.replacementSource.orderItemId}}:{}),
+    collectionSettled: typeof value.collectionSettled === 'boolean' ? value.collectionSettled : undefined,
+    outstandingAmountMinor: typeof value.outstandingAmountMinor === 'number' ? value.outstandingAmountMinor : undefined,
+    productionMessage: typeof value.productionMessage === 'string' ? value.productionMessage : undefined,
     paymentStatus: typeof value.paymentStatus === 'string' ? value.paymentStatus : undefined,
     totalAmountMinor: typeof value.totalAmountMinor === 'number' ? value.totalAmountMinor : undefined, receivableIncreaseMinor:typeof value.receivableIncreaseMinor==='number'?value.receivableIncreaseMinor:undefined, stoppedAmountMinor:typeof value.stoppedAmountMinor==='number'?value.stoppedAmountMinor:undefined, items }
 }

@@ -895,12 +895,13 @@ test('mobile manager payment choices stay synchronized with two guests at the sa
 
   await tableActions.getByRole('button', { name: '协助点单' }).click()
   const paidSheet = page.getByRole('dialog', { name: 'W1协助点单' })
+  await paidSheet.getByRole('button',{name:'挂桌账',exact:true}).click()
   await paidSheet.getByLabel('搜索菜单商品').fill(data.orderableProductName)
   await paidSheet.getByRole('button', { name: `加入${data.orderableProductName}` }).click()
   await paidSheet.getByRole('button', { name: '查看已选' }).click()
   await paidSheet.getByRole('dialog', { name: '购物车明细' }).getByRole('button', { name: '核对无误，确认下单' }).click()
   await paidSheet.getByRole('dialog', { name: '确认上单' }).getByRole('button', { name: '确认上单' }).click()
-  await expect(page.getByRole('status', { name: '操作结果', exact: true })).toContainText('W1 订单已挂桌并发送出品')
+  await expect(page.getByRole('status', { name: '操作结果', exact: true })).toContainText('W1 已挂桌账，未收齐，已送制作')
 
   await tableActions.getByRole('button', { name: '本桌收款' }).click()
   const tablePayment = page.getByRole('dialog', { name: 'W1本桌收款' })

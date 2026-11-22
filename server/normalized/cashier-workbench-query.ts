@@ -1,3 +1,4 @@
+import {sessionMoneySql} from './session-money-sql.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {pendingTabReviewSql} from './carryover-tab-review.js'
 import {carryoverDebtSql} from './carryover-debt.js'
@@ -287,7 +288,7 @@ export class PostgresCashierWorkbenchQuery {
           JOIN LATERAL (
             SELECT payment.order_id FROM mbox.order_payment_facts payment
             WHERE (payment.tenant_id,payment.store_id,payment.id)=(carryover_refund.tenant_id,carryover_refund.store_id,carryover_refund.payment_id)
-              AND (carryover_refund.order_id IS NULL OR carryover_refund.order_id=payment.order_id) OFFSET 0
+              AND (carryover_refund.order_id=payment.order_id OR (carryover_refund.order_id IS NULL AND payment.payable_kind='order')) OFFSET 0
           ) carryover_payment ON true
           WHERE carryover_refund.tenant_id=$1 AND carryover_refund.store_id=$2
             AND carryover_refund.status IN ('requested','approved','processing')
@@ -431,7 +432,7 @@ export class PostgresCashierWorkbenchQuery {
               JOIN mbox.order_payment_facts AS searched_refund_payment
                 ON searched_refund_payment.tenant_id = searched_refund.tenant_id
                AND searched_refund_payment.store_id = searched_refund.store_id
-               AND searched_refund_payment.id = searched_refund.payment_id AND (searched_refund.order_id IS NULL OR searched_refund.order_id=searched_refund_payment.order_id)
+               AND searched_refund_payment.id = searched_refund.payment_id AND (searched_refund.order_id=searched_refund_payment.order_id OR (searched_refund.order_id IS NULL AND searched_refund_payment.payable_kind='order'))
               WHERE searched_refund.tenant_id = orders.tenant_id
                 AND searched_refund.store_id = orders.store_id
                 AND searched_refund_payment.order_id = orders.id
@@ -458,14 +459,7 @@ export class PostgresCashierWorkbenchQuery {
           AND ($15::date IS NULL OR orders.business_date >= $15::date)
           AND ($16::date IS NULL OR orders.business_date <= $16::date)
         ORDER BY ${bulkOrderNeedsCollectionSql('orders')} DESC,
-          EXISTS (
-            SELECT 1 FROM mbox.order_payment_facts recent_captured_ordering
-            WHERE recent_captured_ordering.tenant_id=orders.tenant_id
-              AND recent_captured_ordering.store_id=orders.store_id
-              AND recent_captured_ordering.order_id=orders.id
-              AND recent_captured_ordering.status IN ('succeeded','partially_refunded','refunded')
-              AND recent_captured_ordering.succeeded_at>=clock_timestamp()-INTERVAL '6 hours'
-          ) DESC,
+          (orders.id IN (SELECT order_id FROM cashier_recent_captured_orders)) DESC,
           (orders.business_date = $3::date) DESC,
           COALESCE(orders.submitted_at, orders.created_at) DESC, orders.id DESC
         LIMIT $5 OFFSET $14
@@ -673,13 +667,34 @@ export class PostgresCashierWorkbenchQuery {
             input.activityFilter ?? null,
           ])
         : { rows: [] as ActivityRegistrationRow[] }
+      // A table lookup includes its current visit even when no original matches the page or payment filter.
+      const withTableMoney = async (view:CashierWorkbenchView):Promise<CashierWorkbenchView> => {
+        if (!normalizedQuery || (input.collectionScope ?? 'workbench')!=='workbench') return view
+        const result = await transaction.query<NonNullable<CashierWorkbenchView['selectedTable']> & Record<string,unknown>>(`
+          SELECT t.code AS "tableCode",session.id AS "sessionId",session.business_date::text AS "businessDate",
+            jsonb_build_object('grossCollectedAmountMinor',money.gross_collected_minor,
+              'refundedAmountMinor',money.refunded_amount_minor,'outstandingAmountMinor',money.due_minor,
+              'unpaidOrderCount',money.unpaid_order_count,'pendingPaymentCount',money.pending_payment_count,
+              'prepaidReceivedMinor',money.prepaid_received,'prepaidAvailableMinor',money.prepaid_available,
+              'cashAmountMinor',money.cash_minor,'cashPaymentCount',money.cash_count) AS money
+          FROM mbox.table_sessions session JOIN mbox.tables t
+            ON (t.tenant_id,t.store_id,t.id)=(session.tenant_id,session.store_id,session.table_id)
+          CROSS JOIN LATERAL (${sessionMoneySql}) money
+          WHERE (session.tenant_id,session.store_id)=($1,$2)
+            AND session.table_id=${historyTableIdSql('$3','$4')} AND session.status IN ('open','closing')
+            AND EXISTS (SELECT 1 FROM mbox.employees actor WHERE (actor.tenant_id,actor.store_id,actor.id)=($1,$2,$5)
+              AND actor.status='active' AND ($6::boolean OR EXISTS (SELECT 1 FROM mbox.table_assignments a
+                WHERE (a.tenant_id,a.store_id,a.table_id,a.employee_id)=(session.tenant_id,session.store_id,session.table_id,actor.id)
+                  AND a.assignment_type IN ('primary','backup') AND a.starts_at<=statement_timestamp()
+                  AND (a.ends_at IS NULL OR a.ends_at>statement_timestamp()))))
+        `,[input.scope.tenantId,input.scope.storeId,normalizedQuery,canonicalTableCode(normalizedQuery),input.employeeId,canViewStoreWide])
+        return result.rows[0] ? {...view,selectedTable:result.rows[0]} : view
+      }
       const orderIds = orderResult.rows.map((row) => row.id)
-      if (orderIds.length === 0) {
-        const points=await readCheckoutPoints(transaction,orderIds)
-      for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
-      return assembleView(
+      if (!orderIds.length) {
+        return withTableMoney(assembleView(
           input, normalizedQuery, [], [], [], [], [], [], [], [], activityResult.rows,totals,refundApprovalLimits,
-        )
+        ))
       }
 
       const itemResult = await transaction.query<ItemRow>(`
@@ -753,7 +768,7 @@ export class PostgresCashierWorkbenchQuery {
           JOIN mbox.order_payment_facts AS payment
             ON payment.tenant_id = refund.tenant_id
            AND payment.store_id = refund.store_id
-           AND payment.id = refund.payment_id AND (refund.order_id IS NULL OR refund.order_id=payment.order_id)
+           AND payment.id = refund.payment_id AND (refund.order_id=payment.order_id OR (refund.order_id IS NULL AND payment.payable_kind='order'))
           JOIN mbox.employees AS requester
             ON requester.tenant_id = refund.tenant_id
            AND requester.store_id = refund.store_id
@@ -809,7 +824,7 @@ export class PostgresCashierWorkbenchQuery {
 
       const points=await readCheckoutPoints(transaction,orderIds)
       for(const row of orderResult.rows)if(points.has(row.id))row.points=points.get(row.id)
-      return assembleView(
+      return withTableMoney(assembleView(
         input,
         normalizedQuery,
         orderResult.rows,
@@ -821,8 +836,8 @@ export class PostgresCashierWorkbenchQuery {
         settlementExceptionResult.rows,
         recollectionResult.rows,
         activityResult.rows,totals,refundApprovalLimits,
-      )
-    }, { readOnly: true })
+      ))
+    }, { readOnly: true, isolation: 'repeatable-read' })
   }
 }
 
@@ -1003,7 +1018,7 @@ function assembleView(
     summary: {
       orderCount: orders.length,
       ...(orders.some(order=>(order.couponRefundReviewCount??0)>0)?{couponRefundReviewCount:orders.reduce((sum,order)=>sum+(order.couponRefundReviewCount??0),0)}:{}),
-      capturedPaymentCount: paymentRows.filter((payment) => CAPTURED_PAYMENT_STATUSES.includes(payment.status)).length,
+      capturedPaymentCount: new Set(paymentRows.filter(payment => CAPTURED_PAYMENT_STATUSES.includes(payment.status)).map(payment => payment.id)).size,
       requestedRefundCount: refundRows.filter((refund) => refund.status === 'requested').length,
       processingRefundCount: refundRows.filter((refund) => refund.status === 'approved' || refund.status === 'processing').length,
       carryoverOrderCount: orders.filter((order) => order.carryover === true).length,

@@ -144,9 +144,9 @@ integration('KDS remake inventory timing', () => {
     `, [productId, tenantId, storeId, `RM-${label}-${productId.slice(0, 6)}`, `重制库存-${label}`])
     await pool.query(`
       INSERT INTO mbox.orders(
-        id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,fulfillment_state,
+        id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,payment_status,fulfillment_state,
         subtotal_amount_minor,discount_amount_minor,total_amount_minor
-      ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','paid','active',100,0,100)
+      ) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted','paid','active',100,0,100)
     `, [orderId, tenantId, storeId, sessionId, `order-remake-${label}-${orderId.slice(0, 8)}`])
     await pool.query(`
       INSERT INTO mbox.order_items(

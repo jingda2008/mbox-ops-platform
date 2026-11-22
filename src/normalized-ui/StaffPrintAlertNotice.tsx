@@ -4,12 +4,21 @@ import { printAlertStations, type PrintAlert, type PrintAlertSnapshot } from '..
 import { hasNewPrintAlert, validatePrintAlertSnapshot } from './print-alert-notice-model'
 import './staff-print-alert-notice.css'
 
+const productionLabels = {
+  blocked: '已拦截制作，请值班经理核对原单和已出纸票',
+  missing: '已收齐，工位缺任务，请值班经理核对原任务，勿重下',
+  tab: '员工挂桌账，未收齐，可制作',
+  collect: '待收款，未送制作',
+  balance: '本单待收款，请核对原单',
+  proof: '零应收，请值班经理核验赠送或抵扣凭据',
+}
 const names = { bar: '吧台', kitchen: '后厨', cashier: '收银', generation: '票据生成', diagnostics: '打印终端故障' }
 
-export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact = false, onNavigate}: {
-  api: NormalizedApiClient; permissions: readonly string[]; canOpenDevices: boolean; compact?: boolean; onNavigate(route: string): void
+export function StaffPrintAlertNotice({api, permissions, roleCodes = [], canOpenDevices, compact = false, onNavigate}: {
+  api: NormalizedApiClient; permissions: readonly string[]; roleCodes?: readonly string[]; canOpenDevices: boolean; compact?: boolean; onNavigate(route: string): void
 }) {
-  const enabled = printAlertStations(permissions).length > 0 || permissions.includes('kds.prepare')
+  const enabled = printAlertStations(permissions).length > 0 || permissions.includes('kds.prepare') || permissions.includes('order.create')
+    || roleCodes.some(role => ['SERVER','CASHIER','OWNER','MANAGER','DEPUT_MANAGER','OPS_LEAD'].includes(role))
   const signature = permissions.join(',')
   const [snapshot, setSnapshot] = useState<PrintAlertSnapshot | null>(null)
   const [stale, setStale] = useState(false), [forbidden, setForbidden] = useState(false)
@@ -21,7 +30,7 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact
   const known = useRef<PrintAlert[]>([]), audience = useRef('')
   const notice = useRef<HTMLElement | null>(null)
   // Dedicated production/pickup screens keep their full normal-state workspace.
-  const showing = enabled && !forbidden && (!compact || stale || Boolean(snapshot?.alerts.length))
+  const showing = enabled && !forbidden && (!compact || stale || Boolean(snapshot?.alerts.length || snapshot?.orders?.length))
   useLayoutEffect(() => {
     const element = notice.current
     if (!element) return
@@ -107,7 +116,8 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact
       await play.current()
     } catch { setSoundError('无法开启声音，请检查浏览器声音权限和电脑音量。') }
   }
-  if (!showing) return null
+  if (!showing || (!printAlertStations(permissions).length && !permissions.includes('kds.prepare') && !snapshot?.orders?.length && !stale)) return null
+  const orders = snapshot?.orders ?? [], first = orders[0]
   const alerts = snapshot?.alerts ?? [], active = alerts.length > 0
   const compactNotice = compact || active || stale
   const urgent = snapshot?.manager && alerts.some(alert => alert.escalated)
@@ -134,6 +144,12 @@ export function StaffPrintAlertNotice({api, permissions, canOpenDevices, compact
       <button type="button" aria-label={sound ? '关闭打印提醒声音' : '开启打印提醒声音'} aria-pressed={sound} onClick={() => void toggleSound()}>{compactNotice ? sound ? '声音已开' : '开启声音' : sound ? '关闭打印提醒声音' : '开启打印提醒声音'}</button>
       {(active || stale) && <details className="print-alert-compact"><summary aria-label="查看异常与处理方法">查看异常</summary>{details}</details>}
     </div>
+    {first && <details className="order-production-notices"><summary>{first.tableCode} · {productionLabels[first.issue]}{first.dueMinor !== null && ` · 待收 ¥${(first.dueMinor/100).toFixed(2)}`}{first.checkPayment && ' · 先查原付款'}（{orders.length} 单）{stale && ' · 上次读取'}</summary>
+      {orders.map(order => <p key={order.orderNumber}><strong>{order.tableCode}</strong> · {order.orderNumber} ·
+        {productionLabels[order.issue]}
+        {order.dueMinor !== null && ` · 待收 ¥${(order.dueMinor / 100).toFixed(2)}`}
+        {order.stations.map(st => st === 'bar' ? ' · 吧台' : ' · 后厨').join('')}
+        {order.checkPayment && ' · 先查原付款结果，勿重复收款'}</p>)}</details>}
     {soundError && <p role="status">{soundError}</p>}
     {sound && !compactNotice && <small>新异常会响铃，同一未恢复异常每分钟提醒。本页须保持可见；切换应用或锁屏可能暂停，请确认电脑未静音。</small>}
   </aside>

@@ -66,6 +66,17 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
     expect(Math.max(...timings)).toBeLessThan(8000)
   },60000)
 
+  it('reads the complete active visit once when the cashier looks up a table',async()=>{
+    const start=performance.now()
+    const view=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId,businessDate:day,capabilities:permissions,query:'P1',limit:1})
+    const elapsed=Math.round(performance.now()-start)
+    console.info(JSON.stringify({check:'table-money-growth',orders:count+2,ms:elapsed}))
+    expect(view.orders).toHaveLength(1)
+    expect(view.selectedTable).toMatchObject({sessionId:session,money:{grossCollectedAmountMinor:count*100+150,
+      refundedAmountMinor:0,cashPaymentCount:count+1,outstandingAmountMinor:250,unpaidOrderCount:1}})
+    expect(elapsed).toBeLessThan(8000)
+  },30000)
+
   it('keeps interactive query compilation settings local after commit and rollback',async()=>{
     const single=new Pool({connectionString:runtimeUrl,max:1})
     const serial=new ScopedPostgresTransactionRunner(single)

@@ -37,7 +37,10 @@ for(const mode of ['order_gate','prepaid'])test(`opens a table with ${mode}, exa
    await sheet.getByRole('button',{name:'查看已选'}).click();await sheet.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:'核对无误，确认下单'}).click()
    const submitted=server.waitForResponse(r=>r.url().endsWith('/commerce/orders')&&r.request().method()==='POST')
    await sheet.getByRole('dialog',{name:'确认上单'}).getByRole('button',{name:'确认上单'}).click();const order=await submitted;expect(order.status(),await order.text()).toBe(201)
-   expect((await order.json()).paymentStatus).toBe('unpaid');await expect(sheet).toBeHidden()
+   expect(await order.json()).toMatchObject({paymentStatus:'unpaid',settlementMode:'immediate_payment'})
+   await expect(server.locator('.staff-actions-notice')).toContainText('待收款，未送制作')
+   await sheet.getByRole('button',{name:'关闭点单'}).click()
+   await expect(sheet).toBeHidden()
    await minimum.getByRole('button',{name:'刷新本桌低消'}).click();await minimum.getByText(/^低消操作记录（/).click();await expect(minimum).toContainText('本单放行');await expect(minimum).toContainText('Tom')
   }finally{await scheduler.close();await server.close()}
  }

@@ -473,16 +473,14 @@ export function StaffModulePanel({ api, auth, module, initialBlockerFact = null,
   const content = useMemo(() => {
     if(module==='orders')return <OrderCenterPanel key={orderRefreshToken} api={api} onLoginRequired={onLoginRequired} printEmployeeId={auth.permissions.includes('order.bill.print')?auth.employee.id:undefined} inventoryEmployeeId={auth.permissions.includes('inventory.receive')?auth.employee.id:undefined}/>
     if (module === 'payments') {
-      return <><ItemAfterSalesPendingPanel employeeId={auth.employee.id}/><GroupVoucherRedemptionPanel
-        api={api}
-        auth={auth}
-      /><CashierAfterSalesWorkbench
+      return <><CashierAfterSalesWorkbench
         api={api}
         auth={auth}
         onLoginRequired={onLoginRequired}
         onNavigate={onNavigate}
         refreshToken={paymentRefreshToken}
-      /><OrderFinancialRecoveryPanel api={api} auth={auth}/></>
+      /><ItemAfterSalesPendingPanel employeeId={auth.employee.id}/><GroupVoucherRedemptionPanel api={api} auth={auth}/>
+        <OrderFinancialRecoveryPanel api={api} auth={auth}/></>
     }
     if (module === 'performance') return <PerformanceModule api={api} auth={auth} view={data.performance} performers={data.performers} requests={data.songRequests} phases={data.performancePhases} onChanged={refresh} />
     if (module === 'inventory') return <InventoryModule api={api} auth={auth} view={data.inventory} onChanged={refresh} />

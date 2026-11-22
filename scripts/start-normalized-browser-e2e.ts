@@ -202,7 +202,10 @@ try {
     const ids=await runtime.transactions.run(scope,async tx=>{
       const productId=randomUUID(),orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID(),productName='隔离重做实物'
       await tx.query(`INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES($1,$2,$3,'QA-REMAKE-HANDOVER',$4,'test','bar','not_managed')`,[productId,scope.tenantId,scope.storeId,productName])
-      await tx.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),3000,3000)`,[orderId,scope.tenantId,scope.storeId,opened.value.id,`remake-original-${orderId}`])
+      await tx.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+        settlement_mode,created_by_employee_id,submitted_at,subtotal_amount_minor,total_amount_minor)
+        VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','table_tab',$6,clock_timestamp(),3000,3000)`,
+        [orderId,scope.tenantId,scope.storeId,opened.value.id,`remake-original-${orderId}`,employeeId])
       await tx.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,status,product_snapshot) VALUES($1,$2,$3,$4,$5,3,1000,3000,'bar','ready',$6::jsonb)`,[itemId,scope.tenantId,scope.storeId,orderId,productId,JSON.stringify({name:productName,inventoryControlMode:'not_managed'})])
       await tx.query(`INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity,status,ready_at) VALUES($1,$2,$3,$4,'bar',3,'ready',clock_timestamp())`,[taskId,scope.tenantId,scope.storeId,itemId])
       const batch=await new QuantityRemakeRepository(tx).create({itemId,employeeId,quantity:3,originalGoodsLost:true,reason:'隔离测试原实物无法交付',eventKey:randomUUID()})

@@ -1,3 +1,4 @@
+import { readOrderProductionNotices } from './order-production-notices.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 import { StaffAccessRepository, StaffAccessDeniedError } from './staff-access-repository.js'
 import { resolveFulfillmentAllowedStations } from './fulfillment-query-service.js'
@@ -7,7 +8,9 @@ import { printAlertStations, type PrintAlertSnapshot, type PrintAlertStation } f
 export async function readPrintAlerts(tx: ScopedTransaction, employeeId: string): Promise<PrintAlertSnapshot> {
   const access = await new StaffAccessRepository(tx).resolve(employeeId)
   const stations = printAlertStations(access.permissions, resolveFulfillmentAllowedStations(access.dataScopes))
-  if (!stations.length) throw new StaffAccessDeniedError('当前岗位无打印提醒查看权限')
+  const service = access.permissions.includes('order.create') || access.roleCodes.includes('SERVER')
+  const dutyManager = access.roleCodes.some(role => ['MANAGER','DEPUT_MANAGER','OWNER','OPS_LEAD'].includes(role))
+  if (!stations.length && !service && !dutyManager && !access.roleCodes.includes('CASHIER')) throw new StaffAccessDeniedError('当前岗位无打印提醒查看权限')
   const manager = access.permissions.some(p => ['printer.manage', 'hardware.manage', 'print.view_all'].includes(p))
   const rows = await tx.query<{
     station: PrintAlertStation; failed: string; stalled: string; oldest_at: string;
@@ -56,7 +59,13 @@ export async function readPrintAlerts(tx: ScopedTransaction, employeeId: string)
       CURRENT_TIMESTAMP::text AS as_of
     FROM attention GROUP BY station ORDER BY station
   `, [tx.scope.tenantId, tx.scope.storeId, stations])
+  const productionStations = ['bar','kitchen'].filter(station => access.permissions.includes('work.' + station)
+    || access.permissions.includes('kds.prepare') && resolveFulfillmentAllowedStations(access.dataScopes).some(s => s === station))
+  const orders = await readOrderProductionNotices(tx, employeeId, {
+    service, manager: dutyManager, cashier: access.permissions.includes('work.cashier') || access.roleCodes.includes('CASHIER'), stations: productionStations,
+  })
   return {
+    orders,
     asOf: rows.rows[0] ? new Date(rows.rows[0].as_of).toISOString() : new Date().toISOString(), manager,
     alerts: rows.rows.map(row => ({station: row.station, failed: Number(row.failed), stalled: Number(row.stalled),
       oldestAt: new Date(row.oldest_at).toISOString(), newestKey: row.newest_key, escalated: row.escalated})),

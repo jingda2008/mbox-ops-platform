@@ -40,7 +40,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import sharp from 'sharp'
 import { WechatMiniProgramCodeError } from './wechat-mini-program-code.js'
-import { ScopedPostgresTransactionRunner, type PostgresPool } from './transaction-runner.js'
+import { ScopedPostgresTransactionRunner, type PostgresPool, type ScopedTransaction } from './transaction-runner.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
 import { ChannelDistributionRepository } from './channel-distribution-repository.js'
 import { channelDistributionApiPlugin } from './channel-distribution-api.js'
@@ -2243,14 +2243,37 @@ integration('channel distribution real PostgreSQL authority', () => {
     expect(missing.statusCode,missing.body).toBe(409)
     expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(1)
   })
-  it('serializes gift fulfillment against cancellation with exactly one successful outcome',async()=>{
-    const gift=await giftProduct(1),cid=await customer(),session=await table([cid]),b=await batch({minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}}),coupon=await issue(b.code,cid),active=await activate(coupon.claimId,cid,session)
+  it.each(['fulfill','cancel'] as const)('serializes gift fulfillment against cancellation when %s wins',async first=>{
+    const gift=await giftProduct(1),cid=await customer(),session=await table([cid])
+    const b=await batch({minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}})
+    const coupon=await issue(b.code,cid),active=await activate(coupon.claimId,cid,session)
     const commerce=new CommerceCommandService(new NormalizedCommandExecutor(runner),new PostgresPricingAuthority())
-    const results=await Promise.allSettled([runner.run(scope,tx=>fulfillChannelGift(tx,commerce,{claimId:coupon.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'})),runner.run(scope,tx=>new ChannelDistributionRepository(tx).cancelActivation(active.activationId!,session,employee,'同时误撤销'))])
-    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1)
-    const promise=(await admin.query('SELECT order_id FROM mbox.channel_gift_promises WHERE claim_id=$1',[coupon.claimId])).rows[0]
-    const count=(await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n
-    expect(count).toBe(promise.order_id?1:0)
+    const act=async(tx:ScopedTransaction,action:'fulfill'|'cancel')=>{
+      if(action==='fulfill') await fulfillChannelGift(tx,commerce,{claimId:coupon.claimId,tableSessionId:session,employeeId:employee,businessDate:'2026-11-12'})
+      else await new ChannelDistributionRepository(tx).cancelActivation(active.activationId!,session,employee,'同时误撤销')
+    }
+    let second:Promise<unknown>|undefined
+    await runner.run(scope,async tx=>{
+      await act(tx,first)
+      const {pid}=(await tx.query<{pid:number}>('SELECT pg_backend_pid() AS pid')).rows[0]!
+      second=runner.run(scope,other=>act(other,first==='fulfill'?'cancel':'fulfill')).then(()=>null,error=>error)
+      await vi.waitFor(async()=>expect((await admin.query(
+        'SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true),
+        {timeout:10_000,interval:25})
+    })
+    await expect(second).resolves.toMatchObject({code:first==='fulfill'?'NOT_REVERSIBLE':'OWNERSHIP'})
+    const promises=(await admin.query('SELECT order_id,state FROM mbox.channel_gift_promises WHERE claim_id=$1',[coupon.claimId])).rows
+    const orders=(await admin.query('SELECT id FROM mbox.orders WHERE table_session_id=$1',[session])).rows
+    const activation=(await admin.query('SELECT status FROM mbox.channel_activations WHERE id=$1',[active.activationId])).rows[0]
+    if(first==='fulfill'){
+      expect(orders).toHaveLength(1)
+      expect(promises).toEqual([{order_id:orders[0].id,state:'converted'}])
+      expect(activation.status).toBe('active')
+    }else{
+      expect(orders).toEqual([])
+      expect(promises).toEqual([])
+      expect(activation.status).toBe('cancelled')
+    }
   })
 
   it('prices 85-percent-payable only on eligible goods in a mixed basket',async()=>{

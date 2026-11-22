@@ -181,6 +181,26 @@ export interface CarryoverTabReviewBasis {
   maximumAmountMinor:number;currency:string;orderNote:string|null;reason:string
 }
 
+export interface OriginalReceiptSummary {
+  publicId: string
+  provider: CashierPaymentProvider
+  amountMinor: number
+  refundMinor: number
+  shared: boolean
+}
+
+export interface TableSessionMoney {
+  prepaidReceivedMinor?: number
+  prepaidAvailableMinor?: number
+  grossCollectedAmountMinor: number
+  refundedAmountMinor: number
+  outstandingAmountMinor: number
+  unpaidOrderCount: number
+  pendingPaymentCount: number
+  cashPaymentCount: number
+  cashAmountMinor: number
+}
+
 export interface CashierWorkbenchOrder {
   carryoverReview?: {basis:CarryoverTabReviewBasis|null;canConfirm:boolean;canCollect?:boolean}
   carryoverReviewDecision?: {amountMinor:number;reason:string;createdAt:string}
@@ -238,6 +258,7 @@ export interface CashierWorkbenchOrder {
 }
 
 export interface CashierWorkbenchView {
+  selectedTable?: {tableCode:string; sessionId:string; businessDate:string; money:TableSessionMoney}
   pagination?:{page:number;pageSize:number;totalCount:number;totalOutstandingMinor:number}
   businessDate: string
   query: string

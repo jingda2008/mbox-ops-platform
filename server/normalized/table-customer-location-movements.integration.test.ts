@@ -471,9 +471,9 @@ integration('table customer location movements', () => {
     ) VALUES($1,$2,$3,$4,'无物理出品服务','service','none','{}')`,
     [nonPhysicalProductId,tenantId,storeId,`NONE-${randomUUID().slice(0,8)}`])
     await pool.query(`INSERT INTO mbox.orders(
-      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,payment_status,
       subtotal_amount_minor,discount_amount_minor,total_amount_minor
-    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','paid',100,0,100)`,
+    ) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted','paid',100,0,100)`,
     [orderId,tenantId,storeId,source,`order-${randomUUID()}`])
     await pool.query(`INSERT INTO mbox.order_items(
       id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,
@@ -539,9 +539,9 @@ integration('table customer location movements', () => {
     ) VALUES($1,$2,$3,$4,'部分退款饮品','drink','bar','{}')`,
     [productId,tenantId,storeId,`REF-${randomUUID().slice(0,8)}`])
     await pool.query(`INSERT INTO mbox.orders(
-      id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      id,tenant_id,store_id,table_session_id,public_id,created_by_employee_id,channel,status,payment_status,
       subtotal_amount_minor,discount_amount_minor,total_amount_minor
-    ) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','partially_refunded',100,0,100)`,
+    ) VALUES($1,$2,$3,$4,$5,(SELECT id FROM mbox.employees WHERE tenant_id=$2 AND store_id=$3 ORDER BY id LIMIT 1),'staff_assisted','submitted','partially_refunded',100,0,100)`,
     [orderId,tenantId,storeId,source,`order-${randomUUID()}`])
     await pool.query(`INSERT INTO mbox.order_items(
       id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,

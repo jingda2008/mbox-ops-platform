@@ -71,6 +71,27 @@ integration('optional product sales portions with real transactions and runtime 
     const id=await product(4),row=await order(id,3);await reserve(row);await release(row);await release(row)
     expect(await remaining(id)).toBe(4);await reserve(row);expect(await remaining(id)).toBe(1)
   })
+  it('records costs at deduction for a table-tab recipe with known, zero and unknown costs', async () => {
+    const productId = await product(), recipeId = randomUUID()
+    await pool.query("UPDATE mbox.products SET inventory_control_mode='tracked' WHERE id=$1", [productId])
+    await pool.query(`INSERT INTO mbox.recipes(id,tenant_id,store_id,product_id,version,yield_quantity,status,effective_at)
+      VALUES($1,$2,$3,$4,1,1,'active',clock_timestamp())`, [recipeId,tenantId,storeId,productId])
+    for (const cost of ['0.125', '0', null]) {
+      const material = randomUUID()
+      await pool.query(`INSERT INTO mbox.inventory_items(id,tenant_id,store_id,sku,name,item_type,base_unit)
+        VALUES($1,$2,$3,$4,'原料','ingredient','ml')`, [material,tenantId,storeId,material])
+      await pool.query(`INSERT INTO mbox.inventory_balances(tenant_id,store_id,inventory_item_id,on_hand_quantity,weighted_unit_cost_minor,cost_status,cost_basis)
+        VALUES($1,$2,$3,10,$4,$5,$6)`, [tenantId,storeId,material,cost,cost===null?'needs_review':'complete',cost===null?'none':'moving_weighted_average'])
+      await pool.query(`INSERT INTO mbox.recipe_items(tenant_id,store_id,recipe_id,inventory_item_id,quantity)
+        VALUES($1,$2,$3,$4,1)`, [tenantId,storeId,recipeId,material])
+    }
+    const row = await order(productId)
+    await run(tx=>new InventoryRepository(tx).consumeForOrderItems([row.item]))
+    const facts = await pool.query(`SELECT m.unit_cost_minor::float8 AS cost,b.on_hand_quantity::int AS balance
+      FROM mbox.inventory_movements m JOIN mbox.inventory_balances b USING (tenant_id,store_id,inventory_item_id)
+      WHERE m.order_item_id=$1 AND m.movement_type='sale' ORDER BY cost NULLS LAST`, [row.item.id])
+    expect(facts.rows).toEqual([{cost:0,balance:9},{cost:0.125,balance:9},{cost:null,balance:9}])
+  })
   it('table-tab orders consume the same product pool and are idempotent',async()=>{
     const id=await product(4),row=await order(id,2)
     await run(tx=>new InventoryRepository(tx).consumeForOrderItems([row.item]));await run(tx=>new InventoryRepository(tx).consumeForOrderItems([row.item]))

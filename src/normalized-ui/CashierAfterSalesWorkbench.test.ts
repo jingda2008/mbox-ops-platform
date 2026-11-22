@@ -22,6 +22,35 @@ const employeeId = '33333333-3333-4333-8333-333333333333'
 const otherEmployeeId = '44444444-4444-4444-8444-444444444444'
 
 describe('CashierAfterSalesWorkbenchView', () => {
+  it('makes a fully refunded original collectible only with a current amount-matched approval', () => {
+    const entry = payment('postar',[{...refund('refund-321','succeeded',employeeId),amountMinor:32100}])
+    entry.status='refunded'
+    entry.amountMinor=32100
+    const view=workbench([entry])
+    const order=view.orders[0]!
+    Object.assign(order,{totalAmountMinor:32100,outstandingAmountMinor:32100,paymentStatus:'refunded'})
+    const authorized={id:'approved-321',amountMinor:32100,expiresAt:new Date(Date.now()+60_000).toISOString()}
+    for(const grant of [undefined,null,{...authorized,amountMinor:32000},{...authorized,expiresAt:new Date(0).toISOString()}]) {
+      order.recollectionAuthorization=grant
+      const html=render(view)
+      expect(html).toContain('查看退款记录</button>')
+      expect(html).not.toContain('>收款</button>')
+      expect(html).not.toContain('登记现金收款</button>')
+    }
+    order.recollectionAuthorization=authorized
+    expect(render(view)).toContain('>收款</button>')
+    expect(render(view)).toContain('登记现金收款')
+  })
+
+  it('keeps a settled receipt distinct from an unresolved earlier scan', () => {
+    const pending={...payment('postar',[]),status:'pending' as const,providerActionState:'unknown' as const,succeededAt:null}
+    const view=workbench([payment('cash',[]),pending])
+    const html=render(view)
+    expect(html).toContain('查询原付款</button>')
+    expect(html).not.toContain('>收款</button>')
+    expect(html).toContain('净收 ¥68.00')
+  })
+
   it.each([undefined, {}, {CNY: 0}, {CNY: 999}, {USD: 50000}])('does not offer approval or rejection when the current currency limit cannot cover the refund: %j', limits => {
     const view=workbench([payment('cash',[refund('requested-other','requested',otherEmployeeId)])])
     view.actions.refundApprovalLimits=limits

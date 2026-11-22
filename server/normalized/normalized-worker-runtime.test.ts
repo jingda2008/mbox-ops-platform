@@ -136,15 +136,24 @@ describe('NormalizedWorkerRuntime', () => {
     expect(result.workers.wechatLoyaltyNotification).toBeNull()
     expect(result.workers.reservationPerformanceNotification).toBeNull()
     expect(sql.some((statement) => statement.includes('FROM mbox.sop_step_executions'))).toBe(false)
-    expect(sql.some((statement) => statement.includes('FROM mbox.outbox_messages'))).toBe(false)
+    for (const statement of sql.filter(query => query.includes('FROM mbox.outbox_messages'))) {
+      expect(statement).toContain('productionItemIds')
+      expect(statement).not.toMatch(/(?:UPDATE|DELETE FROM) mbox\.outbox_messages/)
+      expect(statement.match(/FOR UPDATE OF [\w, ]+? SKIP LOCKED/g)).toEqual(
+        [expect.stringMatching(/^FOR UPDATE OF (?:order_row|s,o) SKIP LOCKED$/)])
+    }
     expect(sql.some((statement) => statement.includes('FROM mbox.notifications'))).toBe(false)
     // Database-only diagnostics may observe pending jobs, but cannot claim or mutate them.
     const printReads=sql.filter(statement=>statement.includes('FROM mbox.print_jobs'))
     expect(printReads.length).toBeGreaterThan(0)
     for(const statement of printReads){
-      expect(statement).toContain('INSERT INTO mbox.print_incidents')
+      if (statement.includes('productionItemIds')) {
+        expect(statement).toContain('FOR UPDATE OF s,o SKIP LOCKED')
+      } else {
+        expect(statement).toContain('INSERT INTO mbox.print_incidents')
+        expect(statement).not.toContain('FOR UPDATE')
+      }
       expect(statement).not.toMatch(/(?:UPDATE|DELETE FROM) mbox\.print_jobs/)
-      expect(statement).not.toContain('FOR UPDATE')
     }
   })
 

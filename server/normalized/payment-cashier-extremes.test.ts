@@ -874,7 +874,23 @@ integration('normalized cashier payment and refund extreme scenarios', () => {
       const recovered=(await app.inject({method:'GET',url:'/payments/finance-review'})).json().data.find((row:{id:string})=>row.id===pending.id)
       expect(recovered.financialSignals??[]).not.toContain('confirmed_payment_not_applied')
       expect((await send('finance-case-resolved-1',true)).statusCode).toBe(200)
-      expect((await app.inject({method:'GET',url:'/payments/finance-review'})).json().data.some((row:{id:string})=>row.id===pending.id)).toBe(false)
+      const resolvedList=(await app.inject({method:'GET',url:'/payments/finance-review'})).json()
+      expect(resolvedList.data.some((row:{id:string})=>row.id===pending.id)).toBe(false)
+
+      // A historical pending attempt can share a cancelled order with the actual receipt.
+      const sibling=randomUUID()
+      await pool.query(`INSERT INTO mbox.payments(id,tenant_id,store_id,order_id,public_id,provider,method,amount_minor,currency,status)
+        VALUES($1,$2,$3,$4,$5,'postar','native_qr',7300,'CNY','pending')`,
+        [sibling,tenantId,storeId,fixture.orderId,`pending-sibling-${sibling}`])
+      await pool.query("UPDATE mbox.orders SET status='cancelled' WHERE id=$1",[fixture.orderId])
+      const cancelledList=(await app.inject({method:'GET',url:'/payments/finance-review'})).json()
+      expect(cancelledList.data.find((row:{id:string})=>row.id===pending.id)).toMatchObject({
+        status:'succeeded',financialSignals:['cancelled_order_captured'],
+      })
+      expect(cancelledList.data.find((row:{id:string})=>row.id===sibling)).toMatchObject({
+        status:'pending',financialSignals:null,linkedOrdersDueMinor:'0',
+      })
+      expect(cancelledList.urgentCount).toBe(resolvedList.urgentCount+1)
       await pool.query('DELETE FROM mbox.employee_roles WHERE tenant_id=$1 AND store_id=$2 AND employee_id=$3 AND role_id=$4',[tenantId,storeId,cashierId,role])
       expect((await send('finance-case-revoked-1',false)).statusCode).toBe(403)
       expect((await send('finance-case-save-1',false)).statusCode).toBe(403)

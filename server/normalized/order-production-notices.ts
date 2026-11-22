@@ -40,7 +40,7 @@ export async function readOrderProductionNotices(tx: ScopedTransaction, employee
       FROM evidence e
     )
     SELECT public_id AS "orderNumber",table_code AS "tableCode",issue,
-      CASE WHEN collect AND issue IN ('tab','collect','balance') THEN
+      CASE WHEN collect AND due>0 AND issue IN ('tab','collect','balance','blocked') THEN
         due::float8 END AS "dueMinor",
       collect AND EXISTS (SELECT 1 FROM mbox.order_payment_facts p
         WHERE (p.tenant_id,p.store_id,p.order_id)=(issues.tenant_id,issues.store_id,issues.id)

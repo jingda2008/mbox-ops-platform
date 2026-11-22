@@ -286,6 +286,7 @@ export interface StaffTableOrderDetailView {
 
 interface StaffTableOrderDetailRow extends Record<string, unknown> {
   production_message?: string
+  production_paused?: boolean
   receipts?: OriginalReceiptSummary[]
   collection_settled?: boolean
   outstanding_amount_minor?: string | number
@@ -325,8 +326,16 @@ export async function listTableOrderDetailsForSession(
         mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id) AS collection_settled,
         mbox.order_collection_due_amount_for_mode(o.tenant_id,o.store_id,o.id,true) AS outstanding_amount_minor
       FROM mbox.orders o WHERE (o.tenant_id,o.store_id,o.table_session_id)=($1,$2,$3)
+    ), production AS (
+      SELECT o.*, (o.settlement_mode='immediate_payment' AND o.fulfillment_state='active'
+        AND o.status IN ('submitted','confirmed','fulfilling') AND NOT o.collection_settled
+        AND o.outstanding_amount_minor>0 AND mbox.order_collection_due_amount(o.tenant_id,o.store_id,o.id)>0
+        AND EXISTS (SELECT 1 FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id)
+          AND i.fulfillment_station IN ('bar','kitchen') AND i.status NOT IN ('cancelled','delivered'))) AS production_paused
+      FROM balances o
     ), originals AS (
       SELECT o.*, CASE WHEN o.status='cancelled' THEN NULL
+        WHEN o.production_paused THEN '本单尚欠款，已暂停制作。请收银核对原单差额'
         WHEN o.fulfillment_state='active' AND o.collection_settled
           AND EXISTS (SELECT 1 FROM mbox.order_items i JOIN mbox.kds_tasks k ON (k.tenant_id,k.store_id,k.order_item_id)=(i.tenant_id,i.store_id,i.id)
             WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.fulfillment_station IN ('bar','kitchen') AND k.status NOT IN ('cancelled','failed'))
@@ -336,9 +345,9 @@ export async function listTableOrderDetailsForSession(
           THEN '已结清，已送制作'
         WHEN o.total_amount_minor>0 AND o.channel='staff_assisted' AND o.created_by_employee_id IS NOT NULL AND o.settlement_mode='table_tab'
           AND o.outstanding_amount_minor>0 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(o.receipts) receipt WHERE (receipt->>'refundMinor')::bigint>0) THEN '员工挂桌账，未收齐，可制作'
-        END AS production_message FROM balances o
+        END AS production_message FROM production o
     )
-    SELECT order_header.receipts,order_header.collection_settled,order_header.outstanding_amount_minor,order_header.production_message,order_header.id AS order_id,order_header.public_id AS order_public_id,
+    SELECT order_header.production_paused,order_header.receipts,order_header.collection_settled,order_header.outstanding_amount_minor,order_header.production_message,order_header.id AS order_id,order_header.public_id AS order_public_id,
       order_header.status AS order_status,order_header.fulfillment_state AS order_fulfillment_state,
       order_header.payment_status AS order_payment_status,
       order_header.total_amount_minor AS order_total_amount_minor,
@@ -425,6 +434,7 @@ function tableOrderItemFulfillmentStatus(row: StaffTableOrderDetailRow): StaffTa
   if (row.fulfillment_station === 'none') return 'not_required'
   if (row.order_fulfillment_state === 'awaiting_payment') return 'awaiting_payment'
   if (row.order_fulfillment_state !== 'active') return 'attention'
+  if (row.production_paused) return 'attention'
   if (row.kds_status === 'ready') return 'ready_for_delivery'
   if (row.kds_status === 'preparing' || row.kds_status === 'accepted') return 'preparing'
   if (row.kds_status === 'pending' || row.kds_status === null) return 'pending'

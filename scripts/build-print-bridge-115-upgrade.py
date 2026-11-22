@@ -28,6 +28,20 @@ def build(baseline, output):
 
     for name in ('bridge.mjs', 'test-print.ps1'):
         files[name] = files[name].replace(b'1.0.14', b'1.0.15')
+    bridge = files['bridge.mjs'].decode()
+    for original, replacement in (
+        ("import { queueSampler", "import { runServiceWorker } from './worker-lifetime.mjs'\nimport { queueSampler"),
+        ("  await emitDiagnostic({ kind: 'bridge_started' })\n  await serviceLoop(await readConfig(true))",
+         "  await runServiceWorker(async parentAlive => {\n    await emitDiagnostic({ kind: 'bridge_started' })\n"
+         "    await serviceLoop(await readConfig(true), parentAlive)\n  })"),
+        ("async function serviceLoop(config)", "async function serviceLoop(config, parentAlive)"),
+        ("  for (;;) {\n    await atomicState(progressPath", "  while (parentAlive()) {\n    await atomicState(progressPath"),
+    ):
+        if bridge.count(original) != 1:
+            raise ValueError('Unrecognized bridge service entry point')
+        bridge = bridge.replace(original, replacement)
+    files['bridge.mjs'] = bridge.encode()
+    files['worker-lifetime.mjs'] = (SRC / 'worker-lifetime.mjs').read_text(encoding='utf-8').encode()
     marker = b"    $stage = 'start'; & $Operations.Start"
     if files['upgrade-core.ps1'].count(marker) != 1:
         raise ValueError('Unrecognized upgrade transaction')

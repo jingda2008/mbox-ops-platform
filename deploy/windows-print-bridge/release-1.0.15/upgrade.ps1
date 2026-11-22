@@ -22,7 +22,7 @@ try {
   $stage = '核对升级包完整性'
   $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($manifest.version -ne '1.0.15' -or $manifest.packageRevision -ne 'r1') { throw '升级包版本不正确。' }
-  $expectedFiles = @('RecoveryActions.cs','service-policy.ps1','observe.mjs','read-queue.ps1','MBOX-Check-Queues.cmd','check-queues.ps1','diagnostic-events.mjs','MBOX-OneClick-Upgrade.cmd','MBOX-Test-Only.cmd','bridge.mjs','list-printers.ps1','paid-58mm.png','paid-80mm.png','partial-58mm.png','partial-80mm.png','payment-58mm.png','payment-80mm.png','print-ticket.ps1','test-bar_production.layout.json','test-cashier_payment.layout.json','test-cashier_refund.layout.json','test-cashier_settlement.layout.json','test-catalog.json','test-daily_settlement.layout.json','test-delivery.layout.json','test-kitchen_production.layout.json','test-order_summary.layout.json','test-paid.layout.json','test-partial.layout.json','test-payment.layout.json','test-print.ps1','test-production_notice.layout.json','test-system_test.layout.json','test-table_settlement.layout.json','test-unpaid.layout.json','unpaid-58mm.png','unpaid-80mm.png','upgrade-core.ps1','upgrade.ps1','使用说明.txt')
+  $expectedFiles = @('worker-lifetime.mjs','RecoveryActions.cs','service-policy.ps1','observe.mjs','read-queue.ps1','MBOX-Check-Queues.cmd','check-queues.ps1','diagnostic-events.mjs','MBOX-OneClick-Upgrade.cmd','MBOX-Test-Only.cmd','bridge.mjs','list-printers.ps1','paid-58mm.png','paid-80mm.png','partial-58mm.png','partial-80mm.png','payment-58mm.png','payment-80mm.png','print-ticket.ps1','test-bar_production.layout.json','test-cashier_payment.layout.json','test-cashier_refund.layout.json','test-cashier_settlement.layout.json','test-catalog.json','test-daily_settlement.layout.json','test-delivery.layout.json','test-kitchen_production.layout.json','test-order_summary.layout.json','test-paid.layout.json','test-partial.layout.json','test-payment.layout.json','test-print.ps1','test-production_notice.layout.json','test-system_test.layout.json','test-table_settlement.layout.json','test-unpaid.layout.json','unpaid-58mm.png','unpaid-80mm.png','upgrade-core.ps1','upgrade.ps1','使用说明.txt')
   if (@($manifest.files.psobject.Properties).Count -ne $expectedFiles.Count) { throw '升级包清单不完整。' }
   foreach ($file in $expectedFiles) {
     $entry = $manifest.files.psobject.Properties[$file]
@@ -58,7 +58,7 @@ try {
   $service = Get-Service -Name 'MBoxPrintBridge' -ErrorAction Stop
   if ($service.Status -notin @('Running','Stopped')) { throw '服务正在切换状态。' }
   $wasRunning = $service.Status -eq 'Running'
-  $files = @('bridge.mjs','print-ticket.ps1','list-printers.ps1','diagnostic-events.mjs','observe.mjs','read-queue.ps1')
+  $files = @('worker-lifetime.mjs','bridge.mjs','print-ticket.ps1','list-printers.ps1','diagnostic-events.mjs','observe.mjs','read-queue.ps1')
   $originalPresence = @{}
   $activationStarted = $null
   $backup = Join-Path $InstallDirectory ('backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -110,6 +110,7 @@ try {
   }
   $baseline14 = @{}
   foreach ($file in $files) { $baseline14[$file] = $manifest.files.psobject.Properties[$file].Value }
+  $baseline14.Remove('worker-lifetime.mjs')
   $baseline14['bridge.mjs'] = '080c43ce3dd009a71bc4af2a5f87b0b8c4a3dbf0286f6632c3fd624f625c890c'
   $policyChange = @{ attempted=$false; original=$null }
   $validatedHashes = @{}

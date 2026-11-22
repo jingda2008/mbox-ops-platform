@@ -27,24 +27,29 @@ function Test-FixtureRecovery {
   Assert ((Get-Process -Id $registered.ProcessId).SessionId -eq 0) 'service not in session zero'
   Record 'automatic service in noninteractive Session 0, first/next restart delays and failure flag verified via sc.exe'
 
-  $child = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($registered.ProcessId) AND Name='node.exe'")
-  Assert ($child.Count -eq 1) 'isolated service child not found'
-  $faultTime = [DateTimeOffset]::UtcNow
-  Stop-Process -Id $child[0].ProcessId -Force
-  $recovered = $false
-  for ($attempt=0; $attempt -lt 90; $attempt++) {
-    Start-Sleep -Seconds 1
-    $now = Get-CimInstance Win32_Service -Filter "Name='MBoxPrintBridge'"
-    if($now.State -eq 'Running' -and $now.ProcessId -ne $registered.ProcessId){
-      try {
-        $runtime = Get-Content -LiteralPath (Join-Path $data 'runtime-status.json') -Raw | ConvertFrom-Json
-        $recovered = ($runtime.version -eq $version -and [DateTimeOffset]::Parse($runtime.lastHeartbeatAt) -gt $faultTime)
-      } catch { }
-      if($recovered){break}
+  foreach ($fault in @('worker','wrapper')) {
+    $registered = Get-CimInstance Win32_Service -Filter "Name='MBoxPrintBridge'"
+    $child = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($registered.ProcessId) AND Name='node.exe'")
+    Assert ($child.Count -eq 1) 'isolated service child not found'
+    $faultTime = [DateTimeOffset]::UtcNow
+    $crashPid = if ($fault -eq 'worker') { $child[0].ProcessId } else { $registered.ProcessId }
+    Stop-Process -Id $crashPid -Force
+    $recovered = $false
+    for ($attempt=0; $attempt -lt 90; $attempt++) {
+      Start-Sleep -Seconds 1
+      $now = Get-CimInstance Win32_Service -Filter "Name='MBoxPrintBridge'"
+      if($now.State -eq 'Running' -and $now.ProcessId -ne $registered.ProcessId){
+        try {
+          $runtime = Get-Content -LiteralPath (Join-Path $data 'runtime-status.json') -Raw | ConvertFrom-Json
+          $recovered = ($runtime.version -eq $version -and [DateTimeOffset]::Parse($runtime.lastHeartbeatAt) -gt $faultTime)
+        } catch { }
+        if($recovered){break}
+      }
     }
+    Assert $recovered 'SCM did not recover a crashed bridge worker and produce a fresh heartbeat'
+    Assert (-not (Get-Process -Id $child[0].ProcessId -ErrorAction SilentlyContinue)) 'old printing worker remained active'
+    Record "forced $fault termination recovered with one worker, new service PID and fresh heartbeat"
   }
-  Assert $recovered 'SCM did not recover a crashed bridge worker and produce a fresh heartbeat'
-  Record 'forced bridge worker termination recovered automatically with a new service PID and fresh backend heartbeat'
 
   Set-FixtureOriginalPolicy
   Assert ((Run-Upgrade) -eq 0) 'repeat upgrade did not repair policy drift'

@@ -10,6 +10,7 @@ $addedFiles = @('diagnostic-events.mjs')
 if($ServiceUpgradeFrom){$QueueUpgrade=$true}
 if($QueueUpgrade){$oldFiles+='diagnostic-events.mjs';$addedFiles=@('read-queue.ps1','observe.mjs')}
 if($ServiceUpgradeFrom -eq '1.0.14'){$oldFiles+=$addedFiles;$addedFiles=@()}
+if($ServiceUpgradeFrom){$addedFiles+='worker-lifetime.mjs'}
 $evidence=Join-Path $repo 'artifacts\print-bridge-native-evidence'
 New-Item -ItemType Directory -Force $evidence | Out-Null
 $root='C:\MBOX Native 验证'

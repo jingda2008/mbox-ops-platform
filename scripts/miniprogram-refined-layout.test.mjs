@@ -210,7 +210,8 @@ test('all configured page style cascades preserve compact wrapping actions in no
   try {
     const page = await browser.newPage()
     const routes = JSON.parse(await readFile(resolve(root, 'miniprogram/app.json'), 'utf8')).pages
-    assert.equal(routes.length, 26)
+    assert.equal(routes.length, 27)
+    assert.ok(routes.includes('pages/table-tickets/index'))
     assert.ok(routes.includes('pages/channel-coupons/index'))
     assert.ok(!routes.includes('pages/channel-partner/index'))
     assert.ok(routes.includes('pages/profile-bottles/index'))

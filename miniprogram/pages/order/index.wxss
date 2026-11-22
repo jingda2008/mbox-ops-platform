@@ -1855,3 +1855,5 @@
 /* Selling-window copy occupies its own row; never overlap price or taste tags. */
 .product-row.is-scheduled .product-availability-copy { max-width: 100%; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
 .product-row.is-scheduled .product-availability { color: #315d46; font-weight: 500; }
+.ticket-date-strip {white-space:nowrap;margin:12rpx 0}
+.ticket-date-strip button {display:inline-block;margin-right:12rpx}

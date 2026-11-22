@@ -5,6 +5,7 @@
     "pages/reservations/index",
     "pages/order/index",
     "pages/community/index",
+    "pages/table-tickets/index",
     "pages/community-detail/index",
     "pages/profile/index",
     "pages/profile-preferences/index",

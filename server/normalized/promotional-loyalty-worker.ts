@@ -1,3 +1,4 @@
+import { creditTableTicketGifts } from './table-ticket-gifts.js'
 import { LoyaltyOperationalControlRepository } from './loyalty-operational-control-repository.js'
 import type { PromotionRefundPolicy, PromotionStackingMode } from './promotional-loyalty-service.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
@@ -236,6 +237,14 @@ export class PromotionalLoyaltyWorker {
           AND status='processing' AND worker_id=$4
       `, [transaction.scope.tenantId, transaction.scope.storeId, fact.id, workerId, control.version])
       return { status: 'deferred', awarded: 0 }
+    }
+    if (fact.trigger_kind === 'activity_payment' && fact.payment_id) {
+      const awarded = await creditTableTicketGifts(transaction, fact.registration_id, fact.payment_id)
+      if (awarded !== null) {
+        const status = awarded > 0 ? 'applied' : 'not_applicable'
+        await finishTrigger(transaction, fact.id, workerId, status, awarded > 0 ? 'awarded' : 'no_matching_policy', awarded)
+        return {status, awarded}
+      }
     }
     const candidates = await this.candidates(transaction, fact)
     if (candidates.kind !== 'eligible') {
@@ -727,6 +736,7 @@ async function registrationHasSucceededRefund(
       WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
         AND payment.payable_kind='activity_registration'
         AND payment.activity_registration_id=$3::uuid
+        AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_purchases t WHERE (t.tenant_id,t.store_id,t.registration_id)=(payment.tenant_id,payment.store_id,payment.activity_registration_id))
     ) AS refunded
   `, [transaction.scope.tenantId, transaction.scope.storeId, registrationId])
   return result.rows[0]?.refunded === true

@@ -1,6 +1,6 @@
 const { parseInstant } = require('./format')
 const initialCheckoutCoupons = {
-  pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, pointsInput: '',
+  pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, maximumPoints: null, pointsInput: '',
   couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
   couponQuoteTotal: '', couponNeedsReview: false, couponEntryOpen: false, couponProducts: [], issuedCouponPending: null,
@@ -41,22 +41,30 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
     },
     async openCheckoutPoints() {
       if (this.data.busy || this.data.couponLoading) return
-      this.invalidateCheckoutCoupons(false, false)
+      this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
       const epoch = this.checkoutCouponEpoch, identity = scope()
-      this.setData({ pointsPickerOpen: true, couponPickerOpen: false, pointsLoading: true, pointsError: '', pointsBalance: null })
+      this.setData({ pointsPickerOpen: true, couponPickerOpen: false, pointsLoading: true, pointsError: '', pointsBalance: null, maximumPoints: null })
       try {
-        const response = await getPoints(), result = response.data || response
+        const response = await getPoints({ generation: this.data.cartGeneration, version: this.data.cartVersion }), result = response.data || response
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
         if (!Number.isSafeInteger(result.availablePoints) || result.availablePoints < 0 || result.minorPerPoint !== 100 || result.allowCoupons !== false) throw new Error('积分规则暂不可用')
-        this.setData({ pointsBalance: result.availablePoints, pointsInput: '' })
+        this.setData({ pointsBalance: result.availablePoints, maximumPoints: Number.isSafeInteger(result.maximumPoints) && result.maximumPoints >= 0 && result.maximumPoints <= result.availablePoints ? result.maximumPoints : null })
       } catch (error) {
         if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '积分读取失败，请重试或不使用积分。') })
       } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ pointsLoading: false }) }
     },
+    closeCheckoutPoints() {
+      if (this.data.busy) return
+      this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
+      this.setData({ pointsPickerOpen: false, pointsLoading: false })
+    },
     onCheckoutPointsInput(event) {
       if (this.data.busy || this.data.pointsLoading) return
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-      this.setData({ pointsInput: String(event.detail.value || ''), pointsError: '', couponQuote: null, couponQuoteTotal: '' })
+      this.setData({ pointsInput: String(event.detail.value || ''), pointsError: '', couponSelections: [], couponQuote: null, couponQuoteTotal: '' })
+    },
+    fillMaximumCheckoutPoints() {
+      if (this.data.maximumPoints > 0) this.onCheckoutPointsInput({ detail: { value: String(this.data.maximumPoints) } })
     },
     async quoteCheckoutPoints() {
       if (this.data.busy || this.data.pointsLoading) return
@@ -78,7 +86,7 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
     invalidateCheckoutCoupons(clearWallet, needsReview) {
       if (this.invalidateCheckoutUpgrade) this.invalidateCheckoutUpgrade()
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-      this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
+      this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, maximumPoints: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
         couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '购物车或会话已变化，请重新核对优惠，或明确选择不使用优惠。' : '',
         ...(clearWallet ? { couponItems: [], couponProducts: [], couponNextCursor: null, couponPickerOpen: false, couponEntryOpen: false } : {}) })
     },
@@ -90,7 +98,8 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
         if (entry) this.setData({ couponEntryOpen: true })
         this.checkoutCouponScope = scope()
       }
-      if (this.data.pointsPickerOpen) this.invalidateCheckoutCoupons(false, false)
+      if (this.data.pointsPickerOpen && this.data.pointsInput) this.invalidateCheckoutCoupons(false, false)
+      else if (this.data.pointsPickerOpen) this.closeCheckoutPoints()
       this.setData({ couponPickerOpen: true })
       await this.loadCheckoutCoupons(false)
     },

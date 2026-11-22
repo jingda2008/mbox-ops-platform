@@ -1,3 +1,6 @@
+import {memberTicketProposals,memberTicketReservations} from './table-ticket-purchase.js'
+import {decideTicketCase} from './table-ticket-refund.js'
+import {consentTicketDining} from './table-ticket-dining.js'
 import {registerActivityCustomerRefundRoutes} from './activity-customer-refund-api.js'
 import {ActivityServiceError} from './activity-service-repository.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
@@ -535,6 +538,77 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       idempotencyKey: idempotencyKey(request),
     })
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
+  }))
+
+  app.post<{Params:{id:string}}>('/public/mini/table-ticket-dining/:id/confirm',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    if(objectBody(request.body).confirmed!==true||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(request.params.id))throw new CustomerExperienceRequestError('请核对原单补款明细')
+    const result=await options.transactions.run(ctx.scope,tx=>consentTicketDining(tx,request.params.id,ctx.customerId))
+    return reply.send({data:result})
+  }))
+  app.post<{Params:{id:string}}>('/public/mini/table-tickets/:id/withdraw',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(request.params.id))throw new CustomerExperienceRequestError('请核对原票号')
+    const result=await options.transactions.run(ctx.scope,tx=>decideTicketCase(tx,request.params.id,{customer:ctx.customerId},'cancelled','顾客从原票撤回本次退票'))
+    return reply.send({data:result})
+  }))
+  app.get('/public/mini/table-ticket-reservations',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>memberTicketReservations(tx,ctx.customerId),{readOnly:true})})
+  }))
+  app.get('/public/mini/table-ticket-assistance',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>memberTicketProposals(tx,ctx.customerId),{readOnly:true})})
+  }))
+  app.get('/public/mini/table-ticket-offers',async(request,reply)=>handle(reply,async()=>{
+    const scope=options.publishedContentScope??(await options.resolvePublicContext(request)).scope
+    return reply.header('cache-control','no-store').send({data:await options.service.tableTicketOffers(scope)})
+  }))
+  app.get('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    const rows=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`
+      SELECT r.public_id AS "registrationPublicId",o.name,p.quantity,p.starts_at::text AS "startsAt",p.ends_at::text AS "endsAt",
+        mbox.unissued_late_ticket_payment(r.tenant_id,r.store_id,r.payment_id) AS "lateUnissued",
+        (SELECT f.status FROM mbox.refunds f WHERE(f.tenant_id,f.store_id,f.payment_id)=(r.tenant_id,r.store_id,r.payment_id) ORDER BY f.created_at DESC,f.id DESC LIMIT 1) AS "cashRefundStatus",
+        EXISTS(SELECT 1 FROM mbox.refunds f WHERE (f.tenant_id,f.store_id,f.payment_id)=(r.tenant_id,r.store_id,r.payment_id) AND f.status NOT IN('cancelled','rejected')) AS "cashRefundPending",
+        r.payment_status AS "paymentStatus",r.status,r.fee_amount_minor::text AS "totalMinor",o.gift_points AS "giftPoints",r.refund_policy_snapshot AS "purchaseTerms",
+        coalesce((SELECT jsonb_agg(jsonb_build_object('id',k.id,'number',k.ordinal,'tableName',tab.display_name,
+          'cashZero',EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.closed_without_receipt AND f.status='refunded'),
+          'refundStatus',(SELECT f.status FROM mbox.table_ticket_refund_requests f WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('rejected','cancelled')),
+          'refundDetail',(SELECT jsonb_build_object('caseStatus',f.status,'reason',f.reason,'decision',f.close_reason,
+            'cashStatus',cash.status,'cashMinor',cash.amount_minor,'closedAt',cash.completed_at)
+            FROM mbox.table_ticket_refund_requests f LEFT JOIN mbox.refunds cash ON(cash.tenant_id,cash.store_id,cash.id)=(f.tenant_id,f.store_id,f.refund_id)
+            WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) ORDER BY f.created_at DESC LIMIT 1),
+          'dining',coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'caseStatus',f.status,'closing',f.close_intent,'amountMinor',c.amount_minor,'items',c.line_snapshot,'reason',c.reason,'confirmed',c.consented_at IS NOT NULL,'paymentStatus',CASE WHEN back.amount>=pay.amount_minor THEN 'refunded' WHEN back.amount>0 THEN 'partially_refunded' ELSE pay.status END,
+            'returnedMinor',back.amount)) FROM mbox.table_ticket_refund_requests f JOIN mbox.ticket_dining_collections c ON(c.tenant_id,c.store_id,c.case_id)=(f.tenant_id,f.store_id,f.id) LEFT JOIN mbox.payments pay ON(pay.tenant_id,pay.store_id,pay.id)=(c.tenant_id,c.store_id,c.payment_id)
+            LEFT JOIN LATERAL(SELECT coalesce(sum(rb.amount_minor),0) amount FROM mbox.refunds rb
+              WHERE(rb.tenant_id,rb.store_id,rb.payment_id)=(c.tenant_id,c.store_id,c.payment_id) AND rb.status='succeeded') back ON true
+            WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id)),'[]'::jsonb),
+          'doorCode',CASE WHEN k.refunded_at IS NULL THEN k.door_code END,'pointsPosted',own_lot.id IS NOT NULL,'remainingPoints',own_lot.remaining_points,'expiresAt',mbox.table_ticket_expiry(k.paid_at)) ORDER BY k.ordinal)
+          FROM mbox.table_tickets k LEFT JOIN mbox.loyalty_point_lots own_lot ON (own_lot.tenant_id,own_lot.store_id,own_lot.id,own_lot.membership_id)=(k.tenant_id,k.store_id,k.point_lot_id,p.membership_id)
+          LEFT JOIN mbox.reservation_table_locks l ON (l.tenant_id,l.store_id,l.id)=(k.tenant_id,k.store_id,k.reservation_lock_id)
+          LEFT JOIN mbox.tables tab ON (tab.tenant_id,tab.store_id,tab.id)=(l.tenant_id,l.store_id,l.table_id)
+          WHERE (k.tenant_id,k.store_id,k.registration_id)=(p.tenant_id,p.store_id,p.registration_id)),'[]'::jsonb) tickets
+      FROM mbox.table_ticket_purchases p JOIN mbox.table_ticket_offers o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
+      JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
+      WHERE p.tenant_id=$1 AND p.store_id=$2 AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$3)
+      ORDER BY r.created_at DESC`,[ctx.scope.tenantId,ctx.scope.storeId,ctx.customerId])).rows,{readOnly:true})
+    return reply.header('cache-control','no-store').send({data:rows})
+  }))
+  app.post('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
+    const context=await options.resolvePublicContext(request)
+    const body=objectBody(request.body)
+    if (Object.keys(body).some(key=>!['offerId','proposalId','reservationLockId','quantity','safetyVersion','refundVersion','termsAcknowledged'].includes(key)))
+      throw new CustomerExperienceRequestError('整桌门票须按票档原价付款','TICKET_TENDER_INVALID',400)
+    if (body.termsAcknowledged!==true) throw new CustomerExperienceRequestError('请先核对本场条款与赠分说明')
+    const offerId=text(body.offerId,'票档',36,36)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(offerId)) throw new CustomerExperienceRequestError('票档编号不正确')
+    if(body.proposalId!==undefined && (typeof body.proposalId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.proposalId)))throw new CustomerExperienceRequestError('代售单号不正确')
+    if(body.reservationLockId!==undefined && (typeof body.reservationLockId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.reservationLockId)))throw new CustomerExperienceRequestError('预约编号不正确')
+    const result=await options.service.purchaseTableTickets(context,{offerId,...(typeof body.reservationLockId==='string'?{reservationLockId:body.reservationLockId}:{}),...(typeof body.proposalId==='string'?{proposalId:body.proposalId}:{}),quantity:integer(body.quantity,'桌数',1,2147483647),
+      safetyVersion:text(body.safetyVersion,'安全条款',1,64),refundVersion:text(body.refundVersion,'退票条款',3,64)},
+      idempotencyKey(request),await options.resolveActivityPaymentReady?.(context.scope,context.customerId)??false)
+    return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
   }))
 
   app.get('/public/mini/activities', async (request, reply) => handle(reply, async () => {

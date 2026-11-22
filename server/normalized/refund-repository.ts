@@ -287,6 +287,17 @@ export class RefundRepository {
       allocations.map((allocation) => allocation.orderItemId),
       retryOf,
     ])
+    if(payment.provider_snapshot?.ticketDiningCollection){
+      const result=await this.transaction.query<{caps:Record<string,number>}>(
+        `SELECT mbox.ticket_dining_item_caps(c.tenant_id,c.store_id,c.id) caps
+         FROM mbox.ticket_dining_collections c JOIN mbox.table_ticket_refund_requests f
+           ON(f.tenant_id,f.store_id,f.id)=(c.tenant_id,c.store_id,c.case_id)
+         WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.payment_id=$3 AND f.status='refunded' FOR SHARE OF f,c`,
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.id])
+      const caps=result.rows[0]?.caps
+      if(!caps || input.purpose!=='return_goods')throw new RefundLimitError('请先核对原票售后结果，按补收时的菜品办理退菜')
+      for(const item of items)item.total_amount_minor=caps[item.id]??0
+    }
     validateRefundCapacity(
       payment,
       items,
@@ -361,10 +372,13 @@ export class RefundRepository {
     if (!['succeeded', 'partially_refunded'].includes(payment.status)) {
       throw new RefundLimitError(`Payment ${payment.id} is not refundable from status ${payment.status}`)
     }
+    if ((await this.transaction.query('SELECT 1 FROM mbox.table_ticket_purchases WHERE tenant_id=$1 AND store_id=$2 AND registration_id=$3 AND NOT mbox.unissued_late_ticket_payment($1,$2,$4)',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id,payment.id])).rowCount)
+      throw new ActivityServiceError('请从原票号核算票款与赠分','TICKET_SELECTION_REQUIRED',409)
     if(input.requestedByCustomerId) {
       const owner=await this.transaction.query(`SELECT r.id FROM mbox.community_activity_registrations r
-        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND r.service_version=3
-          AND r.payment_status='paid' AND r.status IN('confirmed','checked_in')
+        WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND ((r.service_version=3 AND r.payment_status='paid' AND r.status IN('confirmed','checked_in'))
+            OR mbox.unissued_late_ticket_payment(r.tenant_id,r.store_id,r.payment_id))
           AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$4)
         FOR UPDATE`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activity_registration_id,input.requestedByCustomerId])
       if(owner.rowCount!==1||payment.status!=='succeeded')throw new ActivityServiceError('仅能申请本人的未使用整份套餐退订，请联系门店核对原单','ACTIVITY_REFUND_NOT_ALLOWED')

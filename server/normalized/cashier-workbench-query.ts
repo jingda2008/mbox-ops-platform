@@ -916,6 +916,10 @@ function assembleView(
         remainingRefundableMinor: paymentRemaining,
         refundableItems: items.map((item) => {
           const reserved = reservedByItem.get(item.id) ?? 0
+          const supplementCaps=payment.provider_snapshot?.ticketDiningItemCaps
+          const itemPaid=supplementCaps && typeof supplementCaps==='object'
+            ? asSafeMinor(Number((supplementCaps as Record<string,unknown>)[item.id]??0),'supplement item amount')
+            : item.totalAmountMinor
           const fundsOnly=payment.provider_snapshot?.lateSuccessAfterClose===true&&(itemsByOrder.get(order.id)??[]).some(original=>original.id===item.id&&original.fully_waived_quantity===true)
           return {
             ...item,
@@ -923,7 +927,7 @@ function assembleView(
             reservedRefundAmountMinor: reserved,
             remainingRefundableMinor: fundsOnly&&captured?Math.min(Math.max(0,item.totalAmountMinor-reserved),paymentRemaining,asSafeMinor(payment.unreserved_excess_minor??0,'unreserved excess')):captured && (item.status !== 'cancelled'
               || payment.provider_snapshot.guestCheckoutAbandoned === true || payment.cancelled_after_attempt===true)
-              ? Math.min(Math.max(0, item.totalAmountMinor - reserved), paymentRemaining)
+              ? Math.min(Math.max(0, itemPaid - reserved), paymentRemaining)
               : 0,
           }
         }),

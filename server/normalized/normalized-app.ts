@@ -256,7 +256,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '251'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '350'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -714,6 +714,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       commandExecutor,
       new CustomerCommandService(commandExecutor),
       options.config.payment !== null,
+      activityContactProtection,
     )
     const mediaAssets = new MediaAssetService(transactions, commandExecutor)
     const personalContactGovernance = new PersonalContactGovernanceService(
@@ -1171,7 +1172,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
       })
       await reservationApp.register(activityOperationsApiPlugin, {
         transactions,
-        service: new ActivityOperationsService(transactions, commandExecutor),
+        service: new ActivityOperationsService(transactions, commandExecutor,activityContactProtection),
         activityPublisher: customerExperience,
         activityPayments,
         resolveStaffContext: staffReservationContext,

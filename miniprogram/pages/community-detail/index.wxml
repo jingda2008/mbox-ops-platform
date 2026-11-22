@@ -53,7 +53,8 @@
       <text class="detail-heading">我的本场订单（{{registrations.length}} 份）</text>
       <text class="detail-summary">每份独立付款、独立查看；请选中本次要出示或加购的订单。</text>
       <button wx:for="{{registrations}}" wx:key="publicId" class="activity-order-row {{registration && registration.publicId === item.publicId && !creatingPurchase ? 'activity-order-row--selected' : ''}}" data-registration-id="{{item.publicId}}" bindtap="selectRegistration" disabled="{{busy}}"><text>{{item.packageText || item.purchaseText}} · {{item.referenceText}}</text><text>{{item.statusText}} · {{item.partySize}} 人</text></button>
-      <view wx:if="{{!creatingPurchase && (activity.hasServicePackages || registration.hasServiceFlow)}}" class="activity-purchase-actions">
+      <navigator wx:if="{{registration.serviceVersion===4}}" url="/pages/table-tickets/index">查看本单各桌门票、验票码及逐票售后</navigator>
+      <view wx:if="{{registration.serviceVersion!==4 && !creatingPurchase && (activity.hasServicePackages || registration.hasServiceFlow)}}" class="activity-purchase-actions">
         <button wx:if="{{activity.hasServicePackages}}" data-kind="admission_package" bindtap="beginPurchase" disabled="{{busy || activity.registrationBlocked}}">再买一份含入场套餐</button>
         <button wx:if="{{registration.canAddPurchase && registration.hasServiceFlow && activity.hasServicePackages}}" data-kind="meal_package" bindtap="beginPurchase" disabled="{{busy || activity.addonBlocked}}">加购套餐（仅加餐）</button>
         <button wx:if="{{registration.canAddPurchase && (serviceCode.service.hasMeal || serviceCode.service.includesAdmission) && serviceCode.service.purchaseKind !== 'single_dish'}}" data-kind="single_dish" bindtap="beginPurchase" disabled="{{busy || activity.addonBlocked}}">给本份加购菜品</button>

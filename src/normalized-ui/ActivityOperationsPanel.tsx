@@ -1,3 +1,5 @@
+import {TableTicketReception} from './TableTicketReception'
+import {TableTicketOffers} from './TableTicketOffers'
 import {ActivityRefundReviewActions} from './ActivityRefundReviewActions'
 import type {ActivityPackageChoiceGroup} from '../shared/activity-service'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
@@ -93,16 +95,30 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   const { confirmAction } = useConfirmationDialog()
   const canManage = auth.permissions.includes('community.activity.manage')
   const canPublish = auth.permissions.includes('community.activity.publish')
-  const canView = auth.permissions.includes('community.activity.view') || canManage || canPublish
+  const canView = auth.permissions.includes('community.activity.view') || auth.permissions.includes('community.activity.verify') || canManage || canPublish
   const canRequestRefund = canManage && auth.permissions.includes('refund.request')
   const canApproveRefund = auth.permissions.includes('refund.approve')
   const canExecuteRefund = auth.permissions.includes('refund.execute')
   const canRevealContact = auth.permissions.includes('community.activity.contact.reveal')
   const [scanTarget] = useState(() => {
     const query = new URLSearchParams(window.location.search)
-    return { activity: query.get('activity'), registration: query.get('registration') }
+    return { activity: query.get('activity'), registration: query.get('registration'), reception: query.get('ticketReception') === '1' }
   })
-  const [expanded, setExpanded] = useState(!!scanTarget.activity)
+  const [ticketInbox,setTicketInbox]=useState<{activityId:string;title:string;waiting:number}[]>([])
+  const canReceiveTickets=canManage || auth.permissions.includes('community.activity.verify')
+  useEffect(()=>{
+    if(!canReceiveTickets)return
+    let active=true
+    const load=async()=>{
+      try{const reply=await api.getEndpoint<{data:typeof ticketInbox}>('/api/staff/activity-operations/ticket-reception-inbox')
+        if(active && Array.isArray(reply.data))setTicketInbox(reply.data)
+      }catch{/* The persistent inbox remains available on the next poll. */}
+    }
+    void load()
+    const timer=window.setInterval(()=>void load(),20000)
+    return ()=>{active=false;window.clearInterval(timer)}
+  },[api,canReceiveTickets])
+  const [expanded, setExpanded] = useState(!!scanTarget.activity || scanTarget.reception)
   const [scanOnly, setScanOnly] = useState(!!scanTarget.registration)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -331,7 +347,8 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     finally { setBusy('') }
   }
 
-  async function revealContact(registration:Registration){
+  async function revealContact(registration:Pick<Registration,'publicId'|'contactVersionPublicId'|'status'|'maskedContact'>){
+    const generation=detailGeneration.current
     const purpose=registration.status==='waitlisted'?'waitlist_coordination'
       :registration.status==='payment_pending'?'payment_followup'
         :['confirmed','checked_in'].includes(registration.status)?'attendance_coordination':null
@@ -342,6 +359,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
         `/api/staff/activity-contacts/${encodeURIComponent(registration.contactVersionPublicId)}/reveal`,
         {purpose},{idempotencyKey:operationKey(`activity-contact-${purpose}`)},
       )
+      if(generation!==detailGeneration.current)return
       const value=object(raw,'联系方式查看结果')
       const contactValue=string(value.contactValue)
       const expiresAt=string(value.expiresAt)
@@ -477,6 +495,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   })
 
   return <section className="activity-operations-panel" aria-label="活动报名运营工作台">
+    {ticketInbox.length>0 && <aside aria-live="polite">{ticketInbox.map(t=><button key={t.activityId} onClick={()=>{setExpanded(true);void loadDetail(t.activityId)}}>{t.title} · {t.waiting} 笔购票待跟进</button>)}</aside>}
     <header>
       <div><strong>活动报名运营</strong><small>名单、候补、签到、取消与退款状态集中处理；不在此页面伪造支付结果。</small></div>
       <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => {if(value)setRevealedContacts({});return !value})}>{expanded ? '收起' : '打开工作台'}<ChevronDown size={17} /></button>
@@ -489,6 +508,15 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
         <strong>{activity.title}</strong><span>{statusLabel(activity.status)} · {dateText(activity.startsAt)}</span><small>{activity.occupiedSeats}/{activity.capacity} 人 · 候补 {activity.waitlistedSeats} 人</small>
       </button>)}</div>
       {detail && <div className="activity-operations-detail">
+        {detail.activity.publicId && (canManage || auth.permissions.includes('community.activity.verify')) && <TableTicketReception key={'reception:'+detail.activity.publicId} initiallyOpen={scanTarget.reception} api={api} activityId={detail.activity.publicId} renderContact={contact=>{
+          const shown=revealedContacts[contact.orderId]
+          if(shown)return <a href={'tel:'+shown.value}>{shown.value}（{Math.max(0,Math.ceil((Date.parse(shown.expiresAt)-contactClock)/1000))} 秒后隐藏）</a>
+          const version=contact.contactVersionPublicId
+          return <>{contact.maskedPhone} {canRevealContact && version && ['confirmed','checked_in'].includes(contact.registrationStatus) &&
+            <button type="button" disabled={Boolean(busy)} onClick={()=>void revealContact({publicId:contact.orderId,contactVersionPublicId:version,
+              status:contact.registrationStatus==='checked_in'?'checked_in':'confirmed',maskedContact:contact.maskedPhone})}>联系购票人 · 查看60秒</button>}</>
+        }} canRefund={auth.permissions.includes('refund.request')} canManage={canManage} canApproveRefund={canApproveRefund} canCorrect={auth.permissions.includes('loyalty.adjust.manual')} canApproveCorrection={auth.permissions.includes('loyalty.accrual.approve')}/>}
+        {detail.activity.publicId && (canReceiveTickets || canPublish) && <TableTicketOffers key={detail.activity.publicId} api={api} activityId={detail.activity.publicId} canManage={canManage} canPublish={canPublish} canAssist={canReceiveTickets}/>}
         <header><div><strong>{detail.activity.publicId === '' ? '新活动草稿' : detail.activity.title}</strong><small>{dateText(detail.activity.startsAt)} · {detail.activity.assemblyLocation}</small></div><div><em>{statusLabel(detail.activity.status)}</em>{detail.activity.status === 'draft' && detail.activity.publicId !== '' && canPublish && <button type="button" disabled={busy === 'publish'} onClick={() => void publishActivity(detail.activity)}>复核并发布</button>}</div></header>
         <div className="activity-operations-metrics"><span><strong>{detail.activity.occupiedSeats}</strong>已占名额</span><span><strong>{detail.activity.waitlistedSeats}</strong>候补人数</span><span><strong>{detail.activity.capacity}</strong>人数上限</span></div>
         {detail.activity.pointsReward > 0 && <p className="activity-operations-warning">历史活动配置了未版本化积分奖励，当前不会自动发放或对顾客展示；发布前必须改为0。</p>}
@@ -616,14 +644,14 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             {registration.refund && <p className="activity-refund-state">退款 {money(registration.refund.amountMinor)} · {refundStatusLabel(registration.refund.status)}</p>}
             {registration.serviceVersion===3&&<p>现场入场、领牌和出餐请从“全部 → 扫码与活动核销”办理；退款统一到“收银与退款 → 活动收银”核对原申请，需要补偿时由授权收银核定金额和剩余内容安排。</p>}
             <div className="activity-registration-actions">
-              {canManage && registration.serviceVersion!==3 && registration.status === 'confirmed' && <><button type="button" onClick={() => void registrationAction(registration,'check-in')}><UserCheck size={16} />签到</button><button type="button" onClick={() => void registrationAction(registration,'no-show')}><XCircle size={16} />未到</button></>}
-              {canManage && registration.serviceVersion!==3 && registration.status === 'checked_in' && registration.packageFulfillmentStatus === 'pending' && <button type="button" disabled={busy===`${registration.publicId}:fulfill-package`} onClick={() => void registrationAction(registration,'fulfill-package')}>登记套餐交付</button>}
+              {canManage && registration.serviceVersion!==3 && registration.serviceVersion!==4 && registration.status === 'confirmed' && <><button type="button" onClick={() => void registrationAction(registration,'check-in')}><UserCheck size={16} />签到</button><button type="button" onClick={() => void registrationAction(registration,'no-show')}><XCircle size={16} />未到</button></>}
+              {canManage && registration.serviceVersion!==3 && registration.serviceVersion!==4 && registration.status === 'checked_in' && registration.packageFulfillmentStatus === 'pending' && <button type="button" disabled={busy===`${registration.publicId}:fulfill-package`} onClick={() => void registrationAction(registration,'fulfill-package')}>登记套餐交付</button>}
               {canManage && ['reserved','payment_pending','confirmed','waitlisted'].includes(registration.status) && registration.paymentStatus !== 'paid' && registration.paidAmountMinor === 0 && <button type="button" onClick={() => void registrationAction(registration,'cancel')}>取消报名</button>}
               {registration.status === 'payment_pending' && registration.providerActionState && registration.paymentId && <button type="button" onClick={() => void queryPayment(registration)}>先查支付</button>}
-              {registration.serviceVersion!==3 && canRequestRefund && registration.paymentStatus === 'paid' && registration.refund === null && <button type="button" onClick={() => void refundAction(registration,'request')}>店长发起退款取消</button>}
-              {registration.serviceVersion!==3 && canApproveRefund && registration.refund?.status === 'requested' && <ActivityRefundReviewActions registrationPublicId={registration.publicId} canUseCashier={auth.permissions.includes('community.activity.cashier')} blockedReason={registration.refund.reviewBlockReason} busy={!!busy} onDecision={action=>void refundAction(registration,action)}/>}
-              {registration.serviceVersion!==3 && canExecuteRefund && registration.refund?.status === 'approved' && <button type="button" onClick={() => void refundAction(registration,'execute')}>执行退款</button>}
-              {registration.serviceVersion!==3 && canExecuteRefund && registration.refund?.status === 'processing' && <button type="button" onClick={() => void refundAction(registration,'query')}>查询渠道退款</button>}
+              {registration.serviceVersion!==3 && registration.serviceVersion!==4 && canRequestRefund && registration.paymentStatus === 'paid' && registration.refund === null && <button type="button" onClick={() => void refundAction(registration,'request')}>店长发起退款取消</button>}
+              {registration.serviceVersion!==3 && registration.serviceVersion!==4 && canApproveRefund && registration.refund?.status === 'requested' && <ActivityRefundReviewActions registrationPublicId={registration.publicId} canUseCashier={auth.permissions.includes('community.activity.cashier')} blockedReason={registration.refund.reviewBlockReason} busy={!!busy} onDecision={action=>void refundAction(registration,action)}/>}
+              {registration.serviceVersion!==3 && registration.serviceVersion!==4 && canExecuteRefund && registration.refund?.status === 'approved' && <button type="button" onClick={() => void refundAction(registration,'execute')}>执行退款</button>}
+              {registration.serviceVersion!==3 && registration.serviceVersion!==4 && canExecuteRefund && registration.refund?.status === 'processing' && <button type="button" onClick={() => void refundAction(registration,'query')}>查询渠道退款</button>}
             </div>
           </article>)}</div>
         </section>}

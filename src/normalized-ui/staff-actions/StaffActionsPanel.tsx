@@ -1,7 +1,7 @@
 import {SessionMoneySummary} from '../SessionMoneySummary'
 import {beijingDisplayTime} from '../beijing-display-time'
 import { TableGuestCountEditor } from './TableGuestCountEditor'
-import type { GuestCountChange } from './staff-actions-api'
+import type { GuestCountChange, TicketInboxItem } from './staff-actions-api'
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import {TableMinimumSpendPanel} from './TableMinimumSpendPanel'
 import {ChannelActivationPanel} from './ChannelActivationPanel'
@@ -135,6 +135,36 @@ export function tableFinancialLabel(state: StaffTableFinancialState): string {
   if (state === 'cancelled') return '已取消'
   if (state === 'paid') return '已结清'
   return '已开台'
+}
+
+function ReservationTicketInbox({api}: {api: StaffActionsApiPort}) {
+  const [tasks,setTasks] = useState<TicketInboxItem[]>([])
+  const [unavailable,setUnavailable] = useState(false)
+  useEffect(() => {
+    if (!api.loadTicketInbox) return
+    const controller = new AbortController()
+    let loading = false
+    async function refresh() {
+      if (loading || !api.loadTicketInbox) return
+      loading = true
+      try {
+        const rows = await api.loadTicketInbox(controller.signal)
+        if (!controller.signal.aborted) { setTasks(rows); setUnavailable(false) }
+      } catch {
+        if (!controller.signal.aborted) setUnavailable(true)
+      } finally { loading = false }
+    }
+    void refresh()
+    const timer = window.setInterval(refresh,20000)
+    return () => { controller.abort(); window.clearInterval(timer) }
+  }, [api])
+  return <section aria-label="门票接待">
+    <a href="/staff/customer-experience?ticketReception=1#work=activities">门票接待</a>
+    {unavailable && <p role="status">待接待数量暂未更新</p>}
+    {tasks.map(task => <p key={task.activityId}><a href={'/staff/customer-experience?ticketReception=1&activity='+encodeURIComponent(task.activityId)+'#work=activities'}>
+      {task.title} · {task.waiting} 笔购票待跟进
+    </a></p>)}
+  </section>
 }
 
 export function StaffActionsPanel({
@@ -1558,7 +1588,8 @@ export function StaffActionsPanel({
       )}
 
       {tab === 'reservations' && (
-        <>{api.reservationReception&&operations?.actor.id&&<ReservationReceptionPanel key={operations.actor.id} api={api.reservationReception} employeeId={operations.actor.id} permissions={permissions} selected={receptionSelected} onClose={()=>setReceptionSelected(null)} onOpenTables={()=>setTab('tables')} onChanged={loadReservations}/>}
+        <>{(permissions.includes('community.activity.verify') || permissions.includes('community.activity.manage')) && <ReservationTicketInbox api={api}/>}
+        {api.reservationReception&&operations?.actor.id&&<ReservationReceptionPanel key={operations.actor.id} api={api.reservationReception} employeeId={operations.actor.id} permissions={permissions} selected={receptionSelected} onClose={()=>setReceptionSelected(null)} onOpenTables={()=>setTab('tables')} onChanged={loadReservations}/>}
         <PriorityQueue entries={priorityQueue} canManage={permissions.includes('reservation.manage')}
           pendingAction={pendingAction} onOverride={(entry, mode) => void overridePriority(entry, mode)} />
         <ReservationList

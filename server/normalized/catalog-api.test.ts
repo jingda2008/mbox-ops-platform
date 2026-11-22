@@ -819,6 +819,8 @@ describe("normalized catalog HTTP API", () => {
       3200,
       "not_managed",
       "manual",
+      null, // visibleFrom
+      null, // visibleUntil
     ]);
     expect(fixture.commandCalls[0]?.requestFingerprint).toContain('"costAmountMinor":3200');
   });

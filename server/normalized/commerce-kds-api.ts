@@ -1,3 +1,5 @@
+import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
+import {staffPointsProposal} from './assisted-points-proposal.js'
 import type {OriginalReceiptSummary} from '../../src/shared/cashier-workbench-contracts.js'
 import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import {IdempotencyReceiptUnavailableError} from './command-executor.js'
@@ -653,6 +655,17 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.code(201).send({ data: issued })
   }))
 
+  app.post('/commerce/assisted-points',async(request,reply)=>handleCommerceRoute(reply,async()=>{
+    const ctx=await resolveContext(options,request),body=readObject(request.body,'代客用分')
+    assertActorBinding(body,ctx.employeeId)
+    const input=readOrderInput(body)
+    if(input.orderMode!=='paid'||input.settlementMode!=='immediate_payment'||body.channelQuoteId)
+      throw new CommerceKdsRequestError('POINTS_TENDER_INVALID','请从本次待结餐饮单核对积分')
+    const result=await options.staffAccessTransactions.run(ctx.scope,tx=>staffPointsProposal(tx,ctx.employeeId,
+      readUuid(readRequiredString(body.tableSessionId,'桌次',64),'桌次'),readRequiredString(body.memberNo,'会员号',80),
+      input.lines,body.points===null?null:readInteger(body.points,'积分',1,2147483647)))
+    return reply.header('cache-control','no-store').send({data:result})
+  }))
   app.post('/commerce/channel-quote', async (request, reply) => handleCommerceRoute(reply, async () => {
     const context=await resolveContext(options,request),body=readObject(request.body,'请求正文')
     assertActorBinding(body,context.employeeId)
@@ -2074,6 +2087,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof AssistedOrderContextDeniedError) {
     return apiError(403, error.code, error.message)
   }
+  if (error instanceof CheckoutCartPricingError) return apiError(409,'POINTS_REVIEW_REQUIRED',error.message)
   if (error instanceof CommerceKdsRequestError) {
     return apiError(error.statusCode, error.code, error.message)
   }

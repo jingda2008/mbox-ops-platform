@@ -1,3 +1,4 @@
+import {ticketStatement,ticketFinanceDay} from './table-ticket-reception.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
 import {ActivityServiceError} from './activity-service-repository.js'
 import type {ActivityDoorCommand} from '../../src/shared/activity-service.js'
@@ -38,6 +39,122 @@ export interface ActivityOperationsApiOptions {
 }
 
 export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsApiOptions> = async (app, options) => {
+  app.get<{Querystring:{day?:string}}>('/staff/activity-operations/ticket-finance-day',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])
+    const day=request.query.day??null
+    if(day!==null && (typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day))throw invalid('请选择有效营业日')
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketFinanceDay(tx,day),{readOnly:true})})
+  }))
+  app.get<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/statement',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])
+    const id=uuid(request.params.id,'票号')
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketStatement(tx,id),{readOnly:true})})
+  }))
+  app.get('/staff/activity-operations/ticket-reception-inbox',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    const tasks=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`SELECT a.public_id AS "activityId",a.title,count(*)::int AS waiting
+      FROM mbox.ticket_reception_tasks t JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(t.tenant_id,t.store_id,t.registration_id)
+      JOIN mbox.community_activities a ON(a.tenant_id,a.store_id,a.id)=(r.tenant_id,r.store_id,r.activity_id)
+      WHERE t.tenant_id=$1 AND t.store_id=$2 AND a.ends_at>clock_timestamp() AND t.status IN('waiting','unreachable','claimed')
+        AND EXISTS(SELECT 1 FROM mbox.table_tickets k WHERE(k.tenant_id,k.store_id,k.registration_id)=(t.tenant_id,t.store_id,t.registration_id) AND k.refunded_at IS NULL)
+      GROUP BY a.id ORDER BY a.starts_at`,[ctx.scope.tenantId,ctx.scope.storeId])).rows,{readOnly:true})
+    return reply.header('cache-control','no-store').send({data:tasks})
+  }))
+  app.get<{Params:{id:string}}>('/staff/activity-operations/:id/ticket-reception',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    return reply.header('cache-control','no-store').send({data:await options.service.ticketReception(ctx,publicId(request.params.id))})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/assign',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    const body=object(request.body,'排桌')
+    const result=await options.service.assignTicket(ctx,uuid(request.params.id,'票号'),uuid(body.tableId,'桌号'),
+      body.reservationPublicId?publicId(body.reservationPublicId):null,idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-refunds/:id/submit',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['refund.request'])
+    const body=object(request.body,'退票')
+    const result=await options.service.submitTicketRefund(ctx,uuid(request.params.id,'退票案'),integer(body.amountMinor,'应退票款',1,2147483647),
+      body.merchantReason?text(body.merchantReason,'门店履约原因',2,500):null,idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/correction',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['loyalty.adjust.manual'])
+    const body=object(request.body,'原票冲正')
+    const action=body.action
+    if(action!=='request'&&action!=='reject'&&action!=='approve')throw new ActivityOperationsError('请选择冲正操作','TICKET_CORRECTION_ACTION',400)
+    const result=await options.service.changeTicketGift(ctx,uuid(request.params.id,'票号'),text(body.reason,'原因',3,240),action,
+      action==='request'?null:uuid(body.caseId,'冲正案'),idempotencyKey(request),body.merchantAssumes===true)
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-refunds/:id/dining',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['refund.approve'])
+    const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(object(request.body,'补菜款').reason,'按售出条款核算的原因',2,500),idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-offers/:id/assist',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    const body=object(request.body,'代客选票'),phone=text(body.phone,'本人手机号',11,11)
+    if(!/^1[3-9][0-9]{9}$/.test(phone))throw invalid('请核对本人手机号')
+    const result=await options.service.offerTicketToMember(ctx,uuid(request.params.id,'票档'),integer(body.quantity,'桌数',1,2147483647),phone,idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/admit',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    const body=object(request.body,'验票')
+    const result=await options.service.ticketFrontDesk(ctx,uuid(request.params.id,'票号'),{code:text(body.code,'入场码',12,12).toUpperCase(),quantity:integer(body.quantity,'本批到场',1,2147483647)},idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/ticket-reception/:id/contact',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
+    const status=enumeration(object(request.body,'接待').status,'联系结果',['waiting','claimed','called','unreachable','onsite'] as const)
+    const result=await options.service.ticketFrontDesk(ctx,publicId(request.params.id),{status},idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/:id/table-ticket-terms',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.publish']),body=object(request.body,'场次公示')
+    if(typeof body.requiresNamedAttendees!=='boolean')throw invalid('请选择本场实名要求')
+    const rules={organizer:text(body.organizer,'举办主体',2,180),seller:text(body.seller,'售票主体',2,180),approvalReference:text(body.approvalReference,'批文或核实依据',3,500),
+      performers:text(body.performers,'主要演员',1,250),durationMinutes:integer(body.durationMinutes,'最低演出分钟数',1,10080),programNote:text(body.programNote,'曲目说明',2,500),
+      serviceContact:text(body.serviceContact,'客服',3,180),refundSchedule:text(body.refundSchedule,'退票时段及金额规则',8,2000),requiresNamedAttendees:body.requiresNamedAttendees}
+    const result=await options.service.approveTicketTerms(ctx,publicId(request.params.id),rules,integer(body.version,'原版本',0,2147483646),idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/disposition',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['refund.request','refund.approve']),body=object(request.body,'退票原案')
+    const result=await options.service.closeTicketCase(ctx,uuid(request.params.id,'票号'),enumeration(body.action,'处理结果',['rejected','zero','cancelled'] as const),
+      text(body.reason,'依据',3,240),idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/refund-request',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['refund.request'])
+    const result=await options.service.openStaffTicketRefund(ctx,uuid(request.params.id,'票号'),text(object(request.body,'退票').reason,'退票原因',2,500),idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  const offerPath = '/staff/activity-operations/:publicId/table-tickets'
+  app.get<{Params:{publicId:string}}>(offerPath,async(request,reply)=>handle(reply,async()=>{
+    const context = await authorizedAny(options,request,['community.activity.manage','community.activity.publish','community.activity.verify'])
+    return reply.send({data:await options.service.ticketOffers(context,publicId(request.params.publicId))})
+  }))
+  app.post<{Params:{publicId:string}}>(offerPath,async(request,reply)=>handle(reply,async()=>{
+    const body = object(request.body,'桌票')
+    const status = enumeration(body.status,'票档状态',['draft','published','withdrawn'] as const)
+    const context = await authorized(options,request,[status==='draft'?'community.activity.manage':'community.activity.publish'])
+    const visibleFrom = body.visibleFrom ? timestamp(body.visibleFrom,'可见开始') : null
+    const visibleUntil = body.visibleUntil ? timestamp(body.visibleUntil,'可见结束') : null
+    if (visibleFrom && visibleUntil && visibleUntil<=visibleFrom) throw invalid('可见结束须晚于开始')
+    const saleFrom=body.saleFrom===undefined?undefined:body.saleFrom?timestamp(body.saleFrom,'开售时间'):null
+    const saleUntil=body.saleUntil===undefined?undefined:body.saleUntil?timestamp(body.saleUntil,'停售时间'):null
+    if(saleFrom && saleUntil && saleUntil<=saleFrom)throw invalid('停售时间须晚于开售时间')
+    const result = await options.service.saveTicketOffer(context,publicId(request.params.publicId),{
+      ...(saleFrom!==undefined?{saleFrom}:{}),...(saleUntil!==undefined?{saleUntil}:{}),
+      categoryCode:body.categoryCode?text(body.categoryCode,'分类',1,64):null,areaId:uuid(body.areaId,'桌区'),name:text(body.name,'票名',1,120),status,visibleFrom,visibleUntil,
+      expectedVersion:integer(body.expectedVersion,'票档版本',0,2147483646),
+      priceMinor:integer(body.priceMinor,'每桌价格（分）',1,2147483647),
+      giftPoints:body.giftPoints===null && status!=='published'?null:integer(body.giftPoints,'每张赠分',0,2147483647),
+    },idempotencyKey(request))
+    return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
+  }))
   app.post('/staff/activity-operations/scan',async(request,reply)=>handle(reply,async()=>{const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.verify']);return reply.send({data:await options.service.scanService(context,text(object(request.body,'扫码').code,'套餐核销码',10,300))})}))
   app.get<{Params:{registrationPublicId:string}}>('/staff/activity-operations/registrations/:registrationPublicId/service',async(request,reply)=>handle(reply,async()=>{const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.verify']);return reply.send({data:await options.service.serviceView(context,publicId(request.params.registrationPublicId))})}))
   app.post<{Params:{registrationPublicId:string}}>('/staff/activity-operations/registrations/:registrationPublicId/service',async(request,reply)=>handle(reply,async()=>{const body=object(request.body,'现场办理');const context=await authorizedAny(options,request,['recover','restore_plaque'].includes(String(body.action))?['community.activity.manage']:['community.activity.manage','community.activity.verify']);const action=enumeration(body.action,'现场操作',['admit','redeem','admit_and_redeem','plaque_issued','return_plaque','restore_plaque','recover','update_location'] as const);const command:ActivityDoorCommand={action,...(body.arrivedCount===undefined?{}:{arrivedCount:integer(body.arrivedCount,'本次到场',1,50)}),...(body.location===undefined?{}:{location:text(body.location,'收餐位置',1,100)}),...(body.credential===undefined?{}:{credential:text(body.credential,'核销凭证',10,300)})};const result=await options.service.serviceCommand(context,publicId(request.params.registrationPublicId),command,idempotencyKey(request));return reply.send({data:result.value,meta:{replayed:result.replayed}})}))

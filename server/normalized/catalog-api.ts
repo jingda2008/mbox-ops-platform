@@ -150,6 +150,7 @@ interface ProductRow extends Record<string, unknown> {
   recommendation_hold_minutes: number;
   recommendation_upgrade_product_id: string | null;
   menu_sort_order: number;
+  visible_from:string|null;visible_until:string|null;
   available_from: string | null;
   available_until: string | null;
   supply_window_available?: boolean;
@@ -196,6 +197,7 @@ interface CatalogProduct {
   recommendationHoldMinutes: number;
   recommendationUpgradeProductId: string | null;
   menuSortOrder: number;
+  visibleFrom:string|null;visibleUntil:string|null;
   availableFrom: string | null;
   availableUntil: string | null;
   allowedChannels: string[];
@@ -225,6 +227,7 @@ interface MenuCategoryRow extends Record<string, unknown> {
   parent_code: string | null;
   sort_order: number;
   guest_visible: boolean;
+  visible_from:string|null; visible_until:string|null;
   product_count: string | number;
   created_at: string;
   updated_at: string;
@@ -237,6 +240,7 @@ interface MenuCategory {
   parentCode: string | null;
   sortOrder: number;
   guestVisible: boolean;
+  visibleFrom:string|null; visibleUntil:string|null;
   productCount: number;
   createdAt: string;
   updatedAt: string;
@@ -439,8 +443,8 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           );
           const inserted = await transaction.query<{ id: string }>(`
             INSERT INTO mbox.menu_categories (
-              tenant_id,store_id,code,display_name,parent_code,sort_order,guest_visible
-            ) VALUES ($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::boolean)
+              tenant_id,store_id,code,display_name,parent_code,sort_order,guest_visible,visible_from,visible_until
+            ) VALUES ($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::boolean,$8,$9)
             RETURNING id
           `, [
             transaction.scope.tenantId,
@@ -449,7 +453,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
             input.displayName,
             input.parentCode,
             input.sortOrder,
-            input.guestVisible,
+            input.guestVisible,input.visibleFrom,input.visibleUntil,
           ]);
           const id = inserted.rows[0]?.id;
           if (id === undefined) throw new Error("Menu category insert did not return an id");
@@ -504,6 +508,8 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               parentCode: patch.parentCode === undefined ? before.parentCode : patch.parentCode,
               sortOrder: patch.sortOrder ?? before.sortOrder,
               guestVisible: patch.guestVisible ?? before.guestVisible,
+              visibleFrom:patch.visibleFrom===undefined?before.visibleFrom:patch.visibleFrom,
+              visibleUntil:patch.visibleUntil===undefined?before.visibleUntil:patch.visibleUntil,
             };
             await assertMenuCategoryParent(
               transaction,
@@ -521,7 +527,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               SET display_name=$4::text,
                   parent_code=$5::text,
                   sort_order=$6::integer,
-                  guest_visible=$7::boolean,
+                  guest_visible=$7::boolean,visible_from=$8,visible_until=$9,
                   updated_at=clock_timestamp()
               WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
             `, [
@@ -531,7 +537,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               afterInput.displayName,
               afterInput.parentCode,
               afterInput.sortOrder,
-              afterInput.guestVisible,
+              afterInput.guestVisible,afterInput.visibleFrom,afterInput.visibleUntil,
             ]);
             const category = await getMenuCategory(transaction, before.id);
             return menuCategoryOutcome(
@@ -634,13 +640,13 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
           recommendation_hold_minutes, recommendation_upgrade_product_id,
           menu_sort_order, available_from, available_until, allowed_channels,
           max_order_quantity, kds_priority, fulfillment_sla_seconds, cost_amount_minor,
-          inventory_control_mode, cost_source
+          inventory_control_mode, cost_source,visible_from,visible_until
         ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9,
           $10::boolean, $11::text, $12::boolean, $13::smallint, $14::smallint,
           $15::smallint, $16::text[], $17::text[], $18::text[], $19::text[],
           $20::boolean, $21::smallint, $22::smallint, $23::uuid,
           $24::integer, $25::time, $26::time, $27::text[],
-          $28::smallint, $29::smallint, $30::integer, $31::bigint, $32::text, $33::text)
+          $28::smallint, $29::smallint, $30::integer, $31::bigint, $32::text, $33::text,$34::timestamptz,$35::timestamptz)
         RETURNING id
       `,
             [
@@ -679,6 +685,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               automaticCost || operational.costAmountMinor === null
                 ? "incomplete"
                 : "manual",
+              input.visibleFrom??null,input.visibleUntil??null,
             ],
           );
           const productId = result.rows[0]?.id;
@@ -842,6 +849,7 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
               recommendation_hold_minutes = $22::smallint,
               recommendation_upgrade_product_id = $23::uuid,
               menu_sort_order = $24::integer,
+              visible_from=$34::timestamptz,visible_until=$35::timestamptz,
               available_from = $25::time,
               available_until = $26::time,
               allowed_channels = $27::text[],
@@ -906,6 +914,8 @@ export const catalogApiPlugin: FastifyPluginAsync<CatalogApiOptions> = async (
                 storedCostAmountMinor,
                 patch.inventoryControlMode,
                 costBasisChanged,
+                patch.operationalInput.visibleFrom===undefined?before.visibleFrom:categoryInstant(patch.operationalInput.visibleFrom),
+                patch.operationalInput.visibleUntil===undefined?before.visibleUntil:categoryInstant(patch.operationalInput.visibleUntil),
               ],
             );
             if (result.rowCount !== 1) throw new CatalogProductNotFoundError();
@@ -1133,7 +1143,7 @@ async function sendMenuCategoryList(
 async function listMenuCategories(transaction: ScopedTransaction): Promise<MenuCategoryRow[]> {
   const result = await transaction.query<MenuCategoryRow>(`
     SELECT category.id,category.code,category.display_name,category.parent_code,
-      category.sort_order,category.guest_visible,
+      category.sort_order,category.guest_visible,category.visible_from::text,category.visible_until::text,
       count(product.id)::text AS product_count,
       category.created_at::text,category.updated_at::text
     FROM mbox.menu_categories AS category
@@ -1156,7 +1166,7 @@ async function getMenuCategory(
 ): Promise<MenuCategory> {
   const result = await transaction.query<MenuCategoryRow>(`
     SELECT category.id,category.code,category.display_name,category.parent_code,
-      category.sort_order,category.guest_visible,
+      category.sort_order,category.guest_visible,category.visible_from::text,category.visible_until::text,
       count(product.id)::text AS product_count,
       category.created_at::text,category.updated_at::text
     FROM mbox.menu_categories AS category
@@ -1192,7 +1202,7 @@ async function getMenuCategoryByCode(
   }
   const result = await transaction.query<MenuCategoryRow>(`
     SELECT category.id,category.code,category.display_name,category.parent_code,
-      category.sort_order,category.guest_visible,
+      category.sort_order,category.guest_visible,category.visible_from::text,category.visible_until::text,
       count(product.id)::text AS product_count,
       category.created_at::text,category.updated_at::text
     FROM mbox.menu_categories AS category
@@ -1275,6 +1285,7 @@ function mapMenuCategory(row: MenuCategoryRow): MenuCategory {
     parentCode: row.parent_code,
     sortOrder: Number(row.sort_order),
     guestVisible: row.guest_visible,
+    visibleFrom:row.visible_from??null,visibleUntil:row.visible_until??null,
     productCount: Number(row.product_count),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1296,7 +1307,7 @@ async function listProducts(
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id) AS sale_quantity_available,
       (COALESCE(inventory_stock.available, false) AND mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id)) AS inventory_available,
-      product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
+      product.product_snapshot, product.guest_visible,product.visible_from::text,product.visible_until::text, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
       product.recommendation_scene_tags, product.recommendation_intent_tags,
@@ -1667,6 +1678,8 @@ function assistedOrderCatalogProduct(
     recommendationHoldMinutes: product.recommendationHoldMinutes,
     recommendationUpgradeProductId: product.recommendationUpgradeProductId,
     menuSortOrder: product.menuSortOrder,
+    visibleFrom: product.visibleFrom,
+    visibleUntil: product.visibleUntil,
     availableFrom: product.availableFrom,
     availableUntil: product.availableUntil,
     allowedChannels: product.allowedChannels,
@@ -2191,7 +2204,7 @@ async function getProduct(
       COALESCE(inventory_readiness.configuration_complete, false) AS inventory_configuration_complete,
       mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id) AS sale_quantity_available,
       (COALESCE(inventory_stock.available, false) AND mbox.product_sale_quantity_available(product.tenant_id,product.store_id,product.id)) AS inventory_available,
-      product.product_snapshot, product.guest_visible, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
+      product.product_snapshot, product.guest_visible,product.visible_from::text,product.visible_until::text, mbox.product_service_window_json(product.tenant_id,product.store_id,product.id,NULL) AS service_window, product.search_text,
       product.recommendation_enabled, product.recommendation_min_guests,
       product.recommendation_max_guests, product.recommendation_priority,
       product.recommendation_scene_tags, product.recommendation_intent_tags,
@@ -2542,6 +2555,7 @@ function mapProduct(row: ProductRow, guest = false, includeCost = true): Catalog
     recommendationHoldMinutes: row.recommendation_hold_minutes,
     recommendationUpgradeProductId: row.recommendation_upgrade_product_id,
     menuSortOrder: row.menu_sort_order,
+    visibleFrom:row.visible_from??null,visibleUntil:row.visible_until??null,
     availableFrom: row.available_from,
     availableUntil: row.available_until,
     allowedChannels: row.allowed_channels,
@@ -2817,6 +2831,7 @@ function redact(value: JsonValue): JsonValue {
 }
 
 function readCreateProduct(value: unknown): {
+  visibleFrom?:string|null;visibleUntil?:string|null;
   code: string;
   name: string;
   categoryCode: string;
@@ -2858,6 +2873,8 @@ function readCreateProduct(value: unknown): {
     bundleChoiceGroups,
     productSnapshot,
     operationalFields,
+    ...(body.visibleFrom!==undefined?{visibleFrom:categoryInstant(body.visibleFrom)}:{}),
+    ...(body.visibleUntil!==undefined?{visibleUntil:categoryInstant(body.visibleUntil)}:{}),
     costAmountProvided: body.costAmountMinor !== undefined,
     status,
     standardPrice,
@@ -2920,7 +2937,14 @@ function readUpdateProduct(value: unknown): {
   return patch;
 }
 
+function categoryInstant(value:unknown):string|null {
+  if(value===null || value===undefined)return null
+  if(typeof value!=='string' || !/(Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)))throw new CatalogRequestError('请填写带时区的可见时间')
+  return new Date(value).toISOString()
+}
+
 function readCreateMenuCategory(value: unknown): {
+  visibleFrom:string|null; visibleUntil:string|null;
   code: string;
   displayName: string;
   parentCode: string | null;
@@ -2929,6 +2953,7 @@ function readCreateMenuCategory(value: unknown): {
 } {
   const body = readJsonObject(value, "请求正文");
   return {
+    visibleFrom:categoryInstant(body.visibleFrom),visibleUntil:categoryInstant(body.visibleUntil),
     code: requiredCode(body.code, "code"),
     displayName: requiredText(body.displayName, "displayName", 32),
     parentCode: optionalCode(body.parentCode, "parentCode"),
@@ -2942,6 +2967,7 @@ function readCreateMenuCategory(value: unknown): {
 }
 
 function readUpdateMenuCategory(value: unknown): {
+  visibleFrom?:string|null; visibleUntil?:string|null;
   displayName?: string;
   parentCode?: string | null;
   sortOrder?: number;
@@ -2949,6 +2975,7 @@ function readUpdateMenuCategory(value: unknown): {
 } {
   const body = readJsonObject(value, "请求正文");
   const patch = {
+    visibleFrom:body.visibleFrom===undefined?undefined:categoryInstant(body.visibleFrom),visibleUntil:body.visibleUntil===undefined?undefined:categoryInstant(body.visibleUntil),
     displayName: body.displayName === undefined
       ? undefined
       : requiredText(body.displayName, "displayName", 32),
@@ -2974,7 +3001,7 @@ const PRODUCT_OPERATIONAL_INPUT_KEYS = [
   'recommendationIntentTags', 'recommendationTasteTags', 'recommendationDwellTags',
   'recommendationSingleWaveEligible', 'recommendationExpectedPrepMinutes',
   'recommendationHoldMinutes', 'recommendationUpgradeProductId', 'menuSortOrder',
-  'availableFrom', 'availableUntil', 'serviceWindow', 'allowedChannels', 'maxOrderQuantity',
+  'visibleFrom','visibleUntil','availableFrom', 'availableUntil', 'serviceWindow', 'allowedChannels', 'maxOrderQuantity',
   'kdsPriority', 'fulfillmentSlaSeconds', 'costAmountMinor',
 ] as const;
 
@@ -3398,6 +3425,8 @@ function catalogProductToJson(product: CatalogProduct): JsonObject {
     recommendationHoldMinutes: product.recommendationHoldMinutes,
     recommendationUpgradeProductId: product.recommendationUpgradeProductId,
     menuSortOrder: product.menuSortOrder,
+    visibleFrom: product.visibleFrom,
+    visibleUntil: product.visibleUntil,
     availableFrom: product.availableFrom,
     availableUntil: product.availableUntil,
     allowedChannels: product.allowedChannels,
@@ -3427,6 +3456,7 @@ function menuCategoryToJson(category: MenuCategory): JsonObject {
     parentCode: category.parentCode,
     sortOrder: category.sortOrder,
     guestVisible: category.guestVisible,
+    visibleFrom:category.visibleFrom,visibleUntil:category.visibleUntil,
     productCount: category.productCount,
     createdAt: category.createdAt,
     updatedAt: category.updatedAt,
@@ -3489,6 +3519,8 @@ const catalogProductCodec: JsonCodec<CatalogProduct> = {
     }
     return {
       ...value,
+      visibleFrom: value.visibleFrom ?? null,
+      visibleUntil: value.visibleUntil ?? null,
       // Idempotent results written before schema 159 do not contain the new
       // display field. They remain replayable as an empty choice-group list.
       bundleChoiceGroups:Array.isArray(value.bundleChoiceGroups)?value.bundleChoiceGroups:[],

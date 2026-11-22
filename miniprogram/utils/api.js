@@ -244,6 +244,18 @@ async function createRedemption(catalogItemPublicId) {
 async function cancelRedemption(redemptionPublicId, reason) {
   return recoverableMemberWrite('redemption-cancel:' + redemptionPublicId, `/api/public/mini/redemptions/${encodeURIComponent(redemptionPublicId)}/cancel`, 'POST', { reason }, [`mbox.redemption.cancel.${redemptionPublicId}`])
 }
+async function getTicketReservations(){return (await publicRequest('/api/public/mini/table-ticket-reservations')).data}
+async function getTicketProposals(){return (await publicRequest('/api/public/mini/table-ticket-assistance')).data}
+async function getTableTicketOffers() { return (await request('/api/public/mini/table-ticket-offers',{requireTableSession:false,credentialDomain:'none'})).data }
+async function withdrawTicketRefund(id){return publicRequest('/api/public/mini/table-tickets/'+encodeURIComponent(id)+'/withdraw',{method:'POST',data:{}})}
+async function confirmTicketDining(id){return publicRequest('/api/public/mini/table-ticket-dining/'+encodeURIComponent(id)+'/confirm',{method:'POST',data:{confirmed:true}})}
+async function refundTableTicket(orderId,ticketId,reason) {
+  return recoverableMemberWrite('ticket-refund:'+(ticketId||orderId),'/api/public/mini/activity-registrations/'+encodeURIComponent(orderId)+'/refund-request','POST',{ticketId,reason},[])
+}
+async function getMyTableTickets() { return (await publicRequest('/api/public/mini/table-ticket-purchases')).data }
+async function buyTableTickets(input, initialKey) {
+  return recoverableMemberWrite('table-ticket-purchase:'+input.offerId,'/api/public/mini/table-ticket-purchases','POST',input,[],{initialKey})
+}
 async function getActivities() { return (await publicRequest('/api/public/mini/activities')).data }
 async function getActivity(activityPublicId) {
   return (await publicRequest(`/api/public/mini/activities/${encodeURIComponent(activityPublicId)}`)).data
@@ -671,6 +683,10 @@ async function checkout(items, checkoutUpgradeOfferPublicId, idempotencyKey, rec
     },
   })
 }
+async function getAssistedPointsProposal(){return (await request('/api/guest/shared-cart/assisted-points')).data}
+async function adoptAssistedPointsProposal(id){return (await recoverableGuestCommand('adopt-assisted-points',{id},key=>request('/api/guest/shared-cart/assisted-points',{
+  method:'POST',headers:{'idempotency-key':key},data:{id}
+}))).data}
 async function getSharedCart() { return (await request('/api/guest/shared-cart')).data }
 async function addIssuedCouponProduct(productId, issuedCouponBenefitId, expectedGeneration, expectedVersion, bundleSelections) {
   const intent = { productId, issuedCouponBenefitId, bundleSelections: Array.isArray(bundleSelections) ? bundleSelections : [] }
@@ -704,7 +720,10 @@ async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyK
     data: { expectedGeneration, expectedVersion },
   })).data
 }
-async function getCheckoutPoints() { return (await request('/api/guest/shared-cart/points')).data }
+async function getCheckoutPoints(cart) {
+  const query = cart ? '?generation=' + encodeURIComponent(cart.generation) + '&version=' + encodeURIComponent(cart.version) : ''
+  return (await request('/api/guest/shared-cart/points' + query)).data
+}
 async function quoteSharedCartPoints(input, idempotencyKey) { return (await request('/api/guest/shared-cart/points-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input })).data }
 async function quoteSharedCartChannel(input) { return (await request('/api/guest/shared-cart/channel-quote', { method: 'POST', data: input })).data }
 async function quoteSharedCartCoupons(input, idempotencyKey) {
@@ -910,6 +929,7 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
+  getAssistedPointsProposal, adoptAssistedPointsProposal, getTableTicketOffers, getMyTableTickets, getTicketReservations, getTicketProposals, buyTableTickets, refundTableTicket, withdrawTicketRefund, confirmTicketDining,
   getCustomerBottles, getCustomerBottle, getCustomerBottlePhoto,
   getCustomerOrderHistory,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,

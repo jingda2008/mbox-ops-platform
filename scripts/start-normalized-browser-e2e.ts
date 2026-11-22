@@ -246,12 +246,31 @@ try {
     }
   })
 
+  const ticketEvent=process.env.NORMALIZED_E2E_TABLE_TICKETS==='true'?randomUUID():null
+  if(ticketEvent)await runtime.transactions.run(scope,async tx=>{
+    const publisher = (await tx.query<{id:string}>(
+      "SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='wuya'", [scope.tenantId,scope.storeId]
+    )).rows[0]!
+    await new StaffAccessRepository(tx).setEmployeePermissionOverride({
+      employeeId:publisher.id,permissionCode:'community.activity.publish',effect:'grant',
+      reason:'整桌票隔离浏览器验收',configuredByEmployeeId:employeeId,
+    })
+    await tx.query(`INSERT INTO mbox.community_activities(id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,assembly_location,capacity,
+      fee_amount_minor,deposit_amount_minor,fee_basis,registration_payment_mode,payment_deadline_minutes,payment_rule_text,currency,points_reward,visibility,
+      safety_policy_version,safety_acknowledgement_text,safety_requirements,refund_policy_version,refund_policy_summary,activity_details,included_items,
+      participation_requirements,contact_instructions,status,published_at,created_by_employee_id,approved_by_employee_id)
+      VALUES($1::uuid,$2,$3,$1::text,'member_night','整桌演出票浏览器验收场','现场爵士演出',clock_timestamp()+interval '7 days',clock_timestamp()+interval '7 days 2 hours',
+      '门店',150,0,0,'per_registration','none',15,'选择桌票购票','CNY',0,'public','safety-v1','遵守本场安全规定',ARRAY['现场核验'],
+      'refund-v1','按本场退票约定办理','实际演出与桌区展示测试',ARRAY['整桌入场'],ARRAY['本人购票'],'原单接待','published',clock_timestamp(),$4,$4)`,
+      [ticketEvent,scope.tenantId,scope.storeId,employeeId])
+  })
   const threeScreenFixture=process.env.NORMALIZED_E2E_THREE_SCREEN==='true'?await seedThreeScreenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   const kitchenBatchFixture=process.env.NORMALIZED_E2E_KITCHEN==='true'?await seedKitchenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   const crossDayDebtFixture=process.env.NORMALIZED_E2E_CROSS_DAY_DEBT==='true'?await seedCrossDayDebtBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined
   await mkdir(dirname(fixturePath), { recursive: true })
   await writeFile(fixturePath, `${JSON.stringify({
     schemaVersion: 1,
+    ticketEvent,
     kitchenBatchFixture,
     crossDayDebtFixture,
     threeScreenFixture,

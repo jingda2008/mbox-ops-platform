@@ -6,6 +6,7 @@
     <text>暂时无法确认会员身份，请稍后再试。</text>
   </view>
   <block wx:else>
+    <navigator wx:if="{{membership}}" url="/pages/table-tickets/index">我的演出门票</navigator>
     <member-identities id="member-identities" wx:if="{{membership}}" />
     <view wx:if="{{membership}}" class="profile-member-card profile-member-card--{{membership.level}}">
       <view class="profile-member-card__glow"></view>

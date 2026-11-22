@@ -354,11 +354,11 @@ describe('channel checkout quote safety', () => {
     expect(h.page.couponCheckoutReady()).toBe(false)
     h.page.skipCheckoutCoupons(); expect(h.page.couponCheckoutReady()).toBe(true)
   })
-  it('clears member and point choices on channel pricing and clears channel pricing for points', async () => {
+  it('clears point selections on channel pricing and retains the channel quote while browsing points', async () => {
     const h = checkoutHarness(); h.page.data.pointsInput = '10'; h.page.data.couponSelections = [{ benefitId: 'member' }]
     h.quoteChannel.mockResolvedValue(h.quote()); await h.page.quoteCheckoutChannel()
     expect(h.page.data.pointsInput).toBe(''); expect(h.page.data.couponSelections).toEqual([])
-    await h.page.openCheckoutPoints(); expect(h.page.data.couponQuote).toBeNull(); expect(h.page.data.pointsPickerOpen).toBe(true)
+    const channelQuote=h.page.data.couponQuote; await h.page.openCheckoutPoints(); expect(h.page.data.couponQuote).toEqual(channelQuote); expect(h.page.data.pointsPickerOpen).toBe(true)
   })
 })
 

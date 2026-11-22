@@ -1335,12 +1335,8 @@ export function StaffActionsPanel({
               }}
               onPayment={() => {
                 if (selectedTable.activeSession !== null) {
-                  const session = selectedTable.activeSession
                   setCardCollection(null)
-                  openTableSecondary(session.id, () => {
-                    if (session.pendingPaymentCount > 0 || session.financialState === 'payment_pending') setCardRead({sessionId: session.id, mode: 'review'})
-                    else setTablePaymentOpen(true)
-                  })
+                  openTableSecondary(selectedTable.activeSession.id, () => setTablePaymentOpen(true))
                 }
               }}
               onGift={() => {

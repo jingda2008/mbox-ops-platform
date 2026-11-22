@@ -3,7 +3,7 @@ import { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
-import { listTablePaymentOrdersForSession } from './commerce-kds-api.js'
+import { listTablePaymentOrdersForSession, listTablePendingReview } from './commerce-kds-api.js'
 import { PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository } from './payment-repository.js'
 import { PaymentProviderActionRepository } from './payment-provider-action-repository.js'
@@ -171,6 +171,20 @@ integration('unresolved payment retry release', () => {
       hasOnlinePaymentInProgress: true,
       unresolvedOnlinePaymentId: paymentId,
     })])
+    // A missing provider signal is not a reason to hide an otherwise collectible original.
+    const read = () => runner.run({tenantId,storeId}, tx => listTablePendingReview(tx,sessionId), {readOnly:true})
+    expect((await read()).attempts).toHaveLength(0)
+    await pool.query('UPDATE mbox.payments SET provider_transaction_id=$2 WHERE id=$1',[paymentId,'isolated-channel-'+paymentId])
+    const otherId = randomUUID()
+    await pool.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,payment_status,
+      subtotal_amount_minor,discount_amount_minor,total_amount_minor,currency,created_by_employee_id,submitted_at)
+      VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','unpaid',1200,0,1200,'CNY',$6,clock_timestamp())`,
+      [otherId,tenantId,storeId,sessionId,'other-'+otherId,employeeId])
+    const review = await read()
+    expect(review.attempts.map(attempt => attempt.id)).toEqual([paymentId])
+    expect(review.collectibleOrders.map(order => order.id)).toEqual([otherId])
+    expect((await runner.run({tenantId,storeId},tx=>listTablePendingReview(tx,randomUUID()),{readOnly:true})).attempts).toEqual([])
+
   })
 
   it('shows a fully refunded order only after an explicit recollection authorization', async () => {

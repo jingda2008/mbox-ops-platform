@@ -73,6 +73,11 @@ export interface AssistedOrderAccess {
 }
 
 /** A deliberately small read model for a server to collect only on one owned table. */
+export interface StaffTablePendingReview {
+  attempts: {id: string; publicId: string; amountMinor: number; currency: string; orderLabels: string[]}[]
+  collectibleOrders: StaffTablePaymentOrder[]
+}
+
 export interface StaffTablePaymentOrder {
   id: string
   publicId: string
@@ -359,6 +364,7 @@ export interface StaffActionsApiPort {
   loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess>
   loadFulfillmentHistory?(input: {kind:'prepared'|'delivered';date:string;table:string;page:number}, signal?: AbortSignal):Promise<OperatingHistory>
   loadTableOrderDetails?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTableOrderDetail[]>
+  loadTablePendingReview?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePendingReview>
   loadTablePaymentOrders?(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]>
   loadAssistedOrderCatalog(signal?: AbortSignal): Promise<AssistedOrderCatalogProduct[]>
   issueAssistedOrderContext(input: Readonly<{
@@ -990,6 +996,19 @@ export class StaffActionsApi implements StaffActionsApiPort {
       throw new StaffActionsApiError('本桌点单详情无法识别，请刷新后重试', 'INVALID_TABLE_ORDER_DETAILS_RESPONSE', null)
     }
     return data.map((value) => tableOrderDetail(value))
+  }
+
+  async loadTablePendingReview(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePendingReview> {
+    const data = await this.getData<unknown>(`/api/commerce/table-sessions/${encodeURIComponent(tableSessionId)}/payment-orders?view=review`, signal)
+    const invalid = () => new StaffActionsApiError('本桌付款核对数据无法识别，请刷新后重试', 'INVALID_TABLE_PAYMENT_RESPONSE', null)
+    if (!isObject(data) || !Array.isArray(data.attempts) || !Array.isArray(data.collectibleOrders)) throw invalid()
+    const attempts = data.attempts.map((row: unknown) => {
+      if (!isObject(row) || typeof row.id !== 'string' || typeof row.publicId !== 'string' ||
+        typeof row.amountMinor !== 'number' || !Number.isSafeInteger(row.amountMinor) || typeof row.currency !== 'string' ||
+        !Array.isArray(row.orderLabels) || !row.orderLabels.every((label: unknown) => typeof label === 'string')) throw invalid()
+      return {id: row.id, publicId: row.publicId, amountMinor: row.amountMinor, currency: row.currency, orderLabels: row.orderLabels}
+    })
+    return {attempts, collectibleOrders: data.collectibleOrders.map(tablePaymentOrder)}
   }
 
   async loadTablePaymentOrders(tableSessionId: string, signal?: AbortSignal): Promise<StaffTablePaymentOrder[]> {

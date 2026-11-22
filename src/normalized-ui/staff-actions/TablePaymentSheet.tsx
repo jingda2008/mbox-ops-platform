@@ -13,6 +13,8 @@ import { createCashReceiptReference, shortPaymentOrderLabel } from './table-paym
 
 export interface TablePaymentSheetProps {
   api: StaffActionsApiPort
+  cardCollection?: {orderId?: string} | null
+  onReview?(): void
   employeeId?: string
   table: Readonly<{ code: string; activeSession: { id: string } }>
   onClose(): void
@@ -25,7 +27,7 @@ export interface TablePaymentSheetProps {
  * current-table scope check.  This keeps the common “再出二维码/再扫付款码”
  * operation on the table page without turning the page into a cashier ledger.
  */
-export function TablePaymentSheet({ api, table, employeeId = 'current-session', onClose, onUpdated }: TablePaymentSheetProps) {
+export function TablePaymentSheet({ api, table, cardCollection, onReview, employeeId = 'current-session', onClose, onUpdated }: TablePaymentSheetProps) {
   const { confirmAction } = useConfirmationDialog()
   const [access, setAccess] = useState<AssistedOrderAccess | null>(null)
   const [orders, setOrders] = useState<StaffTablePaymentOrder[]>([])
@@ -46,6 +48,7 @@ export function TablePaymentSheet({ api, table, employeeId = 'current-session', 
   const advanceGeneration = () => { generation.current += 1; setInteractionEpoch(generation.current); return generation.current }
   const writing = useRef(false)
   const [cashRecovery, setCashRecovery] = useState(() => readPendingCashCollection(table.activeSession.id))
+  const [needsReview,setNeedsReview] = useState(false)
   const actionOrderId = useRef<string | null>(null)
   useEffect(() => () => { generation.current += 1 }, [])
 
@@ -63,11 +66,17 @@ export function TablePaymentSheet({ api, table, employeeId = 'current-session', 
     if (api.loadTablePaymentOrders === undefined) {
       throw new Error('本桌收款入口暂时不可用，请到收银页面处理')
     }
-    const [nextAccess, nextOrders] = await Promise.all([
+    const [nextAccess, candidates] = await Promise.all([
       api.loadAssistedOrderAccess(signal),
-      api.loadTablePaymentOrders(table.activeSession.id, signal),
+      cardCollection
+        ? api.loadTablePendingReview!(table.activeSession.id, signal)
+        : api.loadTablePaymentOrders(table.activeSession.id, signal),
     ])
     if (signal?.aborted || requestGeneration !== generation.current) return
+    const hasPending = !Array.isArray(candidates) && candidates.attempts.length > 0
+    const nextOrders = Array.isArray(candidates) ? candidates : candidates.collectibleOrders.filter(order =>
+      cardCollection?.orderId ? order.id === cardCollection.orderId : !hasPending)
+    setNeedsReview(hasPending)
     setAccess(nextAccess)
     setOrders(nextOrders)
     setSelectedIds(current=>current.length?current.filter(id=>nextOrders.some(order=>order.id===id)):nextOrders.map(order=>order.id))
@@ -77,19 +86,22 @@ export function TablePaymentSheet({ api, table, employeeId = 'current-session', 
         ? current
         : nextOrders[0]?.id ?? null
     ))
-  }, [api, table.activeSession.id])
+  }, [api, table.activeSession.id, cardCollection])
 
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
     setError(null)
     void refresh(controller.signal).catch((reason: unknown) => {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '本桌未结订单暂时无法读取')
+      if (!controller.signal.aborted) {
+        if (cardCollection) setOrders([])
+        setError(reason instanceof Error ? reason.message : '本桌未结订单暂时无法读取')
+      }
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false)
     })
     return () => controller.abort()
-  }, [loadAttempt, refresh])
+  }, [loadAttempt, refresh, cardCollection])
 
   useEffect(() => {
     if (activePaymentId === null || paymentStatus !== 'pending') return
@@ -239,7 +251,7 @@ export function TablePaymentSheet({ api, table, employeeId = 'current-session', 
         <div><small>{table.code} · 仅本桌未结订单</small><h2><QrCode size={21} /> 本桌收款</h2></div>
         <button type="button" aria-label="关闭本桌收款" onClick={onClose}><X size={21} /></button>
       </header>
-      <p className="staff-order-payment-note">默认合并本桌未结订单，可取消勾选或填写本次部分收款金额。原支付未知不阻塞再次收款；退款后的重新收款仍需收银授权。</p>
+      <p className="staff-order-payment-note">{cardCollection?.orderId ? '仅收所选原单，可填写本次部分金额。' : '可取消勾选订单或填写本次部分收款金额。'}退款后的重新收款需收银授权。</p>
       {cashRecovery.error && <p role="alert">{cashRecovery.error}</p>}
       {cashRecovery.attempt && <section className="staff-order-error" aria-label="上次现金登记待核对">
         <strong>上次 {money(cashRecovery.attempt.amountMinor, 'CNY')} 现金登记结果待核对</strong>
@@ -249,9 +261,10 @@ export function TablePaymentSheet({ api, table, employeeId = 'current-session', 
           : <p>请由原经办员工登录核对；也可到收银页面按凭证查询。当前账号不会代为重发。</p>}
         <details><summary>登记凭证</summary>{cashRecovery.attempt.receiptReference}</details>
       </section>}
+      {needsReview && onReview && <button type="button" disabled={busy} onClick={onReview}>本桌有付款待确认，查原付款</button>}
       {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
       {!loading && error !== null && orders.length === 0 && <button type="button" className="staff-payment-reload" onClick={() => setLoadAttempt((current) => current + 1)}><RefreshCcw size={18} />重新读取本桌收款</button>}
-      {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">本桌没有需要再次收款的订单。</p> : <>
+      {loading ? <p className="staff-order-loading"><LoaderCircle className="is-spinning" /> 正在读取本桌未结订单</p> : orders.length === 0 ? error === null && <p className="staff-actions-empty">{needsReview ? '请先核对原付款，再选择可单独收款的原单。' : cardCollection?.orderId ? '该原单当前没有可收余额，请核对最新账单。' : '本桌没有需要再次收款的订单。'}</p> : <>
         <div className="staff-payment-pinned-total" aria-label="本桌本次收款合计">
           <span>已选{selectedOrders.length}单 · 待收 {money(selectedTotal,selected?.currency??'CNY')}</span>
           <strong>本次 {Number.isSafeInteger(enteredMinor)&&enteredMinor>0?money(enteredMinor,selected?.currency??'CNY'):'请填写有效金额'}</strong>

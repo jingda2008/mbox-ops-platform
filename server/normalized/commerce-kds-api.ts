@@ -13,6 +13,7 @@ import {lockQuantityTaskOrders} from './quantity-task-lock.js'
 import {executeQuantityKdsAction} from './quantity-kds-action.js'
 import {ItemQuantityConflict} from './order-item-quantity-plan.js'
 import { synchronizeRefundedCancelledItem } from './refunded-fulfillment-repair.js'
+import {pendingTablePaymentSql} from './session-money-sql.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type {
@@ -444,6 +445,7 @@ function tableOrderItemFulfillmentStatus(row: StaffTableOrderDetailRow): StaffTa
 export async function listTablePaymentOrdersForSession(
   transaction: ScopedTransaction,
   tableSessionId: string,
+  excludedOrderIds: string[] = [],
 ): Promise<StaffTablePaymentOrderView[]> {
   const result = await transaction.query<{
     id: string
@@ -491,13 +493,14 @@ export async function listTablePaymentOrdersForSession(
     ) recollection ON true
     WHERE order_header.tenant_id=$1::uuid AND order_header.store_id=$2::uuid
       AND order_header.table_session_id=$3::uuid AND order_header.status<>'cancelled'
+      AND NOT (order_header.id=ANY($4::uuid[]))
       AND mbox.order_collection_due_amount_for_mode(order_header.tenant_id,order_header.store_id,order_header.id,true)>0
       -- A server can collect only an ordinary unpaid balance, or a balance
       -- that a cashier explicitly reopened after a completed refund.
       AND (refund.refunded_amount_minor=0 OR recollection.active)
     ORDER BY order_header.created_at DESC,order_header.id DESC
     LIMIT 20
-  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, tableSessionId, excludedOrderIds])
   return result.rows.map((row) => ({
     id: row.id,
     publicId: row.public_id,
@@ -507,6 +510,27 @@ export async function listTablePaymentOrdersForSession(
     hasOnlinePaymentInProgress: row.has_online_payment_in_progress === true,
     unresolvedOnlinePaymentId: row.unresolved_online_payment_id,
   }))
+}
+
+export async function listTablePendingReview(transaction: ScopedTransaction, tableSessionId: string) {
+  const attempts = await transaction.query<{
+    id: string; publicId: string; amountMinor: string; currency: string; orderIds: string[]; orderLabels: string[]
+  }>(`
+    SELECT payment.id, payment.public_id AS "publicId", payment.amount_minor::text AS "amountMinor",
+      payment.currency, array_agg(DISTINCT o.id) AS "orderIds", array_agg(DISTINCT o.public_id ORDER BY o.public_id) AS "orderLabels"
+    FROM mbox.orders o
+    JOIN mbox.order_payment_facts p ON (p.tenant_id,p.store_id,p.order_id)=(o.tenant_id,o.store_id,o.id)
+    JOIN mbox.payments payment ON (payment.tenant_id,payment.store_id,payment.id)=(p.tenant_id,p.store_id,p.id)
+    WHERE (o.tenant_id,o.store_id,o.table_session_id)=($1,$2,$3) AND ${pendingTablePaymentSql}
+    GROUP BY payment.id,payment.public_id,payment.amount_minor,payment.currency,payment.created_at
+    ORDER BY payment.created_at,payment.id
+  `, [transaction.scope.tenantId,transaction.scope.storeId,tableSessionId])
+  const pendingOrders = new Set(attempts.rows.flatMap(attempt => attempt.orderIds))
+  const orders = await listTablePaymentOrdersForSession(transaction, tableSessionId, [...pendingOrders])
+  return {
+    attempts: attempts.rows.map(({orderIds: _ids, amountMinor, ...attempt}) => ({...attempt, amountMinor: Number(amountMinor)})),
+    collectibleOrders: orders,
+  }
 }
 
 export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = async (
@@ -574,6 +598,7 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
       readRequiredString(readObject(request.params, '路由参数').tableSessionId, 'tableSessionId', 64),
       'tableSessionId',
     )
+    const review = (request.query as {view?: string} | undefined)?.view === 'review'
     const data = await options.staffAccessTransactions.run(context.scope, async (transaction) => {
       await assertEmployeeTableSessionReadAccess(transaction, {
         employeeId: context.employeeId,
@@ -581,8 +606,11 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
         includeTableViewAll: false,
         allTablePermissionCodes: ['payment.collect.all_tables'],
       })
+      if (review) {
+        return listTablePendingReview(transaction, tableSessionId)
+      }
       return listTablePaymentOrdersForSession(transaction, tableSessionId)
-    }, { readOnly: true })
+    }, review ? {readOnly: true, isolation: 'repeatable-read'} : {readOnly: true})
     return reply.send({ data })
   }))
 

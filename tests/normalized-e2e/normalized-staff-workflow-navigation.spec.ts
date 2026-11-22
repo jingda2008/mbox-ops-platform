@@ -412,3 +412,94 @@ test('320px live table and cashier show the three VIP8 money snapshots without r
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(320)
   }
 })
+
+test('mobile floor keeps paid tables compact and pending amounts actionable', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await login(page)
+  const operations = await readOperations(page)
+  const source = operations.tables.find(table => table.activeSession)!
+  const liveReview = await page.request.get('/api/commerce/table-sessions/' + source.activeSession!.id + '/payment-orders?view=review')
+  expect(liveReview.ok()).toBe(true)
+  expect((await liveReview.json()).data).toMatchObject({attempts:expect.any(Array),collectibleOrders:expect.any(Array)})
+  const settled = {
+    ...source.activeSession!, financialState: 'paid' as const, guestCount: 2, latestMood: null,
+    orderCount: 1, unpaidOrderCount: 0, pendingPaymentCount: 0, refundAttentionCount: 0,
+    orderAmountMinor: 21600, grossCollectedAmountMinor: 21600, outstandingAmountMinor: 0,
+    refundedAmountMinor: 0, prepaidReceivedMinor: 0, cashPaymentCount: 0,
+  }
+  const neighbours = operations.tables.filter(table => table.id !== source.id).slice(0, 7)
+  const tables = [source, ...neighbours].map((table, i) => ({
+    ...table, code: 'A' + (6 + i), areaId: source.areaId, areaName: source.areaName, assignedToActor: false,
+    activeSession: i === 0 ? settled : i === 3 ? {
+      ...settled, id: 'pending-test-session', financialState: 'payment_pending' as const,
+      grossCollectedAmountMinor: 6000, outstandingAmountMinor: 15600, pendingPaymentCount: 1, unpaidOrderCount: 1,
+    } : i === 4 ? { ...settled, id: 'collect-test-session', financialState: 'unpaid' as const, grossCollectedAmountMinor: 0, outstandingAmountMinor: 4500, unpaidOrderCount: 1 } : null,
+  }))
+  await page.route('**/api/operations', route => route.fulfill({ json: { data: { ...operations, tables } } }))
+  const clean = {id: 'clean-order', publicId: '单独可收原单', currency: 'CNY', paymentStatus: 'unpaid', outstandingAmountMinor: 4500, hasOnlinePaymentInProgress: false, unresolvedOnlinePaymentId: null}
+  const pending = {id: 'original-payment', publicId: '原付款编号001', amountMinor: 11100, currency: 'CNY', orderLabels: ['待确认原单']}
+  const writes: string[] = []
+  page.on('request', req => {
+    if (req.method() !== 'GET' && /\/api\/(payments|commerce)\//.test(req.url())) writes.push(req.url())
+  })
+  let newlyPending = false
+  await page.route('**/payment-orders?view=review', route => route.fulfill({json:{data:{
+    attempts: newlyPending || route.request().url().includes('pending-test-session') ? [pending] : [],
+    collectibleOrders: [clean],
+  }}}))
+  await page.goto('/staff/live')
+  await page.getByRole('group', { name: '桌台显示范围' }).getByRole('button', { name: /^全部/ }).click()
+  const tile = (code: string) => page.locator('.staff-table-tile').filter({ has: page.getByText(code, { exact: true }) })
+  const collect = page.getByRole('button', { name: 'A10直接收款', exact: true })
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 })
+    await expect(tile('A6')).toContainText('已结清')
+    const grid = page.locator('.staff-table-grid').first()
+    await grid.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+    await grid.screenshot({ path: testInfo.outputPath('table-grid-' + width + '.png') })
+    const height = (await tile('A6').boundingBox())!.height
+    await testInfo.attach('paid-table-height-' + width, { body: String(height), contentType: 'text/plain' })
+    expect(height).toBeLessThanOrEqual(96)
+    expect((await tile('A7').boundingBox())!.height).toBeLessThanOrEqual(96)
+    await expect(tile('A6').getByText('已点 ¥216.00')).toBeVisible()
+    await expect(tile('A6').getByLabel('本桌次收退款')).toBeHidden()
+    await expect(tile('A9').getByText('待收 ¥156.00', { exact: true })).toBeVisible()
+    await expect(tile('A9')).toContainText('1笔确认中')
+    expect((await collect.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+  }
+  await tile('A6').click()
+  const dialog = page.getByRole('dialog', { name: 'A6桌台操作' })
+  await expect(dialog.getByLabel('本桌次收退款')).toContainText('净收 ¥216.00 · 待收 ¥0.00')
+  await dialog.getByRole('button', { name: '关闭桌台操作' }).click()
+  await page.getByRole('button', {name:'A6查看账单'}).click()
+  const bill = page.getByRole('dialog', {name:'A6账单'})
+  await expect(bill.getByLabel('本桌次收退款')).toContainText('净收 ¥216.00')
+  await expect(bill.getByRole('button',{name:'调出付款二维码'})).toHaveCount(0)
+  await bill.getByRole('button',{name:'关闭',exact:true}).click()
+  await page.getByRole('button',{name:'A9查原付款'}).click()
+  const review = page.getByRole('dialog',{name:'A9查原付款'})
+  await expect(review).toContainText('原付款编号001')
+  await expect(review).toContainText('待确认原单')
+  await expect(review.getByRole('button',{name:'调出付款二维码'})).toHaveCount(0)
+  await review.getByRole('button',{name:/单独可收原单.*45.00/}).click()
+  const payment = page.getByRole('dialog',{name:'A9本桌收款'})
+  await expect(payment.getByLabel('本桌本次收款合计')).toContainText('已选1单')
+  await expect(payment.getByLabel('本桌本次收款合计')).toContainText('45')
+  await expect(payment.getByLabel('本桌未结订单')).not.toContainText('待确认原单')
+  await payment.getByRole('button',{name:'关闭本桌收款'}).click()
+  await page.getByRole('button',{name:'关闭桌台操作'}).click()
+  await collect.click()
+  const direct = page.getByRole('dialog', { name: 'A10本桌收款' })
+  await expect(direct.getByLabel('本桌本次收款合计')).toContainText('45')
+  await direct.getByRole('button',{name:'关闭本桌收款'}).click()
+  await page.getByRole('button',{name:'关闭桌台操作'}).click()
+  newlyPending = true
+  await collect.click()
+  await expect(direct.getByRole('button',{name:'本桌有付款待确认，查原付款'})).toBeVisible()
+  await expect(direct.getByLabel('本桌本次收款合计')).toHaveCount(0)
+  expect(writes).toEqual([])
+  await page.getByRole('button', { name: '关闭本桌收款' }).click()
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await expect(tile('A6').getByLabel('本桌次收退款')).toBeVisible()
+})

@@ -8,7 +8,7 @@ http.createServer(async(req,res)=>{
  const value=body?JSON.parse(body):{}
  await appendFile(join(directory,'requests.jsonl'),JSON.stringify({path:req.url,body:value,time:new Date().toISOString()})+'\n')
  let control={};try{control=JSON.parse(await readFile(join(directory,'control.json'),'utf8'))}catch{}
- if(req.url.endsWith('/heartbeat')&&control.rejectNewHeartbeat&&value.softwareVersion==='1.0.13'){res.writeHead(503);res.end('{}');return}
+ if(req.url.endsWith('/heartbeat')&&control.rejectVersion&&value.softwareVersion===control.rejectVersion){res.writeHead(503);res.end('{}');return}
  res.setHeader('content-type','application/json')
  if(req.url.endsWith('/work/claim'))res.end(JSON.stringify({data:{jobs:[],commands:[]}}))
  else if(req.url.endsWith('/diagnostics'))res.end(JSON.stringify({data:{acceptedEventIds:(value.events||[]).map(e=>e.eventId)}}))

@@ -1,3 +1,4 @@
+import { recordQueueObservations } from './print-queue-observation.js'
 import { productionPrintClaimSql } from './order-production-print-gate.js'
 import { PrintDiagnosticsRepository, type DiagnosticEvent } from './print-diagnostics.js'
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
@@ -221,6 +222,8 @@ export class PrintBridgeRepository {
     hostname: string
     softwareVersion: string
     queues: readonly string[]
+    queueObservations?: unknown
+    monitorQueues?: boolean
   }>) {
     assertUuid(bridgeId, 'bridgeId')
     requireText(input.hostname, 'hostname', 1, 160)
@@ -241,7 +244,10 @@ export class PrintBridgeRepository {
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND print_bridge_id=$3::uuid
         AND status='active' AND device_type='printer'
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, bridgeId, queues])
-    return { accepted: true, serverTime: new Date().toISOString() }
+    const monitorQueues = input.monitorQueues
+      ? await recordQueueObservations(this.transaction, bridgeId, input.queueObservations)
+      : undefined
+    return { accepted: true, serverTime: new Date().toISOString(), ...(monitorQueues ? { monitorQueues } : {}) }
   }
 
   async claim(bridge: Readonly<{ id: string; publicId: string }>, limit = 10, staleLockSeconds = 90) {

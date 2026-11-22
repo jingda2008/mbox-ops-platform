@@ -32,7 +32,9 @@ export async function seedThreeScreenBrowserFixture(databaseUrl:string,tenantId:
       for(const station of ['bar','kitchen'] as const){
         const orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID()
         const note=index===19?'此单请完整核对：酱料与装饰分别放置，确认桌号后再取走，不与其他桌的出品混放。':''
-        await db.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor,created_at) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),2000,2000,clock_timestamp()-interval '5 minutes'+$6::int*interval '2 seconds')",[orderId,tenantId,storeId,sessionId,`TS-${code}-${station}`,index])
+        await db.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+          settlement_mode,created_by_employee_id,submitted_at,subtotal_amount_minor,total_amount_minor,created_at)
+          VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','table_tab',$7,clock_timestamp(),2000,2000,clock_timestamp()-interval '5 minutes'+$6::int*interval '2 seconds')`,[orderId,tenantId,storeId,sessionId,`TS-${code}-${station}`,index,waiter])
         await db.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,note) VALUES($1,$2,$3,$4,$5,2,1000,2000,$6,$7::jsonb,$8)`,[itemId,tenantId,storeId,orderId,products[station].id,station,JSON.stringify({name:products[station].name,inventoryControlMode:'not_managed'}),note])
         await db.query('INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity) VALUES($1,$2,$3,$4,$5,2)',[taskId,tenantId,storeId,itemId,station])
         tasks.push({taskId,itemId,orderId,station})

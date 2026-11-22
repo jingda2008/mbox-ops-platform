@@ -19,7 +19,9 @@ export async function seedKitchenBrowserFixture(databaseUrl:string,tenantId:stri
       await client.query('INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1,$2,$3,$4,$5,$6,2)',[sessionId,tenantId,storeId,tableId,`kitchen-test-${sessionId}`,businessDate])
       for(let order=0;order<2;order++){
         const orderId=randomUUID(),itemId=randomUUID(),taskId=randomUUID();taskIds.push(taskId)
-        await client.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor,created_at) VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted',clock_timestamp(),3000,3000,clock_timestamp()-interval '2 minutes'+$6::int*interval '2 seconds')",[orderId,tenantId,storeId,sessionId,`KDS-${code}-${order+1}`,index*2+order])
+        await client.query(`INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,
+          settlement_mode,created_by_employee_id,submitted_at,subtotal_amount_minor,total_amount_minor,created_at)
+          VALUES($1,$2,$3,$4,$5,'staff_assisted','submitted','table_tab',$7,clock_timestamp(),3000,3000,clock_timestamp()-interval '2 minutes'+$6::int*interval '2 seconds')`,[orderId,tenantId,storeId,sessionId,`KDS-${code}-${order+1}`,index*2+order,waiter])
         await client.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,note) VALUES($1,$2,$3,$4,$5,3,1000,3000,'kitchen',$6::jsonb,$7)`,[itemId,tenantId,storeId,orderId,productId,JSON.stringify({name:productName,inventoryControlMode:'not_managed'}),index%10===9?'不要盐':''])
         await client.query("INSERT INTO mbox.kds_tasks(id,tenant_id,store_id,order_item_id,station_code,quantity) VALUES($1,$2,$3,$4,'kitchen',3)",[taskId,tenantId,storeId,itemId])
       }

@@ -48,6 +48,7 @@ import {
 } from 'lucide-react'
 import { StaffActionsApi, StaffActionsApiError, type StaffActionsApiPort, type StaffReservationListOptions } from './staff-actions-api'
 import { AssistedOrderSheet } from './AssistedOrderSheet'
+import {TableCardReadSheet} from './TableCardReadSheet'
 import { TablePaymentSheet } from './TablePaymentSheet'
 import { ResponsibilityAssignmentPanel } from './ResponsibilityAssignmentPanel'
 import { TableObservationSheet } from './TableObservationSheet'
@@ -208,6 +209,8 @@ export function StaffActionsPanel({
   const fulfillmentRevisionRef = useRef(0)
   const [orderSheetMode, setOrderSheetMode] = useState<'paid' | 'gift' | null>(null)
   const [tablePaymentOpen, setTablePaymentOpen] = useState(false)
+  const [cardRead, setCardRead] = useState<{sessionId: string; mode: 'bill' | 'review'} | null>(null)
+  const [cardCollection, setCardCollection] = useState<{sessionId: string; orderId?: string} | null>(null)
   const [observationOpen, setObservationOpen] = useState(false)
   const [recommendationOpen, setRecommendationOpen] = useState(false)
   const [participantMovementOpen,setParticipantMovementOpen]=useState(false)
@@ -424,6 +427,8 @@ export function StaffActionsPanel({
     setCloseIssue(null)
     setOrderSheetMode(null)
     setTablePaymentOpen(false)
+    setCardRead(null)
+    setCardCollection(null)
     setObservationOpen(false)
     setRecommendationOpen(false)
     setParticipantMovementOpen(false)
@@ -624,6 +629,8 @@ export function StaffActionsPanel({
     noticeController.clear()
     setOrderSheetMode(null)
     setTablePaymentOpen(false)
+    setCardRead(null)
+    setCardCollection(null)
     setObservationOpen(false)
     setRecommendationOpen(false)
     setParticipantMovementOpen(false)
@@ -1227,19 +1234,35 @@ export function StaffActionsPanel({
                   const hasFinancialAttention = table.activeSession !== null
                     && (table.activeSession.refundAttentionCount > 0
                       || table.activeSession.financialState === 'payment_exception')
+                  const session = table.activeSession
+                  const reviewPayment = !!session && (session.pendingPaymentCount > 0 || session.financialState === 'payment_pending')
+                  const collectible = !!session && (session.outstandingAmountMinor === undefined ? session.unpaidOrderCount > 0 : session.outstandingAmountMinor > 0)
+                  const quickLabel = reviewPayment ? '查原付款' : collectible ? '收款' : '查看账单'
+                  const notices = session ? [
+                    session.unpaidOrderCount > 0 && `${session.unpaidOrderCount}笔未收`,
+                    session.pendingPaymentCount > 0 && `${session.pendingPaymentCount}笔确认中`,
+                    session.refundAttentionCount > 0 && `${session.refundAttentionCount}笔${(session.refundActionCount ?? session.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}`,
+                  ].filter((notice): notice is string => typeof notice === 'string') : []
                   return (
                   <div className="staff-table-tile-shell" key={table.id}>
                     <button
                       type="button"
-                      className={`staff-table-tile ${table.activeSession === null ? '' : `is-open is-financial-${table.activeSession.financialState}`} ${selectedTableId === table.id ? 'is-selected' : ''}`}
+                      className={`staff-table-tile ${reviewPayment ? 'has-pending-payment' : ''} ${table.activeSession === null ? '' : `is-open is-financial-${table.activeSession.financialState}`} ${selectedTableId === table.id ? 'is-selected' : ''}`}
                       onClick={() => selectTable(table)}
                       disabled={pendingAction === `table:${table.id}`}
                     >
                       <strong>{table.code}</strong>
-                      <span>{table.activeSession === null ? `${table.capacity}人 · 空台` : `${table.activeSession.guestCount}人 · ${`${table.activeSession.status === 'closing' ? '结台中 · ' : ''}${tableFinancialLabel(table.activeSession.financialState)}`}`}</span>
+                      <span>{table.activeSession ? <>
+                        {table.activeSession.guestCount}人 · {table.activeSession.status === 'closing' && '结台中 · '}<span className="staff-table-state">{tableFinancialLabel(table.activeSession.financialState)}</span>
+                      </> : `${table.capacity}人 · 空台`}</span>
+                      {session?.outstandingAmountMinor !== undefined && session.outstandingAmountMinor > 0 && (
+                        <em className="staff-table-spend staff-table-due">待收 ¥{(session.outstandingAmountMinor / 100).toFixed(2)}</em>
+                      )}
                       {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
                       {table.activeSession?.grossCollectedAmountMinor === undefined && table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
-                      {table.activeSession !== null && (table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 || table.activeSession.refundAttentionCount > 0) && <em className="staff-table-financial-detail">{table.activeSession.unpaidOrderCount > 0 ? `${table.activeSession.unpaidOrderCount}笔未收` : ''}{table.activeSession.pendingPaymentCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 ? ' · ' : ''}${table.activeSession.pendingPaymentCount}笔确认中` : ''}{table.activeSession.refundAttentionCount > 0 ? `${table.activeSession.unpaidOrderCount > 0 || table.activeSession.pendingPaymentCount > 0 ? ' · ' : ''}${table.activeSession.refundAttentionCount}笔${(table.activeSession.refundActionCount ?? table.activeSession.refundAttentionCount) > 0 ? '退款待办' : '退款核对中'}` : ''}</em>}
+                      {notices.length > 0 && <em className="staff-table-financial-detail staff-table-notices">
+                        {notices.map(notice => <span key={notice}>{notice}</span>)}
+                      </em>}
                       {table.activeSession && (table.activeSession.orderCount > 0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
                       {hasFinancialAttention && <b className="staff-table-attention-badge" aria-label="支付或退款待办">!</b>}
                       {table.assignedToActor && <small>负责桌</small>}
@@ -1249,16 +1272,21 @@ export function StaffActionsPanel({
                         </span>
                       )}
                     </button>
-                    {canCollect && <button type="button" className="staff-table-quick-payment"
-                      aria-label={`${table.code}直接收款`}
+                    {canCollect && session && (reviewPayment || collectible || session.orderCount > 0 || !!session.prepaidReceivedMinor || session.financialState !== 'no_order') && <button type="button" className="staff-table-quick-payment"
+                      aria-label={table.code + (quickLabel === '收款' ? '直接收款' : quickLabel)}
                       disabled={pendingAction === `table:${table.id}` || table.activeSession?.id.startsWith('optimistic-')}
                       onClick={() => {
                         if (!table.activeSession || table.activeSession.id.startsWith('optimistic-')) return
                         selectTable(table, false)
-                        secondaryTableSessionIdRef.current = table.activeSession?.id ?? null
-                        setTablePaymentOpen(true)
+                        secondaryTableSessionIdRef.current = session.id
+                        if (reviewPayment || !collectible) {
+                          setCardRead({sessionId: session.id, mode: reviewPayment ? 'review' : 'bill'})
+                        } else {
+                          setCardCollection({sessionId: session.id})
+                          setTablePaymentOpen(true)
+                        }
                       }}>
-                      <QrCode size={15} />收款
+                      {reviewPayment ? <Search size={15}/> : collectible ? <QrCode size={15}/> : null}{quickLabel}
                     </button>}
                   </div>
                   )
@@ -1306,7 +1334,10 @@ export function StaffActionsPanel({
                 if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setOrderSheetMode('paid'))
               }}
               onPayment={() => {
-                if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setTablePaymentOpen(true))
+                if (selectedTable.activeSession !== null) {
+                  setCardCollection(null)
+                  openTableSecondary(selectedTable.activeSession.id, () => setTablePaymentOpen(true))
+                }
               }}
               onGift={() => {
                 if (selectedTable.activeSession !== null) openTableSecondary(selectedTable.activeSession.id, () => setOrderSheetMode('gift'))
@@ -1566,8 +1597,20 @@ export function StaffActionsPanel({
           }}
         />
       )}
-      {tablePaymentOpen && operations !== null && selectedTable?.activeSession !== null && selectedTable !== null && (
-        <TablePaymentSheet api={api} employeeId={operations.actor.id} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
+      {cardRead && selectedTable?.activeSession?.id === cardRead.sessionId && <TableCardReadSheet
+        key={cardRead.sessionId} api={api} table={{code: selectedTable.code, activeSession: selectedTable.activeSession}}
+        mode={cardRead.mode} canViewOrders={permissions.includes('order.view') || permissions.includes('service.execute')}
+        onClose={() => setCardRead(null)} onCollect={orderId => {
+          setCardCollection({sessionId: cardRead.sessionId, orderId})
+          setCardRead(null)
+          setTablePaymentOpen(true)
+        }}/>}
+      {tablePaymentOpen && operations !== null && selectedTable?.activeSession && (!cardCollection || cardCollection.sessionId === selectedTable.activeSession.id) && (
+        <TablePaymentSheet key={selectedTable.activeSession.id} api={api} cardCollection={cardCollection}
+          onReview={() => {
+            setTablePaymentOpen(false)
+            setCardRead({sessionId: selectedTable.activeSession!.id, mode: 'review'})
+          }} employeeId={operations.actor.id} table={{ code: selectedTable.code, activeSession: selectedTable.activeSession }}
           onClose={() => returnToTableActionDialog(() => setTablePaymentOpen(false))} onUpdated={(message) => {
             showNotice({ kind: 'success', message })
             void load(true)

@@ -559,6 +559,13 @@ describe('commerceKdsApiPlugin', () => {
     expect(value.staffQueries.some((sql) => sql.includes('FROM mbox.orders order_header'))).toBe(false)
   })
 
+  it('keeps the pending payment review scoped to collection staff', async () => {
+    const value = fixture({ permissions: ['order.create'] })
+    const response = await value.app.inject({method:'GET', url:`/api/commerce/table-sessions/${tableSessionId}/payment-orders?view=review`})
+    expect(response.statusCode).toBe(403)
+    expect(value.staffQueries.some(sql => sql.includes('array_agg(DISTINCT o.id)'))).toBe(false)
+  })
+
   it('lets any service employee inspect active-table delivery progress without payment data', async () => {
     const value = fixture({ permissions: ['service.execute'] })
     const response = await value.app.inject({

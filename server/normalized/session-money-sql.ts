@@ -1,3 +1,10 @@
+// Expects an order payment fact with alias p. The count and drill-down share this definition.
+export const pendingTablePaymentSql = `p.status IN ('created','pending')
+      AND p.provider IN ('wechat','postar','simulation') AND p.retry_released_at IS NULL
+      AND (p.provider_transaction_id IS NOT NULL OR EXISTS (
+        SELECT 1 FROM mbox.payment_provider_actions a WHERE (a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id)
+        AND a.state IN ('creating','ready','unknown')))`
+
 // The caller selects an authorized table_sessions row named session. All amounts
 // use the allocations for this visit, including when only one original is visible on a page.
 export const sessionMoneySql = `
@@ -51,9 +58,5 @@ export const sessionMoneySql = `
     (SELECT count(DISTINCT id) FROM captured WHERE provider='cash')::integer AS cash_count,
     (SELECT count(*) FROM due WHERE amount>0)::integer AS unpaid_order_count,
     (SELECT COALESCE(sum(amount),0) FROM due)::bigint AS due_minor,
-    (SELECT count(DISTINCT p.id) FROM receipts p WHERE p.status IN ('created','pending')
-      AND p.provider IN ('wechat','postar','simulation') AND p.retry_released_at IS NULL
-      AND (p.provider_transaction_id IS NOT NULL OR EXISTS (
-        SELECT 1 FROM mbox.payment_provider_actions a WHERE (a.tenant_id,a.store_id,a.payment_id)=(p.tenant_id,p.store_id,p.id)
-        AND a.state IN ('creating','ready','unknown'))))::integer AS pending_payment_count
+    (SELECT count(DISTINCT p.id) FROM receipts p WHERE ${pendingTablePaymentSql})::integer AS pending_payment_count
 `

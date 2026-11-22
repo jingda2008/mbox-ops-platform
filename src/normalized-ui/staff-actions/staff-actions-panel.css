@@ -297,9 +297,12 @@
 .staff-table-tile.is-financial-refund_pending,
 .staff-table-tile.is-financial-payment_exception { border-color: #a62630; background: #ffd2d5; box-shadow: inset 0 0 0 1px rgb(166 38 48 / 18%); }
 .staff-table-financial-detail { max-width: 100%; overflow: hidden; color: #6b3e00; font-size: 10px; font-style: normal; font-weight: 800; line-height: 1.2; white-space: normal; overflow-wrap: anywhere; }
+.staff-table-notices { display: flex; flex-wrap: wrap; gap: 2px 5px; }
+.staff-table-notices > span { max-width: 100%; font: inherit; color: inherit; }
 .staff-table-tile.is-financial-refund_pending .staff-table-financial-detail,
 .staff-table-tile.is-financial-payment_exception .staff-table-financial-detail { color: #84232b; }
 .staff-table-spend { color: #173f30; font-size: 11px; font-style: normal; font-weight: 800; }
+.staff-table-due { display: none; }
 .staff-table-attention-badge { position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 999px; color: #fff; background: #b52f37; font-size: 11px !important; }
 .staff-table-tile.is-selected { outline: 2px solid var(--staff-gold); outline-offset: 1px; }
 .staff-table-tile small { color: var(--staff-green); font-weight: 700; }
@@ -672,6 +675,20 @@
 .staff-member-benefit-tasks label { display: grid; gap: 4px; color: #46564d; font-size: 13px; font-weight: 700; }
 .staff-member-benefit-tasks select,.staff-member-benefit-tasks input { min-height: 44px; padding: 0 9px; border: 1px solid #b9c4bc; border-radius: 7px; background: #fff; }
 
+@media (max-width: 719px) {
+  .staff-table-grid { align-items: start; }
+  .staff-table-tile-shell { grid-template-rows: auto; }
+  .staff-table-tile .session-money-summary,
+  .staff-table-due + .staff-table-spend { display: none; }
+  .staff-table-due { display: block; }
+  .staff-table-spend { max-width: 100%; overflow-wrap: anywhere; }
+  .staff-table-state { display: inline-block; max-width: 100%; }
+}
+
+@media (max-width: 359px) {
+  .staff-table-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 @media (min-width: 720px) {
   .staff-actions-panel { max-width: 920px; margin: 0 auto; }
   .staff-table-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); }
@@ -767,3 +784,7 @@
 .staff-guest-count-buttons { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; }
 .staff-guest-count-buttons .is-payment { grid-column: auto; }
 .staff-guest-count-confirmed { grid-column: 1 / -1; margin: 0; color: var(--staff-green); }
+
+.staff-actions-panel .staff-table-tile.has-pending-payment { background: #fff0cc; border-color: #b8781b; }
+.staff-table-read-sheet article { padding-block: .6rem; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
+.staff-table-read-sheet section > button, .staff-table-read-sheet article > button { min-height: 44px; }

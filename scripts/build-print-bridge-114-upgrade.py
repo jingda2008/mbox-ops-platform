@@ -53,7 +53,7 @@ def build(baseline, output, rebuilt=False):
     b = edit(b, "outcome: 'succeeded', resultSnapshot: { checkedAt: new Date().toISOString() },", "outcome: inspection && !inspection.readable ? 'failed' : 'succeeded',\n      ...(inspection && !inspection.readable ? {failureCode: 'queue_unavailable'} : {}),\n      resultSnapshot: { checkedAt: new Date().toISOString(), ...(inspection ? {queueObservation: inspection} : {}) },")
     b = edit(b, 'documentName: `MBOX-${businessKey}`.slice(0, 120)', 'documentName: `MBOX-job-${id}`')
     files['bridge.mjs'] = b.encode()
-    files['observe.mjs'] = (SRC / 'observe.mjs').read_bytes()
+    files['observe.mjs'] = (SRC / 'observe.mjs').read_text(encoding='utf-8').encode('utf-8')
     files['read-queue.ps1'] = ps((SRC / 'read-queue.ps1').read_text(encoding='utf-8'))
     files['MBOX-Check-Queues.cmd'] = (SRC / 'MBOX-Check-Queues.cmd').read_text().replace('\n', '\r\n').encode('ascii')
     files['check-queues.ps1'] = ps((SRC / 'check-queues.ps1').read_text(encoding='utf-8'))

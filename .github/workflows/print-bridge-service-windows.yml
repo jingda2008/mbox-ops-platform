@@ -1,0 +1,47 @@
+name: print-bridge-service-windows
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/print-bridge-service-recovery-115']
+    paths: ['deploy/windows-print-bridge/**','scripts/build-print-bridge-115-upgrade.py','.github/workflows/print-bridge-service-windows.yml']
+permissions:
+  contents: read
+jobs:
+  unattended:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: ['1.0.13', '1.0.14']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - uses: actions/setup-node@v6
+        with: {node-version: 22}
+      - name: Build installer and exercise real service and print queues
+        shell: powershell
+        run: |
+          foreach($build in '113','114','115'){
+            python "scripts/build-print-bridge-$build-upgrade.py"
+            if($LASTEXITCODE){exit $LASTEXITCODE}
+          }
+          $dir='artifacts/print-bridge-1.0.15/MBOX-PrintBridge-1.0.15-OneClick-r1'
+          Expand-Archive -LiteralPath ($dir+'.zip') -DestinationPath $dir
+          python scripts/verify-print-bridge-113-package.py --package $dir --pwsh powershell.exe
+          if($LASTEXITCODE){exit $LASTEXITCODE}
+          & ./deploy/windows-print-bridge/release-1.0.14/observer.tests.ps1 -Package $dir
+          & ./deploy/windows-print-bridge/release-1.0.13/windows-native.tests.ps1 -ServiceUpgradeFrom '${{ matrix.baseline }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MBOX-PrintBridge-1.0.15-from-${{ matrix.baseline }}
+          path: |
+            artifacts/print-bridge-1.0.15/*.zip
+            artifacts/print-bridge-1.0.15/*.sha256
+            artifacts/print-bridge-1.0.15/windows-evidence.json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: service-test-diagnostics-${{ matrix.baseline }}
+          path: artifacts/print-bridge-native-evidence/

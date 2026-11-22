@@ -1,13 +1,15 @@
-﻿param([switch]$QueueUpgrade)
+﻿param([switch]$QueueUpgrade, [ValidateSet('1.0.13','1.0.14')][string]$ServiceUpgradeFrom)
 $ErrorActionPreference='Stop'
 $repo=(Get-Location).Path
-$version = if($QueueUpgrade){'1.0.14'}else{'1.0.13'}
-$previous = if($QueueUpgrade){'1.0.13'}else{'1.0.11'}
+$version = if($ServiceUpgradeFrom){'1.0.15'}elseif($QueueUpgrade){'1.0.14'}else{'1.0.13'}
+$previous = if($ServiceUpgradeFrom){$ServiceUpgradeFrom}elseif($QueueUpgrade){'1.0.13'}else{'1.0.11'}
 $archiveBase = Join-Path $repo ("artifacts/print-bridge-$version/MBOX-PrintBridge-$version-OneClick-r1")
 $package = $archiveBase
 $oldFiles = @('bridge.mjs','print-ticket.ps1','list-printers.ps1')
 $addedFiles = @('diagnostic-events.mjs')
+if($ServiceUpgradeFrom){$QueueUpgrade=$true}
 if($QueueUpgrade){$oldFiles+='diagnostic-events.mjs';$addedFiles=@('read-queue.ps1','observe.mjs')}
+if($ServiceUpgradeFrom -eq '1.0.14'){$oldFiles+=$addedFiles;$addedFiles=@()}
 $evidence=Join-Path $repo 'artifacts\print-bridge-native-evidence'
 New-Item -ItemType Directory -Force $evidence | Out-Null
 $root='C:\MBOX Native 验证'
@@ -49,7 +51,7 @@ try {
  Assert (-not (Get-Service MBoxPrintBridge -ErrorAction SilentlyContinue)) 'test runner already has MBoxPrintBridge; refuse touching it'
  Assert (-not (Test-Path $root)) 'fixture directory already exists'
  New-Item -ItemType Directory -Force $root,$install,$data,$baseline | Out-Null
- $baselineZip = if($QueueUpgrade){Join-Path $repo 'artifacts/print-bridge-1.0.13/MBOX-PrintBridge-1.0.13-OneClick-r1.zip'}else{Join-Path $PSScriptRoot 'baseline-1.0.11.zip'}
+ $baselineZip = if($QueueUpgrade){Join-Path $repo "artifacts/print-bridge-$previous/MBOX-PrintBridge-$previous-OneClick-r1.zip"}else{Join-Path $PSScriptRoot 'baseline-1.0.11.zip'}
  Expand-Archive -LiteralPath $baselineZip -DestinationPath $baseline
  Invoke-WebRequest -UseBasicParsing 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe' -OutFile $exe
  Assert ((Get-FileHash -LiteralPath $exe).Hash -eq '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da') 'WinSW digest mismatch'
@@ -62,6 +64,11 @@ try {
  Set-Service Spooler -StartupType Manual; Start-Service Spooler
  & $exe install
  Assert ($LASTEXITCODE -eq 0) 'WinSW service install failed'
+ if($ServiceUpgradeFrom){
+   . (Join-Path $repo 'deploy/windows-print-bridge/release-1.0.15/recovery.tests.ps1')
+   Set-FixtureOriginalPolicy
+   $originalPolicy = Read-FixturePolicy
+ }
  Reset-Old
  Start-Sleep -Seconds 8
  Assert ((Get-Content -LiteralPath (Join-Path $data 'requests.jsonl') -Raw) -match [regex]::Escape($previous)) 'original bridge heartbeat absent'
@@ -93,6 +100,7 @@ try {
  Assert ((Run-Upgrade) -ne 0) 'new heartbeat failure not detected'
  $failure=Get-Content -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Raw | ConvertFrom-Json
  Assert ($failure.Result.Recovery -eq 'original-restored') 'rollback not confirmed';Assert-Old
+ if($ServiceUpgradeFrom){ Assert ((Read-FixturePolicy) -ceq $originalPolicy) 'SCM rollback differs from original policy'; Record 'prior startup mode and custom recovery policy restored after failed upgrade' }
  Copy-Item -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Destination (Join-Path $evidence 'rollback-result.json')
  Record 'real new-service heartbeat rejection restores old files, absent module and running state'
  Reset-Old
@@ -109,6 +117,7 @@ try {
  $same=Get-Content -LiteralPath (Join-Path $install 'upgrade-last-result.json') -Raw | ConvertFrom-Json
  Assert ($same.Result.State -eq 'already-current') 'repeat install is not idempotent'
  Record 'repeated upgrade is idempotent'
+ if($ServiceUpgradeFrom){ Test-FixtureRecovery }
  # Exercise real winspool APIs through an isolated Generic/Text-only file port, never a physical printer.
  $capture=Join-Path $root 'capture.raw'
  Add-PrinterDriver -Name 'Generic / Text Only'

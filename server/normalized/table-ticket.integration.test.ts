@@ -784,6 +784,71 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     const product=(await admin.query("SELECT id FROM mbox.products WHERE tenant_id=$1 AND code='DISH'",[scope.tenantId])).rows[0].id
     await admin.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id) VALUES($1,$2,$3,$4)",[...args,session,buyer])
     const ref=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:buyer})
+    // Use one fully funded dish. The second ticket is a control for cross-ticket balance changes.
+    const fullGiftDish = randomUUID()
+    await admin.query(`WITH dish AS (
+      INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode)
+      VALUES($3,$1,$2,'FULLGIFT','550元原价菜','food','none','not_managed') RETURNING id,tenant_id,store_id
+    ) INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from)
+      SELECT tenant_id,store_id,id,'standard',55000,'CNY','2020-01-01' FROM dish`, [...args,fullGiftDish])
+    await run(async tx=>{
+      await tx.query('SAVEPOINT full_ticket_meal')
+      const proposal = await staffPointsProposal(tx,employee,session,'MBX-TWO-TABLES',[{productId:fullGiftDish,quantity:1}],550)
+      const checkout = await adoptAssistedPoints(tx,{customerId:buyer,tableSessionId:session,actorRef:ref},proposal.id!)
+      expect(checkout.quote).toMatchObject({subtotalMinor:55000,pointsUsed:550,payableMinor:0})
+      const meal = await placeDining(session,buyer,ref,checkout,tx)
+      await new PaymentRepository(tx).syncOrderPaymentStatus(meal.id)
+      await new PaymentFulfillmentRepository(tx).activatePaidOrder(meal.id)
+      await new CheckoutPointsRepository(tx).consume(meal.id)
+      const original = (await tx.query('SELECT lot_id,points FROM mbox.checkout_point_lots WHERE quote_id=$1',[checkout.quote.id])).rows
+      expect(original).toEqual([{lot_id:tickets[0].point_lot_id,points:550}])
+      const lots = ()=>tx.query(`SELECT l.remaining_points,l.status FROM mbox.table_tickets k JOIN mbox.loyalty_point_lots l
+        ON l.id=k.point_lot_id WHERE k.registration_id=$1 ORDER BY k.ordinal`,[sale.id])
+      const mealPayments = ()=>tx.query('SELECT id FROM mbox.payments WHERE order_id=$1',[meal.id])
+      const originalTicket = tickets[0].id
+      const dayBefore = await ticketFinanceDay(tx,null)
+      await tx.query('SAVEPOINT personal_full_ticket')
+      const personal = await requestTicketRefund(tx,sale.id,originalTicket,buyer,'本人原因，依据原菜款申请核定')
+      expect(personal.consumedMinor).toBe(55000)
+      expect(await ticketDiningLines(tx,personal.caseId)).toMatchObject([{priceMinor:55000,usedMinor:55000,review:false}])
+      await expect(proposeTicketDining(tx,personal.caseId,employee,'已人工核对原价550元及票款500元')).rejects.toMatchObject({code:'TICKET_DINING_REVIEW'})
+      expect((await tx.query('SELECT id FROM mbox.ticket_dining_collections WHERE case_id=$1',[personal.caseId])).rows).toEqual([])
+      await expect(submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).rejects.toMatchObject({code:'TICKET_DINING_REVIEW_REQUIRED'})
+      await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
+      expect((await mealPayments()).rows).toEqual([])
+      expect(await ticketFinanceDay(tx,dayBefore.day)).toEqual(dayBefore)
+      expect((await lots()).rows).toEqual([{remaining_points:0,status:'ticket_hold'},{remaining_points:550,status:'available'}])
+      expect((await ticketStatement(tx,originalTicket)).refunds).toMatchObject([{status:'review',cashStatus:null}])
+      await tx.query('ROLLBACK TO SAVEPOINT personal_full_ticket')
+
+      const merchant = await requestTicketRefund(tx,sale.id,originalTicket,buyer,'门店取消本场演出')
+      expect(merchant.consumedMinor).toBe(55000)
+      const cash = await submitTicketCashRefund(tx,merchant.caseId,employee,50000,'门店承担本次全部已用赠分菜款550元')
+      const approver = (await tx.query("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND employee_code='AUD'",[scope.tenantId])).rows[0].id
+      const refunds = new RefundRepository(tx)
+      const approved = await refunds.approve(cash.refundId,approver,'核对退还原票实付500元')
+      await refunds.beginExecution(approved.id)
+      const receipt = {refundPublicId:approved.publicId,provider:'postar' as const,providerRefundId:'FULL-'+approved.id,
+        originalProviderTransactionId:'twotix-'+pay.id,reportedAmountMinor:50000,reportedCurrency:'CNY',succeeded:true}
+      expect((await refunds.completeProviderExecution(receipt)).applied).toBe(true)
+      expect((await refunds.completeProviderExecution(receipt)).applied).toBe(false)
+      expect((await tx.query('SELECT payment_id,amount_minor,status FROM mbox.refunds WHERE payment_id=$1',[pay.id])).rows)
+        .toEqual([{payment_id:pay.id,amount_minor:'50000',status:'succeeded'}])
+      const statement = await ticketStatement(tx,originalTicket)
+      expect(statement.ticket).toMatchObject({priceMinor:50000,giftPoints:550})
+      expect(statement.refunds).toMatchObject([{status:'refunded',cashMinor:'50000',cashStatus:'succeeded'}])
+      expect(statement.dining).toEqual([])
+      const expectedDaily = {...dayBefore.amounts,ticketRefund:String(Number(dayBefore.amounts.ticketRefund??0)+50000)}
+      expect((await ticketFinanceDay(tx,dayBefore.day)).amounts).toEqual(expectedDaily)
+      expect(statement.points.map(m=>m.delta)).toEqual([550,-550])
+      expect((await mealPayments()).rows).toEqual([])
+      expect((await lots()).rows).toEqual([{remaining_points:0,status:'reversed'},{remaining_points:550,status:'available'}])
+      const balance = await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[member])
+      expect(balance.rows).toEqual([{available_points:550}])
+      const reward = await tx.query('SELECT coalesce(sum(awarded_points-reversed_points+restored_points),0)::int points FROM mbox.loyalty_order_awards WHERE order_id=$1',[meal.id])
+      expect(reward.rows).toEqual([{points:0}])
+      await tx.query('ROLLBACK TO SAVEPOINT full_ticket_meal')
+    })
     const existingCredential=(await admin.query('SELECT id FROM mbox.store_daily_credentials WHERE tenant_id=$1 AND store_id=$2 AND revoked_at IS NULL AND business_date=current_date',args)).rows[0]
     const credentialId=existingCredential?.id??randomUUID(),leaseId=randomUUID(),staffSessionId=randomUUID()
     if(!existingCredential)await admin.query("INSERT INTO mbox.store_daily_credentials(id,tenant_id,store_id,business_date,credential_hash,valid_from,valid_until,configured_by_employee_id) VALUES($1,$2,$3,current_date,'scrypt$closure-test',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '8 hours',$4)",[credentialId,...args,employee])

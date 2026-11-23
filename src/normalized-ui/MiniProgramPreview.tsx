@@ -110,13 +110,18 @@ function CommunityPreview({ open, onOpen, partySize, onPartySize }: { open: 'pai
 }
 
 function ProfilePreview() {
+  const [history,setHistory]=useState<'list'|'detail'|null>(null)
   const [member, setMember] = useState(false)
   const [agreed, setAgreed] = useState(false)
+  if(history)return <><header className="mini-detail-nav"><button type="button" onClick={()=>setHistory(history==='detail'?'list':null)}><ArrowLeft />{history==='detail'?'返回报名记录':'返回我的'}</button></header>
+    <section className="mini-section mini-registered-activities">{history==='list'?<>
+      <h1>我的报名记录</h1><button type="button" onClick={()=>setHistory('detail')}><UsersRound /><span><b>歌手主场后的深夜小聚</b><small>8月16日 23:20 · 2人</small></span><ChevronRight /></button>
+    </>:<><h1>歌手主场后的深夜小聚</h1><p>8月16日 23:20 · M-BOX陆家嘴店</p><p>报名人数　2 人</p></>}</section></>
   return <><Band eyebrow="MY M-BOX" title="你的今晚，都在这里" copy="订单、预约、活动和真正可使用的权益。" />
     <section className="mini-profile-identity"><img src={miniLogo} alt="M-BOX" /><span><strong>{member ? 'M-BOX 会员' : 'M-BOX 访客'}</strong><small>{member ? 'MBX-35648' : '勾选同意后即可确认加入会员'}</small></span><b>{member ? '会员中心' : '邀请入会'}</b></section>
     <section className="mini-profile-metrics"><button type="button"><i><Crown /></i><strong>{member ? '1,280' : '0'}</strong><span>积分<ChevronRight /></span></button><button type="button"><i><TicketCheck /></i><strong>{member ? '2' : '0'}</strong><span>优惠券<ChevronRight /></span></button><button type="button"><i><Zap /></i><strong>{member ? '360' : '0'}</strong><span>成长值<ChevronRight /></span></button><button type="button"><i><Gift /></i><strong>0</strong><span>余额<ChevronRight /></span></button></section>
     {!member && <section className="mini-section mini-join-invite"><small>INVITATION</small><h2>邀请加入 M-BOX 会员</h2><p>保存积分、到店偏好与门店发放的专属权益。</p><label><input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} />我已阅读并同意 <u>《用户服务协议》</u></label><button type="button" disabled={!agreed} onClick={() => setMember(true)}>确定入会</button></section>}
-    <section className="mini-section mini-profile-services"><header><strong>我的服务</strong><span>点击进入</span></header><div><button type="button"><Martini /><span><b>我的订单</b><small>订单与桌账</small></span><ChevronRight /></button><button type="button"><CalendarDays /><span><b>我的预约</b><small>到店安排</small></span><ChevronRight /></button><button type="button"><UsersRound /><span><b>超嗨活动</b><small>我的报名记录</small></span><ChevronRight /></button><button type="button"><UserRound /><span><b>我的偏好</b><small>口味与服务</small></span><ChevronRight /></button></div></section>
+    <section className="mini-section mini-profile-services"><header><strong>我的服务</strong><span>点击进入</span></header><div><button type="button"><Martini /><span><b>我的订单</b><small>订单与桌账</small></span><ChevronRight /></button><button type="button"><CalendarDays /><span><b>我的预约</b><small>到店安排</small></span><ChevronRight /></button><button type="button" onClick={()=>setHistory('list')}><UsersRound /><span><b>超嗨活动</b><small>我的报名记录</small></span><ChevronRight /></button><button type="button"><UserRound /><span><b>我的偏好</b><small>口味与服务</small></span><ChevronRight /></button></div></section>
   </>
 }
 

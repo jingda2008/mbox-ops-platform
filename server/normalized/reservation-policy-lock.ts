@@ -7,3 +7,11 @@ export async function lockReservationPolicy(transaction: ScopedTransaction): Pro
     'reservation-policy:'||$1::uuid::text||':'||$2::uuid::text,0))`,
   [transaction.scope.tenantId, transaction.scope.storeId])
 }
+
+/** The deferred capacity check can reject COMMIT after the command handler returns. */
+export function ticketCapacityConflict(error: unknown) {
+  if (error instanceof Error && 'code' in error && error.code === '23P01'
+    && 'where' in error && typeof error.where === 'string' && error.where.includes('check_ticket_capacity()')) {
+    return { code: 'TABLE_TICKET_CAPACITY_RESERVED', message: '所选时段需保留已购桌票的桌位，请刷新并重新安排' }
+  }
+}

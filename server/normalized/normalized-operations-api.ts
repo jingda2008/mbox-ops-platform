@@ -1,3 +1,4 @@
+import { ticketCapacityConflict } from './reservation-policy-lock.js'
 import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import { registerNativeServiceRoutes } from './native-service-api.js'
 import {ExperiencePlanLifecycleRepository,ExperiencePlanLifecycleConflict} from './experience-plan-lifecycle-repository.js'
@@ -1056,6 +1057,8 @@ function safeErrorCode(error: unknown): string {
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  const capacity = ticketCapacityConflict(error)
+  if (capacity) return apiError(409, capacity.code, capacity.message)
   if (typeof error === 'object' && error !== null && 'code' in error && ['P2701','P2702'].includes(String(error.code))) return { statusCode:409,body:{error:{code:'TABLE_SERVICE_CONFLICT',message:(error instanceof Error ? error.message : '请确认本次主服务员')}} }
   if (error instanceof NormalizedAuthenticationRequiredError || error instanceof StaffSessionNotFoundError) {
     return apiError(401, 'AUTH_REQUIRED', '登录信息无效或已过期，请重新登录')

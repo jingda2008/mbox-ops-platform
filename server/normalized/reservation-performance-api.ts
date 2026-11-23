@@ -1,3 +1,4 @@
+import { ticketCapacityConflict } from './reservation-policy-lock.js'
 import { appendAuditEvent } from './command-executor.js'
 import type { ActivityContactProtectionKeyring } from './personal-contact-protection.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
@@ -1615,6 +1616,8 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  const capacity = ticketCapacityConflict(error)
+  if (capacity) return apiError(409, capacity.code, capacity.message)
   if(error instanceof ReservationTablePreassignmentRetiredError)return apiError(409,'RESERVATION_RECEPTION_REQUIRED',error.message)
   if (
     error instanceof NormalizedAuthenticationRequiredError

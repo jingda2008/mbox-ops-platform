@@ -1,6 +1,6 @@
 import {isStaffAuthenticationRequiredError,STAFF_AUTHENTICATION_REQUIRED_ERROR} from './staff-api-authentication.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
-import {lockReservationPolicy} from './reservation-policy-lock.js'
+import {lockReservationPolicy,ticketCapacityConflict} from './reservation-policy-lock.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { JsonCodec, JsonObject } from './command-executor.js'
@@ -1633,6 +1633,8 @@ async function handle(reply: FastifyReply, operation: () => Promise<FastifyReply
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; retryAt?: string } {
+  const capacity = ticketCapacityConflict(error)
+  if (capacity) return { status: 409, ...capacity }
   if (isStaffAuthenticationRequiredError(error)) return {status:401,...STAFF_AUTHENTICATION_REQUIRED_ERROR}
   if (error instanceof ReservationGuestRateLimitError || error instanceof PublicReservationRateLimitError) {
     return { status: 429, code: 'PUBLIC_RESERVATION_RATE_LIMITED', message: error.message, retryAt: error.retryAt }

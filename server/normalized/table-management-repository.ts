@@ -1,3 +1,4 @@
+import { lockReservationPolicy } from './reservation-policy-lock.js'
 import type {
   AuditActor,
   CommandExecution,
@@ -717,6 +718,8 @@ export class TableManagementRepository {
 
   async open(input: ManagedOpenInput): Promise<ManagedTableSession> {
     validateOpen(input)
+    // Ticket assignment takes the store capacity lock before the physical table.
+    await lockReservationPolicy(this.transaction)
     const tableResult = await this.transaction.query<{
       id: string; code: string; capacity: number; table_status: TableStatus; area_status: AreaStatus
     }>(`
@@ -795,6 +798,8 @@ export class TableManagementRepository {
       Object.defineProperty(value,'movementStoreReplayed',{ value:true,enumerable:false })
       return value
     }
+    // Reception seating uses movement, capacity, then physical row locks.
+    await lockReservationPolicy(this.transaction)
     const sessionResult = await this.transaction.query<SessionRow>(`
       SELECT session.id, session.table_id, session.location_version, source.code AS table_code, session.public_id,
         session.business_date::text, session.guest_count, session.capacity_at_open,
@@ -984,6 +989,7 @@ export class TableManagementRepository {
   }
 
   private async applyParticipantMovement(input:ManagedParticipantMovementInput,movementKey:string,movementFingerprint:string):Promise<TableParticipantMovementResult> {
+    await lockReservationPolicy(this.transaction)
     if(input.nativeGuard) {
       const expected=input.nativeGuard
       await this.transaction.query(`SELECT id FROM mbox.table_sessions

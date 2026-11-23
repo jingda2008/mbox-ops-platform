@@ -6,7 +6,7 @@ import {assertEmployeeTableSessionAccess,EmployeeTableAccessDeniedError} from '.
 import {StaffAccessDeniedError,StaffNotFoundError,StaffAccessRepository,type EffectiveStaffAccess} from './staff-access-repository.js'
 import {NormalizedStoreUnavailableError,TrustedStoreScopeError} from './normalized-request-context.js'
 import {isStaffAuthenticationRequiredError} from './staff-api-authentication.js'
-import {lockReservationPolicy} from './reservation-policy-lock.js'
+import {lockReservationPolicy,ticketCapacityConflict} from './reservation-policy-lock.js'
 import {ReservationRepository,type Reservation} from './reservation-repository.js'
 import {reservationVisibility,type StaffReservationPerformanceContext} from './reservation-performance-api.js'
 import {readPolicy,readReservationCapacity,capacityAccepts,insertPrivateContact,validateReservationWindow,assertPreferredSchedule} from './public-reservation-api.js'
@@ -246,7 +246,9 @@ async function handle(reply:FastifyReply,work:()=>Promise<unknown>) {
   try{return await work()}catch(outer){
     const notCommitted=outer instanceof NativeCommandNotCommittedError,error=notCommitted?outer.original:outer
     let status=503,code='RESERVATION_RECEPTION_UNAVAILABLE',message='接待请求结果未确认，请保留原请求并稍后核对'
-    if(error instanceof ReservationReceptionError){status=error.status;code=error.code;message=error.message}
+    const capacity = ticketCapacityConflict(error)
+    if(capacity){status=409;code=capacity.code;message=capacity.message}
+    else if(error instanceof ReservationReceptionError){status=error.status;code=error.code;message=error.message}
     else if(error instanceof IdempotencyConflictError){status=409;code='IDEMPOTENCY_CONFLICT';message='原请求编号与载荷不一致，请保留原请求核对'}
     else if(error instanceof IdempotencyInProgressError){status=409;code='IDEMPOTENCY_IN_PROGRESS';message='原请求仍在处理中，请保留原请求'}
     else if(error instanceof StaffAccessDeniedError||error instanceof StaffNotFoundError||error instanceof NormalizedStoreUnavailableError||error instanceof TrustedStoreScopeError||error instanceof EmployeeTableAccessDeniedError){status=403;code='STAFF_ACCESS_DENIED';message='当前员工没有此预约或桌次的操作权限'}

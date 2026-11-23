@@ -7,9 +7,9 @@ import type {ActivityDoorCommand,ActivityServiceView} from '../../src/shared/act
 
 const credential='MBOX_ACTIVITY_V3:browser-registration-v3:12345678-1234-4234-8234-123456789abc'
 const initial:ActivityServiceView={registrationPublicId:'browser-registration-v3',activityPublicId:'browser-activity-v3',activityTitle:'活动核销界面测试',packageName:'五人固定套餐',hasMeal:true,partySize:2,maxParticipants:5,reservedSeats:5,admittedCount:0,remainingAdmission:5,includesAdmission:true,paymentStatus:'paid',meal:null}
-async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json'){
+async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string){
   const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
-  await page.goto(fixture.staffUrl)
+  await page.goto(origin?new URL(fixture.staffUrl,origin).href:fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill(fixture.adminEmployeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
   await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()
@@ -104,8 +104,8 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await expect.poll(async()=>{try{return (await fetch(origin+'/api/live')).ok}catch{return false}},{timeout:60000}).toBe(true)
     const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
     await page.setViewportSize({width:390,height:844})
-    await login(page,fixturePath)
-    await page.goto(new URL('/staff/reservations',fixture.staffUrl).href)
+    await login(page,fixturePath,origin)
+    await page.goto(new URL('/staff/reservations',origin).href)
     await page.getByRole('link',{name:'门票接待',exact:true}).click()
     const workspace=page.getByRole('region',{name:'活动报名运营工作台'})
     const open=workspace.getByRole('button',{name:'打开工作台',exact:true})
@@ -134,7 +134,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     }
     await workspace.getByRole('button',{name:'保存并发布票档'}).click()
     await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
-    const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',fixture.staffUrl).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
+    const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',origin).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
     await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
     await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
     await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')

@@ -126,18 +126,23 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
       const foreign=await tx.query(operatingHistorySummariesSql,[scope.tenantId,randomUUID(),'2026-01-01','2026-01-01'])
       expect(foreign.rows[0]?.summary).toMatchObject({orderCount:0,orderAmountMinor:'0'})
       console.info(JSON.stringify({check:'scoped-finance-summaries',orders:count+2,ms:Math.round(performance.now()-started)}))
-      // SQL functions use a generic plan. EXPLAIN the function body itself to
-      // detect repeated scans even on machines where the clock limit still passes.
-      const definition=await tx.query<{prosrc:string}>("SELECT prosrc FROM pg_proc WHERE oid='mbox.operating_day_summaries(uuid,uuid,date,date)'::regprocedure")
-      const body=definition.rows[0]!.prosrc.replaceAll('p_tenant','$1').replaceAll('p_store','$2').replaceAll('p_start','$3').replaceAll('p_end','$4')
-      await tx.query("SET LOCAL plan_cache_mode=force_generic_plan")
+      // Explain the inner report with the same per-call plan as the function.
+      // Count actual join work even on machines that meet the clock limit.
+      const definition=await tx.query<{prosrc:string;proconfig:string[]}>("SELECT prosrc,proconfig FROM pg_proc WHERE oid='mbox.operating_day_summaries(uuid,uuid,date,date)'::regprocedure")
+      expect(definition.rows[0]!.proconfig).toContain('plan_cache_mode=force_custom_plan')
+      const statement=/^\s*BEGIN\s+RETURN QUERY\s+([\s\S]+);\s*END\s*;?\s*$/i.exec(definition.rows[0]!.prosrc)
+      if(!statement)throw new Error('Expected one read-only report query')
+      const body=statement[1]!.replaceAll('p_tenant','$1').replaceAll('p_store','$2').replaceAll('p_start','$3').replaceAll('p_end','$4')
+      await tx.query("SET LOCAL plan_cache_mode=force_custom_plan")
       await tx.query("SET LOCAL jit=off")
       await tx.query('PREPARE report_scope_plan(uuid,uuid,date,date) AS '+body)
       try{
-        type Node = {Plans?:Node[];'CTE Name'?:string;'Actual Rows':number;'Actual Loops':number;'Rows Removed by Filter'?:number}
+        type Node = {Plans?:Node[];'CTE Name'?:string;'Actual Rows':number;'Actual Loops':number;'Rows Removed by Filter'?:number;'Rows Removed by Join Filter'?:number}
         const plan=await tx.query<{'QUERY PLAN':{Plan:Node}[]}>(`EXPLAIN (ANALYZE, FORMAT JSON, TIMING OFF)
           EXECUTE report_scope_plan(mbox.current_tenant_id(),mbox.current_store_id(),'2026-01-01','2026-01-01')`)
         const scanned=(node:Node):number=>{
+          const discardedPairs=node['Actual Loops']*(node['Rows Removed by Join Filter']??0)
+          expect(discardedPairs).toBeLessThan((count+2)*100)
           const own=node['CTE Name']==='window_orders'?node['Actual Loops']*(node['Actual Rows']+(node['Rows Removed by Filter']??0)):0
           return own+(node.Plans??[]).reduce((n,child)=>n+scanned(child),0)
         }

@@ -35,6 +35,7 @@ import {GuestSharedCartRepository} from './guest-shared-cart-repository.js'
 import {checkoutLinesWithNotes} from './checkout-line-notes.js'
 import {RefundRepository} from './refund-repository.js'
 import {decideTicketCase,requestTicketRefund,submitTicketCashRefund} from './table-ticket-refund.js'
+import {ActivityRegistrationExpiryWorker} from './activity-registration-expiry-worker.js'
 import {ReservationHoldExpiryWorker} from './reservation-hold-expiry-worker.js'
 import {ReservationRepository} from './reservation-repository.js'
 import {ticketReception,ticketFinanceDay,ticketStatement,admitTicketBatch,updateTicketContact,assignTicketTable} from './table-ticket-reception.js'
@@ -191,10 +192,6 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     expect((await admin.query('SELECT status FROM mbox.reservations WHERE id=$1',[lockedReservation])).rows[0].status).toBe('confirmed')
     const admissionKey=randomUUID()
     await expect(run(tx=>admitTicketBatch(tx,first.id,'FFFFFFFFFFFF',2,employee,admissionKey))).rejects.toMatchObject({code:'TICKET_DOOR_INVALID'})
-    await run(tx=>admitTicketBatch(tx,first.id,first.door_code,2,employee,admissionKey))
-    await run(tx=>admitTicketBatch(tx,first.id,first.door_code,2,employee,admissionKey))
-    await run(tx=>admitTicketBatch(tx,first.id,first.door_code,1,employee,randomUUID()))
-    expect((await admin.query('SELECT sum(quantity)::int n FROM mbox.ticket_admission_batches WHERE ticket_id=$1',[first.id])).rows[0].n).toBe(3)
     await grantFixtureStaffPermissions(admin,scope,[employee],['reservation.manage','reservation.view','table.open','table.view_all'])
     const reserved=(await run(tx=>tx.query(`UPDATE mbox.reservations SET status='arrived' WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3
       RETURNING id,aggregate_version`,[scope.tenantId,scope.storeId,'ticket-'+first.id]))).rows[0]
@@ -204,9 +201,62 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await reception.register(reservationReceptionApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),
       resolveStaffContext:()=>({scope,employeeId:employee,businessDate:se.business_date}),protectContact:value=>protection.protect(value)})
     try{
-      const response=await reception.inject({method:'POST',url:'/staff/reservation-receptions/'+reserved.id+'/seat',headers:{'idempotency-key':randomUUID()},
-        payload:{protocol:1,reservationVersion:Number(reserved.aggregate_version),reason:'已核对原票入座桌号',sessions:[{tableSessionId:se.id,
-          expectedTableId:table,expectedLocationVersion:Number(se.location_version),expectedGuestCount:3}]}})
+      const candidates=()=>reception.inject({method:'GET',url:'/staff/reservation-receptions/'+reserved.id+'/table-sessions'})
+      const seat=(expectedTableId=table,session=se)=>reception.inject({method:'POST',url:'/staff/reservation-receptions/'+reserved.id+'/seat',
+        headers:{'idempotency-key':randomUUID()},payload:{protocol:1,reservationVersion:Number(reserved.aggregate_version),reason:'已核对原票入座桌号',
+          sessions:[{tableSessionId:session.id,expectedTableId,expectedLocationVersion:Number(session.location_version),expectedGuestCount:3}]}})
+      const beforeScan=await seat()
+      expect(beforeScan.statusCode,beforeScan.body).toBe(409)
+      expect(beforeScan.json().error.code).toBe('TICKET_SEATING_UNAVAILABLE')
+      expect((await candidates()).json().data.ticketGuidance).toContain('入场码')
+      await run(tx=>admitTicketBatch(tx,first.id,first.door_code,2,employee,admissionKey))
+      await run(tx=>admitTicketBatch(tx,first.id,first.door_code,2,employee,admissionKey))
+      await run(tx=>admitTicketBatch(tx,first.id,first.door_code,1,employee,randomUUID()))
+      expect((await admin.query('SELECT sum(quantity)::int n FROM mbox.ticket_admission_batches WHERE ticket_id=$1',[first.id])).rows[0].n).toBe(3)
+      let release!:()=>void,readyToSeat!:(pid:number)=>void
+      const hold=new Promise<void>(resolve=>{release=resolve})
+      const locked=new Promise<number>(resolve=>{readyToSeat=resolve})
+      const refund=run(async tx=>{
+        await requestTicketRefund(tx,first.registration_id,first.id,customer,'原票已到店，申请退票待复核')
+        readyToSeat((await tx.query('SELECT pg_backend_pid() pid')).rows[0]!.pid)
+        await hold
+      })
+      const pid=await Promise.race([locked,refund.then(()=>{throw Error('退票未锁定')})])
+      const seating=seat().then(response=>response)
+      let waiting=false
+      try{
+        for(let step=0;step<200 && !waiting;step++){
+          waiting=(await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1::int=ANY(pg_blocking_pids(pid))) AS waiting',[pid])).rows[0].waiting
+          if(!waiting)await new Promise(resolve=>setTimeout(resolve,5))
+        }
+      }finally{release()}
+      const [,blocked]=await Promise.all([refund,seating])
+      expect(waiting).toBe(true)
+      const frozen=await candidates()
+      expect(frozen.statusCode,frozen.body).toBe(200)
+      expect(frozen.json().data.sessions).toEqual([])
+      expect(frozen.json().data.ticketGuidance).toContain('退票')
+      expect(blocked.statusCode,blocked.body).toBe(409)
+      expect(blocked.json().error.code).toBe('TICKET_SEATING_UNAVAILABLE')
+      expect((await admin.query('SELECT id FROM mbox.reservation_seating_batches WHERE reservation_id=$1',[reserved.id])).rowCount).toBe(0)
+      await run(async tx=>{
+        await tx.query('SAVEPOINT settle_arrival')
+        await decideTicketCase(tx,first.id,{employee},'zero','按原条款零现金办结，释放已到店未领桌的专属预约')
+        const released=(await tx.query('SELECT r.status,l.status AS lock FROM mbox.reservations r JOIN mbox.reservation_table_locks l ON l.reservation_id=r.id WHERE r.id=$1',[reserved.id])).rows[0]
+        expect(released).toEqual({status:'cancelled',lock:'cancelled'})
+        await tx.query('ROLLBACK TO SAVEPOINT settle_arrival')
+      })
+      await run(tx=>decideTicketCase(tx,first.id,{customer},'cancelled','购票人撤回退票，保留原桌'))
+      const otherTable=(await admin.query('SELECT id FROM mbox.tables WHERE area_id=$1 AND id<>$2 ORDER BY code LIMIT 1',[area,table])).rows[0]!.id
+      const otherSession=(await admin.query(`INSERT INTO mbox.table_sessions(tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id,primary_service_employee_id)
+        VALUES($1,$2,$3,$4,current_date,3,6,'open',$5,$5) RETURNING id,location_version`,[scope.tenantId,scope.storeId,otherTable,randomUUID(),employee])).rows[0]!
+      const ready=await candidates()
+      expect(ready.json().data.sessions.map((s:{tableId:string})=>s.tableId)).toEqual([table])
+      const wrong=await seat(otherTable,otherSession)
+      await admin.query("UPDATE mbox.table_sessions SET status='closed',closed_at=clock_timestamp() WHERE id=$1",[otherSession.id])
+      expect(wrong.statusCode).toBe(409)
+      expect(wrong.json().error.code).toBe('TICKET_SEATING_TABLE_CHANGED')
+      const response=await seat()
       expect(response.statusCode,response.body).toBe(200)
     }finally{await reception.close()}
     expect((await run(publicTableTickets))[0]?.remaining).toBe(1)
@@ -636,9 +686,25 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       ownerEmployeeId:employee,tableIds:[table],initialStatus:'confirmed',reservationSnapshot:{},reservationPolicyVersion:1,arrivalGraceEndsAt:available.endsAt}))
     const current=() =>run(publicTableTickets).then(offers=>offers.find(o=>o.id===offer.id)!.remaining)
     expect(await current()).toBe(0)
-    const order=await run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,safetyVersion:available.safetyVersion,refundVersion:available.refundVersion,
+    const convert=()=>run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,safetyVersion:available.safetyVersion,refundVersion:available.refundVersion,
       reservationLockId:reservation.tableLocks[0]!.id},randomUUID(),randomUUID(),randomUUID(),protection))
+    const unpaid=await convert()
     expect(await current()).toBe(0)
+    await admin.query("UPDATE mbox.reservations SET status='arrived' WHERE id=$1",[reservation.id])
+    const reception=Fastify()
+    await reception.register(reservationReceptionApiPlugin,{transactions:runner,commands:new NormalizedCommandExecutor(runner),
+      resolveStaffContext:()=>({scope,employeeId:employee,businessDate:new Date().toISOString().slice(0,10)}),protectContact:value=>protection.protect(value)})
+    try{
+      const pending=await reception.inject({method:'GET',url:'/staff/reservation-receptions/'+reservation.id+'/table-sessions'})
+      expect(pending.statusCode,pending.body).toBe(200)
+      expect(pending.json().data.ticketGuidance).toContain('原购票单')
+      await admin.query("UPDATE mbox.community_activity_registrations SET seat_hold_expires_at=clock_timestamp()-interval '1 minute' WHERE id=$1",[unpaid.id])
+      const expired=await new ActivityRegistrationExpiryWorker(runner).runBatch(scope,'ticket-conversion-expiry')
+      expect(expired.releasedRegistrationIds).toContain(unpaid.id)
+      const resumed=await reception.inject({method:'GET',url:'/staff/reservation-receptions/'+reservation.id+'/table-sessions'})
+      expect(resumed.json().data.ticketGuidance).toBeNull()
+    }finally{await reception.close()}
+    const order=await convert()
     const pay=(await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id='LOCAL-'||id,succeeded_at=clock_timestamp() WHERE activity_registration_id=$1 RETURNING id",[order.id])).rows[0].id
     await run(tx=>new PaymentRepository(tx).syncActivityRegistrationPaymentStatus({id:pay,activityRegistrationId:order.id,payableKind:'activity_registration',amountMinor:50000,succeededAt:new Date().toISOString(),status:'succeeded'}))
     const ticket=(await admin.query('SELECT id FROM mbox.table_tickets WHERE registration_id=$1',[order.id])).rows[0].id
@@ -657,6 +723,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await run(tx=>requestTicketRefund(tx,order.id,ticket,customer,'按原票条款终止'))
     expect((await run(tx=>decideTicketCase(tx,ticket,{employee},'zero','原场规定该时段无应退现金'))).status).toBe('refunded')
     expect((await admin.query('SELECT status FROM mbox.reservation_table_locks WHERE id=$1',[reservation.tableLocks[0]!.id])).rows[0].status).toBe('confirmed')
+    expect((await admin.query('SELECT status FROM mbox.reservations WHERE id=$1',[reservation.id])).rows[0].status).toBe('arrived')
     expect(await current()).toBe(0)
   })
   it('binds a staff-selected offer to the verified phone and refunds a late payment without issuing tickets',async()=>{

@@ -26,19 +26,35 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
   const [areas,setAreas]=useState<Offer[]>([])
   const [selected,setSelected]=useState('')
   const [reload,setReload]=useState(0)
-  const [busy,setBusy]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [loaded,setLoaded]=useState('')
+  const confirmation=useRef<{endpoint:string;message:string}|null>(null)
   const [notice,setNotice]=useState('')
   const endpoint='/api/staff/activity-operations/'+encodeURIComponent(activityId)+'/table-tickets'
+  const readKey=endpoint+':'+reload
+  const busy=saving || loaded!==readKey
+  function reloadAfterSave(message:string){
+    confirmation.current={endpoint,message}
+    setNotice('已保存，正在核对最新版本…')
+    setReload(n=>n+1)
+  }
   useEffect(()=>{
     if (!open) return
     let active=true
     api.getEndpoint<{data:Offer[]}>(endpoint).then(result=>{
       if (!active) return
       setAreas(result.data)
+      setLoaded(readKey)
+      if(confirmation.current?.endpoint===endpoint){
+        setNotice(confirmation.current.message)
+        confirmation.current=null
+      }
       setSelected(current=>result.data.some(row=>row.areaId===current)?current:result.data[0]?.areaId??'')
-    }).catch(error=>{if(active)setNotice(error instanceof Error?error.message:'票档读取失败')})
+    }).catch(error=>{
+      if(active)setNotice(confirmation.current?.endpoint===endpoint?'已保存，最新版本读取失败。请点「刷新票档」后继续。':error instanceof Error?error.message:'票档读取失败')
+    })
     return ()=>{active=false}
-  },[api,endpoint,reload,open])
+  },[api,endpoint,readKey,open])
   const area=areas.find(row=>row.areaId===selected)
   const retry=useRef<{body:string;key:string}|null>(null)
   async function save(form:HTMLFormElement,status:'draft'|'published'|'withdrawn') {
@@ -59,38 +75,41 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
       saleFrom:instant('saleFrom'),saleUntil:instant('saleUntil'),categoryCode:value('category')||null,giftPoints:points===''?null:Number(points),visibleFrom:instant('from'),visibleUntil:instant('until'),status}
     const body=JSON.stringify(payload)
     if (retry.current?.body!==body) retry.current={body,key:'table-ticket-'+crypto.randomUUID()}
-    setBusy(true);setNotice('')
+    setSaving(true);setNotice('')
     try {
       await api.postEndpoint(endpoint,payload,{idempotencyKey:retry.current.key})
       retry.current=null
-      setNotice(status==='published'?'票档版本已发布':status==='withdrawn'?'票档已下架':(canPublish?'票档草稿已保存':'草稿已保存，发布人员可在本场核对并上架'))
-      setReload(n=>n+1)
+      reloadAfterSave(status==='published'?'票档版本已发布':status==='withdrawn'?'票档已下架':(canPublish?'票档草稿已保存':'草稿已保存，发布人员可在本场核对并上架'))
     } catch(error) {setNotice(error instanceof Error?error.message:'保存失败，可重试')}
-    finally {setBusy(false)}
+    finally {setSaving(false)}
   }
   async function saveRules(form:HTMLFormElement){
     const data=new FormData(form),terms=Object.fromEntries(ruleFields.map(([field])=>[field,field==='durationMinutes'?Number(data.get(field)):data.get(field)]))
-    setBusy(true)
+    setSaving(true)
     try{
       await api.postEndpoint('/api/staff/activity-operations/'+encodeURIComponent(activityId)+'/table-ticket-terms',
         {...terms,version:area?.terms?.version??0,requiresNamedAttendees:data.get('named')==='yes'},{idempotencyKey:'terms-'+crypto.randomUUID()})
-      setReload(n=>n+1);setNotice('场次公示已核实，发布的新票档将使用本版本')
-    }catch(e){setNotice(e instanceof Error?e.message:'场次公示保存失败')}finally{setBusy(false)}
+      reloadAfterSave('场次公示已核实，发布的新票档将使用本版本')
+    }catch(e){setNotice(e instanceof Error?e.message:'场次公示保存失败')}finally{setSaving(false)}
   }
   async function assist(form:HTMLFormElement){
     if(!area?.id || busy)return
-    const fields=new FormData(form);setBusy(true)
+    const fields=new FormData(form);setSaving(true)
     try{await api.postEndpoint('/api/staff/activity-operations/table-ticket-offers/'+area.id+'/assist',{
       phone:fields.get('phone'),quantity:Number(fields.get('quantity'))},{idempotencyKey:'ticket-assist-'+crypto.randomUUID()})
       form.reset();setNotice('已为该手机号留存选票信息。请客人打开小程序「我的门票」，授权本人手机号后确认付款。')
-    }catch(e){setNotice(e instanceof Error?e.message:'代售办理失败')}finally{setBusy(false)}
+    }catch(e){setNotice(e instanceof Error?e.message:'代售办理失败')}finally{setSaving(false)}
   }
-  return <details onToggle={event=>setOpen(event.currentTarget.open)}>
+  return <details onToggle={event=>{
+    if(event.target!==event.currentTarget)return
+    setOpen(event.currentTarget.open)
+    if(!event.currentTarget.open)setLoaded('')
+  }}>
     <summary>整桌门票</summary>
     {open && <>{canPublish && area && <details><summary>{area.terms?'本场公示资料 · 版本 '+area.terms.version:'首次上架，先核实本场公示资料'}</summary>
       <form key={area.terms?.version??0} onSubmit={e=>{e.preventDefault();void saveRules(e.currentTarget)}}>
-        {ruleFields.map(([field,column,label])=><label key={field}>{label}<input name={field} required type={field==='durationMinutes'?'number':'text'} defaultValue={String(area.terms?.[column]??'')}/></label>)}
-        <label><input type="checkbox" name="named" value="yes" defaultChecked={area.terms?.requires_named_attendees===true}/>本场要求逐人实名</label>
+        {ruleFields.map(([field,column,label])=><label key={field}>{label}<input disabled={busy} name={field} required type={field==='durationMinutes'?'number':'text'} defaultValue={String(area.terms?.[column]??'')}/></label>)}
+        <label><input disabled={busy} type="checkbox" name="named" value="yes" defaultChecked={area.terms?.requires_named_attendees===true}/>本场要求逐人实名</label>
         <button disabled={busy}>确认资料并保存本场版本</button></form></details>}<label>演出桌区<select value={selected} disabled={busy} onChange={e=>setSelected(e.target.value)}>
       {areas.map(row=><option key={row.areaId} value={row.areaId}>{row.areaName}</option>)}
     </select></label>{area && (canManage || canPublish) && <form key={area.areaId+':'+area.version} onSubmit={e=>{
@@ -98,17 +117,17 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
       const button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement|null
       void save(e.currentTarget,button?.value==='published'?'published':button?.value==='withdrawn'?'withdrawn':'draft')
     }}>
-      <label>产品名称<input name="name" required maxLength={120} defaultValue={area.name??area.areaName+'整桌票'}/></label>
-      <label>每桌售价（元）<input required type="number" name="price" min=".01" step=".01" defaultValue={area.priceMinor===null?'':(area.priceMinor/100).toFixed(2)}/></label>
-      <label>每张赠送积分<input type="number" name="points" min="0" step="1" defaultValue={area.giftPoints??''}/></label>
-      <details><summary>分类、展示及售卖时间（选填，北京时间）</summary><label>大分类<select name="category" defaultValue={area.categoryCode??''}><option value="">门票</option>{area.categories.map(c=><option key={c.code} value={c.code}>{c.name}</option>)}</select></label><label>开始<input type="datetime-local" name="from" defaultValue={localTime(area.visibleFrom)}/></label>
-      <label>结束<input type="datetime-local" name="until" defaultValue={localTime(area.visibleUntil)}/></label>
-      <label>开售<input type="datetime-local" name="saleFrom" defaultValue={localTime(area.saleFrom)}/></label><label>停售<input type="datetime-local" name="saleUntil" defaultValue={localTime(area.saleUntil)}/></label></details>
+      <label>产品名称<input disabled={busy} name="name" required maxLength={120} defaultValue={area.name??area.areaName+'整桌票'}/></label>
+      <label>每桌售价（元）<input disabled={busy} required type="number" name="price" min=".01" step=".01" defaultValue={area.priceMinor===null?'':(area.priceMinor/100).toFixed(2)}/></label>
+      <label>每张赠送积分<input disabled={busy} type="number" name="points" min="0" step="1" defaultValue={area.giftPoints??''}/></label>
+      <details><summary>分类、展示及售卖时间（选填，北京时间）</summary><label>大分类<select disabled={busy} name="category" defaultValue={area.categoryCode??''}><option value="">门票</option>{area.categories.map(c=><option key={c.code} value={c.code}>{c.name}</option>)}</select></label><label>开始<input disabled={busy} type="datetime-local" name="from" defaultValue={localTime(area.visibleFrom)}/></label>
+      <label>结束<input disabled={busy} type="datetime-local" name="until" defaultValue={localTime(area.visibleUntil)}/></label>
+      <label>开售<input disabled={busy} type="datetime-local" name="saleFrom" defaultValue={localTime(area.saleFrom)}/></label><label>停售<input disabled={busy} type="datetime-local" name="saleUntil" defaultValue={localTime(area.saleUntil)}/></label></details>
       {canManage && <button disabled={busy} value="draft">{canPublish?'保存草稿':'保存并提交复核'}</button>}
       {canPublish && <button disabled={busy} value="published">保存并发布票档</button>}
       {canPublish && area.version!==null && <button disabled={busy} value="withdrawn">下架</button>}
     </form>}{canAssist && area?.status==='published' && <form onSubmit={e=>{e.preventDefault();void assist(e.currentTarget)}}>
-      <label>本人手机号<input name="phone" required pattern="1[3-9][0-9]{9}" inputMode="tel"/></label><label>代选桌数<input type="number" name="quantity" required min={1} defaultValue={1}/></label>
-      <button disabled={busy}>由客人确认购票</button></form>}{notice && <p role="status">{notice}</p>}<button type="button" disabled={busy} onClick={()=>setReload(n=>n+1)}>刷新票档</button></>}
+      <label>本人手机号<input disabled={busy} name="phone" required pattern="1[3-9][0-9]{9}" inputMode="tel"/></label><label>代选桌数<input disabled={busy} type="number" name="quantity" required min={1} defaultValue={1}/></label>
+      <button disabled={busy}>由客人确认购票</button></form>}{notice && <p role="status">{notice}</p>}<button type="button" disabled={saving} onClick={()=>setReload(n=>n+1)}>刷新票档</button></>}
   </details>
 }

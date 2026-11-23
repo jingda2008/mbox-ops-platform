@@ -6,20 +6,20 @@ import {loadMiniModule} from './load-miniprogram-test-module.mjs'
 
 const pageUrl=new URL('../miniprogram/pages/table-tickets/index.js',import.meta.url)
 const source=readFileSync(pageUrl,'utf8')
-function fixture(showModal){
+function fixture(showModal,requestPayment=()=>{throw Error('Unexpected payment sheet')}){
   const calls=[],offer={id:'public-offer',areaId:'window',name:'靠窗桌票',priceMinor:50000,giftPoints:550,startsAt:'2026-11-23T12:00:00Z',endsAt:'2026-11-23T19:00:00Z',remaining:3}
   let member=null,page
   const api={
     getTableTicketOffers:async()=>[offer],getMiniBootstrap:async()=>({membership:member,membershipTerms:{version:7}}),
     getMyTableTickets:async()=>[],getTicketProposals:async()=>[],getTicketReservations:async()=>[],getVerifiedPhones:async()=>[{maskedPhone:'138****1234'}],
-    enrollMembership:async(version,_,code)=>{calls.push(['enroll',version,code]);member={id:'member'}},
+    enrollMembership:async(version,_,code)=>{calls.push(['enroll',version,code]);member={memberNo:'M001'}},
     buyTableTickets:async input=>{calls.push(['buy',input.quantity]);return {registrationPublicId:'original'}},
     getActivityRegistrationPayment:async()=>({allowedActions:['start_payment']}),
     startActivityRegistrationPayment:async(id,key)=>{calls.push(['present',id,key]);return {providerAction:{status:'unknown'}}},
     queryActivityRegistrationPayment:async id=>calls.push(['query',id]),
   }
   vm.runInNewContext(source,{require:name=>name.endsWith('/api')?api:name.endsWith('/id')?{randomId:()=> 'operation'}:loadMiniModule(new URL(name+'.js',pageUrl)),
-    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{showModal,requestPayment:()=>{throw Error('Unexpected payment sheet')}}})
+    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{showModal,requestPayment}})
   page.onLoad({id:offer.id,quantity:'2'})
   return {page,calls,api}
 }
@@ -35,7 +35,7 @@ test('分享带入桌数，拒绝手机号授权仍可看票，授权后沿用�
   assert.deepEqual(calls,[])
   await page.authorize({detail:{code:'phone-code'}})
   assert.deepEqual(calls,[['enroll',7,'phone-code']])
-  assert.equal(page.data.member.id,'member')
+  assert.equal(page.data.member.memberNo,'M001')
   assert.equal(page.data.selected.id,'public-offer')
   assert.match(page.onShareAppMessage().path,/quantity=2$/)
 })
@@ -83,4 +83,132 @@ test('改期及错户消费由会员逐项确认，取消或连点不重复提�
     assert.equal(page.data.busy,false)
   }
   assert.deepEqual(calls,[['move','original',false],['move','original',true],['use','original']])
+})
+
+test('离开后重进，旧页面延迟返回的支付请求不会启动付款',async()=>{
+  const {page,api,calls}=fixture()
+  let release
+  api.getActivityRegistrationPayment=()=>new Promise(resolve=>{release=resolve})
+  const pending=page.payOriginal('previous-order')
+  page.onHide()
+  page.onShow()
+  release({allowedActions:['start_payment']})
+  await pending
+  assert.deepEqual(calls,[])
+})
+
+test('回访身份读取失败时隐藏原会员入场码、手机号和原单，重新识别后仅本人恢复原单',async()=>{
+  const {page,api}=fixture()
+  await page.refresh()
+  await page.authorize({detail:{code:'phone-code'}})
+  page.agree({detail:{value:['yes']}})
+  await page.buy()
+  api.getMyTableTickets=async()=>[{totalMinor:50000,tickets:[{doorCode:'FIRST-MEMBER',expiresAt:'2027-11-23T08:00:00Z'}]}]
+  await page.refresh()
+  assert.equal(page.data.mine[0].tickets[0].doorCode,'FIRST-MEMBER')
+  const bootstrap=api.getMiniBootstrap
+  page.onHide()
+  api.getMiniBootstrap=async()=>{throw Error('身份暂时无法读取')}
+  await page.onShow()
+  assert.equal(page.data.mine.length,0)
+  assert.equal(page.data.originalOrder,null)
+  assert.equal(page.data.phone,null)
+  assert.equal(page.data.member,null)
+  api.getMiniBootstrap=bootstrap
+  await page.refresh()
+  assert.equal(page.data.originalOrder,'original')
+  api.getMiniBootstrap=async()=>({membership:{memberNo:'M002'}})
+  api.getMyTableTickets=async()=>[]
+  page.onHide()
+  await page.onShow()
+  assert.equal(page.data.originalOrder,null)
+  assert.equal(page.data.member.memberNo,'M002')
+})
+
+test('原订桌不再可用或退票条款更新时重新确认，再买一单清除旧桌号',async()=>{
+  const {page,api}=fixture()
+  const [offer]=await api.getTableTicketOffers()
+  offer.refundVersion='v1'
+  const row={id:'old-lock',areaId:offer.areaId,startsAt:offer.startsAt,endsAt:offer.endsAt}
+  api.getTicketReservations=async()=>[row]
+  await page.refresh()
+  await page.authorize({detail:{code:'phone-code'}})
+  page.chooseReservation({detail:{value:'old-lock'}})
+  page.agree({detail:{value:['yes']}})
+  api.getTicketReservations=async()=>[]
+  await page.refresh()
+  assert.equal(page.data.reservationLockId,null)
+  assert.equal(page.data.agreed,false)
+  page.agree({detail:{value:['yes']}})
+  offer.refundVersion='v2'
+  await page.refresh()
+  assert.equal(page.data.agreed,false)
+  api.getTicketReservations=async()=>[row]
+  await page.refresh()
+  page.chooseReservation({detail:{value:'old-lock'}})
+  page.chooseAnother()
+  assert.equal(page.data.reservationLockId,null)
+})
+
+test('退票、撤回和补款弹窗防连点，离开又重进后旧确认作废',async()=>{
+  for(const [method,endpoint] of [['withdraw','withdrawTicketRefund'],['confirmDining','confirmTicketDining'],['refund','refundTableTicket']]){
+    const modals=[]
+    const {page,api,calls}=fixture(options=>modals.push(options))
+    api[endpoint]=async()=>calls.push(endpoint)
+    const event={currentTarget:{dataset:{id:'dish',amount:10000,ticket:'ticket',order:'order'}}}
+    const first=page[method](event)
+    const second=page[method](event)
+    assert.equal(modals.length,1)
+    modals[0].success({confirm:true,content:'因故退票'})
+    await Promise.all([first,second])
+    assert.deepEqual(calls,[endpoint])
+    const stale=page[method](event)
+    page.onHide()
+    await page.onShow()
+    modals[1].success({confirm:true,content:'因故退票'})
+    await stale
+    assert.deepEqual(calls,[endpoint])
+    assert.equal(page.data.busy,false)
+  }
+})
+
+test('支付面板返回时页面已隐藏，仅原会员下次进入核对该单支付结果',async()=>{
+  for(const switchMember of [false,true]){
+    let opened
+    const sheet=new Promise(resolve=>{opened=resolve})
+    const {page,api,calls}=fixture(undefined,opened)
+    await page.refresh()
+    await page.authorize({detail:{code:'phone-code'}})
+    api.startActivityRegistrationPayment=async()=>({providerAction:{status:'pending',presentation:'jsapi',
+      payload:{timeStamp:'1',nonceStr:'n',package:'p',signType:'RSA',paySign:'signature'}}})
+    const payment=page.payOriginal('first-order')
+    const modal=await sheet
+    page.onHide()
+    modal.success()
+    await payment
+    assert.equal(calls.filter(c=>c[0]==='query').length,0)
+    if(switchMember)api.getMiniBootstrap=async()=>({membership:{memberNo:'M002'}})
+    await page.onShow()
+    await page.refresh()
+    assert.deepEqual(calls.filter(c=>c[0]==='query'),switchMember?[]:[['query','first-order']])
+  }
+})
+
+test('购票回执晚于页面回访时保留本人原单，换会员不展示或继续其支付',async()=>{
+  for(const switchMember of [false,true]){
+    const {page,api,calls}=fixture()
+    await page.refresh()
+    await page.authorize({detail:{code:'phone-code'}})
+    page.agree({detail:{value:['yes']}})
+    let finish
+    api.buyTableTickets=()=>new Promise(resolve=>{finish=resolve})
+    const attempt=page.buy()
+    page.onHide()
+    if(switchMember)api.getMiniBootstrap=async()=>({membership:{memberNo:'M002'}})
+    await page.onShow()
+    finish({registrationPublicId:'delayed-first'})
+    await attempt
+    assert.equal(page.data.originalOrder,switchMember?null:'delayed-first')
+    assert.deepEqual(calls.map(c=>c[0]),['enroll'])
+  }
 })

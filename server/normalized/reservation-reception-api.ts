@@ -6,6 +6,7 @@ import {assertEmployeeTableSessionAccess,EmployeeTableAccessDeniedError} from '.
 import {StaffAccessDeniedError,StaffNotFoundError,StaffAccessRepository,type EffectiveStaffAccess} from './staff-access-repository.js'
 import {NormalizedStoreUnavailableError,TrustedStoreScopeError} from './normalized-request-context.js'
 import {isStaffAuthenticationRequiredError} from './staff-api-authentication.js'
+import {lockReservationPolicy} from './reservation-policy-lock.js'
 import {ReservationRepository,type Reservation} from './reservation-repository.js'
 import {reservationVisibility,type StaffReservationPerformanceContext} from './reservation-performance-api.js'
 import {readPolicy,readReservationCapacity,capacityAccepts,insertPrivateContact,validateReservationWindow,assertPreferredSchedule} from './public-reservation-api.js'
@@ -121,13 +122,14 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
       const access=await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'table.open')
       await visibleReservation(tx,ctx,id,access)
       const reservation=await new ReservationRepository(tx).findById(id)
-      const rows=reservation?.status!=='arrived'?[]:(await tx.query<Record<string,unknown>>(`SELECT s.id AS "tableSessionId",s.table_id AS "tableId",t.code AS "tableCode",s.location_version AS "locationVersion",s.guest_count AS "guestCount",s.business_date::text AS "businessDate",s.opened_at::text AS "openedAt"
+      const ticket=reservation?.status==='arrived'?await ticketSeatingRule(tx,id):null
+      const rows=reservation?.status!=='arrived'||ticket?.message?[]:(await tx.query<Record<string,unknown>>(`SELECT s.id AS "tableSessionId",s.table_id AS "tableId",t.code AS "tableCode",s.location_version AS "locationVersion",s.guest_count AS "guestCount",s.business_date::text AS "businessDate",s.opened_at::text AS "openedAt"
         FROM mbox.table_sessions s JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id)
-        WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.status='open' AND s.business_date=$4::date
+        WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.status='open' AND s.business_date=$4::date AND ($5::uuid IS NULL OR s.table_id=$5)
         AND NOT EXISTS(SELECT 1 FROM mbox.reservation_seating_sessions linked WHERE(linked.tenant_id,linked.store_id,linked.table_session_id)=(s.tenant_id,s.store_id,s.id))
         AND (mbox.employee_has_effective_permission($1,$2,$3,'table.view_all') OR EXISTS(SELECT 1 FROM mbox.table_assignments a WHERE(a.tenant_id,a.store_id,a.table_id,a.employee_id)=(s.tenant_id,s.store_id,s.table_id,$3) AND a.assignment_type IN('primary','backup') AND a.starts_at<=clock_timestamp() AND (a.ends_at IS NULL OR a.ends_at>clock_timestamp())))
-        ORDER BY t.code,s.id LIMIT 1000`,[ctx.scope.tenantId,ctx.scope.storeId,ctx.employeeId,ctx.businessDate])).rows
-      return {protocol:1,reservationId:id,reservationVersion:reservation!.aggregateVersion,reservationGuestCount:reservation!.guestCount,reservationStatus:reservation!.status,sessions:rows.map(row=>({...row,locationVersion:Number(row.locationVersion),guestCount:Number(row.guestCount)})),partialSeatingSupported:false}
+        ORDER BY t.code,s.id LIMIT 1000`,[ctx.scope.tenantId,ctx.scope.storeId,ctx.employeeId,ctx.businessDate,ticket?.tableId??null])).rows
+      return {protocol:1,reservationId:id,reservationVersion:reservation!.aggregateVersion,reservationGuestCount:reservation!.guestCount,reservationStatus:reservation!.status,ticketGuidance:ticket?.message??null,sessions:rows.map(row=>({...row,locationVersion:Number(row.locationVersion),guestCount:Number(row.guestCount)})),partialSeatingSupported:false}
     },{readOnly:true})
     return reply.send({data})
   }))
@@ -140,6 +142,9 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
     if(new Set(sessions.map(row=>row.tableSessionId)).size!==sessions.length||new Set(sessions.map(row=>row.expectedTableId)).size!==sessions.length)fail('同一桌台或桌次不能重复选择','RESERVATION_RECEPTION_INPUT',400)
     const key=requestKey(request),requestFingerprint=hash({actor:ctx.employeeId,scope:ctx.scope,reservationId:id,reservationVersion,sessions,reason})
     const execution=await options.commands.execute({scope:ctx.scope,operationScope:'reservation.reception.seat.v1',idempotencyKey:key,requestFingerprint,retainReceipt:true,resultCodec:codec},async tx=>{
+      const ticket=await ticketSeatingRule(tx,id,true)
+      if(ticket?.message)fail(ticket.message,'TICKET_SEATING_UNAVAILABLE')
+      if(ticket && (sessions.length!==1 || sessions[0]!.expectedTableId!==ticket.tableId))fail('本票只能关联已确认桌号。请刷新门票接待核对具体桌号。','TICKET_SEATING_TABLE_CHANGED')
       const locked=await tx.query<{customer_id:string|null;guest_count:number;aggregate_version:string|number;status:string}>(`SELECT customer_id,guest_count,aggregate_version,status FROM mbox.reservations WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[ctx.scope.tenantId,ctx.scope.storeId,id])
       const reservation=locked.rows[0] ?? fail('未找到预约','RESERVATION_NOT_FOUND',404)
       if(reservation.status!=='arrived'||Number(reservation.aggregate_version)!==reservationVersion)fail('预约状态或版本已变化，仅已到店预约可以确认入座')
@@ -176,6 +181,7 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
       const access=await new StaffAccessRepository(tx).assertPermission(ctx.employeeId,'reservation.manage')
       if(!access.permissions.includes('table.open'))throw new StaffAccessDeniedError('table.open required')
       await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))`,[ctx.scope.tenantId,ctx.scope.storeId])
+      await lockReservationPolicy(tx)
       await visibleReservation(tx,ctx,id,access)
     })
     return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
@@ -185,6 +191,46 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
 function requestKey(request:FastifyRequest):string {return text(request.headers['idempotency-key'],'原请求编号',8,160)}
 function staffReservation(reservation:Reservation) {const {contactToken,...rest}=reservation;const snapshot={...reservation.reservationSnapshot};delete snapshot.receptionRequestHash;return {...rest,reservationSnapshot:snapshot,contactAvailable:contactToken.length>0}}
 function createReceipt(reservation:Reservation,employeeId:string,requestKey:string,maskedContact:string):JsonObject{return json({protocol:1,operation:'create',employeeId,requestKey,reservation:staffReservation(reservation),maskedContact})}
+// A ticket-created reservation belongs to its original ticket. An independently booked
+// reservation can resume its ordinary use once the ticket linked to it is refunded.
+async function ticketSeatingRule(tx:ScopedTransaction,reservationId:string,lock=false){
+  const args=[tx.scope.tenantId,tx.scope.storeId,reservationId]
+  if(!(await tx.query<{installed:boolean}>("SELECT to_regclass('mbox.table_tickets') IS NOT NULL AS installed")).rows[0]?.installed)return null
+  const linked=`WITH desks AS (SELECT id FROM mbox.reservation_table_locks WHERE (tenant_id,store_id,reservation_id)=($1,$2,$3)),
+    related AS (
+      SELECT k.id FROM mbox.table_tickets k JOIN desks d ON d.id=k.reservation_lock_id
+      WHERE (k.tenant_id,k.store_id)=($1,$2) AND k.refunded_at IS NULL
+      UNION SELECT k.id FROM mbox.table_ticket_purchases p JOIN desks d ON d.id=p.original_lock_id
+      JOIN mbox.table_tickets k USING(tenant_id,store_id,registration_id)
+      WHERE (p.tenant_id,p.store_id)=($1,$2) AND k.ordinal=1 AND k.reschedule_id IS NULL AND k.refunded_at IS NULL
+        AND (k.reservation_lock_id IS NULL OR k.reservation_lock_id=d.id)
+      UNION SELECT k.id FROM mbox.reservations r JOIN mbox.table_tickets k
+        ON (k.tenant_id,k.store_id)=(r.tenant_id,r.store_id) AND k.id=CASE WHEN r.reservation_snapshot->>'ticketId' ~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' THEN (r.reservation_snapshot->>'ticketId')::uuid END
+      WHERE (r.tenant_id,r.store_id,r.id)=($1,$2,$3)
+    )`
+  if(lock)await tx.query(linked+' SELECT k.id FROM mbox.table_tickets k JOIN related ON related.id=k.id ORDER BY k.id FOR UPDATE OF k',args)
+  const result=await tx.query<{table_id:string|null;valid:boolean;admitted:boolean;awaiting_payment:boolean}>(linked+`
+    SELECT l.table_id, a.status='published' AND k.refunded_at IS NULL AND coalesce(m.starts_at,p.starts_at)<=statement_timestamp()
+      AND coalesce(m.ends_at,p.ends_at)>statement_timestamp() AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f
+        WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('cancelled','rejected')) AS valid,
+      EXISTS(SELECT 1 FROM mbox.ticket_admission_batches b WHERE (b.tenant_id,b.store_id,b.ticket_id)=(k.tenant_id,k.store_id,k.id)) AS admitted,false AS awaiting_payment
+    FROM related JOIN mbox.table_tickets k ON k.id=related.id JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
+    LEFT JOIN mbox.ticket_reschedule_offers m ON m.id=k.reschedule_id
+    JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
+    JOIN mbox.community_activities a ON (a.tenant_id,a.store_id,a.id)=(r.tenant_id,r.store_id,coalesce(m.activity_id,r.activity_id))
+    LEFT JOIN mbox.reservation_table_locks l ON l.id=k.reservation_lock_id AND l.reservation_id=$3 AND l.status='confirmed'
+    UNION ALL
+    SELECT NULL::uuid,false,false,true FROM desks d JOIN mbox.table_ticket_purchases p ON p.original_lock_id=d.id
+      JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
+      WHERE (p.tenant_id,p.store_id)=($1,$2) AND r.status='payment_pending'`,args)
+  if(!result.rowCount)return null
+  const row=result.rows[0]!
+  const message=row.awaiting_payment?'请先核对关联的原购票单，出票后确认桌号并验票；购票单取消后可按原预约入座。'
+    :result.rowCount!==1||!row.valid?'请核对场次、入场时段及原票退票状态。'
+    :!row.table_id?'请先在门票接待确认本票的具体桌号。':!row.admitted?'请先在门票接待核验客人出示的入场码。':null
+  return {tableId:row.table_id,message}
+}
+
 async function visibleReservation(tx:ScopedTransaction,ctx:StaffReservationPerformanceContext,id:string,access:EffectiveStaffAccess) {
   const scope=reservationVisibility({...ctx,access})
   const row=await tx.query(`SELECT r.id FROM mbox.reservations r WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3 AND ($4::boolean OR r.owner_employee_id=ANY($5::uuid[]) OR EXISTS(SELECT 1 FROM mbox.reservation_table_locks l JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(l.tenant_id,l.store_id,l.table_id) WHERE(l.tenant_id,l.store_id,l.reservation_id)=(r.tenant_id,r.store_id,r.id) AND t.area_id=ANY($6::uuid[])) OR EXISTS(SELECT 1 FROM mbox.reservation_seating_batches b JOIN mbox.reservation_seating_sessions l ON(l.tenant_id,l.store_id,l.batch_id)=(b.tenant_id,b.store_id,b.id) JOIN mbox.table_sessions s ON(s.tenant_id,s.store_id,s.id)=(l.tenant_id,l.store_id,l.table_session_id) JOIN mbox.tables t ON(t.tenant_id,t.store_id,t.id)=(s.tenant_id,s.store_id,s.table_id) WHERE(b.tenant_id,b.store_id,b.reservation_id)=(r.tenant_id,r.store_id,r.id) AND t.area_id=ANY($6::uuid[])))`,[ctx.scope.tenantId,ctx.scope.storeId,id,scope.all,scope.ownerEmployeeIds,scope.areaIds])

@@ -8,7 +8,9 @@ import type { NativePushSender, NativePushSendRequest, NativePushDeliveryOutcome
 
 export interface NativePushBatch { workerId:string; projected:number; claimed:number; accepted:number; unknown:number; rejected:number; retry:number; cancelled:number; expired:number; configurationRejected:number }
 type Binding=Record<string,unknown>&{provider:'apns'|'getui';id:string;revision:string;employee_id:string;staff_session_id:string;device_access_lease_id:string;registered_at:Date;expires_at:Date;environment:string;topic:string;token_ciphertext:Buffer;token_key_id:string}
-type Event=Record<string,unknown>&{id:string;task_id:string;table_session_id:string;occurred_at:Date;expires_at:Date}
+type Event=Record<string,unknown>&{id:string;task_id:string;table_session_id:string;occurred_at:string;expires_at:string}
+// Preserve PostgreSQL microseconds when event times are compared with device registration times.
+const eventFields='id,task_id,table_session_id,occurred_at::text,expires_at::text'
 const scoped=(scope:StoreScope)=>[scope.tenantId,scope.storeId]
 const actor=(scope:StoreScope,b:Binding):NativePushActor=>({scope,employeeId:b.employee_id,staffSessionId:b.staff_session_id,deviceAccessLeaseId:b.device_access_lease_id,businessDate:new Date().toISOString().slice(0,10)})
 function denied(error:unknown) {return error instanceof NativePushError&&[401,403].includes(error.statusCode) || error instanceof Error&&['StaffAccessDeniedError','StaffNotFoundError'].includes(error.name)}
@@ -38,7 +40,7 @@ export class NativePushWorker {
     return result
   }
   private project(scope:StoreScope) {return this.transactions.run(scope,async tx=>{
-    const events=await tx.query<Event>('SELECT * FROM mbox.native_push_events WHERE tenant_id=$1 AND store_id=$2 AND projected_at IS NULL ORDER BY occurred_at,id LIMIT 20 FOR UPDATE SKIP LOCKED',scoped(scope))
+    const events=await tx.query<Event>(`SELECT ${eventFields} FROM mbox.native_push_events e WHERE tenant_id=$1 AND store_id=$2 AND projected_at IS NULL ORDER BY e.occurred_at,id LIMIT 20 FOR UPDATE SKIP LOCKED`,scoped(scope))
     for(const event of events.rows) {
       const live=(await tx.query('SELECT 1 WHERE $1::timestamptz>clock_timestamp()',[event.expires_at])).rowCount===1
       if(live) {
@@ -71,7 +73,7 @@ export class NativePushWorker {
     const delivery=(await tx.query<Record<string,unknown>&{binding_revision:string;employee_id:string;staff_session_id:string;attempts:number;event_id:string}>("SELECT * FROM mbox.native_push_deliveries WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND status IN('pending','retry') AND available_at<=clock_timestamp() FOR UPDATE",[...scoped(scope),id])).rows[0]
     if(!delivery)return null
     if(!binding||!provider||!authorized||binding.revision!==delivery.binding_revision||binding.employee_id!==delivery.employee_id||binding.staff_session_id!==delivery.staff_session_id||binding.environment!==provider.config.environment||binding.topic!==provider.config.topic) {await this.terminal(tx,id,'cancelled','BINDING_NOT_CURRENT');return 'cancelled' as const}
-    const event=(await tx.query<Event>('SELECT * FROM mbox.native_push_events WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...scoped(scope),delivery.event_id])).rows[0]!
+    const event=(await tx.query<Event>(`SELECT ${eventFields} FROM mbox.native_push_events WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scoped(scope),delivery.event_id])).rows[0]!
     const deadline=(await tx.query<{expires_at:Date;live:boolean}>(`SELECT LEAST($1::timestamptz,$2::timestamptz,$3::timestamptz+make_interval(secs=>$4)) AS expires_at,
       LEAST($1::timestamptz,$2::timestamptz,$3::timestamptz+make_interval(secs=>$4))>clock_timestamp() AS live`,[event.expires_at,new Date(Math.min(binding.expires_at.getTime(),currentExpiry!.getTime())),event.occurred_at,provider.config.eventTtlSeconds])).rows[0]!
     if(!deadline.live||delivery.attempts>=10){await this.terminal(tx,id,'expired','EVENT_EXPIRED');return 'expired' as const}

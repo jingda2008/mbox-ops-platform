@@ -131,14 +131,36 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
       await expect(field).toBeFocused()
       await field.fill(valid)
     }
-    await workspace.getByRole('button',{name:'保存并发布票档'}).click()
+    let resume!:()=>void
+    const delayed=new Promise<void>(resolve=>{resume=resolve})
+    let failRead=false
+    const listRoute='**/api/staff/activity-operations/*/table-tickets'
+    await page.route(listRoute,async route=>{
+      if(route.request().method()==='GET'){
+        await delayed
+        if(failRead){await route.fulfill({status:503,contentType:'application/json',body:'{}'});return}
+      }
+      await route.continue()
+    })
+    try{
+      await publish.click()
+      await expect(workspace.getByText('已保存，正在核对最新版本…',{exact:true})).toBeVisible()
+      await expect(name).toBeDisabled()
+      await expect(publish).toBeDisabled()
+    }finally{resume()}
     await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
     const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',origin).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
     await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
     await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
     await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')
-    await workspace.getByRole('button',{name:'保存并发布票档'}).click()
+    failRead=true
+    await publish.click()
     await expect.poll(published).toMatchObject([{saleState:'upcoming'}])
+    await expect(workspace.getByText('已保存，最新版本读取失败。请点「刷新票档」后继续。',{exact:true})).toBeVisible()
+    await expect(publish).toBeDisabled()
+    failRead=false
+    await workspace.getByRole('button',{name:'刷新票档'}).click()
+    await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
     await workspace.getByRole('button',{name:'下架',exact:true}).click()
     await expect.poll(published).toEqual([])
   }finally{

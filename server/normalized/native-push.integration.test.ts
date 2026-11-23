@@ -60,9 +60,10 @@ suite.each(['apns','getui'] as const)('native push %s scoped installation and ir
   const work=await pushWork(),otherId=randomUUID(),other=provider==='apns'?{platform:'android' as const,provider:'getui' as const,token:work.payload.token.slice(0,32)}:{platform:'ios' as const,provider:'apns' as const,token:work.payload.token}
   const otherPayload={...body(),...other}
   expect((await put(otherId,otherPayload)).statusCode).toBe(201)
-  // A fresh event occurs after both registrations. The earlier event must not go to the late binding.
+  // At the precise registration instant both devices qualify. The earlier event belongs only to the first device.
   const event=randomUUID()
-  await owner.query("INSERT INTO mbox.service_task_events(id,tenant_id,store_id,service_task_id,event_type,to_status,actor_type,actor_employee_id) VALUES($1,$2,$3,$4,'task.reminded','pending','employee',$5)",[event,tenant,store,work.task,employee])
+  await owner.query(`INSERT INTO mbox.service_task_events(id,tenant_id,store_id,service_task_id,event_type,to_status,actor_type,actor_employee_id,occurred_at)
+    SELECT $1,$2,$3,$4,'task.reminded','pending','employee',$5,registered_at FROM mbox.native_push_installations WHERE id=$6`,[event,tenant,store,work.task,employee,otherId])
   const sent:{provider:string;token:string}[]=[]
   const sender=(p:string):NativePushSender=>({send:async r=>{sent.push({provider:p,token:r.token});return {status:'provider_accepted'}}})
   const mixed=new NativePushWorker(tx,cfg,hashSecret,sender('apns'),getuiCfg,sender('getui'))

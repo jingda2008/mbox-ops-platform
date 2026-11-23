@@ -1,5 +1,5 @@
 <view class="page">
-  <button wx:for="{{proposals}}" wx:key="id" bindtap="openProposal" data-id="{{item.id}}">核对服务员代选的 {{item.name}} × {{item.quantity}}桌</button>
+  <button wx:for="{{proposals}}" wx:key="id" bindtap="openProposal" disabled="{{busy}}" data-id="{{item.id}}">核对服务员代选的 {{item.name}} × {{item.quantity}}桌</button>
   <view wx:if="{{selected}}" class="section">
     <view class="title">{{selected.name}}</view><view wx:if="{{selected.saleText}}">{{selected.saleText}}</view><view>{{selected.time}} · {{selected.location}}</view>
     <view>{{selected.areaName}}一整桌 · {{selected.price}}／桌<text wx:if="{{selected.giftPoints}}"> · 每张赠 {{selected.giftPoints}} 积分</text></view>
@@ -10,7 +10,7 @@
     <view>退票时段及费用：{{selected.refundSchedule}} · 客服 {{selected.serviceContact}}</view>
     <view>{{selected.refundSummary}}。退票时收回该票赠分，已抵扣的菜款按原菜价、原实付及退票原因核算。</view>
     <view>{{selected.safetySummary}}</view>
-    <radio-group wx:if="{{eligibleReservations.length}}" bindchange="chooseReservation"><view>是否沿用本人已订的桌</view><label><radio value="" checked="{{!reservationLockId}}"/>另购一桌</label><label wx:for="{{eligibleReservations}}" wx:key="id"><radio value="{{item.id}}"/>{{item.tableName}} · {{item.reference}}</label></radio-group>
+    <radio-group wx:if="{{eligibleReservations.length}}" bindchange="chooseReservation"><view>是否沿用本人已订的桌</view><label><radio disabled="{{busy}}" value="" checked="{{!reservationLockId}}"/>另购一桌</label><label wx:for="{{eligibleReservations}}" wx:key="id"><radio disabled="{{busy}}" value="{{item.id}}" checked="{{reservationLockId === item.id}}"/>{{item.tableName}} · {{item.reference}}</label></radio-group>
     <label>购买桌数<input type="number" value="{{quantity}}" bindinput="quantity" disabled="{{busy || proposalId}}"/></label>
     <view wx:if="{{summary}}">{{summary}}</view>
     <checkbox-group bindchange="agree"><label><checkbox value="yes" checked="{{agreed}}"/>已阅读本场入场、退票和赠分说明</label></checkbox-group>

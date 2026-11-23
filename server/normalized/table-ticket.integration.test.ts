@@ -1100,6 +1100,62 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       }
     })
   })
+  it('keeps one refund of the supplement when its capture overlaps the ticket refund',async()=>{
+    const fixture=(await admin.query(`SELECT k.id AS ticket,k.registration_id,k.payment_id,m.customer_id AS buyer,s.table_session_id AS session,
+      p.provider_transaction_id FROM mbox.customer_memberships m JOIN mbox.table_session_customers s USING(tenant_id,store_id,customer_id)
+      JOIN mbox.table_ticket_purchases b ON (b.tenant_id,b.store_id,b.membership_id)=(m.tenant_id,m.store_id,m.id)
+      JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.registration_id)=(b.tenant_id,b.store_id,b.registration_id)
+      JOIN mbox.payments p ON p.id=k.payment_id WHERE m.tenant_id=$1 AND m.member_no='MBX-REFUND-MATRIX' AND k.ordinal=1`,[scope.tenantId])).rows[0]!
+    const {ticket,registration_id:registration,buyer,session}=fixture
+    const product=(await admin.query("SELECT id FROM mbox.products WHERE tenant_id=$1 AND code='DISH'",[scope.tenantId])).rows[0].id
+    const reviewer=(await admin.query("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND employee_code='AUD'",[scope.tenantId])).rows[0].id
+    await run(tx=>decideTicketCase(tx,ticket,{customer:buyer},'cancelled','保留原票后重新消费'))
+    const ref=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:buyer})
+    const {attempt,refund}=await run(async tx=>{
+      const proposal=await staffPointsProposal(tx,employee,session,'MBX-REFUND-MATRIX',[{productId:product,quantity:1}],100)
+      const quote=await adoptAssistedPoints(tx,{customerId:buyer,tableSessionId:session,actorRef:ref},proposal.id!)
+      const order=await placeDining(session,buyer,ref,quote,tx)
+      await collectDining(order.id,tx)
+      const afterSale=await requestTicketRefund(tx,registration,ticket,buyer,'退票期间已补款')
+      await proposeTicketDining(tx,afterSale.caseId,employee,'原餐单补100元')
+      const bill=(await tx.query('SELECT id FROM mbox.ticket_dining_collections WHERE case_id=$1',[afterSale.caseId])).rows[0]!.id
+      await consentTicketDining(tx,bill,buyer)
+      const attempt=await new PaymentRepository(tx).createForOrder({orderId:order.id,publicId:'RC'+randomUUID(),provider:'postar',method:'native_qr',
+        initialStatus:'pending',principal:{type:'employee',employeeId:employee}})
+      const ticketRefund=await submitTicketCashRefund(tx,afterSale.caseId,employee,50000,'门店承担，票款和餐饮补款分别核对')
+      const repository=new RefundRepository(tx),refund=await repository.approve(ticketRefund.refundId,reviewer,'核对原路')
+      await repository.beginExecution(refund.id)
+      return {attempt,refund}
+    })
+    // Leave capture uncommitted while the separate refund callback reads the original order.
+    let unlock!:()=>void, captured!:()=>void
+    const release=new Promise<void>(resolve=>{unlock=resolve})
+    const reached=new Promise<void>(resolve=>{captured=resolve})
+    const capture=run(async tx=>{
+      await new PaymentRepository(tx).applySucceededCallback({paymentPublicId:attempt.publicId,provider:'postar',providerTransactionId:'C-'+attempt.id,reportedAmountMinor:10000,reportedCurrency:'CNY'})
+      captured()
+      await release
+    })
+    await Promise.race([reached,capture])
+    let done=false, callbackPid=0, sawBlockedCallback=false
+    const returned=run(async tx=>{
+      callbackPid=Number((await tx.query('SELECT pg_backend_pid() pid')).rows[0]!.pid)
+      await new RefundRepository(tx).completeProviderExecution({refundPublicId:refund.publicId,provider:'postar',providerRefundId:'R-'+refund.id,
+        originalProviderTransactionId:fixture.provider_transaction_id,reportedAmountMinor:50000,reportedCurrency:'CNY',succeeded:true})
+    }).finally(()=>{done=true})
+    try{
+      for(let step=0;step<200 && !done;step++){
+        if(callbackPid && (await admin.query('SELECT cardinality(pg_blocking_pids($1)) AS blocked',[callbackPid])).rows[0].blocked>0){
+          sawBlockedCallback=true
+          break
+        }
+        await new Promise(resolve=>setTimeout(resolve,5))
+      }
+    }finally{unlock()}
+    await Promise.all([capture,returned])
+    expect(sawBlockedCallback).toBe(true)
+    expect((await admin.query('SELECT status,amount_minor FROM mbox.refunds WHERE payment_id=$1',[attempt.id])).rows).toEqual([{status:'requested',amount_minor:'10000'}])
+  })
   it('sells five desks and then the sixth to one member with separate lots and independent area limits',async()=>{
     const other=randomUUID(),args=[scope.tenantId,scope.storeId]
     await admin.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'SIX','中间','indoor')",[...args,other])

@@ -29,6 +29,7 @@ import {
   type ExperiencePlanIntentView,
   type CheckoutBasketLine,
   type CheckoutUpgradeOfferView,
+  type RegistrationHistoryQuery,
   type ActivityFeeBasis,
   type ActivityPaymentChoice,
   type ActivityPaymentMode,
@@ -66,6 +67,7 @@ import {
 } from './employee-table-access.js'
 
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
+import {saveTicketOffer,publishTicketDrafts,type TicketDraftSelection,type TableTicketOfferInput} from './table-ticket-offer-repository.js'
 import {buyTableTickets,publicTableTickets,type TablePurchaseInput} from './table-ticket-purchase.js'
 type TransactionRunner = Pick<ScopedPostgresTransactionRunner, 'run'>
 
@@ -2064,8 +2066,8 @@ export class CustomerExperienceService {
     })
   }
 
-  tableTicketOffers(scope: Readonly<StoreScope>) {
-    return this.transactions.run(scope,publicTableTickets,{readOnly:true})
+  tableTicketOffers(scope: Readonly<StoreScope>,recommendedOnly=false) {
+    return this.transactions.run(scope,tx=>publicTableTickets(tx,recommendedOnly),{readOnly:true})
   }
 
   purchaseTableTickets(context:PublicCustomerExperienceContext,input:TablePurchaseInput,key:string,ready:boolean) {
@@ -2099,9 +2101,9 @@ export class CustomerExperienceService {
     ), { readOnly: true })
   }
 
-  activityRegistrations(context: PublicCustomerExperienceContext) {
+  activityRegistrations(context: PublicCustomerExperienceContext, history?: RegistrationHistoryQuery) {
     return this.transactions.run(context.scope, (transaction) => (
-      new CustomerExperienceRepository(transaction, this.activityPaymentProviderConfigured).publicActivityRegistrations(context.customerId)
+      new CustomerExperienceRepository(transaction, this.activityPaymentProviderConfigured).publicActivityRegistrations(context.customerId, history)
     ), { readOnly: true })
   }
 
@@ -3188,15 +3190,37 @@ export class CustomerExperienceService {
 
   publishActivity(
     context: StaffCustomerExperienceContext,
-    input: Readonly<{ publicId: string; idempotencyKey: string }>,
+    input: Readonly<{ publicId: string; idempotencyKey: string; ticketOffer?: TableTicketOfferInput; draftBatch?:{drafts:TicketDraftSelection[];termsVersion:number}; expectedUpdatedAt?: string }>,
   ) {
     return staffAuthorizedCommands(this.commands, context.employeeId, 'community.activity.publish').execute({
       scope: context.scope,
-      operationScope: 'community.activity.publish',
+      operationScope: input.draftBatch?'community.table_ticket.review_batch':input.ticketOffer ? 'community.table_ticket.review_publish' : 'community.activity.publish',
+      retainReceipt: !!(input.ticketOffer || input.draftBatch),
       idempotencyKey: input.idempotencyKey,
-      requestFingerprint: fingerprint(input),
+      requestFingerprint: fingerprint(input.ticketOffer || input.draftBatch ? {...input,actor:context.employeeId} : input),
       resultCodec: objectCodec<{ publicId: string; status: 'published' }>(),
     }, async (transaction) => {
+      if (input.ticketOffer || input.draftBatch) {
+        const {rows:[event]}=await transaction.query<{status:string;own:boolean;current:boolean;upcoming:boolean}>(`
+          SELECT status, created_by_employee_id=$4::uuid AS own, updated_at=$5::timestamptz AS current,
+            starts_at>clock_timestamp() AS upcoming
+          FROM mbox.community_activities
+          WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3 FOR UPDATE
+        `,[transaction.scope.tenantId,transaction.scope.storeId,input.publicId,context.employeeId,input.expectedUpdatedAt])
+        if(event?.current && event.status==='published' && input.draftBatch){
+          const saved=await publishTicketDrafts(transaction,input.publicId,context.employeeId,input.draftBatch.drafts,input.draftBatch.termsVersion)
+          return {result:{publicId:input.publicId,status:'published' as const},auditEvents:saved.map(offer=>({
+            actor:staffActor(context),action:'community.table_ticket.offer_saved',objectType:'table_ticket_offer',objectId:offer.id,
+            businessDate:context.businessDate,afterData:{version:offer.version}
+          })),outboxMessages:[]}
+        }
+        if (!event || event.status!=='draft' || !event.current) throw new CustomerExperienceRequestError(
+          '场次资料已变化，请重新打开场次核对。','ACTIVITY_PUBLISH_DENIED',409)
+        if (event.own) throw new CustomerExperienceRequestError(
+          '场次由你创建，请由另一位有发布权限的员工复核。','ACTIVITY_PUBLISH_DENIED',409)
+        if (!event.upcoming) throw new CustomerExperienceRequestError(
+          '场次已经开始，不能首次发布。请核对演出时间。','ACTIVITY_PUBLISH_DENIED',409)
+      }
       const result = await transaction.query<{ id: string; public_id: string; status: 'published' }>(`
         UPDATE mbox.community_activities
         SET status = 'published', approved_by_employee_id = $4::uuid,
@@ -3316,7 +3340,7 @@ export class CustomerExperienceService {
         409,
       )
       const output = { publicId: row.public_id, status: row.status }
-      return commandOutcome(
+      const outcome = commandOutcome(
         output,
         staffActor(context),
         'community.activity.published',
@@ -3328,6 +3352,17 @@ export class CustomerExperienceService {
         undefined,
         input.publicId,
       )
+      if(input.draftBatch){
+        const saved=await publishTicketDrafts(transaction,input.publicId,context.employeeId,input.draftBatch.drafts,input.draftBatch.termsVersion)
+        for(const offer of saved)outcome.auditEvents.push({actor:staffActor(context),action:'community.table_ticket.offer_saved',objectType:'table_ticket_offer',
+          objectId:offer.id,businessDate:context.businessDate,afterData:{version:offer.version}})
+      }
+      if (input.ticketOffer) {
+        const offer = await saveTicketOffer(transaction,input.publicId,context.employeeId,input.ticketOffer)
+        outcome.auditEvents.push({actor:staffActor(context),action:'community.table_ticket.offer_saved',objectType:'table_ticket_offer',
+          objectId:offer.id,businessDate:context.businessDate,afterData:{...input.ticketOffer,version:offer.version}})
+      }
+      return outcome
     })
   }
 

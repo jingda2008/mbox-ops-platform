@@ -133,16 +133,29 @@ test('preference creation completed off-page cannot reopen an old snapshot',asyn
   const gate=deferred(),f=profile({declareCustomerPreference:()=>gate.promise});Object.assign(f.page.data,{preferenceTypeOptions:[{key:'taste.note'}],preferenceTypeIndex:0,preferenceUsesPicker:false,preferenceTextValue:'test'});let applied=0;f.page.applyCustomerPreferenceSnapshot=()=>applied++
   const pending=f.page.submitCustomerPreference();f.page.onHide();gate.resolve({facts:[],sources:[]});await pending;assert.equal(applied,0)
 })
-test('activity entry still navigates after an authoritative empty registration list',async()=>{
-  const f=profile({getActivityRegistrations:async()=>[]});await f.page.openSuperhighService();assert.equal(f.state.calls.filter(([k])=>k==='tab').length,1)
+test('profile opens personal activity history directly', () => {
+  const f = profile()
+  f.page.openSuperhighService()
+  assert.equal(f.state.calls.find(([key]) => key === 'navigate')[1].url, '/pages/profile-activities/index')
 })
-test('activity entry cannot navigate after a hidden page receives empty registrations',async()=>{
-  const gate=deferred(),f=profile({getActivityRegistrations:()=>gate.promise});const pending=f.page.openSuperhighService();f.page.onHide();gate.resolve([]);await pending;assert.equal(f.state.calls.filter(([k])=>k==='tab').length,0)
+test('personal history keeps ended records and opens the exact registration even after public listing closes', async () => {
+  const row = {publicId:'record-7',activityPublicId:'event-1',activityTitle:'夏日狂欢2.0',endsAt:'2026-08-28T00:00:00+08:00',
+    startsAt:'2026-08-27T21:00:00+08:00',partySize:1,status:'confirmed',paymentStatus:'paid',paidAmountMinor:5000,
+    activityPackage:{name:'原套餐'},location:'原场地',refundSummary:'原退款约定',liveDetailAvailable:false}
+  const {page} = pageFixture('profile-activities',{getActivityRegistrationHistory:async({id,before}) => ({
+    items:id || !before ? [row] : [{...row,publicId:'record-6',status:'cancelled'}],nextCursor:id || before ? null : row.publicId}),
+    getActivityRegistrationPayment:async()=>({resolutionState:'confirmed'})})
+  page.onLoad({}); await page.onShow(); await page.loadMore()
+  assert.equal(page.data.rows.length,2); assert.equal(page.data.rows[0].ended,true)
+  page.onLoad({id:row.publicId}); await page.onShow()
+  assert.equal(page.data.selected.packageName,'原套餐'); assert.equal(page.data.selected.liveUrl,'')
+  assert.equal(page.data.selected.refund,'原退款约定'); assert.equal(page.data.selected.paid,'¥50.00')
+  page.onHide(); assert.equal(page.data.selected,null)
 })
-test('activity entry waits for asynchronous view commit and scrolls to existing registrations',async()=>{
-  const f=profile({getActivityRegistrations:async()=>[{publicId:'registration',status:'confirmed'}],getActivityRegistrationPayment:async()=>({})});let scrolls=0;const callbacks=[]
-  f.page.setData=(patch,callback)=>{Object.assign(f.page.data,patch);if(callback)callbacks.push(callback)};f.wx.pageScrollTo=()=>scrolls++
-  const pending=f.page.openSuperhighService();await tick();callbacks.forEach(fn=>fn());await pending;assert.equal(scrolls,1);assert.equal(f.state.calls.filter(([k])=>k==='tab').length,0)
+test('hidden activity page discards late private history',async()=>{
+  const gate=deferred(),f=pageFixture('profile-activities',{getActivityRegistrationHistory:()=>gate.promise})
+  const pending=f.page.onShow();f.page.onHide();gate.resolve({items:[{publicId:'private'}],nextCursor:null});await pending
+  assert.equal(f.page.data.rows.length,0)
 })
 
 test('history fresh reload failure does not retain another members old orders',async()=>{

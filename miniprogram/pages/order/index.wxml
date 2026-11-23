@@ -1,13 +1,6 @@
 <view class="page order-page" style="height: calc(100vh - {{customTabBarHeight || 50}}px)">
   <scroll-view scroll-y enhanced show-scrollbar="{{false}}" scroll-into-view="{{menuScrollTarget}}" class="order-scroll">
     <view class="order-scroll__content">
-  <view wx:if="{{tableTicketOffers.length}}" class="browse-intro">
-    <view>整桌演出门票</view>
-    <scroll-view wx:if="{{ticketDays.length > 1}}" scroll-x class="ticket-date-strip"><button wx:for="{{ticketDays}}" wx:key="*this" size="mini" data-day="{{item}}" bindtap="chooseTicketDay" disabled="{{item===ticketDay}}">{{item}}</button></scroll-view>
-    <navigator wx:for="{{tableTicketOffers}}" wx:key="id" url="/pages/table-tickets/index?id={{item.id}}">
-      {{item.time}} · {{item.name}} · ¥{{item.price}}／桌<text wx:if="{{item.giftPoints}}"> · 赠{{item.giftPoints}}分</text> {{item.saleText}}
-    </navigator>
-  </view>
   <view wx:if="{{connectionState === 'active'}}">
     <button class="secondary-button" bindtap="readStaffPoints" disabled="{{busy}}">查看服务员代点单</button>
     <view wx:if="{{assistedPointsProposal}}">
@@ -72,7 +65,7 @@
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
     <view class="browse-menu">
-      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length}} 款</text></view>
+      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length + visibleTickets.length}} 款</text></view>
       <view id="browse-menu-anchor"></view>
 <view class="menu-tools menu-tools--browse">
       <view wx:if="{{!categoriesExpanded}}" class="category-grid">
@@ -85,15 +78,19 @@
       </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
-        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : visibleProducts.length + ' 款'}}</text>
+        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
         <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
       </view>
       <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
       </view></scroll-view>
-      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
+      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索菜品、门票或场次" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
     </view>
-      <view wx:if="{{visibleProducts.length}}" class="product-list product-list--browse">
+      <scroll-view wx:if="{{selectedCategory === ticketCategoryCode && ticketDays.length > 1}}" scroll-x class="ticket-date-strip">
+        <button size="mini" data-day="" bindtap="chooseTicketDay" disabled="{{!ticketDay}}">全部日期</button>
+        <button wx:for="{{ticketDays}}" wx:key="*this" size="mini" data-day="{{item}}" bindtap="chooseTicketDay" disabled="{{ticketDay === item}}">{{item}}</button>
+      </scroll-view>
+      <view wx:if="{{visibleProducts.length || visibleTickets.length}}" class="product-list product-list--browse">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available || item.scheduledDisplay ? '' : 'is-unavailable'}} {{item.scheduledDisplay ? 'is-scheduled' : ''}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
             <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
@@ -104,6 +101,7 @@
           <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
           <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.scheduledDisplay ? '可销售时间' : item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : (item.scheduledDisplay ? item.salesTimeText : item.availabilityDetail)}}</text></view></view>
         </view>
+        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" data="{{ticket: item}}" /></block>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
@@ -144,13 +142,13 @@
       </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
-        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : visibleProducts.length + ' 款'}}</text>
+        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
         <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
       </view>
       <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
       </view></scroll-view>
-      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索酒水、套餐或口味" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
+      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索菜品、门票或场次" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
     </view>
 
     <view class="menu-filter-line" aria-label="选购帮助">
@@ -174,7 +172,11 @@
     </view>
     <view wx:if="{{selectedCategory !== 'recommendation'}}" class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
-      <view wx:if="{{visibleProducts.length}}" class="product-list">
+      <scroll-view wx:if="{{selectedCategory === ticketCategoryCode && ticketDays.length > 1}}" scroll-x class="ticket-date-strip">
+        <button size="mini" data-day="" bindtap="chooseTicketDay" disabled="{{!ticketDay}}">全部日期</button>
+        <button wx:for="{{ticketDays}}" wx:key="*this" size="mini" data-day="{{item}}" bindtap="chooseTicketDay" disabled="{{ticketDay === item}}">{{item}}</button>
+      </scroll-view>
+      <view wx:if="{{visibleProducts.length || visibleTickets.length}}" class="product-list">
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available || item.scheduledDisplay ? '' : 'is-unavailable'}} {{item.scheduledDisplay ? 'is-scheduled' : ''}}">
           <view class="product-media" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
             <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
@@ -185,6 +187,7 @@
           <view class="product-main" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
           <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.scheduledDisplay ? '可销售时间' : item.availabilityText}}</text><text wx:if="{{item.scheduledDisplay}}" class="product-availability-copy">{{item.salesTimeText}}</text></view><button wx:if="{{item.available}}" class="{{item.bundleChoiceGroups.length ? 'product-choice-action' : ''}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct" disabled="{{!orderReady}}">{{item.bundleChoiceGroups.length ? '选规格' : '＋'}}</button><button wx:elif="{{!item.scheduledDisplay}}" class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
+        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" data="{{ticket: item}}" /></block>
       </view>
       <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
@@ -298,3 +301,15 @@
 
 
 <launch-popup />
+
+<template name="menuTicketCard">
+  <navigator class="product-row" hover-class="product-row--pressed" url="/pages/table-tickets/index?id={{ticket.id}}" aria-label="{{ticket.name}}，{{ticket.price}}一桌，查看详情">
+    <view class="product-media {{ticket.cover ? '' : 'ticket-cover-default'}}">
+      <image wx:if="{{ticket.cover}}" src="{{ticket.cover}}" mode="aspectFill" lazy-load data-id="{{ticket.id}}" data-cover="{{ticket.cover}}" binderror="ticketCoverFailed" />
+      <image wx:else class="ticket-cover-mark" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+      <text class="product-media__detail-hint">查看详情</text>
+    </view>
+    <view class="product-main"><text class="product-kind">整桌门票</text><text class="product-name">{{ticket.name}}</text><text class="product-copy">{{ticket.time}} 开演</text></view>
+    <view class="product-action"><view class="product-action__meta"><text class="product-price">{{ticket.price}}／桌</text><text wx:if="{{ticket.giftPoints}}" class="product-availability">赠 {{ticket.giftPoints}} 积分</text><text wx:if="{{ticket.saleText}}" class="product-availability">{{ticket.saleText}}</text></view></view>
+  </navigator>
+</template>

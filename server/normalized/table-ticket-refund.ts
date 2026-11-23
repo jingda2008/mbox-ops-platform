@@ -1,3 +1,4 @@
+import {ticketRefundPreview} from './table-ticket-refund-preview.js'
 import {creditTableTicketGifts} from './table-ticket-gifts.js'
 import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
 import {PaymentRepository} from './payment-repository.js'
@@ -6,7 +7,7 @@ import type {ScopedTransaction} from './transaction-runner.js'
 
 // Freeze the exact lot on the original ticket. Already expired points are
 // distinguished from settled food discounts by the checkout source records.
-export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string) {
+export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string,previewVersion?:string) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   const ticket=(await tx.query<{point_lot_id:string|null;gift_points:number;price_minor:number;refunded_at:string|null}>(`
     SELECT k.point_lot_id,o.gift_points,o.price_minor,k.refunded_at FROM mbox.table_tickets k
@@ -22,14 +23,17 @@ export async function requestTicketRefund(tx:ScopedTransaction,registrationId:st
     WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.ticket_id=$3 AND f.status NOT IN('rejected','cancelled')`,[...scope,ticketId])).rows[0]
   if(previous)return {caseId:previous.id,status:previous.status,ticketId,amountMinor:ticket.price_minor,consumedMinor:Number(previous.consumed_minor)}
   if(ticket.refunded_at)throw new CustomerExperienceRequestError('该票已退款','TICKET_ALREADY_REFUNDED',409)
-  let frozen=0
+  let frozen=0,holdLot=false
   if(ticket.point_lot_id){
     const lot=(await tx.query<{remaining_points:number;status:string}>(`SELECT remaining_points,status FROM mbox.loyalty_point_lots
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,ticket.point_lot_id])).rows[0]!
     frozen=lot.remaining_points
-    if(lot.status==='available' || lot.status==='consumed')await tx.query(`UPDATE mbox.loyalty_point_lots SET status='ticket_hold'
-      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,ticket.point_lot_id])
+    holdLot=lot.status==='available' || lot.status==='consumed'
   }
+  if(previewVersion && (await ticketRefundPreview(tx,ticketId))[0]?.previewVersion!==previewVersion)
+    throw new CustomerExperienceRequestError('原票金额或积分已变化，请刷新本票后重新核对','TICKET_PREVIEW_CHANGED',409)
+  if(holdLot)await tx.query(`UPDATE mbox.loyalty_point_lots SET status='ticket_hold'
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,ticket.point_lot_id])
   const basis=(await tx.query<{consumed_minor:string;requires_review:boolean}>('SELECT * FROM mbox.ticket_refund_basis($1,$2,$3)',[...scope,ticketId])).rows[0]!
   const consumedMinor=Number(basis.consumed_minor),review=basis.requires_review
   const saved=(await tx.query<{id:string}>(`INSERT INTO mbox.table_ticket_refund_requests(tenant_id,store_id,ticket_id,

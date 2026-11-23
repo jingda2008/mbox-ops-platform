@@ -4,6 +4,8 @@ const {readWechatPhoneAuthorization} = require('../../utils/wechat-phone')
 const {randomId} = require('../../utils/id')
 const {isPresentableWechatJsapiAction} = require('../../utils/wechat-payment')
 
+const {publicImageUrl} = require('../../utils/media')
+
 function clearMemberDisplay(){
   return {member:null,phone:null,terms:null,mine:[],proposals:[],proposalId:null,reservations:[],eligibleReservations:[],
     reservationLockId:null,originalOrder:null,agreed:false}
@@ -17,7 +19,7 @@ function priceSummary(offer,quantity){
 }
 
 Page({
-  data:{originalOrder:null,reservations:[],eligibleReservations:[],reservationLockId:null,proposals:[],proposalId:null,offers:[],mine:[],selected:null,quantity:'1',agreed:false,member:null,terms:null,phone:null,busy:false,error:''},
+  data:{rulesOpen:false,offersOpen:false,failedCover:'',originalOrder:null,reservations:[],eligibleReservations:[],reservationLockId:null,proposals:[],proposalId:null,offers:[],mine:[],selected:null,quantity:'1',agreed:false,member:null,terms:null,phone:null,busy:false,error:''},
   onLoad(query){
     this.visit=0
     this.offerId=query.id||''
@@ -42,7 +44,7 @@ Page({
     if(this.visible===false)return
     const generation=this.readGeneration=(this.readGeneration||0)+1
     try {
-      const offers=(await api.getTableTicketOffers()).map(o=>({...o,saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':'',price:money(o.priceMinor),time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt)}))
+      const offers=(await api.getTableTicketOffers()).map(o=>({...o,cover:o.coverUrl?publicImageUrl(o.coverUrl):'',saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':'',price:money(o.priceMinor),time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt)}))
       if(generation!==this.readGeneration)return
       const selected=offers.find(o=>o.id===this.offerId)||null
       this.setData({offers,selected,summary:priceSummary(selected,this.data.quantity),agreed:Boolean(selected && selected.id===this.data.selected?.id && selected.safetyVersion===this.data.selected.safetyVersion && selected.refundVersion===this.data.selected.refundVersion && this.data.agreed)})
@@ -81,14 +83,24 @@ Page({
     if(!item){this.setData({error:'票档已变更，请服务员重新选票'});return}
     if(this.data.busy)return
     this.originalReceipt=null
-    this.offerId=item.id;this.setData({originalOrder:null,selected:item,summary:priceSummary(item,p.quantity),reservationLockId:null,eligibleReservations:this.forOffer(item,this.data.reservations),quantity:String(p.quantity),proposalId:p.id,agreed:false,error:''})
+    this.offerId=item.id;this.setData({originalOrder:null,rulesOpen:false,offersOpen:false,selected:item,summary:priceSummary(item,p.quantity),reservationLockId:null,eligibleReservations:this.forOffer(item,this.data.reservations),quantity:String(p.quantity),proposalId:p.id,agreed:false,error:''})
   },
   select(event){
     if(this.data.busy)return
     this.originalReceipt=null
     this.offerId=event.currentTarget.dataset.id
     const selected=this.data.offers.find(o=>o.id===this.offerId)
-    this.setData({originalOrder:null,proposalId:null,reservationLockId:null,eligibleReservations:this.forOffer(selected,this.data.reservations),selected,summary:priceSummary(selected,1),quantity:'1',agreed:false,error:''})
+    this.setData({originalOrder:null,rulesOpen:false,offersOpen:false,proposalId:null,reservationLockId:null,eligibleReservations:this.forOffer(selected,this.data.reservations),selected,summary:priceSummary(selected,1),quantity:'1',agreed:false,error:''},()=>wx.pageScrollTo({scrollTop:0,duration:180}))
+  },
+  toggleRules(){this.setData({rulesOpen:!this.data.rulesOpen})},
+  toggleOffers(){this.setData({offersOpen:!this.data.offersOpen})},
+  coverFailed(event){this.setData({failedCover:event.currentTarget.dataset.src})},
+  stepQuantity(event){
+    const {selected,quantity,busy,proposalId,reservationLockId}=this.data
+    if(!selected || busy || proposalId)return
+    const next=Number(quantity)+Number(event.currentTarget.dataset.delta)
+    if(!Number.isSafeInteger(next) || next<1 || next>selected.remaining+(reservationLockId?1:0))return
+    this.setData({quantity:String(next),summary:priceSummary(selected,next)})
   },
   quantity(event){this.setData({quantity:event.detail.value,summary:priceSummary(this.data.selected,event.detail.value)})},
   agree(event){this.setData({agreed:event.detail.value.includes('yes')})},
@@ -124,13 +136,20 @@ Page({
     }catch(e){if(this.currentVisit(visit))this.setData({error:e.message||'请在我的门票中核对原单'})}
     finally{await this.refresh();this.setData({busy:false})}
   },
-  async withdraw(event){
-    if(this.data.busy)return
-    this.setData({busy:true,error:''})
-    const visit=this.visit
-    const answer=await new Promise(resolve=>wx.showModal({title:'撤回退票申请',content:'已补收的菜款须退回原收款方式后才解冻本票积分。',success:resolve,fail:()=>resolve({confirm:false})}))
-    if(!answer.confirm || !this.currentVisit(visit)){this.setData({busy:false});return}
-    try{await api.withdrawTicketRefund(event.currentTarget.dataset.ticket);await this.refresh()}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+  contactStoreForTicket(event){
+    const {order:orderId,ticket:ticketId}=event.currentTarget.dataset
+    const order=this.data.mine.find(item=>item.registrationPublicId===orderId)
+    const ticket=order?.tickets.find(item=>item.id===ticketId)
+    if(!order || (ticketId && !ticket))return
+    const contact=String(order.purchaseTerms?.serviceContact || order.purchaseContact || '')
+    const phone=contact.replace(/[\s()（）－-]/g,'')
+    const reference=[order.time,order.name,'购票单号 '+orderId,ticket?'第 '+ticket.number+' 张／共 '+order.quantity+' 张':'未出票',ticket?'票号 '+ticket.id:''].filter(Boolean).join('\n')
+    wx.showActionSheet({itemList:['复制购票信息',/^\+?\d{7,15}$/.test(phone)?'拨打本场客服电话':'查看门店联系方式'],success:res=>{
+      if(!this.visible || !this.data.mine.some(item=>item.registrationPublicId===orderId))return
+      if(res.tapIndex===0)wx.setClipboardData({data:reference})
+      else if(/^\+?\d{7,15}$/.test(phone))wx.makePhoneCall({phoneNumber:phone})
+      else wx.navigateTo({url:'/pages/profile-contact/index'})
+    }})
   },
   async changeShow(event){
     if(this.data.busy)return
@@ -165,18 +184,6 @@ Page({
       await this.refresh()
       this.setData({error:e.message||'请在原票核对最新补款明细'})
     }finally{this.setData({busy:false})}
-  },
-  async refund(event){
-    if(this.data.busy)return
-    const {order,ticket}=event.currentTarget.dataset
-    this.setData({busy:true,error:''})
-    const visit=this.visit
-    const answer=await new Promise(resolve=>wx.showModal({title:ticket?'申请退这张票':'申请退回未出票款',editable:true,placeholderText:'填写退票原因',success:resolve,fail:()=>resolve({confirm:false})}))
-    if(!answer.confirm || !this.currentVisit(visit)){this.setData({busy:false});return}
-    const reason=String(answer.content||'').trim()
-    if(reason.length<2){this.setData({busy:false,error:'请填写至少两个字的退票原因'});return}
-    try{await api.refundTableTicket(order,ticket,reason);await this.refresh()}
-    catch(e){this.setData({error:e.message||'请核对原退票申请'})}finally{this.setData({busy:false})}
   },
   async resume(event){
     if(this.data.busy)return

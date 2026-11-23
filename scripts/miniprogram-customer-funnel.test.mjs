@@ -288,11 +288,9 @@ test('activity cards are horizontal brand-green surfaces and profile actions exp
   assert.equal((profileView.match(/class="metric-icon"/g) || []).length, 3)
   assert.match(profileView, /class="service-chip__icon"/)
   assert.match(profileView, /bindtap="openSuperhighService"/)
-  assert.match(profileView, /已报名的超嗨活动/)
-  assert.match(profileLogic, /activityRegistrationViews\(await getActivityRegistrations\(\)\)/)
-  assert.match(profileLogic, /selector: '#registered-activities'/)
-  assert.match(profileLogic, /当前不会跳转到活动列表/)
-  assert.match(profileLogic, /wx\.switchTab\(\{ url: '\/pages\/community\/index' \}\)/)
+  assert.doesNotMatch(profileView, /已报名的超嗨活动|registered-activities/)
+  assert.doesNotMatch(profileLogic, /getActivityRegistrations|getActivityRegistrationPayment/)
+  assert.match(profileLogic, /pages\/profile-activities\/index/)
   assert.match(profileStyle, /\.metric-icon\s*\{[^}]*border-radius:\s*50%/)
   assert.match(profileStyle, /\.member-content-card\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*row[^}]*background:\s*linear-gradient\(145deg, #315d46, #214635/)
 })
@@ -661,7 +659,7 @@ test('Superhigh activity access invites non-members to join with native WeChat p
   assert.match(termsLogic, /'mini_community'/)
   assert.match(repository, /ACTIVITY_MEMBERSHIP_REQUIRED/)
   assert.match(repository, /才可查看和报名超嗨活动/)
-  assert.match(profileLogic, /openCommunity\(event\)\s*\{\s*if \(!this\.requireMembership\(\)\) return\s+const activityId[\s\S]*?wx\.navigateTo/)
+  assert.match(profileLogic, /if \(!this\.requireMembership\('superhigh'\)\) return/)
   assert.doesNotMatch(profileLogic, /if \(!this\.requireMembership\(\)\) return wx\.navigateTo/)
 })
 
@@ -828,7 +826,7 @@ test('customer menu categories come from the editable backend hierarchy and reve
   assert.match(orderLogic, /categoryParentCode/)
   assert.match(orderLogic, /categoryParentName/)
   assert.match(orderLogic, /topCategorySortOrder/)
-  assert.match(orderLogic, /function menuCategoryState\(products, selectedTopCategory, selectedSubcategory, connected = false\)/)
+  assert.match(orderLogic, /function menuCategoryState\(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = \[\]\)/)
   assert.doesNotMatch(orderLogic, /code: 'recommendation', name: '今夜推荐'|includeRecommendations/)
   assert.match(orderLogic, /const leadingCategories = \[\{ code: 'all', name: '全部'/)
   assert.match(orderLogic, /selectSubcategory\(event\)/)
@@ -1220,7 +1218,7 @@ test('WeChat community loads actual activities without Intl or a performance dep
     Page(value){page=value;page.setData=patch=>Object.assign(page.data,patch)},
     require(name){ if (name === './format') return actualMiniFormat;
       if(name.endsWith('/api'))return {
-        getActivities:async()=>{if(fail)throw new Error('Intl is not defined');return [activity]},
+        getTableTicketOffers:async()=>[],getActivities:async()=>{if(fail)throw new Error('Intl is not defined');return [activity]},
         getActivityRegistrations:async()=>[{activityPublicId:'community-test',status:'confirmed'}],
         getMiniBootstrap:async()=>({membership:{memberNo:'test'},membershipTerms:{version:1}}),
         getReservationPerformances:async()=>{performanceCalls++;return []},
@@ -1246,7 +1244,7 @@ test('WeChat community loads actual activities without Intl or a performance dep
   const template=await read('miniprogram/pages/community/index.wxml')
   assert.doesNotMatch(template,/ops-section|openPerformances|openReservations|openOrder|今晚现场|今晚菜单与套餐/)
   assert.match(template,/wx:elif="\{\{error\}\}"[^>]*action-text="重新加载"[^>]*bindaction="load"/)
-  assert.match(template,/wx:if="\{\{!activities.length\}\}"[^>]*type="empty"/)
+  assert.match(template,/wx:if="\{\{!activities.length && !ticketOffers.length\}\}"[^>]*type="empty"/)
 })
 
 test('WeChat customer errors hide JavaScript reference failures while preserving business messages',async()=>{

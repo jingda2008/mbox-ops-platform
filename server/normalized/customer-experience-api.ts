@@ -5,7 +5,6 @@ import {confirmTabPoints} from './existing-tab-points.js'
 import {decideMove} from './table-ticket-reschedule.js'
 import {confirmBuyerUse} from './table-ticket-correction.js'
 import {memberTicketProposals,memberTicketReservations} from './table-ticket-purchase.js'
-import {decideTicketCase} from './table-ticket-refund.js'
 import {consentTicketDining} from './table-ticket-dining.js'
 import {registerActivityCustomerRefundRoutes} from './activity-customer-refund-api.js'
 import {ActivityServiceError} from './activity-service-repository.js'
@@ -555,8 +554,15 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post<{Params:{id:string}}>('/public/mini/table-tickets/:id/withdraw',async(request,reply)=>handle(reply,async()=>{
     const ctx=await options.resolvePublicContext(request)
     if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(request.params.id))throw new CustomerExperienceRequestError('请核对原票号')
-    const result=await options.transactions.run(ctx.scope,tx=>decideTicketCase(tx,request.params.id,{customer:ctx.customerId},'cancelled','顾客从原票撤回本次退票'))
-    return reply.send({data:result})
+    const contact=await options.transactions.run(ctx.scope,async tx=>(await tx.query<{phone:string}>(`SELECT e.service_contact AS phone
+      FROM mbox.table_tickets k JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
+      JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(k.tenant_id,k.store_id,k.registration_id)
+      JOIN mbox.table_ticket_offers o ON(o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
+      JOIN mbox.table_ticket_event_terms e ON(e.tenant_id,e.store_id,e.id)=(o.tenant_id,o.store_id,o.event_terms_id)
+      WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3 AND
+        mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$4)`,
+      [ctx.scope.tenantId,ctx.scope.storeId,request.params.id,ctx.customerId])).rows[0],{readOnly:true})
+    throw new CustomerExperienceRequestError('撤回申请请联系门店。'+(contact?.phone||'联系方式见小程序「我的 → 联系我们」。'),'TICKET_CONTACT_STORE',409)
   }))
   app.get('/public/mini/table-ticket-reservations',async(request,reply)=>handle(reply,async()=>{
     const ctx=await options.resolvePublicContext(request)
@@ -591,14 +597,14 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     const ctx=await options.resolvePublicContext(request)
     return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>memberTicketProposals(tx,ctx.customerId),{readOnly:true})})
   }))
-  app.get('/public/mini/table-ticket-offers',async(request,reply)=>handle(reply,async()=>{
+  app.get<{Querystring:{channel?:string}}>('/public/mini/table-ticket-offers',async(request,reply)=>handle(reply,async()=>{
     const scope=options.publishedContentScope??(await options.resolvePublicContext(request)).scope
-    return reply.header('cache-control','no-store').send({data:await options.service.tableTicketOffers(scope)})
+    return reply.header('cache-control','no-store').send({data:await options.service.tableTicketOffers(scope,request.query.channel==='community')})
   }))
   app.get('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
     const ctx=await options.resolvePublicContext(request)
     const rows=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`
-      SELECT r.public_id AS "registrationPublicId",o.name,p.quantity,p.starts_at::text AS "startsAt",p.ends_at::text AS "endsAt",
+      SELECT r.public_id AS "registrationPublicId",o.name,original_terms.service_contact AS "purchaseContact",p.quantity,p.starts_at::text AS "startsAt",p.ends_at::text AS "endsAt",
         mbox.unissued_late_ticket_payment(r.tenant_id,r.store_id,r.payment_id) AS "lateUnissued",
         (SELECT f.status FROM mbox.refunds f WHERE(f.tenant_id,f.store_id,f.payment_id)=(r.tenant_id,r.store_id,r.payment_id) ORDER BY f.created_at DESC,f.id DESC LIMIT 1) AS "cashRefundStatus",
         EXISTS(SELECT 1 FROM mbox.refunds f WHERE (f.tenant_id,f.store_id,f.payment_id)=(r.tenant_id,r.store_id,r.payment_id) AND f.status NOT IN('cancelled','rejected')) AS "cashRefundPending",
@@ -629,6 +635,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
           LEFT JOIN mbox.tables tab ON (tab.tenant_id,tab.store_id,tab.id)=(l.tenant_id,l.store_id,mbox.ticket_current_table(l.tenant_id,l.store_id,l.id))
           WHERE (k.tenant_id,k.store_id,k.registration_id)=(p.tenant_id,p.store_id,p.registration_id)),'[]'::jsonb) tickets
       FROM mbox.table_ticket_purchases p JOIN mbox.table_ticket_offers o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
+      LEFT JOIN mbox.table_ticket_event_terms original_terms ON(original_terms.tenant_id,original_terms.store_id,original_terms.id)=(o.tenant_id,o.store_id,o.event_terms_id)
       JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
       WHERE p.tenant_id=$1 AND p.store_id=$2 AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$3)
       ORDER BY r.created_at DESC`,[ctx.scope.tenantId,ctx.scope.storeId,ctx.customerId])).rows,{readOnly:true})
@@ -678,6 +685,26 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   }))
 
   app.get<{Params:{registrationPublicId:string}}>('/public/mini/activity-registrations/:registrationPublicId/service-code',async(request,reply)=>handle(reply,async()=>{reply.header('Cache-Control','private, no-store');const context=await options.resolvePublicContext(request);return reply.send({data:await options.service.activityServiceCode(context,publicId(request.params.registrationPublicId))})}))
+  app.get<{ Querystring: { id?: string; before?: string } }>('/public/mini/activity-registration-history', async (request, reply) => handle(reply, async () => {
+    reply.header('Cache-Control', 'private, no-store')
+    const context = await options.resolvePublicContext(request)
+    const { id, before } = request.query
+    const rows = await options.service.activityRegistrations(context, {
+      id: id === undefined ? undefined : publicId(id),
+      before: before === undefined ? undefined : publicId(before),
+    })
+    const items = rows.slice(0, 20).map(row => {
+      const { publicId, activityTitle, startsAt, endsAt, status, activityPackage } = row
+      const summary = { publicId, activityTitle, startsAt, endsAt, status, activityPackage }
+      if (!id) return summary
+      const { activityPublicId, liveDetailAvailable, location, activityDescription, refundSummary, purchasedItems,
+        partySize, registeredAt, serviceVersion, totalFeeAmountMinor, paidAmountMinor, paymentStatus, note } = row
+      return { ...summary, activityPublicId, liveDetailAvailable, location, activityDescription, refundSummary,
+        purchasedItems, partySize, registeredAt, serviceVersion, totalFeeAmountMinor, paidAmountMinor, paymentStatus, note }
+    })
+    return reply.send({ data: { items, nextCursor: rows.length > 20 ? rows[19]!.publicId : null } })
+  }))
+
   app.get('/public/mini/activity-registrations', async (request, reply) => handle(reply, async () => {
     reply.header('Cache-Control', 'private, no-store, max-age=0').header('Pragma', 'no-cache')
     const context = await options.resolvePublicContext(request)

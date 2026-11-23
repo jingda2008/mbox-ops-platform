@@ -160,8 +160,7 @@ export async function ticketStatement(tx:ScopedTransaction,id:string){
     LEFT JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(c.tenant_id,c.store_id,c.payment_id)
     LEFT JOIN mbox.refunds r ON(r.tenant_id,r.store_id,r.id)=(c.tenant_id,c.store_id,c.return_refund_id)
     WHERE (f.tenant_id,f.store_id,f.ticket_id)=($1,$2,$3) AND c.superseded_at IS NULL ORDER BY c.created_at,c.id`,scope)).rows
-  const review=refunds.find(row=>row.status==='review')
-  const originalDishes=review?(await ticketDiningLines(tx,review.id)).filter(line=>line.usedMinor>0):[]
+  const originalDishes=(await ticketDiningLines(tx,id,'ticket')).filter(line=>line.usedMinor>0)
   return {ticket,points,refunds,dining,originalDishes}
 }
 

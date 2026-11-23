@@ -23,12 +23,13 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   app=Fastify();await registerActivityCustomerRefundRoutes(app,{transactions:runner,resolvePublicContext:req=>({scope,customerId:req.headers['x-other']?other:customer,businessDate:'2026-10-22',tableSessionId:null,actorRef:'self-test'}),handle:async(reply,action)=>{try{return await action()}catch(e){const error=e as {message:string;code?:string;statusCode?:number};return reply.code(error.statusCode??409).send({error:{code:error.code??'CONFLICT',message:error.message}})}}});await app.ready()
  })
  afterAll(async()=>{await app?.close();await runtime?.end();await admin?.end()})
- async function fixture(parent?:{activity:string;id:string},used=false,options:{pending?:boolean;legacy?:boolean}={}){
+ async function fixture(parent?:{activity:string;id:string},used=false,options:{pending?:boolean;legacy?:boolean;ticket?:boolean}={}){
   const activity=parent?.activity??randomUUID(),id=randomUUID(),payment=randomUUID()
+  const membership=options.ticket?(await admin.query("INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no) VALUES($1,$2,$3,$4) RETURNING id",[scope.tenantId,scope.storeId,customer,'MBX-'+id.slice(0,12).toUpperCase()])).rows[0].id:null
   if(!parent)await admin.query(`INSERT INTO mbox.community_activities(id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,assembly_location,capacity,fee_amount_minor,registration_payment_mode,payment_rule_text,safety_policy_version,safety_acknowledgement_text,safety_requirements,refund_policy_version,refund_policy_summary,activity_details,included_items,participation_requirements,contact_instructions,status,published_at,created_by_employee_id,approved_by_employee_id)
     VALUES($1::uuid,$2,$3,$1::text,'member_night','退款测试活动','保留顾客本人申请',clock_timestamp()+interval '1 hour',clock_timestamp()+interval '3 hours','MBOX',30,1000,'full_required','须全额预付','refund-safety-v1','已阅读安全要求',ARRAY['注意安全'],'refund-policy-v1','未使用可申请审核','退款测试详情，整份申请保留真实顾客，原付款进入人工审核。',ARRAY['活动入场'],ARRAY['准时到场'],'店内核对','published',clock_timestamp(),$4,$4)`,[activity,scope.tenantId,scope.storeId,employee])
-  await admin.query(`INSERT INTO mbox.community_activity_registrations(id,tenant_id,store_id,public_id,activity_id,customer_id,party_size,status,payment_choice,payment_status,fee_amount_minor,amount_due_minor,paid_amount_minor,currency,contact_snapshot,safety_acknowledgement,idempotency_key,refund_policy_snapshot,payment_due_at,seat_hold_expires_at,requested_payment_choice,requested_payment_method,requested_amount_due_minor,acknowledged_safety_policy_version,acknowledged_refund_policy_version,terms_acknowledged_at,terms_acknowledgement_source,service_version,reserved_seats,max_participants,includes_admission,purchase_kind,parent_registration_id)
-    VALUES($1::uuid,$2,$3,$1::text,$4,$5,1,'payment_pending','full','pending',1000,1000,0,'CNY',NULL,'{"acknowledged":true,"policyVersion":"refund-safety-v1"}',$1::text,'{"policyVersion":"refund-policy-v1","summary":"未使用可申请审核"}',clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '15 minutes','full','jsapi',1000,'refund-safety-v1','refund-policy-v1',clock_timestamp(),'mini_program',3,$6,1,$7,$8,$9)`,[id,scope.tenantId,scope.storeId,activity,customer,parent?0:1,!parent,parent?'single_dish':'admission_package',parent?.id??null])
+  await admin.query(`INSERT INTO mbox.community_activity_registrations(id,tenant_id,store_id,public_id,activity_id,customer_id,party_size,status,payment_choice,payment_status,fee_amount_minor,amount_due_minor,paid_amount_minor,currency,contact_snapshot,safety_acknowledgement,idempotency_key,refund_policy_snapshot,payment_due_at,seat_hold_expires_at,requested_payment_choice,requested_payment_method,requested_amount_due_minor,acknowledged_safety_policy_version,acknowledged_refund_policy_version,terms_acknowledged_at,terms_acknowledgement_source,service_version,reserved_seats,max_participants,includes_admission,purchase_kind,parent_registration_id,membership_id)
+    VALUES($1::uuid,$2,$3,$1::text,$4,$5,1,'payment_pending','full','pending',1000,1000,0,'CNY',NULL,'{"acknowledged":true,"policyVersion":"refund-safety-v1"}',$1::text,'{"policyVersion":"refund-policy-v1","summary":"未使用可申请审核"}',clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '15 minutes','full','jsapi',1000,'refund-safety-v1','refund-policy-v1',clock_timestamp(),'mini_program',$10,$6,$11,$7,$8,$9,$12)`,[id,scope.tenantId,scope.storeId,activity,customer,parent?0:1,!parent,options.ticket?null:parent?'single_dish':'admission_package',parent?.id??null,options.ticket?4:3,options.ticket?null:1,membership])
   if (options.legacy) await admin.query('UPDATE mbox.community_activity_registrations SET service_version=1 WHERE id=$1',[id])
   if (options.pending) {
    await admin.query("INSERT INTO mbox.payments(id,tenant_id,store_id,payable_kind,activity_registration_id,activity_registration_cycle,public_id,provider,method,amount_minor,currency,status) VALUES($1::uuid,$2,$3,'activity_registration',$4,1,$1::text,'postar','jsapi',1000,'CNY','created')",[payment,scope.tenantId,scope.storeId,id])
@@ -56,6 +57,14 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
    await new PaymentRepository(tx).syncActivityRegistrationRefundStatus(paymentId)
   })
  }
+ it('旧版顾客端请求整桌票退款时只返回门店联系方式',async()=>{
+  const f=await fixture(undefined,false,{ticket:true,pending:true})
+  const result=await post(f.id)
+  expect(result.json().error).toMatchObject({code:'TICKET_CONTACT_STORE'})
+  expect(result.json().error.message).toContain('联系门店')
+  expect((await post(f.id,randomUUID(),{'x-other':'yes'})).statusCode).toBe(404)
+  expect((await admin.query('SELECT id FROM mbox.refunds WHERE payment_id=$1',[f.payment])).rowCount).toBe(0)
+ })
  it('keeps the real requester, replays the original receipt, and appears in the existing cashier queue',async()=>{
   const f=await fixture(),key=randomUUID();const first=await post(f.id,key);expect(first.statusCode,first.body).toBe(200);expect(first.json().data).toMatchObject({status:'requested',amountMinor:1000})
   const replay=await post(f.id,key);expect(replay.json().meta.replayed).toBe(true)

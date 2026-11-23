@@ -67,6 +67,22 @@ const database = process.env.TEST_NORMALIZED_DATABASE_URL;
         id: string;
         version: number;
     }, quantity: number, extra: Partial<ActivityProductionCommand> = {}, key = randomUUID()) => run(repo => repo.production({ action, lines: [{ lineId: line.id, expectedVersion: line.version, quantity }], ...extra }, key, action === 'take' || action === 'undo_take' ? null : employee, { kind: 'shared_pickup_device', id: 'test-device' }));
+    it('reads the original paid registration after the event ends and disappears from discovery',async()=>{
+      const past=randomUUID()
+      await admin.query(`INSERT INTO mbox.community_activities SELECT (jsonb_populate_record(NULL::mbox.community_activities,
+        to_jsonb(a)||jsonb_build_object('id',$2::uuid,'public_id',$2::text,'status','completed',
+          'starts_at',now()-interval '2 days','ends_at',now()-interval '1 day'))).* FROM mbox.community_activities a WHERE a.id=$1`,[activity,past])
+      const first=await registration([],{activityId:past}),second=await registration([],{activityId:past})
+      await runner.run(scope,async tx=>{
+        const repo=new CustomerExperienceRepository(tx,true)
+        expect((await repo.publicActivities(customer)).some(row=>row.publicId===past)).toBe(false)
+        for(const receipt of [first,second]){
+          const rows=await repo.publicActivityRegistrations(customer,{id:receipt.id})
+          expect(rows).toMatchObject([{publicId:receipt.id,activityPublicId:past,partySize:1,paidAmountMinor:5000,liveDetailAvailable:false}])
+          expect(Date.parse(rows[0]!.endsAt!)).toBeLessThan(Date.now())
+        }
+      })
+    })
     it('requires a dedicated credential and leaves member lookup read-only', async () => { const r = await registration([item(await product())]); await expect(run(repo => repo.scan(r.id))).rejects.toMatchObject({ code: 'ACTIVITY_CREDENTIAL_INVALID' }); const view = await run(repo => repo.scan(r.code)); expect(view.meal).toBeNull(); expect(view.admittedCount).toBe(0); await expect(door(r, 'admit', { credential: undefined, arrivedCount: 1 })).rejects.toMatchObject({ code: 'ACTIVITY_CREDENTIAL_INVALID' }); });
     it('separates arrival batches from food and deduplicates the original door command', async () => { const r = await registration([item(await product())]), key = randomUUID(); const first = await door(r, 'admit', { arrivedCount: 2 }, key), again = await door(r, 'admit', { arrivedCount: 2 }, key); expect(again).toEqual(first); expect(first.meal).toBeNull(); expect(first.remainingAdmission).toBe(3); await expect(door(r, 'admit', { arrivedCount: 4 })).rejects.toMatchObject({ code: 'ACTIVITY_ADMISSION_EXCEEDED' }); expect((await door(r, 'admit', { arrivedCount: 3 })).admittedCount).toBe(5); });
     it('serializes competing arrival batches without overselling the same allowance', async () => { const r = await registration(); const results = await Promise.allSettled([door(r, 'admit', { arrivedCount: 4 }), door(r, 'admit', { arrivedCount: 4 })]); expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1); expect((await run(repo => repo.view(r.id))).admittedCount).toBe(4); });
@@ -142,6 +158,11 @@ const database = process.env.TEST_NORMALIZED_DATABASE_URL;
     it('sells a meal-only extra at its configured price with no extra admission after registration closes',async()=>{
       const pkg=await salePackage(),parent=await buy(pkg.id,2);await pay(parent);
       await admin.query('UPDATE mbox.community_activities SET registration_closed_at=clock_timestamp() WHERE id=$1',[activity]);
+      const history=(owner:string,query:{id?:string;before?:string})=>runner.run(scope,tx=>new CustomerExperienceRepository(tx,true).publicActivityRegistrations(owner,query))
+      expect(await history(customer,{id:parent.publicId})).toMatchObject([{publicId:parent.publicId,liveDetailAvailable:false,partySize:2,
+        paidAmountMinor:5000,activityPackage:{name:'整份套餐'},purchasedItems:[{quantity:2}]}])
+      expect(await history(randomUUID(),{id:parent.publicId})).toEqual([])
+      expect((await history(customer,{before:parent.publicId})).some(row=>row.publicId===parent.publicId)).toBe(false)
       try{const meal=await buy(pkg.id,3,{purchaseKind:'meal_package',parentRegistrationPublicId:parent.publicId});expect(meal.totalFeeAmountMinor).toBe(3000);const r=await run(repo=>repo.registration(meal.publicId));expect([r.reserved_seats,r.includes_admission,r.purchase_kind]).toEqual([0,false,'meal_package']);await expect(buy(pkg.id,1)).rejects.toMatchObject({code:'ACTIVITY_UNAVAILABLE'});}finally{await admin.query('UPDATE mbox.community_activities SET registration_closed_at=NULL WHERE id=$1',[activity])}
     });
     it('uses a meal-only package own price and prevents forging admission or a missing meal-only price',async()=>{

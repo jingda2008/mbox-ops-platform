@@ -1,3 +1,4 @@
+import {beijingDateTimeIso,beijingDateTimeInput} from './membership-workflow'
 import {TableTicketReception} from './TableTicketReception'
 import {TableTicketOffers} from './TableTicketOffers'
 import {ActivityRefundReviewActions} from './ActivityRefundReviewActions'
@@ -17,6 +18,7 @@ type ActivityPaymentMode = 'none' | 'deposit_optional' | 'deposit_required' | 'f
 type RegistrationStatus = 'reserved' | 'payment_pending' | 'confirmed' | 'waitlisted' | 'cancelled' | 'checked_in' | 'no_show' | 'refunded'
 
 interface ActivitySummary {
+  ticketOnly?:boolean
   registrationClosedAt?:string|null
   publicId: string; title: string; status: ActivityStatus; startsAt: string; endsAt: string
   assemblyLocation: string; capacity: number; occupiedSeats: number; waitlistedSeats: number
@@ -24,6 +26,7 @@ interface ActivitySummary {
 }
 
 interface ActivityDetail extends ActivitySummary {
+  ticketOnly?:boolean
   mealServiceStartsAt: string | null; mealServiceEndsAt: string | null; addonEndsAt: string | null; addonProductIds: string[]
   kind: string; summary: string; coverUrl: string | null; depositAmountMinor: number
   feeBasis: 'per_person' | 'per_registration'; paymentDeadlineMinutes: number; paymentRuleText: string
@@ -67,7 +70,11 @@ interface Registration {
 
 interface OperationsDetail { activity: ActivityDetail; registrations: Registration[] }
 
+interface TicketRow {areaId:string;name:string;price:string;points:string}
+
 interface DraftForm {
+  ticketRows?:TicketRow[]
+  ticketOnly?:boolean
   mealServiceStartsAt: string; mealServiceEndsAt: string; addonEndsAt: string; addonProductIds: string[]
   kind: string; title: string; summary: string; coverUrl: string; startsAt: string; endsAt: string
   assemblyLocation: string; capacity: string; feeYuan: string; depositYuan: string
@@ -91,7 +98,7 @@ interface PackageForm {
 const memberLevels = [['member','普通会员'],['silver','银卡'],['gold','金卡']] as const
 const lifecycleStages = [['new','新会员'],['active','活跃'],['high_value','高价值'],['at_risk','有流失风险'],['dormant','沉睡']] as const
 
-export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClient; auth: StaffAuthView }) {
+export function ActivityOperationsPanel({ api, auth, ticketCatalog=false }: {ticketCatalog?:boolean; api: NormalizedApiClient; auth: StaffAuthView }) {
   const { confirmAction } = useConfirmationDialog()
   const canManage = auth.permissions.includes('community.activity.manage')
   const canPublish = auth.permissions.includes('community.activity.publish')
@@ -105,6 +112,19 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     return { activity: query.get('activity'), registration: query.get('registration'), reception: query.get('ticketReception') === '1' }
   })
   const [ticketInbox,setTicketInbox]=useState<{activityId:string;title:string;waiting:number}[]>([])
+  const [reviewInbox,setReviewInbox]=useState<{activityId:string;title:string}[]>([])
+  useEffect(()=>{
+    if(!canPublish)return
+    let active=true
+    const read=()=>api.getEndpoint<{data:typeof reviewInbox}>('/api/staff/activity-operations/ticket-review-inbox')
+      .then(r=>{if(active && Array.isArray(r.data))setReviewInbox(r.data)}).catch(()=>{})
+    void read()
+    const timer=window.setInterval(()=>void read(),20000)
+    return ()=>{active=false;window.clearInterval(timer)}
+  },[api,canPublish])
+  const [ticketAreas,setTicketAreas]=useState<{id:string;name:string}[]>([])
+  const [areasError,setAreasError]=useState('')
+  const [areaRetry,setAreaRetry]=useState(0)
   const canReceiveTickets=canManage || auth.permissions.includes('community.activity.verify')
   useEffect(()=>{
     if(!canReceiveTickets)return
@@ -118,15 +138,30 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     const timer=window.setInterval(()=>void load(),20000)
     return ()=>{active=false;window.clearInterval(timer)}
   },[api,canReceiveTickets])
-  const [expanded, setExpanded] = useState(!!scanTarget.activity || scanTarget.reception)
+  const [expanded, setExpanded] = useState(ticketCatalog || !!scanTarget.activity || scanTarget.reception)
   const [scanOnly, setScanOnly] = useState(!!scanTarget.registration)
+  const listEndpoint='/api/staff/activity-operations'+(ticketCatalog?'?catalog=tickets':'')
   const [activities, setActivities] = useState<ActivitySummary[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<OperationsDetail | null>(null)
   const [draft, setDraft] = useState<DraftForm | null>(null)
+  const creatingTickets=!!draft?.ticketOnly && detail?.activity.publicId===''
+  useEffect(()=>{
+    if(!creatingTickets || !canManage)return
+    let active=true
+    setAreasError('')
+    api.getEndpoint<{data:{id:string;name:string}[]}>('/api/staff/activity-operations/ticket-areas')
+      .then(r=>{if(active)setTicketAreas(r.data)}).catch(e=>{if(active)setAreasError(message(e,'读取可售桌区失败'))})
+    return ()=>{active=false}
+  },[api,creatingTickets,canManage,areaRetry])
   const [reason, setReason] = useState('')
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [busy, setBusy] = useState('')
+  const detailPanel=useRef<HTMLDivElement>(null)
+  const scrollToDetail=useRef(false)
+  useEffect(()=>{
+    if(detail && scrollToDetail.current){scrollToDetail.current=false;detailPanel.current?.scrollIntoView({block:'start'})}
+  },[detail])
   const closeInFlight=useRef(false)
   const detailGeneration=useRef(0)
   useEffect(()=>()=>{detailGeneration.current++},[api])
@@ -159,7 +194,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     let current = true
     setPhase('loading')
     setNotice('')
-    void api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations').then((response) => {
+    void api.getEndpoint<{ data: unknown }>(listEndpoint).then((response) => {
       if (!current) return
       setActivities(activityList(response.data))
       setPhase('ready')
@@ -169,9 +204,9 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       setPhase('error')
     })
     return () => { current = false }
-  }, [api, expanded])
+  }, [api, expanded,listEndpoint])
   useEffect(() => {
-    if (!expanded || !canManage) return
+    if (!expanded || !canManage || ticketCatalog) return
     let current = true
     setComponentCatalogState('loading')
     void api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations/component-catalog').then((response) => {
@@ -183,24 +218,24 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       setComponentCatalogState('error')
     })
     return () => { current = false }
-  }, [api, canManage, expanded])
+  }, [api, canManage, expanded,ticketCatalog])
   useEffect(()=>{
-    if(!expanded||!canManage)return
+    if(!expanded||!canManage||ticketCatalog)return
     let current=true
     void api.getEndpoint<{data:Array<{id:string;name:string;station:string}>}>('/api/staff/activity-operations/product-catalog')
       .then(response=>{if(current){setProductCatalog(response.data);setProductCatalogError(false)}})
       .catch(()=>{if(current)setProductCatalogError(true)})
     return()=>{current=false}
-  },[api,canManage,expanded])
+  },[api,canManage,expanded,ticketCatalog])
 
-  async function loadActivities() {
+  async function loadActivities(detailToReload=selected) {
     setPhase('loading'); setNotice('')
     try {
-      const response = await api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')
+      const response = await api.getEndpoint<{ data: unknown }>(listEndpoint)
       const loaded = activityList(response.data)
       setActivities(loaded)
       setPhase('ready')
-      if (selected && loaded.some((activity) => activity.publicId === selected)) await loadDetail(selected)
+      if (detailToReload && loaded.some((activity) => activity.publicId === detailToReload)) await loadDetail(detailToReload)
     } catch (error) {
       setNotice(message(error, '活动运营数据读取失败')); setPhase('error')
     }
@@ -252,7 +287,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       setSelected(saved.publicId)
       setDetail({ activity: saved, registrations: [] })
       setDraft(draftFromActivity(saved))
-      await loadActivities()
+      await loadActivities(null)
       setNotice(isNew
         ? '活动草稿已建立并读回。请由另一位有发布权限的人员复核后发布。'
         : '活动草稿已保存并读回。发布后这些客户承诺将锁定。')
@@ -371,7 +406,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
     finally{setBusy('')}
   }
 
-  function startCreate() {
+  function startCreate(ticketOnly=false,copied?:DraftForm) {
     if(busy||closeInFlight.current)return
     detailGeneration.current++
     setRevealedContacts({});setReason('')
@@ -383,12 +418,35 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
         if (typeof value !== 'object' || value === null || !('key' in value) || typeof value.key !== 'string' || !('draft' in value) || typeof value.draft !== 'object' || value.draft === null || !('title' in value.draft) || typeof value.draft.title !== 'string') throw new Error('待核对的活动草稿无法读取，请联系管理者核对原记录')
         createAttempt.current = value as { key: string; draft: DraftForm }
         nextDraft = createAttempt.current.draft; setCreateUncertain(true)
-      } else { nextDraft = emptyDraft(); createAttempt.current = null; setCreateUncertain(false) }
+      } else {
+        nextDraft = copied ?? emptyDraft()
+        if(ticketOnly && !copied)Object.assign(nextDraft,{
+          ticketOnly:true,capacity:'',reason:'建立整桌演出场次',paymentRuleText:'按所选整桌票档付款，付款成功后出票。',
+          refundPolicySummary:'退票按购票前展示的本场退票规则办理。',contactInstructions:'门店将联系购票会员确认桌号。',
+        })
+        createAttempt.current = null
+        setCreateUncertain(false)
+      }
     } catch (error) { setNotice(message(error, '无法读取本机草稿，请核对原记录')); return }
+    scrollToDetail.current=true
     setSelected(null)
     setDetail({ activity: draftShell(nextDraft), registrations: [] })
     setDraft(nextDraft)
-    setNotice(createAttempt.current ? '上次建立结果待核对，已恢复原资料。点击核对会沿用原操作，不会另建活动。' : '正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')
+    setNotice(createAttempt.current ? '上次建立结果待核对，已恢复原资料。点击核对会沿用原操作，不会另建活动。' : ticketOnly?'填写场次后可继续选择桌区、票价和赠分。':'正在建立新活动草稿。费用、权益、退款和安全承诺请一次填写完整。')
+  }
+
+  async function copyShow(activity:ActivityDetail){
+    if(busy || !canManage)return
+    setBusy('copy');setNotice('')
+    try{
+      const result=await api.getEndpoint<{data:{status:string;areaId:string;name:string;priceMinor:number;giftPoints:number|null}[]}>('/api/staff/activity-operations/'+encodeURIComponent(activity.publicId)+'/table-tickets')
+      const source=draftFromActivity(activity)
+      startCreate(true,{...emptyDraft(),ticketOnly:true,startsAt:'',endsAt:'',title:source.title,assemblyLocation:source.assemblyLocation,
+        coverUrl:source.coverUrl,activityDetails:source.activityDetails,capacity:source.capacity,safetyRequirements:source.safetyRequirements,
+        refundPolicySummary:source.refundPolicySummary,safetyAcknowledgementText:source.safetyAcknowledgementText,
+        contactInstructions:source.contactInstructions,paymentRuleText:source.paymentRuleText,reason:'复制演出并建立新场次',
+        ticketRows:result.data.filter(r=>r.status==='published').map(r=>({areaId:r.areaId,name:r.name,price:String(r.priceMinor/100),points:String(r.giftPoints??'')}))})
+    }catch(e){setNotice(message(e,'无法复制原场次'))}finally{setBusy('')}
   }
 
   async function stopRegistration(activity:ActivityDetail) {
@@ -442,7 +500,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
       })
       setNotice('活动已由发布人员复核发布，顾客端将按当前承诺展示。')
       await loadDetail(activity.publicId)
-      const response = await api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')
+      const response = await api.getEndpoint<{ data: unknown }>(listEndpoint)
       setActivities(activityList(response.data))
     } catch (error) { setNotice(message(error, '活动没有发布')) }
     finally { setBusy('') }
@@ -474,7 +532,7 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
 
   async function refreshSelected() {
     if (selected) await loadDetail(selected)
-    const response = await api.getEndpoint<{ data: unknown }>('/api/staff/activity-operations')
+    const response = await api.getEndpoint<{ data: unknown }>(listEndpoint)
     setActivities(activityList(response.data))
   }
 
@@ -495,20 +553,31 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
   })
 
   return <section className="activity-operations-panel" aria-label="活动报名运营工作台">
-    {ticketInbox.length>0 && <aside aria-live="polite">{ticketInbox.map(t=><button key={t.activityId} onClick={()=>{setExpanded(true);void loadDetail(t.activityId)}}>{t.title} · {t.waiting} 笔购票待跟进</button>)}</aside>}
+    {reviewInbox.length>0 && <aside aria-label="门票上架待复核">{reviewInbox.map(r=><button key={r.activityId} onClick={()=>{setExpanded(true);void loadDetail(r.activityId)}}>{r.title} · 复核门票上架</button>)}</aside>}
+    {!ticketCatalog && ticketInbox.length>0 && <aside aria-live="polite">{ticketInbox.map(t=><button key={t.activityId} onClick={()=>{setExpanded(true);void loadDetail(t.activityId)}}>{t.title} · {t.waiting} 笔购票待跟进</button>)}</aside>}
     <header>
-      <div><strong>活动报名运营</strong><small>名单、候补、签到、取消与退款状态集中处理；不在此页面伪造支付结果。</small></div>
+      <div><strong>{ticketCatalog?'菜单门票上架':'活动报名运营'}</strong>{!ticketCatalog && <small>名单、候补、签到、取消与退款状态集中处理；不在此页面伪造支付结果。</small>}</div>
       <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => {if(value)setRevealedContacts({});return !value})}>{expanded ? '收起' : '打开工作台'}<ChevronDown size={17} /></button>
     </header>
     {expanded && <>
       {notice && <p className="activity-operations-notice" role="status">{notice}</p>}
-      <div className="activity-operations-toolbar"><span>{activities.length} 个活动</span><div>{canManage && <button type="button" disabled={!!busy} onClick={startCreate}>新建活动草稿</button>}<button type="button" disabled={phase === 'loading'} onClick={() => void loadActivities()}><RefreshCw size={16} />刷新</button></div></div>
+      <div className="activity-operations-toolbar"><span>{ticketCatalog?'选择场次':activities.length+' 个活动'}</span><div>{canManage && <button type="button" disabled={!!busy} onClick={()=>startCreate(true)}>新建门票场次</button>}{canManage && !ticketCatalog && <button type="button" disabled={!!busy} onClick={()=>startCreate()}>新建活动草稿</button>}<button type="button" disabled={phase === 'loading'} onClick={() => void loadActivities()}><RefreshCw size={16} />刷新</button></div></div>
       {phase === 'error' && <button type="button" onClick={() => void loadActivities()}>重新读取</button>}
-      <div className="activity-operations-list">{activities.map((activity) => <button type="button" disabled={!!busy} className={selected === activity.publicId ? 'is-selected' : ''} key={activity.publicId} onClick={() => {if(!closeInFlight.current)void loadDetail(activity.publicId)}}>
+      <div className="activity-operations-list">{activities.map((activity) => <button type="button" disabled={!!busy} className={selected === activity.publicId ? 'is-selected' : ''} key={activity.publicId} onClick={() => {if(!closeInFlight.current){scrollToDetail.current=true;void loadDetail(activity.publicId)}}}>
         <strong>{activity.title}</strong><span>{statusLabel(activity.status)} · {dateText(activity.startsAt)}</span><small>{activity.occupiedSeats}/{activity.capacity} 人 · 候补 {activity.waitlistedSeats} 人</small>
       </button>)}</div>
-      {detail && <div className="activity-operations-detail">
-        {detail.activity.publicId && (canManage || auth.permissions.includes('community.activity.verify')) && <TableTicketReception key={'reception:'+detail.activity.publicId} initiallyOpen={scanTarget.reception} api={api} activityId={detail.activity.publicId} renderContact={contact=>{
+      {detail && <div ref={detailPanel} className="activity-operations-detail">
+        <header><div><strong>{detail.activity.publicId === '' ? '新活动草稿' : detail.activity.title}</strong><small>{dateText(detail.activity.startsAt)} · {detail.activity.assemblyLocation}</small></div><div><em>{statusLabel(detail.activity.status)}</em>{detail.activity.status === 'draft' && !detail.activity.ticketOnly && detail.activity.publicId !== '' && canPublish && <button type="button" disabled={busy === 'publish'} onClick={() => void publishActivity(detail.activity)}>复核并发布</button>}</div></header>
+        {detail.activity.publicId && detail.activity.ticketOnly && canManage && <button type="button" disabled={!!busy} onClick={()=>void copyShow(detail.activity)}>复制为新场次</button>}
+        {detail.activity.publicId && (canReceiveTickets || canPublish) && <TableTicketOffers employeeId={auth.employee.id} activityUpdatedAt={detail.activity.updatedAt}
+          initiallyOpen={(detail.activity.ticketOnly===true || ticketCatalog) && !scanTarget.reception}
+          reviewSummary={`${detail.activity.title}，${dateText(detail.activity.startsAt)} 至 ${dateText(detail.activity.endsAt)}，全场上限 ${detail.activity.capacity} 人`} onPublished={()=>{
+          const id=detail.activity.publicId
+          setActivities(rows=>rows.map(row=>row.publicId===id?{...row,status:'published'}:row))
+          setDetail(current=>current?.activity.publicId===id?{...current,activity:{...current.activity,status:'published'}}:current)
+          setDraft(null)
+        }} key={detail.activity.publicId} api={api} activityId={detail.activity.publicId} canManage={canManage} canPublish={canPublish} canAssist={canReceiveTickets}/>}
+        {!ticketCatalog && detail.activity.publicId && (canManage || auth.permissions.includes('community.activity.verify')) && <TableTicketReception key={'reception:'+detail.activity.publicId} initiallyOpen={scanTarget.reception} api={api} activityId={detail.activity.publicId} renderContact={contact=>{
           const shown=revealedContacts[contact.orderId]
           if(shown)return <a href={'tel:'+shown.value}>{shown.value}（{Math.max(0,Math.ceil((Date.parse(shown.expiresAt)-contactClock)/1000))} 秒后隐藏）</a>
           const version=contact.contactVersionPublicId
@@ -516,24 +585,22 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             <button type="button" disabled={Boolean(busy)} onClick={()=>void revealContact({publicId:contact.orderId,contactVersionPublicId:version,
               status:contact.registrationStatus==='checked_in'?'checked_in':'confirmed',maskedContact:contact.maskedPhone})}>联系购票人 · 查看60秒</button>}</>
         }} canRefund={auth.permissions.includes('refund.request')} canManage={canManage} canApproveRefund={canApproveRefund} canCorrect={auth.permissions.includes('loyalty.adjust.manual')} canApproveCorrection={auth.permissions.includes('loyalty.accrual.approve')}/>}
-        {detail.activity.publicId && (canReceiveTickets || canPublish) && <TableTicketOffers key={detail.activity.publicId} api={api} activityId={detail.activity.publicId} canManage={canManage} canPublish={canPublish} canAssist={canReceiveTickets}/>}
-        <header><div><strong>{detail.activity.publicId === '' ? '新活动草稿' : detail.activity.title}</strong><small>{dateText(detail.activity.startsAt)} · {detail.activity.assemblyLocation}</small></div><div><em>{statusLabel(detail.activity.status)}</em>{detail.activity.status === 'draft' && detail.activity.publicId !== '' && canPublish && <button type="button" disabled={busy === 'publish'} onClick={() => void publishActivity(detail.activity)}>复核并发布</button>}</div></header>
         <div className="activity-operations-metrics"><span><strong>{detail.activity.occupiedSeats}</strong>已占名额</span><span><strong>{detail.activity.waitlistedSeats}</strong>候补人数</span><span><strong>{detail.activity.capacity}</strong>人数上限</span></div>
         {detail.activity.pointsReward > 0 && <p className="activity-operations-warning">历史活动配置了未版本化积分奖励，当前不会自动发放或对顾客展示；发布前必须改为0。</p>}
         {draft && canManage && <details className="activity-draft-editor" open={detail.activity.publicId === ''}><summary>{detail.activity.publicId === '' ? '填写活动草稿' : '编辑草稿'}（发布后修改需重新确认）</summary><form onSubmit={(event) => void saveDraft(event)}>
           <fieldset disabled={busy === 'draft' || createUncertain}><legend>活动与时间</legend>
             <label>活动名称<input required minLength={2} maxLength={120} value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} /></label>
-            <label>活动类型<select value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value)}><option value="member_night">会员音乐夜</option><option value="city_walk">城市漫步</option><option value="hike">徒步</option><option value="camping">露营</option><option value="music_picnic">音乐野餐</option><option value="proposal">求婚活动</option><option value="other">其他</option></select></label>
-            <label className="wide">列表摘要<textarea rows={2} value={draft.summary} onChange={(event) => updateDraft('summary', event.target.value)} /></label>
+            {!draft.ticketOnly && <><label>活动类型<select value={draft.kind} onChange={(event) => updateDraft('kind', event.target.value)}><option value="member_night">会员音乐夜</option><option value="city_walk">城市漫步</option><option value="hike">徒步</option><option value="camping">露营</option><option value="music_picnic">音乐野餐</option><option value="proposal">求婚活动</option><option value="other">其他</option></select></label>
+            <label className="wide">列表摘要<textarea rows={2} value={draft.summary} onChange={(event) => updateDraft('summary', event.target.value)} /></label></>}
             <label className="wide">活动详情<textarea rows={5} value={draft.activityDetails} onChange={(event) => updateDraft('activityDetails', event.target.value)} /></label>
-            <label>开始时间<input type="datetime-local" required value={draft.startsAt} onChange={(event) => updateDraft('startsAt', event.target.value)} /></label>
-            <label>结束时间<input type="datetime-local" required value={draft.endsAt} onChange={(event) => updateDraft('endsAt', event.target.value)} /></label>
+            <label>开始时间<input type="datetime-local" required value={draft.startsAt} onInput={(event) => updateDraft('startsAt', event.currentTarget.value)} /></label>
+            <label>结束时间<input type="datetime-local" required value={draft.endsAt} onInput={(event) => updateDraft('endsAt', event.currentTarget.value)} /></label>
             <label>集合地点<input value={draft.assemblyLocation} onChange={(event) => updateDraft('assemblyLocation', event.target.value)} /></label>
-            <label>人数上限<NumberInputWithUnit inputMode="numeric" min={1} max={1000} unit="人" value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
+            <label>人数上限<NumberInputWithUnit required inputMode="numeric" min={1} max={1000} unit="人" value={draft.capacity} onChange={(event) => updateDraft('capacity', event.target.value)} /></label>
             <label className="wide">封面图片（可选）<input readOnly value={draft.coverUrl} placeholder="请通过下方图片库上传或选择（单张不超过 200KB）" /></label>
             <div className="wide"><MediaAssetPicker api={api} purpose="community_activity" value={draft.coverUrl} onChange={(coverUrl)=>updateDraft('coverUrl',coverUrl)} label="上传活动封面" /></div>
           </fieldset>
-          <fieldset disabled={busy === 'draft' || createUncertain}><legend>费用、权益和客群</legend>
+          {!draft.ticketOnly && <><fieldset disabled={busy === 'draft' || createUncertain}><legend>费用、权益和客群</legend>
             <label>计价方式<select value={draft.feeBasis} onChange={(event) => updateDraft('feeBasis', event.target.value)}><option value="per_registration">每次报名/每组</option><option value="per_person">每人</option></select></label>
             <label>预付方式<select value={draft.paymentMode} onChange={(event) => updateDraft('paymentMode', event.target.value as ActivityPaymentMode)}><option value="none">无需预付</option><option value="deposit_optional">订金可选</option><option value="deposit_required">必须付订金</option><option value="full_required">必须全额预付</option></select></label>
             <label>活动费用<NumberInputWithUnit inputMode="decimal" unit="元" value={draft.feeYuan} onChange={(event) => updateDraft('feeYuan', event.target.value)} /></label>
@@ -597,18 +664,32 @@ export function ActivityOperationsPanel({ api, auth }: { api: NormalizedApiClien
             </article>)}</div>
             <button type="button" onClick={addPackage}>新增套餐</button>
           </fieldset>
+          </>}
           <fieldset disabled={busy === 'draft' || createUncertain}><legend>退款、安全和参与承诺</legend>
-            <label>退款规则版本<input value={draft.refundPolicyVersion} onChange={(event) => updateDraft('refundPolicyVersion', event.target.value)} /></label>
-            <label>安全规则版本<input value={draft.safetyPolicyVersion} onChange={(event) => updateDraft('safetyPolicyVersion', event.target.value)} /></label>
+            {!draft.ticketOnly && <><label>退款规则版本<input value={draft.refundPolicyVersion} onChange={(event) => updateDraft('refundPolicyVersion', event.target.value)} /></label>
+            <label>安全规则版本<input value={draft.safetyPolicyVersion} onChange={(event) => updateDraft('safetyPolicyVersion', event.target.value)} /></label></>}
             <label className="wide">退款说明<textarea rows={3} value={draft.refundPolicySummary} onChange={(event) => updateDraft('refundPolicySummary', event.target.value)} /></label>
             <label className="wide">安全确认文案<textarea rows={2} value={draft.safetyAcknowledgementText} onChange={(event) => updateDraft('safetyAcknowledgementText', event.target.value)} /></label>
             <label className="wide">安全要求（每行一项）<textarea rows={4} value={draft.safetyRequirements} onChange={(event) => updateDraft('safetyRequirements', event.target.value)} /></label>
-            <label className="wide">费用包含（每行一项）<textarea rows={3} value={draft.includedItems} onChange={(event) => updateDraft('includedItems', event.target.value)} /></label>
-            <label className="wide">参与条件（每行一项）<textarea rows={3} value={draft.participationRequirements} onChange={(event) => updateDraft('participationRequirements', event.target.value)} /></label>
+            {!draft.ticketOnly && <><label className="wide">费用包含（每行一项）<textarea rows={3} value={draft.includedItems} onChange={(event) => updateDraft('includedItems', event.target.value)} /></label>
+            <label className="wide">参与条件（每行一项）<textarea rows={3} value={draft.participationRequirements} onChange={(event) => updateDraft('participationRequirements', event.target.value)} /></label></>}
             <label className="wide">联系与集合说明<textarea rows={3} value={draft.contactInstructions} onChange={(event) => updateDraft('contactInstructions', event.target.value)} /></label>
             <label className="wide">修改原因<input minLength={2} maxLength={500} required value={draft.reason} onChange={(event) => updateDraft('reason', event.target.value)} /></label>
           </fieldset>
-          <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? createUncertain ? '核对上次建立结果' : '建立草稿并读回' : '保存草稿并读回'}</button>
+          {creatingTickets && <fieldset disabled={!!busy || createUncertain}><legend>本场票档</legend>
+            {(draft.ticketRows??[]).map((row,i)=>{
+              const change=(patch:Partial<TicketRow>)=>updateDraft('ticketRows',draft.ticketRows!.map((item,j)=>i===j?{...item,...patch}:item))
+              return <div className="ticket-draft-row" key={i}><label>桌区<select required value={row.areaId} onChange={e=>{const id=e.target.value;change({areaId:id,name:row.name || (ticketAreas.find(a=>a.id===id)?.name??'')+'整桌票'})}}>
+                <option value="">选择桌区</option>{ticketAreas.map(a=><option key={a.id} value={a.id} disabled={draft.ticketRows?.some((other,j)=>i!==j && other.areaId===a.id)}>{a.name}</option>)}</select></label>
+                <label>票名<input required maxLength={120} value={row.name} onChange={e=>change({name:e.target.value})}/></label>
+                <label>每桌售价（元）<input required type="number" min=".01" step=".01" value={row.price} onChange={e=>change({price:e.target.value})}/></label>
+                <label>每张赠分<input required type="number" min="0" step="1" value={row.points} onChange={e=>change({points:e.target.value})}/></label>
+                <button type="button" onClick={()=>updateDraft('ticketRows',draft.ticketRows!.filter((_,j)=>i!==j))}>移除此档</button></div>
+            })}
+            {areasError && <button type="button" onClick={()=>setAreaRetry(v=>v+1)}>{areasError} · 重试</button>}
+            <button type="button" disabled={!ticketAreas.length} onClick={()=>updateDraft('ticketRows',[...(draft.ticketRows??[]),{areaId:'',name:'',price:'',points:''}])}>添加桌区票档</button>
+          </fieldset>}
+          <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '保存中' : detail.activity.publicId === '' ? createUncertain ? '核对上次建立结果' : draft.ticketRows?.length?'提交本场票档复核':'建立草稿并读回' : '保存草稿并读回'}</button>
         </form></details>}
         {canManage && detail.activity.publicId !== '' && !['cancelled','completed'].includes(detail.activity.status) && <section aria-label="活动结束处理">
           {detail.activity.registrationClosedAt?<p>已停止新报名和候补递补；原名单与收退款继续处理。</p>:<button type="button" disabled={!!busy||detail.activity.status==='draft'} onClick={()=>void stopRegistration(detail.activity)}>先停止新报名</button>}
@@ -667,7 +748,7 @@ function draftFromActivity(activity: ActivityDetail): DraftForm {
     mealServiceEndsAt:activity.mealServiceEndsAt?localDateTime(activity.mealServiceEndsAt):'',
     addonEndsAt:activity.addonEndsAt?localDateTime(activity.addonEndsAt):'',addonProductIds:activity.addonProductIds,
     kind: activity.kind, title: activity.title, summary: activity.summary, coverUrl: activity.coverUrl ?? '',
-    startsAt: localDateTime(activity.startsAt), endsAt: localDateTime(activity.endsAt), assemblyLocation: activity.assemblyLocation,
+    startsAt: activity.ticketOnly?beijingDateTimeInput(activity.startsAt):localDateTime(activity.startsAt), endsAt: activity.ticketOnly?beijingDateTimeInput(activity.endsAt):localDateTime(activity.endsAt), ticketOnly:activity.ticketOnly,assemblyLocation: activity.assemblyLocation,
     capacity: String(activity.capacity), feeYuan: minorToYuan(activity.feeAmountMinor), depositYuan: minorToYuan(activity.depositAmountMinor),
     feeBasis: activity.feeBasis, paymentMode: activity.paymentMode, paymentDeadlineMinutes: String(activity.paymentDeadlineMinutes),
     paymentRuleText: activity.paymentRuleText, visibility: activity.visibility,
@@ -701,8 +782,8 @@ function emptyDraft(): DraftForm {
 }
 
 function draftShell(draft: DraftForm): ActivityDetail {
-  const startsAt = new Date(draft.startsAt).toISOString()
-  const endsAt = new Date(draft.endsAt).toISOString()
+  const startsAt = draft.startsAt?(draft.ticketOnly?beijingDateTimeIso(draft.startsAt):new Date(draft.startsAt).toISOString()):''
+  const endsAt = draft.endsAt?(draft.ticketOnly?beijingDateTimeIso(draft.endsAt):new Date(draft.endsAt).toISOString()):''
   return {
     mealServiceStartsAt:null,mealServiceEndsAt:null,addonEndsAt:null,addonProductIds:[],
     publicId: '', title: '', status: 'draft', startsAt, endsAt,
@@ -727,8 +808,10 @@ function draftPayload(draft: DraftForm) {
     mealServiceStartsAt:draft.mealServiceStartsAt?new Date(draft.mealServiceStartsAt).toISOString():null,
     mealServiceEndsAt:draft.mealServiceEndsAt?new Date(draft.mealServiceEndsAt).toISOString():null,
     addonEndsAt:draft.addonEndsAt?new Date(draft.addonEndsAt).toISOString():null,addonProductIds:draft.addonProductIds??[],
-    kind: draft.kind, title: draft.title.trim(), summary: draft.summary.trim(), coverUrl: draft.coverUrl.trim() || null,
-    startsAt: new Date(draft.startsAt).toISOString(), endsAt: new Date(draft.endsAt).toISOString(),
+    ...(draft.ticketOnly?{ticketOnly:true}:{}),
+    ...(draft.ticketOnly && draft.ticketRows?.length?{ticketRows:draft.ticketRows.map(row=>({areaId:row.areaId,name:row.name.trim(),priceMinor:yuanToMinor(row.price,'每桌售价'),giftPoints:integer(row.points,'赠分')}))}:{}),
+    kind: draft.kind, title: draft.title.trim(), summary: draft.ticketOnly?draft.title.trim():draft.summary.trim(), coverUrl: draft.coverUrl.trim() || null,
+    startsAt: draft.ticketOnly?beijingDateTimeIso(draft.startsAt):new Date(draft.startsAt).toISOString(), endsAt: draft.ticketOnly?beijingDateTimeIso(draft.endsAt):new Date(draft.endsAt).toISOString(),
     assemblyLocation: draft.assemblyLocation.trim(), capacity: integer(draft.capacity,'人数上限'),
     feeAmountMinor: yuanToMinor(draft.feeYuan,'活动费用'), depositAmountMinor: yuanToMinor(draft.depositYuan,'订金'),
     feeBasis: draft.feeBasis, paymentMode: draft.paymentMode,
@@ -830,7 +913,7 @@ function operationsDetail(value: unknown): OperationsDetail {
 function activitySummary(value: unknown): ActivitySummary {
   const record = object(value,'活动摘要')
   return {
-    registrationClosedAt: typeof record.registrationClosedAt==='string'?record.registrationClosedAt:null,
+    ticketOnly:record.ticketOnly===true,registrationClosedAt: typeof record.registrationClosedAt==='string'?record.registrationClosedAt:null,
     publicId: string(record.publicId), title: string(record.title), status: activityStatus(record.status),
     startsAt: string(record.startsAt), endsAt: string(record.endsAt), assemblyLocation: string(record.assemblyLocation),
     capacity: number(record.capacity), occupiedSeats: number(record.occupiedSeats), waitlistedSeats: number(record.waitlistedSeats),
@@ -858,7 +941,7 @@ function activityDetail(value: unknown): ActivityDetail {
     contactInstructions: nullableString(record.contactInstructions), memberBenefitText: nullableString(record.memberBenefitText),
     packageSelectionRequired: record.packageSelectionRequired === true,
     packages: Array.isArray(record.packages) ? record.packages.map(activityPackage) : [],
-    updatedAt: string(record.updatedAt),
+    updatedAt: string(record.updatedAt),ticketOnly:record.ticketOnly===true,
   }
 }
 function activityPackage(value: unknown): ActivityPackage {
@@ -980,7 +1063,7 @@ function localDateTime(value: string) { const date=new Date(value); const local=
 function operationKey(scope: string) { return `${scope}-${crypto.randomUUID()}` }
 function message(error: unknown,fallback: string) { return error instanceof Error ? error.message : fallback }
 function money(value: number) { return `¥${(value/100).toFixed(2)}` }
-function dateText(value: string) { return new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) }
+function dateText(value: string) { if(!value)return '待选日期';return new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) }
 function statusLabel(value: ActivityStatus) { return ({draft:'草稿',published:'报名中',full:'已满',cancelled:'已取消',completed:'已结束'} as const)[value] }
 function packageStatusLabel(value: ActivityPackage['status']) { return ({draft:'草稿',published:'上架中',paused:'已暂停'} as const)[value] }
 function registrationStatusLabel(value: RegistrationStatus) { return ({reserved:'已预留',payment_pending:'待付款',confirmed:'已确认',waitlisted:'候补',cancelled:'已取消',checked_in:'已签到',no_show:'未到',refunded:'已退款'} as const)[value] }

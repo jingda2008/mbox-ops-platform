@@ -126,16 +126,16 @@ export class ActivityOperationsService {
     })
   }
 
-  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string) {
+  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,previewVersion?:string) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'refund.request').execute({
-      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId}),
+      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId,previewVersion}),
       retainReceipt:true,resultCodec:objectCodec<{caseId:string;status:string}>(),
     },async tx=>{
       const identity=(await tx.query<{registration_id:string;customer_id:string}>(`SELECT k.registration_id,r.customer_id FROM mbox.table_tickets k
         JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(k.tenant_id,k.store_id,k.registration_id)
         WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3`,[context.scope.tenantId,context.scope.storeId,id])).rows[0]
       if(!identity)throw new ActivityOperationsError('原票不存在','TICKET_NOT_FOUND',404)
-      const result=await requestTicketRefund(tx,identity.registration_id,id,identity.customer_id,reason)
+      const result=await requestTicketRefund(tx,identity.registration_id,id,identity.customer_id,reason,previewVersion)
       return {result,auditEvents:[audit(context,{action:'table_ticket.refund.opened',objectType:'table_ticket',objectId:id,afterData:{reason,caseId:result.caseId}})],outboxMessages:[]}
     })
   }
@@ -177,10 +177,10 @@ export class ActivityOperationsService {
     })
   }
 
-  list(context: ActivityOperationsStaffContext) {
+  list(context: ActivityOperationsStaffContext, ticketsOnly=false) {
     return this.transactions.run(
       context.scope,
-      (transaction) => new ActivityOperationsRepository(transaction).list(),
+      (transaction) => new ActivityOperationsRepository(transaction).list(ticketsOnly),
       { readOnly: true },
     )
   }
@@ -213,7 +213,7 @@ export class ActivityOperationsService {
 
   createDraft(
     context: ActivityOperationsStaffContext,
-    input: Readonly<{ draft: ActivityDraftInput; reason: string; idempotencyKey: string }>,
+    input: Readonly<{ ticketRows?:Pick<TableTicketOfferInput,'areaId'|'name'|'priceMinor'|'giftPoints'>[]; draft: ActivityDraftInput; reason: string; idempotencyKey: string }>,
   ): Promise<CommandExecution<ActivityOperationsActivity>> {
     const publicId = `community-activity-${createHash('sha256')
       .update(`${context.scope.storeId}:${input.idempotencyKey}`)
@@ -227,6 +227,8 @@ export class ActivityOperationsService {
     }, async (transaction) => {
       const result = await new ActivityOperationsRepository(transaction)
         .createDraft(publicId, input.draft, context.employeeId)
+      for(const row of input.ticketRows??[])await saveTicketOffer(transaction,publicId,context.employeeId,
+        {...row,status:'draft',expectedVersion:0,visibleFrom:null,visibleUntil:null})
       return {
         result,
         auditEvents: [audit(context, {
@@ -235,7 +237,7 @@ export class ActivityOperationsService {
           objectId: publicId,
           reason: input.reason,
           afterData: {
-            status: result.status,
+            ...(input.ticketRows?{ticketRows:input.ticketRows}:{}),status: result.status,
             startsAt: result.startsAt,
             endsAt: result.endsAt,
             capacity: result.capacity,

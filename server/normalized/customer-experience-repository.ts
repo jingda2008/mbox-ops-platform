@@ -338,7 +338,14 @@ export interface PublicAnnualBenefitCalendarItem {
   updatedAt: string
 }
 
+export interface RegistrationHistoryQuery { id?: string; before?: string }
 export interface PublicActivityRegistration {
+  endsAt?: string
+  liveDetailAvailable?: boolean
+  location?: string
+  activityDescription?: string
+  refundSummary?: string
+  purchasedItems?: { name: string; quantity: number }[]
   publicId: string
   note?:string
   selections?:Array<{label:string;productId:string;name:string;quantity:number}>
@@ -1231,8 +1238,9 @@ export class CustomerExperienceRepository {
     return activitySharePreviewView(activity)
   }
 
-  async publicActivityRegistrations(customerId: string): Promise<PublicActivityRegistration[]> {
+  async publicActivityRegistrations(customerId: string, history?: RegistrationHistoryQuery): Promise<PublicActivityRegistration[]> {
     const result = await this.transaction.query<{
+      ends_at: string; live_detail_available: boolean; assembly_location: string; activity_description: string; refund_summary: string
       service_items_snapshot:Array<{productId:string;name:string;quantity:number;note?:string;selectionLabel?:string}>;idempotency_key:string;service_refund_disposition:string|null;service_version:number;purchase_kind:string|null;parent_registration_public_id:string|null;max_participants:number|null;includes_admission:boolean;registered_at:string
       public_id: string
       activity_public_id: string
@@ -1272,6 +1280,10 @@ export class CustomerExperienceRepository {
       SELECT registration.public_id,registration.service_items_snapshot, registration.idempotency_key,registration.service_version,registration.service_refund_disposition,registration.purchase_kind,registration.max_participants,registration.includes_admission,registration.registered_at::text,
  (SELECT parent.public_id FROM mbox.community_activity_registrations parent WHERE (parent.tenant_id,parent.store_id,parent.id)=(registration.tenant_id,registration.store_id,registration.parent_registration_id)) parent_registration_public_id,activity.public_id AS activity_public_id,
         activity.title AS activity_title, activity.starts_at::text,
+        ${history ? `activity.ends_at::text, (activity.ends_at>statement_timestamp() AND activity.status IN ('published','full')
+          AND activity.registration_closed_at IS NULL) AS live_detail_available,` : ''}
+        ${history?.id ? `activity.assembly_location, coalesce(nullif(activity.activity_details,''),activity.summary) AS activity_description,
+          coalesce(nullif(registration.refund_policy_snapshot->>'schedule',''),registration.refund_policy_snapshot->>'summary') AS refund_summary,` : ''}
         registration.party_size, registration.status, registration.payment_choice,
         registration.payment_status, registration.fee_amount_minor,
         registration.amount_due_minor, registration.paid_amount_minor,
@@ -1304,15 +1316,21 @@ export class CustomerExperienceRepository {
       ) current_contact ON true
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid
         AND registration.customer_id IN (SELECT id FROM family)
+      ${history?.id ? 'AND registration.public_id=$4' : history?.before ? `AND (registration.registered_at,registration.id) < (
+        SELECT prior.registered_at,prior.id FROM mbox.community_activity_registrations prior
+        WHERE prior.tenant_id=$1 AND prior.store_id=$2 AND prior.public_id=$4 AND prior.customer_id IN (SELECT id FROM family))` : ''}
       ORDER BY registration.registered_at DESC, registration.id DESC
-      LIMIT 100
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId])
+      LIMIT ${history ? (history.id ? 1 : 21) : 100}
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, customerId, ...(history?.id || history?.before ? [history.id || history.before] : [])])
     return result.rows.map((row) => {
       const paymentAvailability = publicActivityRegistrationPaymentAvailability(
         row.payment_status,
         this.activityPaymentProviderConfigured && row.activity_payment_authorized,
       )
       return {
+        ...(history ? { endsAt: row.ends_at, liveDetailAvailable: row.live_detail_available } : {}),
+        ...(history?.id ? { location: row.assembly_location, activityDescription: row.activity_description,
+          refundSummary: row.refund_summary, purchasedItems: (row.service_items_snapshot ?? []).map(item => ({ name: item.name, quantity: item.quantity })) } : {}),
         publicId: row.public_id,note:row.service_items_snapshot?.find(item=>item.note)?.note??'',selections:(row.service_items_snapshot??[]).filter(item=>item.selectionLabel).map(item=>({label:item.selectionLabel!,productId:item.productId,name:item.name,quantity:item.quantity})),registrationRequestIdempotencyKey:row.idempotency_key,serviceVersion:row.service_version,serviceRefundDisposition:row.service_refund_disposition,purchaseKind:row.purchase_kind,parentRegistrationPublicId:row.parent_registration_public_id,maxParticipants:row.max_participants,includesAdmission:row.includes_admission,registeredAt:row.registered_at,
         activityPublicId: row.activity_public_id,
         activityTitle: row.activity_title,
@@ -1614,9 +1632,9 @@ export class CustomerExperienceRepository {
         activity.sales_copy, activity.activity_details, activity.included_items,
         activity.participation_requirements, activity.contact_instructions,
         activity.member_benefit_text, activity.package_selection_required,
-        EXISTS(SELECT 1 FROM mbox.table_ticket_offers ticket WHERE
+        (activity.ticket_only OR EXISTS(SELECT 1 FROM mbox.table_ticket_offers ticket WHERE
           (ticket.tenant_id,ticket.store_id,ticket.activity_id)=(activity.tenant_id,activity.store_id,activity.id)
-          AND ticket.status='published') AS table_ticket_sales,
+          AND ticket.status='published')) AS table_ticket_sales,
         NULL::text AS registration_status,
         COALESCE((SELECT policy.online_payment_enabled
           FROM mbox.store_commerce_policies policy
@@ -4297,6 +4315,14 @@ export class CustomerExperienceRepository {
         AND (activity.registration_closed_at IS NULL OR ($4::text IS NOT NULL AND registration.status IS NOT NULL))
         AND activity.ends_at > clock_timestamp()
         AND ($4::text IS NULL OR activity.public_id=$4)
+        AND ($4::text IS NOT NULL OR NOT activity.ticket_only)
+        AND ($4::text IS NOT NULL OR activity.fee_amount_minor>0 OR activity.deposit_amount_minor>0 OR EXISTS (
+          SELECT 1 FROM mbox.community_activity_packages pkg WHERE (pkg.tenant_id,pkg.store_id,pkg.activity_id)=
+          (activity.tenant_id,activity.store_id,activity.id) AND pkg.status IN ('published','paused')
+        ) OR NOT EXISTS (
+          SELECT 1 FROM mbox.table_ticket_offers ticket WHERE (ticket.tenant_id,ticket.store_id,ticket.activity_id)=
+          (activity.tenant_id,activity.store_id,activity.id) AND ticket.status='published'
+        ))
       GROUP BY activity.id, registration.status
       ORDER BY activity.starts_at, activity.id
       LIMIT 50

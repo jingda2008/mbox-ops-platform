@@ -264,7 +264,7 @@ try {
       participation_requirements,contact_instructions,status,published_at,created_by_employee_id,approved_by_employee_id)
       VALUES($1::uuid,$2,$3,$1::text,'member_night','整桌演出票浏览器验收场','现场爵士演出',clock_timestamp()+interval '7 days',clock_timestamp()+interval '7 days 2 hours',
       '门店',150,0,0,'per_registration','none',15,'选择桌票购票','CNY',0,'public','safety-v1','遵守本场安全规定',ARRAY['现场核验'],
-      'refund-v1','按本场退票约定办理','实际演出与桌区展示测试',ARRAY['整桌入场'],ARRAY['本人购票'],'原单接待','published',clock_timestamp(),$4,$4)`,
+      'refund-v1','按本场退票约定办理','实际演出与桌区展示测试',ARRAY['整桌入场'],ARRAY['本人购票'],'原单接待','draft',NULL,$4,NULL)`,
       [ticketEvent,scope.tenantId,scope.storeId,employeeId])
   })
   const threeScreenFixture=process.env.NORMALIZED_E2E_THREE_SCREEN==='true'?await seedThreeScreenBrowserFixture(testUrl,scope.tenantId,scope.storeId,businessDate):undefined

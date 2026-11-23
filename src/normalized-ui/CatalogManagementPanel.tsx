@@ -1,3 +1,4 @@
+import {ActivityOperationsPanel} from './ActivityOperationsPanel'
 import { ProductSaleQuantityEditor } from './ProductSaleQuantityEditor'
 import { useStaffViewState } from './staff-view-state'
 import { ServiceWindowFields } from './ServiceWindowFields'
@@ -205,6 +206,8 @@ export function CatalogManagementPanel({
   openRequest?: number
   onOpenInventoryCost?(inventoryItemId:string):void
 }) {
+  const [ticketsOpen,setTicketsOpen]=useState(false)
+  const canEditTickets=auth.permissions.some(p=>p==='community.activity.manage'||p==='community.activity.publish')
   const canManageProduct = auth.permissions.includes('catalog.product.manage')
   const canManagePrice = auth.permissions.includes('catalog.price.manage')
   const canManageInventory = auth.permissions.includes('inventory.manage')
@@ -922,7 +925,8 @@ export function CatalogManagementPanel({
             ? <p>还没有菜单分类。请先创建一级分类，再为“酒水”等一级分类添加二级分类。</p>
             : <div className="catalog-menu-category-list">{menuCategories.map((category) => <article key={category.id} className={category.parentCode === null ? 'is-root' : 'is-child'}><div><strong>{category.parentCode === null ? category.displayName : `└ ${category.displayName}`}</strong><small>{category.code} · 排序 {category.sortOrder} · {category.productCount} 个商品 · {category.guestVisible ? '顾客可见' : '顾客隐藏'}</small></div><button type="button" onClick={() => startEditCategory(category)}><Pencil size={15} /> 编辑</button></article>)}</div>}
         </section>
-        <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button><button type="button" onClick={() => void load()}>刷新可售状态</button></div>
+        <div className="catalog-management-tools"><input aria-label="搜索配置商品" placeholder="搜索商品名、编号或分类" value={query} onChange={(event) => setQuery(event.target.value)} /><button type="button" onClick={startCreate}><CirclePlus size={17} /> 新增商品</button>{canEditTickets && <button type="button" aria-expanded={ticketsOpen} onClick={()=>setTicketsOpen(v=>!v)}>门票上架</button>}<button type="button" onClick={() => void load()}>刷新可售状态</button></div>
+        {ticketsOpen && canEditTickets && <ActivityOperationsPanel api={api} auth={auth} ticketCatalog/>}
         {draft !== null && <form className="catalog-management-form" onSubmit={(event) => void save(event)}>
           <header><strong>{draft.id === null ? '新增商品' : `编辑 ${draft.name}`}</strong><span>{draft.id !== null && draft.productKind === 'bundle' && draft.status !== 'inactive' && <button type="button" onClick={() => { updateDraft('status', 'inactive'); setNotice(null) }}>标记停用（尚未保存）</button>}<button type="button" onClick={closeDraft}>取消</button></span></header>
           <div className="catalog-form-grid">

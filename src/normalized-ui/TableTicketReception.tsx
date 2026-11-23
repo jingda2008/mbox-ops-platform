@@ -1,3 +1,4 @@
+import {TicketRefundDesk} from './TicketRefundDesk'
 import {useEffect,useState,type FormEvent,type ReactNode} from 'react'
 import type {NormalizedApiClient} from '../normalized-api'
 
@@ -26,6 +27,7 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
   const [open,setOpen]=useState(initiallyOpen),[refresh,setRefresh]=useState(0),[working,setWorking]=useState(false)
   const [message,setMessage]=useState(''),[queue,setQueue]=useState<Queue>({orders:[],tables:[]})
   const [statement,setStatement]=useState<{id:string;data:Statement}|null>(null)
+  const [handling,setHandling]=useState('')
   const [day,setDay]=useState('')
   const [daily,setDaily]=useState<{day:string;amounts:Record<string,string>}|null>(null)
   async function inspectDay(){
@@ -139,6 +141,8 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
     </details>}
     {queue.orders.map(ticket=><article key={ticket.id}><strong>{ticket.name} · 第{ticket.ordinal}桌</strong>
       <p>购票单 {ticket.orderId} · {queue.orders.find(row=>row.orderId===ticket.orderId)?.id===ticket.id?renderContact(ticket):ticket.maskedPhone} · {ticket.deskClosed?'本桌已清台':ticket.showEnded?(ticket.arrived?'场次已结束 · 已登记 '+ticket.arrived+' 人':'场次已结束 · 无到场登记'):ticket.tableName??(ticket.awaitingDuringShow?'演出已开始，请尽快排桌':'待排桌')}</p>
+      {(canRefund || canApproveRefund) && <button type="button" onClick={()=>setHandling(handling===ticket.id?'':ticket.id)}>办理退票</button>}
+      {handling===ticket.id && <TicketRefundDesk key={ticket.id} api={api} auth={{permissions:[...(canRefund?['refund.request']:[]),...(canApproveRefund?['refund.approve']:[]),...(canManage?['community.activity.manage']:[])]}} reference={ticket.id}/>}
       {(canRefund||canApproveRefund) && <button type="button" onClick={()=>void inspect(ticket.id)}>核对原票、积分和菜款</button>}
       {statement?.id===ticket.id && <section aria-label="原票对账"><p>本票票款 {money(statement.data.ticket.priceMinor)} · 原收款 {statement.data.ticket.receipt}</p>
         {statement.data.points.map((row,i)=><p key={row.lot+i}>积分{statusText[row.kind]??row.kind} {row.delta} 分 · 批次余额 {row.remaining} 分 · {new Date(row.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</p>)}

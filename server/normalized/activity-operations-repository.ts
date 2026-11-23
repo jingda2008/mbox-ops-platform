@@ -15,6 +15,7 @@ export type ActivityRegistrationOperation = 'check_in' | 'fulfill_package' | 'no
 export type ActivityPackageAvailabilityOperation = 'pause' | 'resume'
 
 export interface ActivityOperationsSummary {
+  ticketOnly?:boolean
   registrationClosedAt?: string | null
   publicId: string
   title: string
@@ -54,6 +55,7 @@ export interface ActivityOperationsActivity extends ActivityOperationsSummary {
   participationRequirements: string[]
   contactInstructions: string | null
   memberBenefitText: string | null
+  ticketOnly?:boolean
   packageSelectionRequired: boolean
   packages: ActivityOperationsPackage[]
   createdByEmployeeId: string
@@ -149,6 +151,7 @@ export interface ActivityWaitlistRetry {
 }
 
 export interface ActivityDraftInput {
+  ticketOnly?:boolean
   mealServiceStartsAt?:string|null;mealServiceEndsAt?:string|null;addonEndsAt?:string|null;addonProductIds?:readonly string[]
   kind: ActivityKind
   title: string
@@ -249,6 +252,7 @@ interface ActivityDetailRow extends ActivitySummaryRow {
   participation_requirements: string[]
   contact_instructions: string | null
   member_benefit_text: string | null
+  ticket_only:boolean
   package_selection_required: boolean
   created_by_employee_id: string
   approved_by_employee_id: string | null
@@ -371,7 +375,7 @@ export class ActivityOperationsRepository {
           refund_policy_summary,activity_details,included_items,
           participation_requirements,contact_instructions,member_benefit_text,
           audience_rule,safety_snapshot,refund_policy_snapshot,sales_copy,
-          status,created_by_employee_id,package_selection_required
+          status,created_by_employee_id,package_selection_required,ticket_only
         ) VALUES (
           $1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::timestamptz,$9::timestamptz,
           $10,$11,$12::bigint,$13::bigint,$14,$15,$16,$17,$18,$19,
@@ -387,7 +391,7 @@ export class ActivityOperationsRepository {
             'participationRequirements',$29::text[],'contactInstructions',$30::text,
             'memberBenefitText',$31::text
           ),
-          'draft',$32::uuid,$33::boolean
+          'draft',$32::uuid,$33::boolean,$34::boolean
         )
         RETURNING *
       )
@@ -404,7 +408,7 @@ export class ActivityOperationsRepository {
         inserted.refund_policy_version,inserted.refund_policy_summary,
         inserted.activity_details,inserted.included_items,
         inserted.participation_requirements,inserted.contact_instructions,
-        inserted.member_benefit_text,inserted.package_selection_required,inserted.created_by_employee_id,
+        inserted.ticket_only,inserted.member_benefit_text,inserted.package_selection_required,inserted.created_by_employee_id,
         inserted.approved_by_employee_id,inserted.published_at::text,
         inserted.updated_at::text
       FROM inserted
@@ -418,7 +422,7 @@ export class ActivityOperationsRepository {
       input.safetyAcknowledgementText,input.safetyRequirements,input.refundPolicyVersion,
       input.refundPolicySummary,input.activityDetails,input.includedItems,
       input.participationRequirements,input.contactInstructions,input.memberBenefitText,
-      employeeId,input.packageSelectionRequired ?? false,
+      employeeId,input.packageSelectionRequired ?? false,input.ticketOnly ?? false,
     ])
     const row = result.rows[0]
     if (!row) throw new ActivityOperationsError('活动草稿未能建立', 'ACTIVITY_DRAFT_CREATE_FAILED', 503)
@@ -432,8 +436,11 @@ export class ActivityOperationsRepository {
     return{rows:result.rows.slice(0,30).map(summaryView),next:result.rows.length>30?result.rows[29]!.public_id:null}
   }
 
-  async list(): Promise<ActivityOperationsSummary[]> {
-    const result = await this.transaction.query<ActivitySummaryRow>(`${ACTIVITY_SUMMARY_QUERY}
+  async list(ticketsOnly=false): Promise<ActivityOperationsSummary[]> {
+    const summary=ticketsOnly?ACTIVITY_SUMMARY_QUERY.replace('GROUP BY activity.id',`AND (activity.ticket_only OR EXISTS(
+      SELECT 1 FROM mbox.table_ticket_offers o WHERE (o.tenant_id,o.store_id,o.activity_id)=(activity.tenant_id,activity.store_id,activity.id)
+    )) GROUP BY activity.id`):ACTIVITY_SUMMARY_QUERY
+    const result = await this.transaction.query<ActivitySummaryRow>(`${summary}
       ORDER BY activity.starts_at DESC, activity.id DESC
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId])
     return result.rows.map(summaryView)
@@ -594,7 +601,7 @@ export class ActivityOperationsRepository {
         updated.refund_policy_version, updated.refund_policy_summary,
         updated.activity_details, updated.included_items,
         updated.participation_requirements, updated.contact_instructions,
-        updated.member_benefit_text,updated.package_selection_required, updated.created_by_employee_id,
+        updated.ticket_only,updated.member_benefit_text,updated.package_selection_required, updated.created_by_employee_id,
         updated.approved_by_employee_id, updated.published_at::text,
         updated.updated_at::text
       FROM updated
@@ -1180,7 +1187,7 @@ export class ActivityOperationsRepository {
 }
 
 const ACTIVITY_SUMMARY_QUERY = `
-  SELECT activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
+  SELECT activity.ticket_only,activity.public_id, activity.title, activity.status,activity.registration_closed_at::text,
     activity.starts_at::text, activity.ends_at::text, activity.assembly_location,
     activity.capacity, activity.registration_payment_mode, activity.fee_amount_minor,
     activity.currency,
@@ -1211,7 +1218,7 @@ const ACTIVITY_DETAIL_QUERY = `
     activity.safety_requirements, activity.refund_policy_version,
     activity.refund_policy_summary, activity.activity_details, activity.included_items,
     activity.participation_requirements, activity.contact_instructions,
-    activity.member_benefit_text,activity.package_selection_required, activity.created_by_employee_id,
+    activity.ticket_only,activity.member_benefit_text,activity.package_selection_required, activity.created_by_employee_id,
     activity.approved_by_employee_id, activity.published_at::text,
     activity.updated_at::text,
     COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)) FILTER (
@@ -1229,7 +1236,7 @@ const ACTIVITY_DETAIL_QUERY = `
 
 function summaryView(row: ActivitySummaryRow): ActivityOperationsSummary {
   return {
-    registrationClosedAt: typeof row.registration_closed_at==='string'?row.registration_closed_at:null,
+    ticketOnly:row.ticket_only===true,registrationClosedAt: typeof row.registration_closed_at==='string'?row.registration_closed_at:null,
     publicId: row.public_id,
     title: row.title,
     status: row.status,
@@ -1271,6 +1278,7 @@ function detailView(row: ActivityDetailRow): ActivityOperationsActivity {
     participationRequirements: textArray(row.participation_requirements),
     contactInstructions: row.contact_instructions,
     memberBenefitText: row.member_benefit_text,
+    ticketOnly:row.ticket_only,
     packageSelectionRequired: row.package_selection_required,
     packages: [],
     createdByEmployeeId: row.created_by_employee_id,

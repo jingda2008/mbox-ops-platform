@@ -109,7 +109,7 @@ assert(!Object.prototype.hasOwnProperty.call(project, 'component2'), 'format 2 �
 assert(project.compileOptions && project.compileOptions.component2 === true, 'mini.project.json 必须显式启用 compileOptions.component2')
 // Customer custody, channel distribution and verified-phone table tickets are WeChat-only. Keep all existing
 // Alipay pages checked; only these exact new routes are outside parity scope.
-const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index', 'pages/table-tickets/index'])
+const wechatOnlyPages = new Set(['pages/profile-activities/index', 'pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index', 'pages/table-tickets/index'])
 for (const page of wechatOnlyPages) {
   assert(wechatApp.pages.includes(page) && !alipayApp.pages.includes(page), `微信独有页面范围变化: ${page}`)
   for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(join(wechatRoot, page + extension))
@@ -150,9 +150,10 @@ const wechatPolicyTemplateDivergences = {
   // 2026-11-16: both platforms retain review-required amounts and show zero-due order confirmation; prior policy differences remain.
   // The WeChat detail page routes each table ticket to its own original after-sales entry.
   'pages/community-detail/index': {wechat:'60954ca7930fd30e515852d2193f11a812c01f766733743faa7f0d8df609d786', alipay:'d97f851a0ea6450fcc273a0896c05ea440b1c0c71131ca386477166752d2e692'},
-  'pages/order/index': {"wechat": "89a4d58e83e5d51545328b2f5c87362e176296f609074e2e607229b087b4a584", "alipay": "bdf6e09103154d227ebc7d59403be0a85a8a4c412381a49bfd94261bf6750ef5", "wechatStyle": "978d82d02fe33d9fe08ee2f6e0bca20529dacd70fcc409518795dab4541c5ced", "alipayStyle": "0d47df0aabd911b2535543e9bf257f12d34a76664610b5109fd1d7800b530b58"},
-  'pages/profile/index': {"wechat": "0a1d13821558949176597256fd1cf9a653eeffe3827e0a8b3b7fdca90865a1c6", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
-  'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
+  'pages/order/index': {"wechat": "c4da0446f0c58a8b2918975b4d6f0c026a508c9d95db61f22baca51ac8a4dfb6", "alipay": "bdf6e09103154d227ebc7d59403be0a85a8a4c412381a49bfd94261bf6750ef5", "wechatStyle": "e090bf9680b5384e38b889b53d45d225bcf5a976d7c50193a89cfe5a990cd0ea", "alipayStyle": "0d47df0aabd911b2535543e9bf257f12d34a76664610b5109fd1d7800b530b58"},
+  'pages/profile/index': {"wechat": "346b792816f79d18019222b4a522a1a5bc96fc3b5fec880f1f2b79b705adf85b", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
+  // Recommended table tickets link to the WeChat-only ticket checkout.
+  'pages/community/index': {"wechat": "b5fef2f8ee48dbdfa23841144fb5d1df50b98721fc343a08729b8241348b6fd3", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
   // 2026-10-23: same ordinary-menu destination copy clarified; existing platform layout retained.
   'pages/profile-cards/index': { "wechat": "cb679e24cf35d967b41380b1fb97bc53b2aae27f58cd2710a51ee6cbc714e688", "alipay": "05ad1e0412d4c63c0889647d607387fdcb7901cf44bc61a93812b4ad7a152a7b" },

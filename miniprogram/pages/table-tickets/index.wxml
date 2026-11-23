@@ -1,30 +1,73 @@
 <view class="page">
   <button wx:for="{{proposals}}" wx:key="id" bindtap="openProposal" disabled="{{busy}}" data-id="{{item.id}}">核对服务员代选的 {{item.name}} × {{item.quantity}}桌</button>
-  <view wx:if="{{selected}}" class="section">
-    <view class="title">{{selected.name}}</view><view wx:if="{{selected.saleText}}">{{selected.saleText}}</view><view>{{selected.time}} · {{selected.location}}</view>
-    <view>{{selected.areaName}}一整桌 · {{selected.price}}／桌<text wx:if="{{selected.giftPoints}}"> · 每张赠 {{selected.giftPoints}} 积分</text></view>
-    <view>可只看演出。付款后出票，门店按已验证手机号联系安排具体桌号。入场按本场核准容量安排。</view>
-    <view wx:if="{{selected.giftPoints}}">积分可抵菜品、酒水及餐饮套餐。自付款起至次年同月同日全天有效，闰日对应次年2月28日。今天付款可用至 {{selected.validThroughIfPaidToday}} 当天结束。赠分不能单独退现。</view>
-    <view>举办方 {{selected.organizer}} · 售票方 {{selected.seller}} · {{selected.approvalReference}}</view>
-    <view>{{selected.performers}} · 至少 {{selected.durationMinutes}} 分钟 · {{selected.programNote}}</view>
-    <view>退票时段及费用：{{selected.refundSchedule}} · 客服 {{selected.serviceContact}}</view>
-    <view>{{selected.refundSummary}}。退票时收回该票赠分，已抵扣的菜款按原菜价、原实付及退票原因核算。</view>
-    <view>{{selected.safetySummary}}</view>
-    <radio-group wx:if="{{eligibleReservations.length}}" bindchange="chooseReservation"><view>是否沿用本人已订的桌</view><label><radio disabled="{{busy}}" value="" checked="{{!reservationLockId}}"/>另购一桌</label><label wx:for="{{eligibleReservations}}" wx:key="id"><radio disabled="{{busy}}" value="{{item.id}}" checked="{{reservationLockId === item.id}}"/>{{item.tableName}} · {{item.reference}}</label></radio-group>
-    <label>购买桌数<input type="number" value="{{quantity}}" bindinput="quantity" disabled="{{busy || proposalId}}"/></label>
-    <view wx:if="{{summary}}">{{summary}}</view>
-    <checkbox-group bindchange="agree"><label><checkbox value="yes" checked="{{agreed}}"/>已阅读本场入场、退票和赠分说明</label></checkbox-group>
-    <button wx:if="{{member && phone && !originalOrder && !selected.saleText}}" bindtap="buy" disabled="{{busy || !agreed || (!selected.remaining && !reservationLockId)}}" loading="{{busy}}">微信支付购票</button>
-  </view>
-    <block wx:if="{{selected && ((terms && !member) || (member && !phone))}}">
-      <view>授权本人手机号，用于接收积分及门店安排桌位。</view>
-      <navigator wx:if="{{!member}}" url="/pages/membership-terms/index">{{terms.title || '会员服务协议'}}</navigator>
-      <button open-type="getPhoneNumber" bindgetphonenumber="authorize" disabled="{{busy || (!member && !terms)}}">{{member ? '授权本人手机号' : '同意会员协议并授权手机号'}}</button>
+  <block wx:if="{{selected}}">
+    <view class="pass">
+      <view class="pass-main">
+        <view class="pass-kind">整桌演出门票</view>
+        <view class="pass-title">{{selected.name}}</view>
+        <view class="pass-sub" wx:if="{{selected.title && selected.title !== selected.name}}">{{selected.title}}</view>
+        <image wx:if="{{selected.cover && failedCover !== selected.cover}}" class="pass-image" src="{{selected.cover}}" data-src="{{selected.cover}}" binderror="coverFailed" mode="aspectFill" />
+        <image wx:else class="pass-mark" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
+      </view>
+      <view class="pass-foot">
+        <view><text class="pass-price">{{selected.price}}</text><text class="pass-unit"> / 桌</text></view>
+        <text wx:if="{{selected.giftPoints}}" class="pass-gift">每桌赠 {{selected.giftPoints}} 积分</text>
+      </view>
+    </view>
+    <view class="sheet schedule">
+      <view class="fact"><text class="key">场次</text><text>{{selected.time}}</text></view>
+      <view class="fact" wx:if="{{selected.location}}"><text class="key">地点</text><text>{{selected.location}}</text></view>
+      <view class="fact"><text class="key">桌区</text><text>{{selected.areaName}} · 整桌</text></view>
+      <view class="note">可只看演出。付款后出票，门店将联系您确认具体桌号。</view>
+    </view>
+    <view class="sheet">
+      <view class="sheet-title">购票须知</view>
+      <view class="rules-copy" wx:if="{{selected.giftPoints}}">赠分可抵菜品、酒水及餐饮套餐。今天付款，积分可用至 {{selected.validThroughIfPaidToday}} 当天结束。</view>
+      <view class="rules-copy">如需退票，请联系门店，由门店按购票时公示的规则办理。<text wx:if="{{selected.serviceContact}}">本场客服 {{selected.serviceContact}}</text></view>
+      <view class="rules-copy"><text class="inline-label">退票约定　</text>{{selected.refundSchedule}}</view>
+      <view wx:if="{{selected.giftPoints}}" class="rules-copy">退票时收回该票赠分。已用积分抵扣的菜款按原单核算。</view>
+      <button class="disclosure" bindtap="toggleRules" aria-expanded="{{rulesOpen}}">入场、退票与赠分说明<text>{{rulesOpen ? '收起 −' : '展开 ＋'}}</text></button>
+      <view wx:if="{{rulesOpen}}" class="rules">
+        <view wx:if="{{selected.activityDetails}}"><text class="rule-title">演出介绍</text>{{selected.activityDetails}}</view>
+        <view><text class="rule-title">演出安排</text>{{selected.performers}} · 至少 {{selected.durationMinutes}} 分钟<text wx:if="{{selected.programNote}}"> · {{selected.programNote}}</text></view>
+        <view><text class="rule-title">入场说明</text>入场按本场核准容量安排。{{selected.safetySummary}}</view>
+        <view wx:if="{{selected.giftPoints}}"><text class="rule-title">赠分有效期</text>自付款起至次年同月同日全天有效，闰日对应次年2月28日。赠分不能单独退现。</view>
+        <view><text class="rule-title">退票说明</text>{{selected.refundSummary}}。退票时收回该票赠分，已抵扣的菜款按原菜价、原实付及退票原因核算。</view>
+        <view><text class="rule-title">举办与售票信息</text>举办方 {{selected.organizer}} · 售票方 {{selected.seller}}<text wx:if="{{selected.approvalReference}}"> · {{selected.approvalReference}}</text></view>
+        <view wx:if="{{selected.serviceContact}}"><text class="rule-title">客服</text>{{selected.serviceContact}}</view>
+      </view>
+    </view>
+    <view class="sheet purchase">
+      <radio-group wx:if="{{eligibleReservations.length}}" class="reservation" bindchange="chooseReservation"><view class="rule-title">是否沿用本人已订的桌</view><label><radio disabled="{{busy}}" value="" checked="{{!reservationLockId}}"/>另购一桌</label><label wx:for="{{eligibleReservations}}" wx:key="id"><radio disabled="{{busy}}" value="{{item.id}}" checked="{{reservationLockId === item.id}}"/>{{item.tableName}} · {{item.reference}}</label></radio-group>
+      <view class="quantity-row"><text class="sheet-title">购买桌数</text>
+        <view class="stepper">
+          <button aria-label="减少一桌" data-delta="-1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity <= 1}}">−</button>
+          <input aria-label="购买桌数" type="number" value="{{quantity}}" bindinput="quantity" disabled="{{busy || proposalId}}"/>
+          <button aria-label="增加一桌" data-delta="1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity >= selected.remaining + (reservationLockId ? 1 : 0)}}">＋</button>
+        </view>
+      </view>
+      <view class="summary" wx:if="{{summary}}">{{summary}}</view>
+      <checkbox-group bindchange="agree"><label class="agreement"><checkbox color="#27513c" value="yes" checked="{{agreed}}"/>已阅读本场入场、退票和赠分说明</label></checkbox-group>
+      <view class="error-banner" role="alert" wx:if="{{error}}">{{error}}</view>
+      <view class="sale-state" wx:if="{{selected.saleText || (!selected.remaining && !reservationLockId)}}">{{selected.saleText || '本场暂时无可售桌位'}}</view>
+      <block wx:elif="{{!originalOrder}}">
+        <button wx:if="{{member && phone}}" class="primary-button" bindtap="buy" disabled="{{busy || !agreed}}" loading="{{busy}}">微信支付购票</button>
+        <block wx:elif="{{terms || member}}">
+          <view class="auth-note">授权本人手机号，用于接收积分及门店安排桌位。<navigator wx:if="{{!member}}" url="/pages/membership-terms/index">{{terms.title || '会员服务协议'}} ›</navigator></view>
+          <button class="primary-button" open-type="getPhoneNumber" bindgetphonenumber="authorize" disabled="{{busy || (!member && !terms)}}">{{member ? '授权本人手机号' : '同意会员协议并授权手机号'}}</button>
+        </block>
+      </block>
+    </view>
+  </block>
+  <view class="sheet" wx:if="{{offers.length}}">
+    <button wx:if="{{selected}}" class="disclosure switch-offers" bindtap="toggleOffers" aria-expanded="{{offersOpen}}">切换场次或票档<text>{{offersOpen ? '收起 −' : '展开 ＋'}}</text></button>
+    <view wx:else class="sheet-title">可选场次</view>
+    <block wx:if="{{!selected || offersOpen}}">
+      <button class="offer-row" wx:for="{{offers}}" wx:key="id" data-id="{{item.id}}" bindtap="select" disabled="{{busy}}"><view><text class="rule-title">{{item.name}}</text><text>{{item.time}} {{item.saleText}}</text></view><text class="offer-price">{{item.price}}／桌</text></button>
     </block>
-  <view class="section"><view class="title">可选场次</view>
-    <button wx:for="{{offers}}" wx:key="id" data-id="{{item.id}}" bindtap="select" disabled="{{busy}}">{{item.time}} · {{item.name}} · {{item.price}}／桌 {{item.saleText}}</button>
   </view>
-  <view class="section"><view class="title">我的门票</view>
+  <view class="sheet history"><view class="sheet-title">我的门票</view>
+    <view class="empty-note" wx:if="{{member && !mine.length && !originalOrder && !error}}">暂无门票记录</view>
     <view wx:if="{{originalOrder}}">已建立购票单 {{originalOrder}}，收款、出票和赠分进度见下方原单。<button size="mini" bindtap="chooseAnother" disabled="{{busy}}">另买一单</button></view>
     <view wx:for="{{mine}}" wx:key="registrationPublicId" class="ticket">
       <view>{{item.time}} · {{item.name}} × {{item.quantity}}桌 · {{item.total}}</view>
@@ -33,7 +76,7 @@
       <view wx:if="{{item.status === 'cancelled' && !item.lateUnissued}}">{{item.cashRefundStatus==='succeeded'?'未出票款已原路退回':'原单已关闭'}}</view>
       <view wx:if="{{!item.tickets.length && item.status==='refunded'}}">未出票款已原路退回</view>
       <view wx:if="{{item.lateUnissued}}">原单超时后收到票款，未出票及赠分。{{item.cashRefundPending ? '原票款退款已申请' : ''}}</view>
-      <button wx:if="{{item.lateUnissued && !item.cashRefundPending}}" size="mini" data-order="{{item.registrationPublicId}}" bindtap="refund" disabled="{{busy}}">申请退回未出票款</button>
+      <button wx:if="{{item.lateUnissued && !item.cashRefundPending}}" size="mini" data-order="{{item.registrationPublicId}}" bindtap="contactStoreForTicket">联系门店办理未出票款退款</button>
       <view wx:for="{{item.tickets}}" wx:for-item="ticket" wx:key="id">第{{ticket.number}}张 · {{ticket.deskClosed ? '本桌已清台' : ticket.tableName || '桌号待安排'}} · 票号 {{ticket.id}}
         <view wx:if="{{ticket.currentShow}}">已接受改期 · {{ticket.currentShow.title}} · {{ticket.effectiveTime}}</view>
         <view wx:if="{{ticket.move}}"><view>{{ticket.move.reason}}</view><view>拟改至 {{ticket.move.title}} · {{ticket.moveTime}} · {{ticket.move.tableName}}</view>
@@ -43,7 +86,6 @@
         <text wx:if="{{item.giftPoints && !ticket.refundStatus}}">{{ticket.pointsPosted ? "赠分已到账" : "赠分待入账"}} · 每张赠 {{item.giftPoints}} 分<text wx:if="{{ticket.pointsPosted}}">，批次剩余 {{ticket.remainingPoints}} 分</text> · 有效至 {{ticket.validThrough}}</text>
         <text wx:if="{{ticket.refundStatus}}">{{ticket.cashZero ? '退票已办结，本次应退现金为零' : ticket.refundStatus === 'refunded' ? '已退款' : ticket.refundStatus === 'review' ? '退票待核算' : '原退款审核处理中'}}</text>
         <view wx:if="{{ticket.refundDetail}}">申请原因：{{ticket.refundDetail.reason}}<text wx:if="{{ticket.refundDetail.decision}}"> · 处理依据：{{ticket.refundDetail.decision}}</text><text wx:if="{{ticket.refundDetail.cashMinor}}"> · {{ticket.refundDetail.cashStatus==='succeeded' ? '已退票款' : '申请退回票款'}} ¥{{ticket.refundDetail.cashMinor / 100}}</text></view>
-        <button wx:if="{{ticket.refundStatus==='review'}}" size="mini" bindtap="withdraw" data-ticket="{{ticket.id}}" disabled="{{busy}}">撤回退票申请</button>
         <view wx:if="{{ticket.buyerUse}}">
           <view>门店核对本票消费归属 · {{ticket.buyerUse.points}}分</view>
           <view wx:for="{{ticket.buyerUse.items}}" wx:key="index">{{item.orderNo}} · {{item.name}} · ¥{{item.minor / 100}}</view>
@@ -58,9 +100,9 @@
           <text wx:elif="{{bill.confirmed && bill.amountMinor == 0}}">已确认，顾客无需补款</text>
           <text wx:elif="{{bill.confirmed}}">{{bill.paymentStatus === 'refunded' ? '补菜款已退回' : bill.paymentStatus === 'partially_refunded' ? '补菜款已部分退回' : bill.paymentStatus === 'succeeded' ? '菜款已收' : bill.caseStatus==='review' && !bill.closing ? '已确认，等待门店在原菜品单收款' : '补款处理已结束'}} · ¥{{bill.returnedMinor ? bill.returnedMinor / 100 : bill.amountMinor / 100}}</text>
         </view>
-        <button wx:if="{{!ticket.refundStatus}}" size="mini" data-order="{{item.registrationPublicId}}" data-ticket="{{ticket.id}}" bindtap="refund" disabled="{{busy}}">原单退票</button>
+        <button size="mini" data-order="{{item.registrationPublicId}}" data-ticket="{{ticket.id}}" bindtap="contactStoreForTicket">联系门店办理退票</button>
       </view>
     </view>
   </view>
-  <view wx:if="{{error}}" role="alert">{{error}}</view><button bindtap="refresh" disabled="{{busy}}">刷新</button>
+  <view wx:if="{{error && (!selected || mine.length)}}" class="error-banner" role="alert">{{error}}</view><button class="refresh" bindtap="refresh" disabled="{{busy}}">刷新</button>
 </view>

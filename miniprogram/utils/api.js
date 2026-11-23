@@ -246,7 +246,7 @@ async function cancelRedemption(redemptionPublicId, reason) {
 }
 async function getTicketReservations(){return (await publicRequest('/api/public/mini/table-ticket-reservations')).data}
 async function getTicketProposals(){return (await publicRequest('/api/public/mini/table-ticket-assistance')).data}
-async function getTableTicketOffers() { return (await request('/api/public/mini/table-ticket-offers',{requireTableSession:false,credentialDomain:'none'})).data }
+async function getTableTicketOffers(channel) { return (await request('/api/public/mini/table-ticket-offers'+(channel==='community'?'?channel=community':''),{requireTableSession:false,credentialDomain:'none'})).data }
 async function withdrawTicketRefund(id){return publicRequest('/api/public/mini/table-tickets/'+encodeURIComponent(id)+'/withdraw',{method:'POST',data:{}})}
 async function decideTicketMove(id,accept){return publicRequest('/api/public/mini/table-ticket-moves/'+encodeURIComponent(id),{method:'POST',data:{accept}})}
 async function getTabPoints(){return (await publicRequest('/api/public/mini/old-tab-points')).data}
@@ -276,6 +276,10 @@ async function getActivityPreview(activityPublicId) {
 }
 async function getActivityLoyaltyBenefits(activityPublicId) {
   return (await publicRequest(`/api/public/community-activities/${encodeURIComponent(activityPublicId)}/loyalty-benefits`)).data
+}
+async function getActivityRegistrationHistory({id, before} = {}) {
+  const query = id ? '?id=' + encodeURIComponent(id) : before ? '?before=' + encodeURIComponent(before) : ''
+  return (await publicRequest('/api/public/mini/activity-registration-history' + query)).data
 }
 async function getActivityRegistrations() {
   return (await publicRequest('/api/public/mini/activity-registrations')).data
@@ -947,7 +951,7 @@ module.exports = {
   getProductRestrictions, withdrawProductRestriction,
   getCustomerPreferenceFacts, declareCustomerPreference, withdrawCustomerPreferenceSource,
   getRedemptionCatalog, getRedemptions, createRedemption, cancelRedemption,
-  getActivities, getActivity, getActivityPreview, getActivityLoyaltyBenefits, getActivityRegistrations,
+  getActivities, getActivity, getActivityPreview, getActivityLoyaltyBenefits, getActivityRegistrations, getActivityRegistrationHistory,
   updateActivityRegistrationContact, getVerifiedPhones, replaceVerifiedPhone, revokeVerifiedPhone,
   enrollMembership,
   startMembershipRecovery, verifyMembershipRecovery, updatePreferences,

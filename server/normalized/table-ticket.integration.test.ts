@@ -1,3 +1,4 @@
+import {orderCollectionBalancesCtesSql} from './order-collection-balances-sql.js'
 import {TableSessionRepository} from './table-session-repository.js'
 import {WaitlistRepository} from './waitlist-repository.js'
 import {tableManagementApiPlugin} from './table-management-api.js'
@@ -981,6 +982,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await expect(consentTicketDining(tx,bill,randomUUID())).rejects.toThrow()
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
       expect((await consentTicketDining(tx,bill,buyer)).amountMinor).toBe(50000)
+      const mealBalance=async()=>(await tx.query(`WITH ${orderCollectionBalancesCtesSql}
+        SELECT amount,effective_minor FROM collection_balances WHERE id=$3`,[scope.tenantId,scope.storeId,meal.id])).rows[0]
+      expect(await mealBalance()).toEqual({amount:'50000',effective_minor:'50000'})
+
       await expect(submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).rejects.toMatchObject({code:'TICKET_DINING_REVIEW_REQUIRED'})
       const cashier=new PaymentCommandService(commands,new NormalizedPaymentCapabilityAuthorization())
       const cashCommand={scope,actor:{type:'employee' as const,employeeId:employee},businessDate:dayBefore.day,idempotencyKey:randomUUID(),
@@ -988,6 +993,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         evidence:{receiptReference:randomUUID(),collectedByEmployeeId:employee}}
       const supplement=(await cashier.recordManual(cashCommand)).value
       expect(supplement.amountMinor).toBe(50000)
+      expect(await mealBalance()).toEqual({amount:'0',effective_minor:'50000'})
       expect((await cashier.recordManual(cashCommand)).replayed).toBe(true)
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
       const rewardBeforeRefund=await tx.query('SELECT eligible_amount_minor,awarded_points,awarded_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[meal.id])

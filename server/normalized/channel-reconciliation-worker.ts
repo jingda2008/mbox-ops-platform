@@ -21,12 +21,14 @@ export class ChannelReconciliationWorker{
    await tx.query(`WITH orphan_visits AS MATERIALIZED(
     SELECT v.id FROM mbox.channel_visits v WHERE v.tenant_id=$1 AND v.store_id=$2 AND v.closed_at IS NULL
      AND NOT EXISTS(SELECT 1 FROM mbox.channel_visit_tables t WHERE (t.tenant_id,t.store_id,t.visit_id)=(v.tenant_id,v.store_id,v.id))
-   ), closed_candidates AS MATERIALIZED(
-    SELECT v.id FROM orphan_visits v WHERE EXISTS(SELECT 1 FROM mbox.channel_effective_attributions a WHERE (a.tenant_id,a.store_id,a.visit_id)=($1,$2,v.id))
-     AND NOT EXISTS(SELECT 1 FROM mbox.channel_effective_attributions a
-      JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(a.tenant_id,a.store_id,a.order_id)
-      JOIN mbox.table_sessions s ON (s.tenant_id,s.store_id,s.id)=(o.tenant_id,o.store_id,o.table_session_id)
-      WHERE (a.tenant_id,a.store_id,a.visit_id)=($1,$2,v.id) AND s.status='open')
+   ), orphan_orders AS MATERIALIZED (
+    SELECT a.visit_id,a.order_id FROM mbox.channel_effective_attributions a
+    JOIN orphan_visits v ON v.id=a.visit_id WHERE a.tenant_id=$1 AND a.store_id=$2
+   ), closed_candidates AS (
+    SELECT a.visit_id AS id FROM orphan_orders a
+    LEFT JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=($1,$2,a.order_id)
+    LEFT JOIN mbox.table_sessions s ON (s.tenant_id,s.store_id,s.id)=(o.tenant_id,o.store_id,o.table_session_id)
+    GROUP BY a.visit_id HAVING count(*) FILTER(WHERE s.status='open')=0
    ) UPDATE mbox.channel_visits v SET closed_at=clock_timestamp(),version=version+1
     WHERE v.tenant_id=$1 AND v.store_id=$2 AND v.closed_at IS NULL AND v.id IN(SELECT id FROM closed_candidates)`,[scope.tenantId,scope.storeId])
    // Fulfillment is derived from actual goods, never from clicking redeem.

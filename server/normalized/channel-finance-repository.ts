@@ -23,8 +23,12 @@ export class ChannelFinanceRepository {
   const visit=(await this.tx.query<{batch_id:string;closed_at:string|null;source_review_required:boolean;rule:unknown}>(`SELECT v.source_batch_id AS batch_id,v.closed_at::text,v.source_review_required,b.rule_snapshot AS rule FROM mbox.channel_visits v JOIN mbox.channel_batches b ON (b.tenant_id,b.store_id,b.id)=(v.tenant_id,v.store_id,v.source_batch_id) WHERE v.tenant_id=$1 AND v.store_id=$2 AND v.id=$3 FOR UPDATE OF v`,[...this.scope,visitId])).rows[0]
   if(!visit)throw new ChannelDistributionError('NOT_FOUND',404)
   const rule=channelRuleSchema.parse(visit.rule)
-  // One SQL statement gives one coherent source snapshot under READ COMMITTED.
-  const orders=(await this.tx.query<OrderFact>(`SELECT o.id,o.status,mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id) AS settled,
+  // Take a fresh snapshot after the row lock: capture may have committed while we waited for the visit.
+  const candidates=await this.tx.query<{order_id:string}>(`SELECT order_id FROM mbox.channel_order_attributions
+    WHERE tenant_id=$1 AND store_id=$2 AND visit_id=$3
+    UNION SELECT order_id FROM mbox.channel_order_corrections WHERE tenant_id=$1 AND store_id=$2 AND visit_id=$3`,[...this.scope,visitId])
+  const orderIds=candidates.rows.map(row=>row.order_id)
+  const orders=orderIds.length===0 ? [] : (await this.tx.query<OrderFact>(`SELECT o.id,o.status,mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id) AS settled,
    EXISTS(SELECT 1 FROM mbox.pricing_authorizations a WHERE (a.tenant_id,a.store_id,a.order_id)=(o.tenant_id,o.store_id,o.id) AND a.status='consumed' AND a.kind='gift') AS gift,
    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'amount',p.amount_minor,'provider',p.provider,'status',p.status,'succeededAt',p.succeeded_at) ORDER BY p.id) FROM mbox.order_payment_facts p WHERE (p.tenant_id,p.store_id,p.order_id)=(o.tenant_id,o.store_id,o.id)),'[]') AS payments,
    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id,'amount',r.amount_minor,'status',r.status,'completedAt',r.completed_at) ORDER BY r.id) FROM mbox.order_refund_facts r WHERE (r.tenant_id,r.store_id,r.order_id)=(o.tenant_id,o.store_id,o.id)),'[]') AS refunds,
@@ -33,7 +37,7 @@ export class ChannelFinanceRepository {
     'fulfilled',i.status='delivered' OR (EXISTS(SELECT 1 FROM mbox.order_item_quantity_units u WHERE (u.tenant_id,u.store_id,u.order_item_id)=(i.tenant_id,i.store_id,i.id)) AND NOT EXISTS(SELECT 1 FROM mbox.order_item_quantity_units u WHERE (u.tenant_id,u.store_id,u.order_item_id)=(i.tenant_id,i.store_id,i.id) AND NOT u.operationally_stopped AND u.production_state<>'delivered')),
     'updatedAt',i.updated_at) ORDER BY i.id) FROM mbox.loyalty_order_item_basis b JOIN mbox.order_items i ON (i.tenant_id,i.store_id,i.id)=(b.tenant_id,b.store_id,b.order_item_id) WHERE (b.tenant_id,b.store_id,b.order_id)=(o.tenant_id,o.store_id,o.id)),'[]') AS lines
    FROM mbox.channel_effective_attributions a JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(a.tenant_id,a.store_id,a.order_id)
-   WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.visit_id=$3 ORDER BY o.id`,[...this.scope,visitId])).rows
+   WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.visit_id=$3 AND o.id=ANY($4::uuid[]) ORDER BY o.id`,[...this.scope,visitId,orderIds])).rows
   const reasons=new Set<string>(),evidence:Record<string,unknown>[]=[];let basis=0,latest=visit.closed_at?Date.parse(visit.closed_at):0
   if(!visit.closed_at)reasons.add('客组尚未结束')
   if(visit.source_review_required)reasons.add('原预约来源待主管按订单核对')

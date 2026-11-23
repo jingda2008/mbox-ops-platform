@@ -136,6 +136,13 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
         expect(actual.rows).toEqual(expected.rows)
         const summaryValues=[scope.tenantId,scope.storeId,reportDate,reportDate]
         const summary=await tx.query(operatingHistorySummariesSql,summaryValues)
+        const totals=await tx.query(`SELECT count(*)::integer AS "orderCount",
+          coalesce(sum(mbox.order_financial_receivable_amount(tenant_id,store_id,id)),0)::text AS "orderAmountMinor",
+          coalesce(sum(mbox.order_collection_due_amount(tenant_id,store_id,id)),0)::text AS "outstandingMinor"
+          FROM mbox.orders o WHERE tenant_id=$1 AND store_id=$2 AND business_date=$3 AND
+          (status NOT IN('draft','cancelled') OR EXISTS(SELECT 1 FROM mbox.order_carryover_debts d WHERE
+            (d.tenant_id,d.store_id,d.order_id)=(o.tenant_id,o.store_id,o.id) AND d.eligibility='confirmed'))`,summaryValues.slice(0,3))
+        expect(summary.rows[0]?.summary).toMatchObject(totals.rows[0]!)
         const authority=await tx.query(`SELECT mbox.operating_day_summary($1,$2,day::date) AS summary
           FROM generate_series($3::date::timestamp,$4::date::timestamp,interval '1 day') day ORDER BY day`,summaryValues)
         expect(summary.rows).toEqual(authority.rows)

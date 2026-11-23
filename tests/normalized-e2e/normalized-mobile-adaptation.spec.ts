@@ -216,6 +216,12 @@ test('manager mobile pages prioritize current actions and keep low-frequency det
   for (const [route, heading] of operationalRoutes.filter(([route]) => managerNavigation.has(route))) {
     await page.goto(route)
     await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    if (route === '/staff/payments') {
+      const summary = page.getByText('原挂桌单使用会员积分', { exact: true })
+      await summary.click()
+      await expect(page.getByRole('button', { name: '发给会员核对' })).toBeVisible()
+      await expectTouchTargets(page, '.cashier-tab-points', 'original tab points')
+    }
     await expectNoHorizontalOverflow(page, `portrait ${route}`)
     await expectTouchTargets(page, 'body', `portrait ${route}`)
   }

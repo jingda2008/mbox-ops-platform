@@ -94,7 +94,7 @@ interface CashierOnlinePaymentInput {
 
 function ExistingTabPoints({api}:{api:NormalizedApiClient}) {
   const [result,setResult]=useState(''),[busy,setBusy]=useState(false),[points,setPoints]=useState('')
-  return <details><summary>原挂桌单使用会员积分</summary><form onSubmit={async e=>{
+  return <details className="cashier-tab-points"><summary>原挂桌单使用会员积分</summary><form onSubmit={async e=>{
     e.preventDefault()
     const form=e.currentTarget,fields=new FormData(form),button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement
     const preview=button?.value==='maximum'

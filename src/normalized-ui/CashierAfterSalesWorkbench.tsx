@@ -972,6 +972,7 @@ function hasCompletedOrderRefund(order: CashierWorkbenchOrder) {
 
 function needsRefundAuthorization(order: CashierWorkbenchOrder) {
   if (order.tableSessionStatus === 'closed') return order.closedDebtRecovery?.status === 'authorization_required'
+  if(order.confirmedTicketDiningMinor && order.confirmedTicketDiningMinor===order.outstandingAmountMinor)return false
   return hasCompletedOrderRefund(order) && !(order.recollectionAuthorization && order.recollectionAuthorization.amountMinor === order.outstandingAmountMinor
       && Date.parse(order.recollectionAuthorization.expiresAt) > Date.now())
 }
@@ -1012,11 +1013,14 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
   const closedTableSession = order.tableSessionStatus === 'closed'
   const recovery = order.closedDebtRecovery
   const consumptionDebt=recovery?.kind==='consumption'
+  const ticketDining=recovery?.kind==='ticket_dining'
   const [collectionAmount,setCollectionAmount]=useState('')
   const amountMinor=collectionAmount.trim()?Math.round(Number(collectionAmount)*100):order.outstandingAmountMinor
   const validAmount=(!collectionAmount.trim()||/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(collectionAmount.trim()))&&Number.isSafeInteger(amountMinor)&&amountMinor>0&&amountMinor<=order.outstandingAmountMinor
   useEffect(()=>{setOnlineAction(null);setConfirmed(false);setShowScanner(false)},[order.id,order.outstandingAmountMinor,recovery?.status])
-  const recoveryDescription = `原营业日 ${recovery?.originalBusinessDate ?? order.businessDate ?? '待核对'}；仅登记当前实际收到的款项，按当前营业日入账并关联原订单，原桌次保持关闭。`
+  const recoveryDescription = ticketDining
+    ? `购票会员已确认本次补菜款 ¥${(order.outstandingAmountMinor/100).toFixed(2)}，请按原餐饮单登记实际收款。`
+    : `原营业日 ${recovery?.originalBusinessDate ?? order.businessDate ?? '待核对'}；仅登记当前实际收到的款项，按当前营业日入账并关联原订单，原桌次保持关闭。`
   const selectedProviderAllowed = !closedTableSession || provider === null
     || (provider === 'cash' ? actions.canRecordManualCash : provider === 'physical_pos' ? actions.canRecordManualPos : actions.canRecordManualExternal)
   useEffect(() => {
@@ -1075,7 +1079,7 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
         : '当前账号无“授权退款后重新收款”权限，请交给具备退款复核权限的收银处理。'}</p>}
     </div>
   }
-  if(closedTableSession&&!consumptionDebt&&order.settlementException&&['automatic_cutoff','customer_left'].includes(order.settlementException.reasonCode))return <div className="cashier-manual-collection is-blocked" role="status">历史账单仅供核对：原关桌记录不等于已付款或实际欠款。请核对送达、线下实收和原结算例外；本页不会自动恢复收款。</div>
+  if(closedTableSession&&!consumptionDebt&&!ticketDining&&order.settlementException&&['automatic_cutoff','customer_left'].includes(order.settlementException.reasonCode))return <div className="cashier-manual-collection is-blocked" role="status">历史账单仅供核对：原关桌记录不等于已付款或实际欠款。请核对送达、线下实收和原结算例外；本页不会自动恢复收款。</div>
   if (!canCollect) return closedTableSession && recovery?.status === 'available' && order.outstandingAmountMinor > 0
     ? <div className="cashier-manual-collection is-blocked" aria-label="已关桌订单补收"><div><strong>已关桌订单补收</strong><small>{recoveryDescription}</small></div><p className="cashier-guidance">当前账号没有人工收款登记权限，请交给具备对应收款方式权限的财务处理。</p></div>
     : !closedTableSession&&order.status!=='cancelled'&&order.outstandingAmountMinor>0
@@ -1110,9 +1114,10 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
     if (!confirmed) { setConfirmed(true); return }
     const completed = await onMutation(
       mutationKey,
-      '/api/payments/manual',
+      ticketDining?'/api/payments/manual/closed-debt':'/api/payments/manual',
       {
         orderId: order.id,
+        ...(ticketDining?{closedDebtGuard:{amountMinor:order.outstandingAmountMinor,authorizationId:recovery.confirmationId}}:{}),
         ...(consumptionDebt?{expectedOutstandingMinor:order.outstandingAmountMinor,amountMinor}:{}),
       ...(directBasis?{carryoverCollection:{basis:directBasis,receivableMinor:directBasis.maximumAmountMinor}}:{}),
         provider,

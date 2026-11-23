@@ -976,6 +976,10 @@ describe('paymentApiPlugin', () => {
     expect(value.commands.recordManual).toHaveBeenCalledWith(expect.objectContaining({closedDebtGuard:base.closedDebtGuard,orderId,orderIds:undefined,amountMinor:undefined}))
     for(const payload of [{orderId,provider:'cash',method:'cash'},{...base,amountMinor:1000},{...base,orderIds:[orderId]},{...base,closedDebtGuard:{amountMinor:0,authorizationId:orderId}},{...base,closedDebtGuard:{amountMinor:1000,authorizationId:'wrong'}}]) expect((await post(payload)).statusCode).toBe(400)
     expect(value.commands.recordManual).toHaveBeenCalledTimes(1)
+    value.commands.recordManual.mockRejectedValueOnce(Object.assign(new Error('原菜款或退菜记录已变化，请核对原售后'),{code:'P0001'}))
+    const changed=await post(base)
+    expect(changed.statusCode).toBe(409)
+    expect(changed.json().error).toMatchObject({code:'TICKET_DINING_AMOUNT_CHANGED',commitDisposition:'not_committed'})
     await value.app.close()
   })
   it('records cash or physical POS evidence with the authenticated employee, not a body actor', async () => {

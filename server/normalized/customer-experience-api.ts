@@ -618,10 +618,11 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
             FROM mbox.table_ticket_refund_requests f LEFT JOIN mbox.refunds cash ON(cash.tenant_id,cash.store_id,cash.id)=(f.tenant_id,f.store_id,f.refund_id)
             WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) ORDER BY f.created_at DESC LIMIT 1),
           'dining',coalesce((SELECT jsonb_agg(jsonb_build_object('id',c.id,'caseStatus',f.status,'closing',f.close_intent,'amountMinor',c.amount_minor,'items',c.line_snapshot,'reason',c.reason,'confirmed',c.consented_at IS NOT NULL,'paymentStatus',CASE WHEN back.amount>=pay.amount_minor THEN 'refunded' WHEN back.amount>0 THEN 'partially_refunded' ELSE pay.status END,
-            'returnedMinor',back.amount)) FROM mbox.table_ticket_refund_requests f JOIN mbox.ticket_dining_collections c ON(c.tenant_id,c.store_id,c.case_id)=(f.tenant_id,f.store_id,f.id) LEFT JOIN mbox.payments pay ON(pay.tenant_id,pay.store_id,pay.id)=(c.tenant_id,c.store_id,c.payment_id)
+            'returnedMinor',back.amount,'returnStatus',supplement_return.status,'merchantAssumes',f.merchant_assumes_dining)) FROM mbox.table_ticket_refund_requests f JOIN mbox.ticket_dining_collections c ON(c.tenant_id,c.store_id,c.case_id)=(f.tenant_id,f.store_id,f.id) LEFT JOIN mbox.payments pay ON(pay.tenant_id,pay.store_id,pay.id)=(c.tenant_id,c.store_id,c.payment_id)
+            LEFT JOIN mbox.refunds supplement_return ON (supplement_return.tenant_id,supplement_return.store_id,supplement_return.id)=(c.tenant_id,c.store_id,c.return_refund_id)
             LEFT JOIN LATERAL(SELECT coalesce(sum(rb.amount_minor),0) amount FROM mbox.refunds rb
               WHERE(rb.tenant_id,rb.store_id,rb.payment_id)=(c.tenant_id,c.store_id,c.payment_id) AND rb.status='succeeded') back ON true
-            WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id)),'[]'::jsonb),
+            WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND c.superseded_at IS NULL),'[]'::jsonb),
           'doorCode',CASE WHEN k.refunded_at IS NULL AND NOT EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id) WHERE NOT active) THEN k.door_code END,'pointsPosted',own_lot.id IS NOT NULL,'remainingPoints',own_lot.remaining_points,'expiresAt',mbox.table_ticket_expiry(k.paid_at)) ORDER BY k.ordinal)
           FROM mbox.table_tickets k LEFT JOIN mbox.loyalty_point_lots own_lot ON (own_lot.tenant_id,own_lot.store_id,own_lot.id,own_lot.membership_id)=(k.tenant_id,k.store_id,k.point_lot_id,p.membership_id)
           LEFT JOIN mbox.reservation_table_locks l ON (l.tenant_id,l.store_id,l.id)=(k.tenant_id,k.store_id,k.reservation_lock_id)
@@ -643,10 +644,18 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(offerId)) throw new CustomerExperienceRequestError('票档编号不正确')
     if(body.proposalId!==undefined && (typeof body.proposalId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.proposalId)))throw new CustomerExperienceRequestError('代售单号不正确')
     if(body.reservationLockId!==undefined && (typeof body.reservationLockId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.reservationLockId)))throw new CustomerExperienceRequestError('预约编号不正确')
-    const result=await options.service.purchaseTableTickets(context,{offerId,...(typeof body.reservationLockId==='string'?{reservationLockId:body.reservationLockId}:{}),...(typeof body.proposalId==='string'?{proposalId:body.proposalId}:{}),quantity:integer(body.quantity,'桌数',1,2147483647),
-      safetyVersion:text(body.safetyVersion,'安全条款',1,64),refundVersion:text(body.refundVersion,'退票条款',3,64)},
-      idempotencyKey(request),await options.resolveActivityPaymentReady?.(context.scope,context.customerId)??false)
-    return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
+    try{
+      const result=await options.service.purchaseTableTickets(context,{offerId,...(typeof body.reservationLockId==='string'?{reservationLockId:body.reservationLockId}:{}),...(typeof body.proposalId==='string'?{proposalId:body.proposalId}:{}),quantity:integer(body.quantity,'桌数',1,2147483647),
+        safetyVersion:text(body.safetyVersion,'安全条款',1,64),refundVersion:text(body.refundVersion,'退票条款',3,64)},
+        idempotencyKey(request),await options.resolveActivityPaymentReady?.(context.scope,context.customerId)??false)
+      return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
+    }catch(error){
+      // Only an explicit business rejection of this command proves no order was committed.
+      if(error instanceof CustomerExperienceRequestError && ['TICKET_CAPACITY_FULL','TICKET_SALES_WINDOW','TICKET_OFFER_CHANGED',
+        'TICKET_ASSISTANCE_CHANGED','TICKET_RESERVATION_MISMATCH','TICKET_MEMBERSHIP_PHONE_REQUIRED','WECHAT_IDENTITY_REQUIRED'].includes(error.code))
+        return reply.code(error.statusCode).send({error:{code:error.code,message:error.message,commitDisposition:'not_committed'}})
+      throw error
+    }
   }))
 
   app.get('/public/mini/activities', async (request, reply) => handle(reply, async () => {

@@ -110,7 +110,13 @@ Page({
     const answer=await new Promise(resolve=>wx.showModal({title:'确认原菜品补款',content:'本次确认 '+money(Number(amount))+'，由门店在原餐饮单收取。',success:resolve,fail:()=>resolve({confirm:false})}))
     if(!answer.confirm)return
     this.setData({busy:true,error:''})
-    try{await api.confirmTicketDining(id);await this.refresh()}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+    try{
+      await api.confirmTicketDining(id)
+      await this.refresh()
+    }catch(e){
+      await this.refresh()
+      this.setData({error:e.message||'请在原票核对最新补款明细'})
+    }finally{this.setData({busy:false})}
   },
   async refund(event){
     if(this.data.busy)return

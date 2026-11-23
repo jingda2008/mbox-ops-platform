@@ -258,7 +258,7 @@ async function refundTableTicket(orderId,ticketId,reason) {
 }
 async function getMyTableTickets() { return (await publicRequest('/api/public/mini/table-ticket-purchases')).data }
 async function buyTableTickets(input, initialKey) {
-  return recoverableMemberWrite('table-ticket-purchase:'+input.offerId,'/api/public/mini/table-ticket-purchases','POST',input,[],{initialKey})
+  return recoverableMemberWrite('table-ticket-purchase:'+input.offerId,'/api/public/mini/table-ticket-purchases','POST',input,[],{initialKey,clearOnNotCommitted:true})
 }
 async function getActivities() { return (await publicRequest('/api/public/mini/activities')).data }
 async function getActivity(activityPublicId) {

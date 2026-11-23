@@ -207,6 +207,11 @@ implements PaymentCapabilityAuthorizationPort {
       if (error instanceof EmployeeTableAccessDeniedError) {
         if (input.allowClosedDebtRecovery) {
           const recovery=await lockClosedDebtRecovery(input.transaction,input.orderId)
+          if(recovery?.ticketDiningId){
+            await this.assertEmployeeCapability({...input,capability:'payment.collect.all_tables'})
+            await this.assertEmployeeCapability({...input,capability:'payment.recollect.authorize'})
+            return
+          }
           if(recovery?.carryover || (await input.transaction.query<{eligible:boolean}>(
             'SELECT mbox.carryover_tab_review_basis($1,$2,$3) IS NOT NULL AS eligible',
             [input.transaction.scope.tenantId,input.transaction.scope.storeId,input.orderId])).rows[0]?.eligible){

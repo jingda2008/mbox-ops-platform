@@ -1624,6 +1624,10 @@ async function handleRoute(
 }
 
 function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
+  if (error instanceof Error && 'code' in error && error.code==='P0001'
+    && error.message.startsWith('原菜款或退菜记录已变化')) {
+    return apiError(409,'TICKET_DINING_AMOUNT_CHANGED','原菜款或退菜记录已变化。请回到原票核对补款并重新确认，本次收款未登记。','not_committed')
+  }
   if (error instanceof ProductSaleQuantityUnavailableError) return apiError(409, 'PRODUCT_SALE_QUANTITY_UNAVAILABLE', error.reason)
   if (error instanceof InventoryReturnCostProjectionBusyError) {
     return { statusCode: 503, body: { error: { code: error.code, message: error.message, retryable: true } } }

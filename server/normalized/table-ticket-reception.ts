@@ -18,7 +18,7 @@ export async function ticketReception(tx:ScopedTransaction,activityPublicId:stri
       coalesce(move.starts_at,p.starts_at)::text AS "startsAt",coalesce(move.ends_at,p.ends_at)::text AS "endsAt",effective.title AS "effectiveTitle",latest.status AS "moveStatus",o.area_id AS "areaId", tab.id AS "tableId",
       fix.id AS "correctionId",fix.reason AS "correctionReason",fix.consumed_points AS "correctionUsed",fix.consumption_resolution AS resolution, (lot.membership_id<>p.membership_id OR (lot.original_points<>o.gift_points AND NOT EXISTS(
         SELECT 1 FROM mbox.table_ticket_corrections done WHERE(done.tenant_id,done.store_id,done.ticket_id,done.replacement_lot_id)=(k.tenant_id,k.store_id,k.id,lot.id) AND done.status='approved'))) AS "wrongGift",
-      lot.original_points AS "issuedPoints",lot.remaining_points AS "remainingPoints" , tab.display_name AS "tableName",o.gift_points AS "giftPoints",f.id AS "refundCase",f.closed_without_receipt AS "cashZero",f.status AS "refundStatus",f.source_review_required AS "needsReview",f.consumed_minor::text AS "consumedMinor",o.price_minor AS "priceMinor",k.refunded_at::text AS "refundedAt"
+      lot.original_points AS "issuedPoints",lot.remaining_points AS "remainingPoints" , tab.display_name AS "tableName",o.gift_points AS "giftPoints",f.id AS "refundCase",f.closed_without_receipt AS "cashZero",f.status AS "refundStatus",coalesce(b.requires_review,f.source_review_required) AS "needsReview",coalesce(b.consumed_minor,f.consumed_minor)::text AS "consumedMinor",o.price_minor AS "priceMinor",k.refunded_at::text AS "refundedAt"
     FROM mbox.table_tickets k JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
     JOIN mbox.table_ticket_offers o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
     JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(k.tenant_id,k.store_id,k.registration_id)
@@ -36,6 +36,7 @@ export async function ticketReception(tx:ScopedTransaction,activityPublicId:stri
     LEFT JOIN mbox.reservation_table_locks l ON (l.tenant_id,l.store_id,l.id)=(k.tenant_id,k.store_id,k.reservation_lock_id)
     LEFT JOIN mbox.tables tab ON (tab.tenant_id,tab.store_id,tab.id)=(l.tenant_id,l.store_id,mbox.ticket_current_table(l.tenant_id,l.store_id,l.id))
     LEFT JOIN mbox.table_ticket_refund_requests f ON (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('rejected','cancelled')
+    LEFT JOIN LATERAL mbox.ticket_refund_basis(f.tenant_id,f.store_id,f.ticket_id) b ON f.status='review' AND f.close_intent IS NULL
     WHERE k.tenant_id=$1 AND k.store_id=$2 AND (a.public_id=$3 OR effective.public_id=$3) ORDER BY k.paid_at DESC,k.registration_id,k.ordinal`,scope)).rows
   const tables=(await tx.query(`SELECT id,display_name AS name,area_id AS "areaId" FROM mbox.tables
     WHERE tenant_id=$1 AND store_id=$2 AND status='available' ORDER BY code`,scope.slice(0,2))).rows
@@ -157,7 +158,7 @@ export async function ticketStatement(tx:ScopedTransaction,id:string){
     JOIN mbox.orders o ON(o.tenant_id,o.store_id,o.id)=(c.tenant_id,c.store_id,c.order_id)
     LEFT JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(c.tenant_id,c.store_id,c.payment_id)
     LEFT JOIN mbox.refunds r ON(r.tenant_id,r.store_id,r.id)=(c.tenant_id,c.store_id,c.return_refund_id)
-    WHERE (f.tenant_id,f.store_id,f.ticket_id)=($1,$2,$3) ORDER BY c.created_at,c.id`,scope)).rows
+    WHERE (f.tenant_id,f.store_id,f.ticket_id)=($1,$2,$3) AND c.superseded_at IS NULL ORDER BY c.created_at,c.id`,scope)).rows
   return {ticket,points,refunds,dining}
 }
 

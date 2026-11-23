@@ -72,6 +72,31 @@ function workbench(status: RecoveryStatus): CashierWorkbenchView {
   }
 }
 
+test('cashier uses the member-confirmed ticket supplement on the closed original order',async({page})=>{
+  await login(page)
+  const view=workbench('available'),order=view.orders[0]!
+  const confirmationId='20000000-0000-4000-8000-000000000001'
+  order.closedDebtRecovery={...order.closedDebtRecovery!,kind:'ticket_dining',confirmationId}
+  order.recollectionAuthorization=null
+  order.confirmedTicketDiningMinor=order.outstandingAmountMinor=20000
+  order.payments=[]
+  const receipts:unknown[]=[]
+  await page.route('**/api/payments/workbench?*',route=>route.fulfill({json:{data:view}}))
+  await page.route('**/api/payments/manual/closed-debt',async route=>{
+    receipts.push(route.request().postDataJSON())
+    await route.fulfill({status:201,json:{data:{id:'local-receipt'}}})
+  })
+  await page.goto('/staff/payments')
+  const card=page.locator('[data-cashier-order-id="closed-debt-order"]')
+  await card.locator('.cashier-order-toggle').click()
+  await expect(card.getByText(/购票会员已确认本次补菜款/)).toBeVisible()
+  await card.getByRole('button',{name:'登记现金收款',exact:true}).click()
+  await card.getByRole('button',{name:'核对并继续',exact:true}).click()
+  await card.getByRole('button',{name:'确认已收到现金',exact:true}).click()
+  await expect.poll(()=>receipts.length).toBe(1)
+  expect(receipts[0]).toMatchObject({orderId:order.id,provider:'cash',closedDebtGuard:{authorizationId:confirmationId,amountMinor:20000}})
+})
+
 test('closed debt queries the original unknown payment before authorization and actual manual receipt', async ({ page }, testInfo) => {
   await login(page)
   let state: RecoveryStatus = 'pending_payment'

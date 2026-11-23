@@ -1,3 +1,4 @@
+import {pendingTicketDining} from './pending-ticket-dining.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {RecollectionAuthorizationConflictError} from './recollection-authorization-repository.js'
@@ -61,7 +62,7 @@ export function closedDebtEligibilitySql(order='orders',session='session'):strin
 
 export interface ClosedDebtRecovery {
   orderId:string;tableSessionId:string;originalBusinessDate:string;closedAt:string
-  carryover?:boolean;reviewReason?:string|null;outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
+  ticketDiningId?:string;carryover?:boolean;reviewReason?:string|null;outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
 }
 
 export interface ClosedDebtPaymentTargets {
@@ -134,6 +135,10 @@ export async function lockClosedDebtRecovery(tx:ScopedTransaction,orderId:string
     WHERE orders.tenant_id=$1 AND orders.store_id=$2 AND orders.id=$3 AND session.id=$4`,[...args,sessionId])
   const row=result.rows[0]
   if(!row)throw new RecollectionAuthorizationConflictError('原订单归属已变化，请刷新后核对')
+  const dining=await pendingTicketDining(tx,orderId)
+  if(dining)return {orderId,tableSessionId:sessionId,ticketDiningId:dining.id,
+    originalBusinessDate:row.original_business_date,closedAt:row.closed_at,outstandingAmountMinor:Number(dining.amount_minor),
+    eligible:true,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:dining.id}
   const debt=await readCarryoverDebt(tx,orderId)
   return {orderId,tableSessionId:sessionId,carryover:debt!==null,reviewReason:debt?.reviewReason,originalBusinessDate:row.original_business_date,closedAt:row.closed_at,
     outstandingAmountMinor:Number(row.due),eligible:debt?debt.eligibility==='confirmed':row.eligible,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:row.authorization_id}

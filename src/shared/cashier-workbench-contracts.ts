@@ -208,7 +208,8 @@ export interface CashierWorkbenchOrder {
   points?:{used:number;restored:number;credited:number;state:'held'|'consumed'|'released'}
   /** Closed sessions retain their original table/day; only proven old debt may be collected. */
   closedDebtRecovery?: {
-    kind?:'consumption'
+    kind?:'consumption'|'ticket_dining'
+    confirmationId?:string
     reviewReason?:string|null
     status:'available'|'authorization_required'|'pending_payment'|'permission_required'|'ineligible'|'settled'
     originalBusinessDate:string
@@ -232,6 +233,7 @@ export interface CashierWorkbenchOrder {
   originalAmountMinor?: number
   receivableIncreaseMinor?:number; stoppedAmountMinor?: number
   totalAmountMinor: number
+  confirmedTicketDiningMinor?: number
   outstandingAmountMinor: number
   /** Confirmed net receipts above the order total; resolve from this order's refund controls. */
   overCollectedAmountMinor: number

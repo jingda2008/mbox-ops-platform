@@ -53,6 +53,7 @@
         <view wx:for="{{ticket.dining}}" wx:for-item="bill" wx:key="id">
           <view>{{bill.reason}}</view><view wx:for="{{bill.items}}" wx:for-item="line" wx:key="portionId">{{line.orderNo}} · {{line.name}} · 原价 ¥{{line.priceMinor / 100}} · 本票已抵 ¥{{line.usedMinor / 100}}</view>
           <button wx:if="{{!bill.confirmed && bill.caseStatus==='review' && !bill.closing}}" data-id="{{bill.id}}" data-amount="{{bill.amountMinor}}" bindtap="confirmDining" disabled="{{busy}}">确认补款 ¥{{bill.amountMinor / 100}}</button>
+          <text wx:elif="{{bill.merchantAssumes && bill.confirmed && bill.paymentStatus !== 'refunded'}}">{{bill.returnStatus === 'requested' || bill.returnStatus === 'approved' || bill.returnStatus === 'processing' ? '门店承担补款，正在办理原路退回' : bill.returnStatus ? '补款退款待门店核对' : bill.paymentStatus === 'pending' || bill.paymentStatus === 'created' ? '门店承担补款，原付款结果待确认' : '门店承担本次补款'}} · ¥{{bill.amountMinor / 100}}</text>
           <text wx:elif="{{bill.confirmed}}">{{bill.paymentStatus === 'refunded' ? '补菜款已退回' : bill.paymentStatus === 'partially_refunded' ? '补菜款已部分退回' : bill.paymentStatus === 'succeeded' ? '菜款已收' : bill.caseStatus==='review' && !bill.closing ? '已确认，等待门店在原菜品单收款' : '补款处理已结束'}} · ¥{{bill.returnedMinor ? bill.returnedMinor / 100 : bill.amountMinor / 100}}</text>
         </view>
         <button wx:if="{{!ticket.refundStatus}}" size="mini" data-order="{{item.registrationPublicId}}" data-ticket="{{ticket.id}}" bindtap="refund" disabled="{{busy}}">原单退票</button>

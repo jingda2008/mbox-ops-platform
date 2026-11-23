@@ -1,3 +1,4 @@
+import {pendingTicketDining} from './pending-ticket-dining.js'
 import {creditTableTicketGifts} from './table-ticket-gifts.js'
 import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
 import { orderHasPendingTableCreditSql, unpostedCaptureSql, verifiedCaptureSql } from './verified-capture-sql.js'
@@ -493,7 +494,10 @@ export class PaymentRepository {
     // on collection. The order lock and confirmed settlement still bound new attempts.
     const dueMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
     if(dueMinor<=0)throw new OrderNotPayableError(order.id,'the order has no outstanding balance')
-    const outstandingMinor = input.amountMinor??dueMinor
+    const dining=await pendingTicketDining(this.transaction,order.id)
+    const supplementMinor=dining?toSafeMinor(dining.amount_minor,'confirmed dining supplement'):null
+    const outstandingMinor = input.amountMinor??supplementMinor??dueMinor
+    if(supplementMinor!==null && outstandingMinor!==supplementMinor)throw new PaymentEvidenceError('请按会员确认的原菜品补款金额单独收款')
     if(!Number.isSafeInteger(outstandingMinor)||outstandingMinor<=0||outstandingMinor>dueMinor||input.amountMinor!==undefined&&!carryover)throw new OrderNotPayableError(order.id,'收款金额超过剩余欠款或不支持单笔分次收款')
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
@@ -506,7 +510,7 @@ export class PaymentRepository {
     // A refund records money leaving the venue. It must not by itself reopen a
     // customer payment link: an explicit, short-lived cashier authorization is
     // locked and consumed together with the replacement payment below.
-    const recollection = await new RecollectionAuthorizationRepository(this.transaction).prepareForPayment({
+    const recollection = supplementMinor!==null ? {authorizationId:null} : await new RecollectionAuthorizationRepository(this.transaction).prepareForPayment({
       orderId: order.id,
       outstandingMinor,
       refundedMinor: toSafeMinor(settlement.refunded_minor, 'refunded'),
@@ -537,7 +541,7 @@ export class PaymentRepository {
       outstandingMinor,
       order.currency,
       status,
-      JSON.stringify(sanitizeProviderSnapshot(input.evidence)),
+      JSON.stringify({...sanitizeProviderSnapshot(input.evidence),...(dining?{ticketDiningApprovalId:dining.id}:{})}),
     ])
     const payment = onePayment(inserted, 'Creating a payment did not insert exactly one row')
     await new RecollectionAuthorizationRepository(this.transaction).consume(recollection.authorizationId, payment.id)

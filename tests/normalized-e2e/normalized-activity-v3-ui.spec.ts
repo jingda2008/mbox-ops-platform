@@ -89,7 +89,6 @@ test('固定套餐编辑保留人数上限、菜量与时间字段，窄屏可�
 })
 
 test('运营在原场次上架桌票，公共菜单读回票价、赠分、预告和下架',async({page})=>{
-  test.skip(process.env.NORMALIZED_E2E_TABLE_TICKETS!=='true','需要隔离票务场次')
   test.setTimeout(120_000)
   // First publication changes the entire store's opening rules. Give this test its own store.
   const directory=await mkdtemp(join(tmpdir(),'mbox-ticket-browser-'))
@@ -97,7 +96,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
   const port=Number(process.env.NORMALIZED_E2E_PORT??18789)+10,origin='http://127.0.0.1:'+port
   const server=spawn(process.execPath,['--import','tsx','scripts/start-normalized-browser-e2e.ts'],{stdio:'ignore',env:{
     ...process.env,TEST_NORMALIZED_ADMIN_URL:process.env.TEST_NORMALIZED_ADMIN_URL??'postgresql://postgres:mbox_test_only@127.0.0.1:55441/postgres',
-    NORMALIZED_E2E_PORT:String(port),NORMALIZED_E2E_FIXTURE_FILE:fixturePath,MBOX_STATIC_DIR:'dist',
+    NORMALIZED_E2E_TABLE_TICKETS:'true',NORMALIZED_E2E_PORT:String(port),NORMALIZED_E2E_FIXTURE_FILE:fixturePath,MBOX_STATIC_DIR:'dist',
   }})
   const exited=new Promise<void>(resolve=>server.once('close',()=>resolve()))
   try{

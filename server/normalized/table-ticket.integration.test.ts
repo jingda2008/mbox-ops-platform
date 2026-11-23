@@ -167,6 +167,12 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const b=await saveTicketOffer(tx,activity,editor,{...offerInput,status:'draft',areaId:other})
       const selection=[{areaId:area,version:a.version},{areaId:other,version:b.version}]
       await expect(publishTicketDrafts(tx,activity,editor,selection,1)).rejects.toMatchObject({code:'TICKET_SELF_REVIEW'})
+      const freeTemplateEvent=randomUUID()
+      await tx.query(`INSERT INTO mbox.community_activities SELECT (jsonb_populate_record(NULL::mbox.community_activities,
+        to_jsonb(a)||jsonb_build_object('id',$4::text,'public_id',$4::text,'refund_policy_summary','免费活动可在开始前取消'))).*
+        FROM mbox.community_activities a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.public_id=$3`,[scope.tenantId,scope.storeId,activity,freeTemplateEvent])
+      await approveEventTicketTerms(tx,freeTemplateEvent,employee,{organizer:'本场主办',seller:'门店',approvalReference:'场次核实',performers:'驻场乐团',durationMinutes:90,programNote:'现场演出',serviceContact:'现场客服',refundSchedule:'开演之前可按票面全额退票',requiresNamedAttendees:false},0)
+      await expect(saveTicketOffer(tx,freeTemplateEvent,employee,offerInput)).rejects.toMatchObject({code:'TICKET_REFUND_TERMS_INVALID'})
       await tx.query('SAVEPOINT stale_batch')
       await expect(publishTicketDrafts(tx,activity,employee,[selection[0]!,{...selection[1]!,version:9}],1)).rejects.toMatchObject({code:'TICKET_VERSION_CHANGED'})
       await tx.query('ROLLBACK TO SAVEPOINT stale_batch')

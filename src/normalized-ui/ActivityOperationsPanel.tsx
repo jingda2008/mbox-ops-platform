@@ -443,7 +443,7 @@ export function ActivityOperationsPanel({ api, auth, ticketCatalog=false }: {tic
       const source=draftFromActivity(activity)
       startCreate(true,{...emptyDraft(),ticketOnly:true,startsAt:'',endsAt:'',title:source.title,assemblyLocation:source.assemblyLocation,
         coverUrl:source.coverUrl,activityDetails:source.activityDetails,capacity:source.capacity,safetyRequirements:source.safetyRequirements,
-        refundPolicySummary:source.refundPolicySummary,safetyAcknowledgementText:source.safetyAcknowledgementText,
+        refundPolicySummary:source.refundPolicySummary.trim()==='免费活动可在开始前取消'?'':source.refundPolicySummary,safetyAcknowledgementText:source.safetyAcknowledgementText,
         contactInstructions:source.contactInstructions,paymentRuleText:source.paymentRuleText,reason:'复制演出并建立新场次',
         ticketRows:result.data.filter(r=>r.status==='published').map(r=>({areaId:r.areaId,name:r.name,price:String(r.priceMinor/100),points:String(r.giftPoints??'')}))})
     }catch(e){setNotice(message(e,'无法复制原场次'))}finally{setBusy('')}

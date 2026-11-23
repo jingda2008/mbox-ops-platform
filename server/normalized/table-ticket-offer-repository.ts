@@ -79,8 +79,8 @@ export async function ticketOfferCatalog(tx: ScopedTransaction, activityPublicId
 
 export async function saveTicketOffer(tx: ScopedTransaction, activityPublicId: string, actor: string, input: TableTicketOfferInput) {
   const scope = [tx.scope.tenantId, tx.scope.storeId]
-  const activity = (await tx.query<{id:string;status:string;visibility:string;valid:boolean}>(`
-    SELECT id,status,visibility,(ends_at > clock_timestamp() AND approved_by_employee_id IS NOT NULL
+  const activity = (await tx.query<{id:string;status:string;visibility:string;valid:boolean;refund_policy_summary:string|null}>(`
+    SELECT id,status,visibility,refund_policy_summary,(ends_at > clock_timestamp() AND approved_by_employee_id IS NOT NULL
       AND refund_policy_version IS NOT NULL AND safety_policy_version IS NOT NULL) AS valid
     FROM mbox.community_activities WHERE tenant_id=$1 AND store_id=$2 AND public_id=$3 FOR UPDATE`,
     [...scope, activityPublicId])).rows[0]
@@ -92,6 +92,8 @@ export async function saveTicketOffer(tx: ScopedTransaction, activityPublicId: s
     if (input.giftPoints === null) throw new ActivityOperationsError('请填写赠分数量，无赠分请填 0','TICKET_PUBLISH_INCOMPLETE',409)
     if (!terms) throw new ActivityOperationsError('请先填写并确认本场公示资料','TICKET_EVENT_TERMS_REQUIRED',409)
     validateRefundDisclosure(terms.refund_schedule,terms.service_contact)
+    if(input.priceMinor>0 && activity.refund_policy_summary?.trim()==='免费活动可在开始前取消')
+      throw new ActivityOperationsError('本场仍沿用免费活动的默认退款说明，请核实付费门票适用的规则。','TICKET_REFUND_TERMS_INVALID',409)
     if (terms.requires_named_attendees) throw new ActivityOperationsError('逐人实名场次须使用实名票务流程','TICKET_EVENT_TERMS_REQUIRED',409)
     if (input.expectedTermsVersion !== undefined && terms.version !== input.expectedTermsVersion) throw new ActivityOperationsError('公示版本已变化，请刷新票档后重新核对','TICKET_TERMS_CHANGED',409)
   }

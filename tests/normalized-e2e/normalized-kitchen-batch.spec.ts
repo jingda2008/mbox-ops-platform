@@ -18,6 +18,8 @@ async function data(page:Page){const response=await page.request.get('/api/comme
 async function choose(page:Page,quantity:number){
   await board(page).getByRole('region',{name:'待制作',exact:true}).getByRole('button').filter({hasText:'隔离合批薯条'}).first().click()
   await board(page).getByLabel('本批份数',{exact:true}).fill(String(quantity))
+  const settings=board(page).locator('details').filter({has:page.locator('summary',{hasText:'制作设置'})})
+  if(await settings.getAttribute('open')===null)await settings.locator('summary').click()
   await board(page).getByLabel('实际设备',{exact:true}).fill('隔离炸篮 A')
 }
 test('完整桌号搜索不混入其他桌订单号或编号前缀',async({page},testInfo)=>{

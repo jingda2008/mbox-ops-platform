@@ -215,7 +215,7 @@ export class LoyaltyAccrualRepository {
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.orderId])
     const collection=!(await this.hasTicketDining())?undefined:(await this.transaction.query<{id:string;eligible:string;rewarded_minor:string|null}>(`
-      SELECT c.id,c.rewarded_minor,coalesce((SELECT sum((line->>'usedMinor')::bigint) FROM jsonb_array_elements(c.line_snapshot) line WHERE line->>'eligible'='true'),0)::text eligible
+      SELECT c.id,c.rewarded_minor,coalesce((SELECT sum(coalesce(line->>'customerMinor',line->>'usedMinor')::bigint) FROM jsonb_array_elements(c.line_snapshot) line WHERE line->>'eligible'='true'),0)::text eligible
       FROM mbox.ticket_dining_collections c WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.order_id=$3 AND c.payment_id=$4 AND c.consented_at IS NOT NULL FOR UPDATE`,
       [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderId,input.paymentId])).rows[0]
     if(collection && collection.rewarded_minor!==null)return NO_OP

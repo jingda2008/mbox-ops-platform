@@ -1,3 +1,4 @@
+import {ticketDiningLines} from './table-ticket-dining.js'
 import {publicTableTickets} from './table-ticket-purchase.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
 import {ReservationRepository,ReservationConflictError} from './reservation-repository.js'
@@ -145,11 +146,11 @@ export async function ticketStatement(tx:ScopedTransaction,id:string){
   const points=(await tx.query(`SELECT l.id AS lot,m.movement_type AS kind,m.points_delta AS delta,m.balance_after AS remaining,m.occurred_at AS at
     FROM mbox.loyalty_point_lots l JOIN mbox.loyalty_point_lot_movements m ON(m.tenant_id,m.store_id,m.lot_id)=(l.tenant_id,l.store_id,l.id)
     WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.source_type='table_ticket' AND l.source_id=$3::text ORDER BY m.occurred_at,m.id`,scope)).rows
-  const refunds=(await tx.query(`SELECT f.id,f.status,f.close_reason AS "closeReason",f.closed_without_receipt AS "zeroCash",
-    r.public_id AS receipt,r.status AS "cashStatus",r.amount_minor AS "cashMinor",r.completed_at AS "paidAt"
+  const refunds=(await tx.query<{id:string;status:string;closeReason:string|null;zeroCash:boolean;merchantAssumes:boolean;consumedMinor:string;receipt:string|null;cashStatus:string|null;cashMinor:string|null;paidAt:Date|null}>(`SELECT f.id,f.status,f.close_reason AS "closeReason",f.closed_without_receipt AS "zeroCash",
+    f.merchant_assumes_dining AS "merchantAssumes",f.consumed_minor AS "consumedMinor",r.public_id AS receipt,r.status AS "cashStatus",r.amount_minor AS "cashMinor",r.completed_at AS "paidAt"
     FROM mbox.table_ticket_refund_requests f LEFT JOIN mbox.refunds r ON(r.tenant_id,r.store_id,r.id)=(f.tenant_id,f.store_id,f.refund_id)
     WHERE (f.tenant_id,f.store_id,f.ticket_id)=($1,$2,$3) ORDER BY f.created_at,f.id`,scope)).rows
-  const dining=(await tx.query(`SELECT o.public_id AS "orderNo",c.amount_minor AS "amountMinor",p.public_id AS receipt,p.status AS "paymentStatus",
+  const dining=(await tx.query(`SELECT o.public_id AS "orderNo",c.amount_minor AS "amountMinor",c.merchant_minor AS "merchantMinor",c.reason,c.consented_at AS "confirmedAt",p.public_id AS receipt,p.status AS "paymentStatus",
     p.succeeded_at AS "paidAt",r.public_id AS "returnNo",r.status AS "returnStatus",r.completed_at AS "returnedAt",
     (SELECT coalesce(jsonb_agg(jsonb_build_object('receipt',back.public_id,'amountMinor',back.amount_minor,'status',back.status)
         ORDER BY back.created_at,back.id),'[]'::jsonb) FROM mbox.refunds back
@@ -159,7 +160,9 @@ export async function ticketStatement(tx:ScopedTransaction,id:string){
     LEFT JOIN mbox.payments p ON(p.tenant_id,p.store_id,p.id)=(c.tenant_id,c.store_id,c.payment_id)
     LEFT JOIN mbox.refunds r ON(r.tenant_id,r.store_id,r.id)=(c.tenant_id,c.store_id,c.return_refund_id)
     WHERE (f.tenant_id,f.store_id,f.ticket_id)=($1,$2,$3) AND c.superseded_at IS NULL ORDER BY c.created_at,c.id`,scope)).rows
-  return {ticket,points,refunds,dining}
+  const review=refunds.find(row=>row.status==='review')
+  const originalDishes=review?(await ticketDiningLines(tx,review.id)).filter(line=>line.usedMinor>0):[]
+  return {ticket,points,refunds,dining,originalDishes}
 }
 
 export async function ticketFinanceDay(tx:ScopedTransaction,day:string|null){
@@ -196,6 +199,18 @@ export async function ticketFinanceDay(tx:ScopedTransaction,day:string|null){
       UNION ALL SELECT 'diningRefund',r.amount_minor,r.completed_at FROM mbox.ticket_dining_collections c
         JOIN mbox.refunds r ON(r.tenant_id,r.store_id,r.payment_id)=(c.tenant_id,c.store_id,c.payment_id)
         WHERE c.tenant_id=$1 AND c.store_id=$2 AND r.status='succeeded'
+      UNION ALL SELECT CASE WHEN e.entry_type='earn' THEN 'diningRewardEarn' ELSE 'diningRewardReverse' END,
+        e.points_delta,e.occurred_at FROM mbox.ticket_dining_collections c JOIN mbox.loyalty_point_ledger e
+        ON (e.tenant_id,e.store_id,e.order_id,e.payment_id)=(c.tenant_id,c.store_id,c.order_id,c.payment_id)
+        WHERE c.tenant_id=$1 AND c.store_id=$2 AND ((e.entry_type='earn' AND e.source_type='order')
+          OR (e.entry_type='reverse' AND e.refund_id IS NOT NULL))
+      UNION ALL SELECT 'merchantDining',cost.amount,k.refunded_at
+        FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k
+          ON (k.tenant_id,k.store_id,k.id)=(f.tenant_id,f.store_id,f.ticket_id)
+        CROSS JOIN LATERAL (SELECT CASE WHEN f.merchant_assumes_dining THEN f.consumed_minor ELSE
+          (SELECT sum(c.merchant_minor) FROM mbox.ticket_dining_collections c WHERE (c.tenant_id,c.store_id,c.case_id)=(f.tenant_id,f.store_id,f.id)
+           AND c.consented_at IS NOT NULL) END AS amount) cost
+        WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.status='refunded' AND cost.amount>0
       UNION ALL SELECT 'points_'||m.movement_type,m.points_delta,m.occurred_at FROM mbox.loyalty_point_lots l
         JOIN mbox.loyalty_point_lot_movements m ON(m.tenant_id,m.store_id,m.lot_id)=(l.tenant_id,l.store_id,l.id)
         WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.source_type='table_ticket'

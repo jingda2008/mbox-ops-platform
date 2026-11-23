@@ -45,8 +45,8 @@ async function hasConfirmedDining(tx:ScopedTransaction,caseId:string){
 
 async function diningDifferencePaid(tx:ScopedTransaction,caseId:string,consumed:string){
   const scope=[tx.scope.tenantId,tx.scope.storeId,caseId,consumed]
-  const totals=await tx.query<{cleared:boolean}>(`SELECT count(*)>0 AND sum(c.amount_minor)=$4::bigint
-    AND bool_and(coalesce(p.status='succeeded' AND p.order_id=c.order_id AND p.amount_minor=c.amount_minor,false)
+  const totals=await tx.query<{cleared:boolean}>(`SELECT count(*)>0 AND sum(c.amount_minor+coalesce(c.merchant_minor,0))=$4::bigint
+    AND bool_and((c.amount_minor=0 OR coalesce(p.status='succeeded' AND p.order_id=c.order_id AND p.amount_minor=c.amount_minor,false))
       AND NOT EXISTS(SELECT 1 FROM mbox.refunds r WHERE (r.tenant_id,r.store_id,r.payment_id)=(p.tenant_id,p.store_id,p.id)
         AND r.status NOT IN('cancelled','rejected'))) AS cleared
     FROM mbox.ticket_dining_collections c LEFT JOIN mbox.payments p ON (p.tenant_id,p.store_id,p.id)=(c.tenant_id,c.store_id,c.payment_id)

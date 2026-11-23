@@ -3,6 +3,9 @@ import {ActivityOperationsError} from './activity-operations-repository.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {PaymentRepository} from './payment-repository.js'
+import {allocateMinorAmount} from './stacking-pricing.js'
+
+export interface DiningSplit { customerMinor:number; merchantMinor:number }
 
 const unavailable=(message:string)=>new ActivityOperationsError(message,'TICKET_DINING_REVIEW',409)
 
@@ -35,7 +38,7 @@ export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
 }
 
 // The proposal is not a receivable until the buyer confirms it on the original refund.
-export async function proposeTicketDining(tx:ScopedTransaction,caseId:string,employee:string,reason:string) {
+export async function proposeTicketDining(tx:ScopedTransaction,caseId:string,employee:string,reason:string,split?:DiningSplit) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   const row=(await tx.query<{consumed_minor:string;price_minor:number;unresolved:boolean}>(`
     SELECT b.consumed_minor,b.unresolved,o.price_minor FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k
@@ -49,46 +52,56 @@ export async function proposeTicketDining(tx:ScopedTransaction,caseId:string,emp
   if(!row)throw unavailable('核算须从待复核的原票进入')
   const lines=(await ticketDiningLines(tx,caseId)).filter(l=>l.usedMinor>0)
   const sum=lines.reduce((total,l)=>total+l.usedMinor,0)
-  if(row.unresolved || !sum||sum!==Number(row.consumed_minor)||sum>row.price_minor||lines.some(l=>l.review))
-    throw unavailable('涉及已退菜款、超出票款或缺少原价分摊，请人工核实')
+  if(row.unresolved || !sum||sum!==Number(row.consumed_minor)||lines.some(l=>l.review))
+    throw unavailable('涉及在途售后或缺少原价分摊，请核实原餐单')
   if(((await readRefundApprovalLimits(tx,employee)).CNY??0)<sum)throw unavailable('本次差额超过经办人审批额度')
+  if (!split && sum>row.price_minor) throw unavailable('本票已抵菜款高于票款，请录入顾客应补、门店承担及核定依据')
+  if (split && (![split.customerMinor,split.merchantMinor].every(value=>Number.isSafeInteger(value)&&value>=0)
+    || split.customerMinor+split.merchantMinor!==sum || reason.trim().length<2)) {
+    throw unavailable('顾客应补与门店承担须合计等于本票实际抵扣，请核对金额及依据')
+  }
+  // The original quote orders sources deterministically, including corrected lots on the same portion.
+  const shares=split && allocateMinorAmount(split.customerMinor,lines.map((line,index)=>({id:String(index),amountMinor:line.usedMinor})))
+  const allocated=lines.map((line,index)=>({...line,customerMinor:shares?.get(String(index))}))
   const orders=[...new Set(lines.map(l=>l.orderId))]
   await tx.query(`UPDATE mbox.ticket_dining_collections SET superseded_at=clock_timestamp()
     WHERE tenant_id=$1 AND store_id=$2 AND case_id=$3 AND superseded_at IS NULL AND consented_at IS NULL
     AND NOT(order_id=ANY($4::uuid[]))`,[...scope,caseId,orders])
   for(const orderId of orders){
-    const items=lines.filter(l=>l.orderId===orderId)
+    const items=allocated.filter(l=>l.orderId===orderId)
+    const due=items.reduce((total,l)=>total+(l.customerMinor??l.usedMinor),0)
+    const merchant=split?items.reduce((total,l)=>total+l.usedMinor,0)-due:null
     const snapshot=JSON.stringify(items)
     const changed=await tx.query(`SELECT 1 FROM mbox.ticket_dining_collections WHERE tenant_id=$1 AND store_id=$2 AND case_id=$3
-      AND order_id=$4 AND consented_at IS NOT NULL AND line_snapshot<>$5::jsonb`,[...scope,caseId,orderId,snapshot])
+      AND order_id=$4 AND consented_at IS NOT NULL AND (line_snapshot<>$5::jsonb OR ((merchant_minor IS NOT NULL OR $6::boolean) AND reason<>$7))`,[...scope,caseId,orderId,snapshot,Boolean(split),reason])
     if(changed.rowCount)throw unavailable('会员已确认的菜款有变动，请先从原案撤回并核对已收款，再按新明细确认')
     // Keep confirmed receipts immutable. Retire an unaccepted proposal if its original dishes changed.
     await tx.query(`UPDATE mbox.ticket_dining_collections SET superseded_at=clock_timestamp()
       WHERE tenant_id=$1 AND store_id=$2 AND case_id=$3 AND order_id=$4 AND superseded_at IS NULL
-      AND consented_at IS NULL AND line_snapshot<>$5::jsonb`,[...scope,caseId,orderId,snapshot])
-    await tx.query(`INSERT INTO mbox.ticket_dining_collections(tenant_id,store_id,case_id,order_id,amount_minor,line_snapshot,reason,proposed_by)
-      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(tenant_id,store_id,case_id,order_id) WHERE superseded_at IS NULL DO NOTHING`,
-      [...scope,caseId,orderId,items.reduce((n,l)=>n+l.usedMinor,0),snapshot,reason,employee])
+      AND consented_at IS NULL AND (line_snapshot<>$5::jsonb OR ((merchant_minor IS NOT NULL OR $6::boolean) AND reason<>$7))`,[...scope,caseId,orderId,snapshot,Boolean(split),reason])
+    await tx.query(`INSERT INTO mbox.ticket_dining_collections(tenant_id,store_id,case_id,order_id,amount_minor,line_snapshot,reason,proposed_by,merchant_minor)
+      VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) ON CONFLICT(tenant_id,store_id,case_id,order_id) WHERE superseded_at IS NULL DO NOTHING`,
+      [...scope,caseId,orderId,due,snapshot,reason,employee,merchant])
   }
-  return {caseId,amountMinor:sum}
+  return {caseId,amountMinor:split?.customerMinor??sum}
 }
 
 export async function consentTicketDining(tx:ScopedTransaction,id:string,customer:string) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
-  const c=(await tx.query<{case_id:string;order_id:string;amount_minor:string;consented_at:string|null}>(`
-    SELECT c.case_id,c.order_id,c.amount_minor,c.consented_at FROM mbox.ticket_dining_collections c JOIN mbox.table_ticket_refund_requests f
+  const c=(await tx.query<{case_id:string;order_id:string;amount_minor:string;merchant_minor:string|null;consented_at:string|null}>(`
+    SELECT c.case_id,c.order_id,c.amount_minor,c.merchant_minor,c.consented_at FROM mbox.ticket_dining_collections c JOIN mbox.table_ticket_refund_requests f
       ON (f.tenant_id,f.store_id,f.id)=(c.tenant_id,c.store_id,c.case_id) JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(c.tenant_id,c.store_id,c.order_id)
     WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.id=$3 AND c.superseded_at IS NULL AND f.status='review' AND f.close_intent IS NULL AND
       mbox.canonical_customer_id($1,$2,f.customer_id)=mbox.canonical_customer_id($1,$2,$4) FOR UPDATE OF f,c,o`,[...scope,id,customer])).rows[0]
   if(!c)throw new CustomerExperienceRequestError('请用原购票会员查看最新补款明细，原确认记录已变更或不可用','TICKET_DINING_REVIEW',409)
   if(c.consented_at)return {id,amountMinor:Number(c.amount_minor)}
   const lines=(await ticketDiningLines(tx,c.case_id)).filter(l=>l.orderId===c.order_id && l.usedMinor>0)
-  const blocked=(await tx.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM mbox.ticket_dining_collections WHERE tenant_id=$1 AND store_id=$2 AND id=$4 AND line_snapshot<>$5::jsonb) OR mbox.order_collection_due_amount($1,$2,$3)<>0 OR EXISTS(
+  const blocked=(await tx.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM mbox.ticket_dining_collections WHERE tenant_id=$1 AND store_id=$2 AND id=$4 AND (SELECT jsonb_agg(item-'customerMinor' ORDER BY n) FROM jsonb_array_elements(line_snapshot) WITH ORDINALITY AS x(item,n))<>$5::jsonb) OR mbox.order_collection_due_amount($1,$2,$3)<>0 OR EXISTS(
     SELECT 1 FROM mbox.order_payment_facts p WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.order_id=$3 AND p.status IN('created','pending'))
     OR EXISTS(SELECT 1 FROM mbox.ticket_dining_collections c JOIN mbox.table_ticket_refund_requests f
       ON (f.tenant_id,f.store_id,f.id)=(c.tenant_id,c.store_id,c.case_id) WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.order_id=$3 AND c.consented_at IS NOT NULL AND f.status='review')`,
     [...scope,c.order_id,id,JSON.stringify(lines)])).rowCount
-  if(blocked||lines.some(l=>l.review)||lines.reduce((n,l)=>n+l.usedMinor,0)!==Number(c.amount_minor))
+  if(blocked||lines.some(l=>l.review)||lines.reduce((n,l)=>n+l.usedMinor,0)!==Number(c.amount_minor)+Number(c.merchant_minor))
     throw new CustomerExperienceRequestError('原菜款、售后或支付已发生变化，请门店重新核对','TICKET_DINING_REVIEW',409)
   await tx.query('UPDATE mbox.ticket_dining_collections SET consented_at=clock_timestamp() WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...scope,id])
   await new PaymentRepository(tx).syncOrderPaymentStatus(c.order_id)

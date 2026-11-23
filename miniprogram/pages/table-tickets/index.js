@@ -152,10 +152,11 @@ Page({
   },
   async confirmDining(event){
     if(this.data.busy)return
-    const {id,amount}=event.currentTarget.dataset
+    const {id,amount,merchant}=event.currentTarget.dataset
     this.setData({busy:true,error:''})
     const visit=this.visit
-    const answer=await new Promise(resolve=>wx.showModal({title:'确认原菜品补款',content:'本次确认 '+money(Number(amount))+'，由门店在原餐饮单收取。',success:resolve,fail:()=>resolve({confirm:false})}))
+    const content='顾客应补 '+money(Number(amount))+(merchant!=null?'，门店承担 '+money(Number(merchant)):'')+(Number(amount)>0?'。确认后由收银在原餐单收款。':'。确认后无需付款。')
+    const answer=await new Promise(resolve=>wx.showModal({title:'确认原菜品补款',content,success:resolve,fail:()=>resolve({confirm:false})}))
     if(!answer.confirm || !this.currentVisit(visit)){this.setData({busy:false});return}
     try{
       await api.confirmTicketDining(id)

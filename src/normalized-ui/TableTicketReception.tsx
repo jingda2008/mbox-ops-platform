@@ -11,8 +11,9 @@ interface Ticket extends TicketContact {
 interface Statement {
   ticket:{receipt:string;priceMinor:number;paidAt:string}
   points:{lot:string;kind:string;delta:number;remaining:number;at:string}[]
-  dining:{orderNo:string;amountMinor:string;receipt:string|null;paymentStatus:string|null;returnNo:string|null;returnStatus:string|null;returns:{receipt:string;amountMinor:number;status:string}[]}[]
-  refunds:{id:string;status:string;receipt:string|null;cashStatus:string|null;cashMinor:string|null;zeroCash:boolean}[]
+  originalDishes?:{orderNo:string;name:string;priceMinor:number;usedMinor:number;review:boolean}[]
+  dining:{orderNo:string;amountMinor:string;merchantMinor:string|null;reason:string;confirmedAt:string|null;receipt:string|null;paymentStatus:string|null;returnNo:string|null;returnStatus:string|null;returns:{receipt:string;amountMinor:number;status:string}[]}[]
+  refunds:{id:string;status:string;receipt:string|null;cashStatus:string|null;cashMinor:string|null;zeroCash:boolean;merchantAssumes:boolean;consumedMinor:string}[]
 }
 const money=(minor:number|string|null)=>'¥'+(Number(minor)/100).toFixed(2)
 const statusText:Record<string,string>={requested:'待复核',review:'待核算',approved:'已批准',processing:'处理中',succeeded:'已完成',refunded:'已退',partially_refunded:'部分已退',cancelled:'已取消',rejected:'已拒绝',pending:'待支付',failed:'失败',grant:'发放',redeem:'抵扣',restore:'退回',reverse:'冲回',expire:'到期'}
@@ -90,10 +91,25 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
   }
   async function proposeDining(event:FormEvent<HTMLFormElement>,ticket:Ticket){
     event.preventDefault()
-    const reason=new FormData(event.currentTarget).get('reason')
+    const form=event.currentTarget
+    const fields=new FormData(form)
+    const reason=fields.get('reason')
+    const customer=String(fields.get('customer')??''), merchant=String(fields.get('merchant')??'')
+    const split=customer!=='' || merchant!=='' ? {customerMinor:Math.round(Number(customer)*100),merchantMinor:Math.round(Number(merchant)*100)} : undefined
+    if(split && (customer==='' || merchant==='' || split.customerMinor+split.merchantMinor!==Number(ticket.consumedMinor))){
+      setMessage('请填齐两项金额，合计须等于本票已抵菜款');return
+    }
+    const payload={reason,...split}
+    const fingerprint=JSON.stringify({caseId:ticket.refundCase,...payload})
+    if(form.dataset.fingerprint!==fingerprint){
+      form.dataset.fingerprint=fingerprint
+      form.dataset.operation='dining-'+crypto.randomUUID()
+    }
     setWorking(true)
     try{
-      await api.postEndpoint('/api/staff/activity-operations/table-ticket-refunds/'+ticket.refundCase+'/dining',{reason},{idempotencyKey:'dining-'+crypto.randomUUID()})
+      await api.postEndpoint('/api/staff/activity-operations/table-ticket-refunds/'+ticket.refundCase+'/dining',payload,{idempotencyKey:form.dataset.operation!})
+      delete form.dataset.fingerprint
+      delete form.dataset.operation
       setMessage('已发至购票会员的原退票案。会员确认后从原餐饮单收款。');setRefresh(v=>v+1)
     }catch(e){setMessage(e instanceof Error?e.message:'菜款核算失败')}
     finally{setWorking(false)}
@@ -117,7 +133,8 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
       <button type="button" onClick={()=>void inspectDay()}>读取营业日</button>
       {daily && <div><p>{daily.day} · 票款实收 {money(daily.amounts.ticketCash??0)} · 退票实退 {money(daily.amounts.ticketRefund??0)}</p>
         <p>关联餐饮原单实收 {money(daily.amounts.originalDiningCash??0)} · 原预收分配 {money(daily.amounts.originalPrepay??0)} · 原菜款实退 {money(daily.amounts.originalDiningRefund??0)}</p>
-        <p>补菜款实收 {money(daily.amounts.diningCash??0)} · 补菜款实退 {money(daily.amounts.diningRefund??0)}</p>
+        <p>补菜款实收 {money(daily.amounts.diningCash??0)} · 补菜款实退 {money(daily.amounts.diningRefund??0)} · 已办结退票的门店承担 {money(daily.amounts.merchantDining??0)}</p>
+        <p>补款关联餐饮积分 · 发放 {daily.amounts.diningRewardEarn??0} 分 · 冲回 {daily.amounts.diningRewardReverse??0} 分</p>
         <p>赠分 {daily.amounts.points_grant??0} · 抵扣占用 {daily.amounts.points_redeem??0} · 原批次退回 {daily.amounts.points_restore??0} · 冲回 {daily.amounts.points_reverse??0} · 到期 {daily.amounts.points_expire??0}</p></div>}
     </details>}
     {queue.orders.map(ticket=><article key={ticket.id}><strong>{ticket.name} · 第{ticket.ordinal}桌</strong>
@@ -125,8 +142,9 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
       {(canRefund||canApproveRefund) && <button type="button" onClick={()=>void inspect(ticket.id)}>核对原票、积分和菜款</button>}
       {statement?.id===ticket.id && <section aria-label="原票对账"><p>本票票款 {money(statement.data.ticket.priceMinor)} · 原收款 {statement.data.ticket.receipt}</p>
         {statement.data.points.map((row,i)=><p key={row.lot+i}>积分{statusText[row.kind]??row.kind} {row.delta} 分 · 批次余额 {row.remaining} 分 · {new Date(row.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</p>)}
-        {statement.data.dining.map((row,i)=><p key={row.orderNo+i}>原菜品单 {row.orderNo} · 核定补款 {money(row.amountMinor)} · {row.receipt??'尚无收款'} {statusText[row.paymentStatus??'']}{row.returns.map(back=><span key={back.receipt}> · 退款 {back.receipt} {money(back.amountMinor)} {statusText[back.status]??back.status}</span>)}</p>)}
-        {statement.data.refunds.map(row=><p key={row.id}>退票 {row.receipt??row.id} · {row.zeroCash?'应退现金为零':row.receipt?money(row.cashMinor):'尚未提交渠道退款'} · {statusText[row.cashStatus??row.status]}</p>)}
+        {statement.data.originalDishes?.map((line,i)=><p key={line.orderNo+i+'-basis'}>原餐单 {line.orderNo} · {line.name} · 原价 {money(line.priceMinor)} · 本票已抵 {money(line.usedMinor)}{line.review && ' · 有售后记录待核实'}</p>)}
+        {statement.data.dining.map((row,i)=><p key={row.orderNo+i}>原菜品单 {row.orderNo} · 顾客应补 {money(row.amountMinor)}{row.merchantMinor!=null && <> · 门店承担 {money(row.merchantMinor)} · {row.reason}</>} · {row.confirmedAt?'会员已确认':'待会员确认'} · {row.receipt??'尚无收款'} {statusText[row.paymentStatus??'']}{row.returns.map(back=><span key={back.receipt}> · 退款 {back.receipt} {money(back.amountMinor)} {statusText[back.status]??back.status}</span>)}</p>)}
+        {statement.data.refunds.map(row=><p key={row.id}>退票 {row.receipt??row.id} · {row.zeroCash?'应退现金为零':row.receipt?money(row.cashMinor):'尚未提交渠道退款'} · {statusText[row.cashStatus??row.status]}{row.merchantAssumes && <> · 门店承担原抵扣 {money(row.consumedMinor)}</>}</p>)}
       </section>}
       {queue.orders.find(row=>row.orderId===ticket.orderId)?.id===ticket.id && <form onSubmit={e=>void frontDesk(e,ticket,false)}><label>本单接待 · {ticket.contactOwner??'待认领'}
         <select key={ticket.contactStatus} name="status" defaultValue={ticket.contactStatus}><option value="waiting">待联系或交班</option><option value="claimed">接单中</option><option value="called">已电话联系</option><option value="unreachable">未接通，待回拨</option><option value="onsite">现场安排</option></select></label><button disabled={working}>更新接待</button></form>}
@@ -156,7 +174,9 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
           <select name="action"><option value="cancelled">顾客撤回，按原收款退回补款</option><option value="rejected">拒绝申请，保留原票</option><option value="zero">终止票权，应退现金为零</option></select>
           <label>决定依据<input name="reason" minLength={3} required/></label><button disabled={working}>按依据办理</button></form></details>}
       {ticket.refundStatus==='review' && Number(ticket.consumedMinor)>0 && canApproveRefund && <form onSubmit={e=>void proposeDining(e,ticket)}>
-        <label>依据原条款的补款原因<input name="reason" minLength={2} maxLength={500} required/></label><button disabled={working}>发给会员核对逐菜补款</button></form>}
+        <label>顾客应补菜款（元）<input type="number" name="customer" min="0" step="0.01" required={Number(ticket.consumedMinor)>ticket.priceMinor}/></label>
+        <label>门店承担金额（元）<input type="number" name="merchant" min="0" step="0.01" required={Number(ticket.consumedMinor)>ticket.priceMinor}/></label>
+        <label>菜款核定依据<input name="reason" minLength={2} maxLength={500} required/></label><button disabled={working}>发给会员核对逐菜补款</button></form>}
       {ticket.refundStatus==='review' && canRefund && <form onSubmit={e=>void handle(e,ticket,'refund')}>
         <label>按原条款应退票款（元）<input required type="number" min=".01" max={ticket.priceMinor/100} step=".01" name="yuan"/></label>
         {canManage && <label>门店履约原因（门店原因单独处理应退票款时填写）<input name="merchantReason"/></label>}

@@ -1,7 +1,7 @@
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import {publicTableTickets} from './table-ticket-purchase.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
-import {proposeTicketDining} from './table-ticket-dining.js'
+import {proposeTicketDining,type DiningSplit} from './table-ticket-dining.js'
 import {correctTicketGift} from './table-ticket-correction.js'
 import {ticketReception,assignTicketTable,admitTicketBatch,updateTicketContact} from './table-ticket-reception.js'
 import {requestTicketRefund,decideTicketCase,submitTicketCashRefund} from './table-ticket-refund.js'
@@ -91,13 +91,13 @@ export class ActivityOperationsService {
     })
   }
 
-  proposeTicketDining(context:ActivityOperationsStaffContext,id:string,reason:string,key:string) {
+  proposeTicketDining(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,split?:DiningSplit) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'refund.approve').execute({
-      scope:context.scope,operationScope:'table_ticket.dining.propose',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId}),
+      scope:context.scope,operationScope:'table_ticket.dining.propose',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,...(split&&{split}),employee:context.employeeId}),
       retainReceipt:true,resultCodec:objectCodec<{caseId:string;amountMinor:number}>(),
     },async tx=>{
-      const result=await proposeTicketDining(tx,id,context.employeeId,reason)
-      return {result,auditEvents:[audit(context,{action:'table_ticket.dining.proposed',objectType:'table_ticket_refund',objectId:id,afterData:{reason,amountMinor:result.amountMinor}})],outboxMessages:[]}
+      const result=await proposeTicketDining(tx,id,context.employeeId,reason,split)
+      return {result,auditEvents:[audit(context,{action:'table_ticket.dining.proposed',objectType:'table_ticket_refund',objectId:id,afterData:{reason,amountMinor:result.amountMinor,...split}})],outboxMessages:[]}
     })
   }
 

@@ -155,10 +155,11 @@ test('退票、撤回和补款弹窗防连点，离开又重进后旧确认作�
     const modals=[]
     const {page,api,calls}=fixture(options=>modals.push(options))
     api[endpoint]=async()=>calls.push(endpoint)
-    const event={currentTarget:{dataset:{id:'dish',amount:10000,ticket:'ticket',order:'order'}}}
+    const event={currentTarget:{dataset:{id:'dish',amount:50000,merchant:5000,ticket:'ticket',order:'order'}}}
     const first=page[method](event)
     const second=page[method](event)
     assert.equal(modals.length,1)
+    if(method==='confirmDining')assert.match(modals[0].content,/顾客应补.*500.*门店承担.*50/)
     modals[0].success({confirm:true,content:'因故退票'})
     await Promise.all([first,second])
     assert.deepEqual(calls,[endpoint])

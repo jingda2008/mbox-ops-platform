@@ -163,6 +163,31 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
     await workspace.getByRole('button',{name:'下架',exact:true}).click()
     await expect.poll(published).toEqual([])
+
+    // The partial-liability form sends the same minor units checked by the database integration test.
+    await page.route('**/api/staff/activity-operations/*/ticket-reception',route=>route.fulfill({json:{data:{tables:[],orders:[{
+      id:'test-ticket',orderId:'test-order',name:'整桌票',ordinal:1,priceMinor:50000,consumedMinor:'55000',
+      refundCase:'test-case',refundStatus:'review',arrived:0,contactStatus:'onsite',showEnded:true,
+    }]}}}))
+    const submitted:unknown[]=[]
+    await page.route('**/table-ticket-refunds/test-case/dining',route=>{
+      submitted.push(route.request().postDataJSON())
+      return route.fulfill({json:{data:{amountMinor:50000}}})
+    })
+    await workspace.getByRole('button',{name:'刷新接待队列'}).click()
+    const customer=workspace.getByLabel('顾客应补菜款（元）')
+    const merchant=workspace.getByLabel('门店承担金额（元）')
+    await customer.fill('500')
+    await merchant.fill('49.99')
+    await workspace.getByLabel('菜款核定依据').fill('已核实售出条款和原餐单')
+    const propose=workspace.getByRole('button',{name:'发给会员核对逐菜补款'})
+    await propose.click()
+    await expect(workspace.getByText('请填齐两项金额，合计须等于本票已抵菜款')).toBeVisible()
+    expect(submitted).toEqual([])
+    await merchant.fill('50')
+    await propose.click()
+    await expect.poll(()=>submitted).toEqual([{reason:'已核实售出条款和原餐单',customerMinor:50000,merchantMinor:5000}])
+
   }finally{
     server.kill('SIGTERM')
     await exited

@@ -102,7 +102,12 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-refunds/:id/dining',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorized(options,request,['refund.approve'])
-    const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(object(request.body,'补菜款').reason,'按售出条款核算的原因',2,500),idempotencyKey(request))
+    const body=object(request.body,'补菜款')
+    const split=body.customerMinor===undefined && body.merchantMinor===undefined ? undefined : {
+      customerMinor:integer(body.customerMinor,'顾客应补菜款',0,Number.MAX_SAFE_INTEGER),
+      merchantMinor:integer(body.merchantMinor,'门店承担金额',0,Number.MAX_SAFE_INTEGER),
+    }
+    const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(body.reason,'菜款核定依据',2,500),idempotencyKey(request),split)
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-offers/:id/assist',async(request,reply)=>handle(reply,async()=>{

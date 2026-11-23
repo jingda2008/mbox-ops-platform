@@ -251,10 +251,13 @@ try {
     const publisher = (await tx.query<{id:string}>(
       "SELECT id FROM mbox.employees WHERE tenant_id=$1 AND store_id=$2 AND employee_code='wuya'", [scope.tenantId,scope.storeId]
     )).rows[0]!
-    await new StaffAccessRepository(tx).setEmployeePermissionOverride({
-      employeeId:publisher.id,permissionCode:'community.activity.publish',effect:'grant',
-      reason:'整桌票隔离浏览器验收',configuredByEmployeeId:employeeId,
-    })
+    const access=new StaffAccessRepository(tx)
+    for(const permissionCode of ['community.activity.publish','refund.approve']){
+      await access.setEmployeePermissionOverride({
+        employeeId:publisher.id,permissionCode,effect:'grant',
+        reason:'整桌票上架与售后核定隔离浏览器验收',configuredByEmployeeId:employeeId,
+      })
+    }
     await tx.query(`INSERT INTO mbox.community_activities(id,tenant_id,store_id,public_id,activity_kind,title,summary,starts_at,ends_at,assembly_location,capacity,
       fee_amount_minor,deposit_amount_minor,fee_basis,registration_payment_mode,payment_deadline_minutes,payment_rule_text,currency,points_reward,visibility,
       safety_policy_version,safety_acknowledgement_text,safety_requirements,refund_policy_version,refund_policy_summary,activity_details,included_items,

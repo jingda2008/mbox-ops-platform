@@ -480,6 +480,12 @@ export class OrderRepository {
         item.note,
       ])
       insertedItems.push(mapOrderItem(requireOne(inserted, 'Order item insert')))
+      if(pricingAuthorization?.sourceType==='checkout_quote' && item.parentOrderItemId===null){
+        await this.transaction.query(`INSERT INTO mbox.checkout_portion_order_items(tenant_id,store_id,quote_id,portion_id,order_item_id)
+          SELECT q.tenant_id,q.store_id,q.quote_id,q.portion_id,$5 FROM mbox.checkout_coupon_quote_lines q WHERE q.tenant_id=$1 AND q.store_id=$2
+            AND q.quote_id=$3 AND q.request_index=$4 AND EXISTS(SELECT 1 FROM mbox.checkout_point_holds h WHERE(h.tenant_id,h.store_id,h.quote_id)=(q.tenant_id,q.store_id,q.quote_id))`,
+          [this.transaction.scope.tenantId,this.transaction.scope.storeId,pricingAuthorization.sourceId,item.requestIndex,item.id])
+      }
     }
 
     const result={...mapOrder(order),items:insertedItems,prepaymentRequired:this.prepaidSession}
@@ -591,7 +597,7 @@ export class OrderRepository {
   private async lockOpenTableSession(tableSessionId: string,input:CreateSubmittedOrderInput): Promise<number> {
     requireUuidLike('tableSessionId', tableSessionId)
     const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string }>(`
-      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE effective_minimum_spend_minor END AS minimum_spend_minor
+      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE mbox.ticket_store_minimum(tenant_id,store_id,effective_minimum_spend_minor) END AS minimum_spend_minor
       FROM mbox.table_sessions
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid

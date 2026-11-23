@@ -247,11 +247,27 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
     return body.data as {id:string;expiresAt:string;payableMinor:number;discountMinor:number;currency:string}
   },[staffSessionId,table.activeSession.id])
 
+  const staffPoints=useCallback(async(items:MenuCartItem[],memberNo:string,points:number|null)=>{
+    const headers=new Headers({'content-type':'application/json'})
+    if(staffSessionId)headers.set(STAFF_SESSION_BINDING_HEADER,staffSessionId)
+    const response=await fetch('/api/commerce/assisted-points',{method:'POST',credentials:'include',headers,
+      body:JSON.stringify({tableSessionId:table.activeSession.id,items,memberNo,points})})
+    const body=await response.json()
+    if(!response.ok)throw new Error(body.error?.message??'代客用分未提交')
+    return body.data as {maximumPoints:number;id:string|null}
+  },[staffSessionId,table.activeSession.id])
   const submitPaidOrder = async (items: MenuCartItem[], options: MenuSubmitOptions) => {
     if (phase !== 'ready' || access?.canCreateOrder !== true || items.length === 0) throw new Error('当前不可提交，请重新核对点单权限和菜品')
     setPhase('submitting')
     setError(null)
     try {
+      if(options.assistedPoints){
+        if(settlementMode!=='immediate_payment')throw new Error('本次使用积分须由顾客确认后立即结算')
+        if(options.fulfillmentNote)throw new Error('请把本单备注填写到对应菜品，再发送本人确认')
+        await staffPoints(items,options.assistedPoints.memberNo,options.assistedPoints.points)
+        onSubmitted('菜品与积分已发至购餐会员的微信点单页，待本人确认结账')
+        onClose(); return
+      }
       const token = await api.issueAssistedOrderContext({ tableSessionId: table.activeSession.id })
       const result = await api.submitAssistedOrder({
         tableSessionId: table.activeSession.id,
@@ -429,7 +445,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
         </div>
         <p className="staff-order-payment-note">挂桌账会立即送制作，未收齐须跟进。跨日时，已确认消费的欠款保留，未确认消费的挂账须由授权员工核对金额后再收款。立即结算须本单收齐才送制作。</p>
         {immediatePaymentMessage !== null && <p className="staff-order-payment-note">{immediatePaymentMessage}{canImmediateSettle ? '；仍可使用下单后显示的已授权现场收款方式。' : ''}</p>}
-        {access?.canReleaseMinimumSpend&&paymentOrder===null&&<p className="staff-order-payment-note">员工协助点单自动放行本单低消拦截，并记录员工与订单。整桌低消、应付款及预收款余额校验保持有效。</p>}
+        {access?.canReleaseMinimumSpend&&paymentOrder===null&&<p className="staff-order-payment-note">员工协助点单按本桌生效规则结算，系统记录经办员工、本单应付及已用预收款。</p>}
         {error !== null && <p className="staff-order-error" role="alert">{error}</p>}
         {paymentOrder!==null&&<StaffTableCreditPanel sessionId={table.activeSession.id} initialOrderId={paymentOrder.paymentNextStep.orderId} staffSessionId={staffSessionId} permissions={permissions} onUpdated={remaining=>{if(remaining!==undefined){setPaymentOrder(current=>current?{...current,paymentNextStep:{...current.paymentNextStep,amountMinor:remaining}}:null);setPaymentAction(null);setPaymentStatus(remaining===0?'succeeded':'pending')}}}/>}
         {paymentOrder !== null ? <StaffPaymentChoice
@@ -467,6 +483,7 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
             includeNonGuestProducts
             partySize={table.activeSession.guestCount}
             recommendationScene={recommendationScene(table.activeSession.guestProfileSnapshot ?? {})}
+            onStaffPoints={!replacementCaseId && settlementMode==='immediate_payment'?staffPoints:undefined}
             onQuoteChannel={quoteChannelOrder}
             onSubmit={submitPaidOrder}
           />

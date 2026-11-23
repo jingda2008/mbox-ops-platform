@@ -1,3 +1,4 @@
+import {pendingTicketDining,ticketDiningAvailableSql} from './pending-ticket-dining.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import type {ScopedTransaction} from './transaction-runner.js'
 import {RecollectionAuthorizationConflictError} from './recollection-authorization-repository.js'
@@ -61,7 +62,7 @@ export function closedDebtEligibilitySql(order='orders',session='session'):strin
 
 export interface ClosedDebtRecovery {
   orderId:string;tableSessionId:string;originalBusinessDate:string;closedAt:string
-  carryover?:boolean;reviewReason?:string|null;outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
+  ticketDiningId?:string;carryover?:boolean;reviewReason?:string|null;outstandingAmountMinor:number;pendingPaymentIds:string[];authorizationId:string|null;eligible:boolean;hasPreCloseObligation:boolean
 }
 
 export interface ClosedDebtPaymentTargets {
@@ -116,8 +117,8 @@ export async function lockClosedDebtRecovery(tx:ScopedTransaction,orderId:string
   const session=await tx.query<{status:string}>(`SELECT status FROM mbox.table_sessions WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...args.slice(0,2),sessionId])
   if(session.rows[0]?.status!=='closed')return null
   await tx.query(`SELECT id FROM mbox.orders WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND table_session_id=$4 FOR UPDATE`,[...args,sessionId])
-  const result=await tx.query<{original_business_date:string;closed_at:string;due:string;eligible:boolean;has_pre_close_obligation:boolean;pending_ids:string[];authorization_id:string|null}>(`
-    SELECT orders.business_date::text original_business_date,session.closed_at::text,
+  const result=await tx.query<{ticket_dining_available:boolean;original_business_date:string;closed_at:string;due:string;eligible:boolean;has_pre_close_obligation:boolean;pending_ids:string[];authorization_id:string|null}>(`
+    SELECT ${ticketDiningAvailableSql} AS ticket_dining_available,orders.business_date::text original_business_date,session.closed_at::text,
       mbox.order_collection_due_amount(orders.tenant_id,orders.store_id,orders.id)::text due,
       ${closedDebtEligibilitySql()} eligible,${preCloseObligationSql()} has_pre_close_obligation,
       ARRAY(SELECT payment.id FROM mbox.order_payment_facts payment WHERE (payment.tenant_id,payment.store_id,payment.order_id)=(orders.tenant_id,orders.store_id,orders.id)
@@ -134,6 +135,10 @@ export async function lockClosedDebtRecovery(tx:ScopedTransaction,orderId:string
     WHERE orders.tenant_id=$1 AND orders.store_id=$2 AND orders.id=$3 AND session.id=$4`,[...args,sessionId])
   const row=result.rows[0]
   if(!row)throw new RecollectionAuthorizationConflictError('原订单归属已变化，请刷新后核对')
+  const dining=row.ticket_dining_available?await pendingTicketDining(tx,orderId):null
+  if(dining)return {orderId,tableSessionId:sessionId,ticketDiningId:dining.id,
+    originalBusinessDate:row.original_business_date,closedAt:row.closed_at,outstandingAmountMinor:Number(dining.amount_minor),
+    eligible:true,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:dining.id}
   const debt=await readCarryoverDebt(tx,orderId)
   return {orderId,tableSessionId:sessionId,carryover:debt!==null,reviewReason:debt?.reviewReason,originalBusinessDate:row.original_business_date,closedAt:row.closed_at,
     outstandingAmountMinor:Number(row.due),eligible:debt?debt.eligibility==='confirmed':row.eligible,hasPreCloseObligation:row.has_pre_close_obligation,pendingPaymentIds:row.pending_ids,authorizationId:row.authorization_id}

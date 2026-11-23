@@ -1219,7 +1219,7 @@ export async function readReservationCapacity(
               )
             )
           )
-      ), 0)::text AS committed_guests
+      ), 0)::bigint+mbox.ticket_guests_committed($1,$2,$3,$4) AS committed_guests
   `, [
     transaction.scope.tenantId,
     transaction.scope.storeId,

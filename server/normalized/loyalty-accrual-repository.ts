@@ -136,12 +136,17 @@ export class LoyaltyAccrualRepository {
       paymentId: input.paymentId,
     })) return NO_OP
     const selected = await this.transaction.query<AwardContextRow>(`
-      WITH RECURSIVE ancestry AS (
+      WITH RECURSIVE payer AS (
+        SELECT coalesce(o.created_by_customer_id,q.customer_id) customer_id
+        FROM mbox.orders o LEFT JOIN mbox.checkout_coupon_order_links l ON (l.tenant_id,l.store_id,l.order_id)=(o.tenant_id,o.store_id,o.id)
+        LEFT JOIN mbox.checkout_coupon_quotes q ON q.id=l.quote_id AND to_jsonb(q)->>'tab_request_id' IS NOT NULL
+        WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
+      ), ancestry AS (
         SELECT customer.id, customer.merged_into_customer_id
         FROM mbox.orders ordering
         JOIN mbox.customers customer
           ON customer.tenant_id=ordering.tenant_id AND customer.store_id=ordering.store_id
-         AND customer.id=ordering.created_by_customer_id
+         AND customer.id=(SELECT customer_id FROM payer)
         WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
           AND ordering.id=$3::uuid
         UNION ALL
@@ -161,7 +166,7 @@ export class LoyaltyAccrualRepository {
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
           AND item.loyalty_eligible
       )
-      SELECT ordering.id AS order_id, ordering.created_by_customer_id AS customer_id,
+      SELECT ordering.id AS order_id, (SELECT customer_id FROM payer) AS customer_id,
         payment.id AS payment_id, ordering.loyalty_policy_version_id AS policy_version_id,
         membership.id AS membership_id, account.id AS account_id,
         account.available_points, account.pending_recovery_points, account.growth_value,
@@ -204,12 +209,18 @@ export class LoyaltyAccrualRepository {
       || row.available_points == null || row.pending_recovery_points == null || row.growth_value == null) {
       return NO_OP
     }
-    const existing = await this.transaction.query<{ id: string }>(`
-      SELECT id FROM mbox.loyalty_order_awards
+    const existing = await this.transaction.query<{ id: string; net_minor:string }>(`
+      SELECT id,(eligible_amount_minor-reversed_amount_minor+restored_amount_minor)::text AS net_minor FROM mbox.loyalty_order_awards
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND order_id=$3::uuid
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.orderId])
-    if (existing.rowCount === 1) {
+    const collection=!(await this.hasTicketDining())?undefined:(await this.transaction.query<{id:string;eligible:string;rewarded_minor:string|null}>(`
+      SELECT c.id,c.rewarded_minor,coalesce((SELECT sum(coalesce(line->>'customerMinor',line->>'usedMinor')::bigint) FROM jsonb_array_elements(c.line_snapshot) line WHERE line->>'eligible'='true'),0)::text eligible
+      FROM mbox.ticket_dining_collections c WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.order_id=$3 AND c.payment_id=$4 AND c.consented_at IS NOT NULL FOR UPDATE`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderId,input.paymentId])).rows[0]
+    if(collection && collection.rewarded_minor!==null)return NO_OP
+    const originalAward=existing.rows[0]
+    if (existing.rowCount === 1 && !collection) {
       const repository = new LoyaltyRecollectionRepository(this.transaction)
       const preview = await repository.previewOrderRecovery({orderId: input.orderId})
       if (preview.status !== 'ready' || !preview.recoveryPaymentId) return NO_OP
@@ -222,7 +233,10 @@ export class LoyaltyAccrualRepository {
         pendingRecoveryPoints: row.pending_recovery_points + recovery.pendingRecoveryPointsDelta }
     }
 
-    const eligibleAmountMinor = money(row.eligible_amount_minor)
+    const additional=collection?money(collection.eligible):0
+    const eligibleAmountMinor=(originalAward?0:money(row.eligible_amount_minor))+additional
+    const previousEligible=originalAward?money(originalAward.net_minor):0
+    const evidenceKey=originalAward&&collection?'ticket-dining:'+collection.id:row.order_id
     const pointsSpec = exactRewardSpec(
       row.points_numerator, row.points_denominator_minor,
       row.points_rounding_scope === 'order' ? 1 : row.points_multiplier_numerator,
@@ -230,7 +244,7 @@ export class LoyaltyAccrualRepository {
     )
     const growthSpec = exactRewardSpec(row.growth_numerator, row.growth_denominator_minor, 1, 1)
     const points = row.points_rounding_scope === 'order'
-      ? orderPointsDelta(0, eligibleAmountMinor, pointsSpec.numeratorPerMinor, pointsSpec.denominator)
+      ? orderPointsDelta(previousEligible, previousEligible+eligibleAmountMinor, pointsSpec.numeratorPerMinor, pointsSpec.denominator)
       : await this.applyExactCarry({
       membershipId: row.membership_id, policyVersionId: row.policy_version_id, currency: row.currency,
       rewardKind: 'points', denominator: pointsSpec.denominator, roundingMode: row.rounding_mode,
@@ -246,7 +260,9 @@ export class LoyaltyAccrualRepository {
     const availablePoints = row.available_points + creditedPoints
     const pendingRecoveryPoints = row.pending_recovery_points - recoveredDebt
     const growthValue = row.growth_value + growth
-    const awardInserted = await this.transaction.query<{ id: string }>(`
+    const awardInserted = originalAward ? await this.transaction.query<{id:string}>(`
+      UPDATE mbox.loyalty_order_awards SET eligible_amount_minor=eligible_amount_minor+$4,awarded_points=awarded_points+$5,awarded_growth=awarded_growth+$6
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 RETURNING id`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,originalAward.id,additional,points,growth]) : await this.transaction.query<{ id: string }>(`
       INSERT INTO mbox.loyalty_order_awards (
         tenant_id, store_id, membership_id, customer_id, order_id, payment_id,
         policy_version_id, eligible_amount_minor, awarded_points, awarded_growth, currency, awarded_at,calculation_model${row.points_rounding_scope==='order'?',points_rounding_scope':''}
@@ -259,7 +275,10 @@ export class LoyaltyAccrualRepository {
     ])
     const awardId = awardInserted.rows[0]?.id
     if (!awardId) throw new Error('Loyalty order award was not inserted')
-    await this.transaction.query(`
+    if (originalAward) {
+      await this.transaction.query(`UPDATE mbox.loyalty_order_reward_contributions SET eligible_amount_minor=eligible_amount_minor+$4
+        WHERE tenant_id=$1 AND store_id=$2 AND award_id=$3`,[this.transaction.scope.tenantId,this.transaction.scope.storeId,originalAward.id,additional])
+    } else await this.transaction.query(`
       INSERT INTO mbox.loyalty_order_reward_contributions (
         tenant_id,store_id,award_id,membership_id,customer_id,order_id,payment_id,policy_version_id,currency,
         eligible_amount_minor,points_numerator_per_minor,points_denominator,
@@ -300,7 +319,7 @@ export class LoyaltyAccrualRepository {
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         row.membership_id, row.customer_id, points, row.available_points + points, row.order_id,
         input.occurredAt, row.points_validity_months, row.policy_version_id,
-        row.order_id, row.payment_id, `loyalty:order:${row.order_id}:points`,
+        row.order_id, row.payment_id, `loyalty:order:${evidenceKey}:points`,
       ])
       const earnedRow = earned.rows[0]
       if (!earnedRow) throw new Error('Loyalty earn ledger was not inserted')
@@ -314,7 +333,7 @@ export class LoyaltyAccrualRepository {
           points: creditedPoints,
           availableAt: input.occurredAt,
           expiresAt: earnedRow.expires_at,
-          idempotencyKey: `lot:order:${row.order_id}`,
+          idempotencyKey: `lot:order:${evidenceKey}`,
         })
       }
       if (recoveredDebt > 0) {
@@ -331,7 +350,7 @@ export class LoyaltyAccrualRepository {
           this.transaction.scope.tenantId, this.transaction.scope.storeId,
           row.membership_id, row.customer_id, -recoveredDebt, availablePoints,
           `recovery-debt:${row.order_id}`, row.policy_version_id, row.order_id, row.payment_id,
-          `loyalty:order:${row.order_id}:recovery-debt`, input.occurredAt,
+          `loyalty:order:${evidenceKey}:recovery-debt`, input.occurredAt,
         ])
       }
     }
@@ -348,10 +367,10 @@ export class LoyaltyAccrualRepository {
       `, [
         this.transaction.scope.tenantId, this.transaction.scope.storeId,
         row.membership_id, row.customer_id, growth, growthValue, row.policy_version_id,
-        row.order_id, row.payment_id, `loyalty:order:${row.order_id}:growth`, input.occurredAt,
+        row.order_id, row.payment_id, `loyalty:order:${evidenceKey}:growth`, input.occurredAt,
       ])
     }
-    if (creditedPoints > 0) {
+    if (creditedPoints > 0 && !originalAward) {
       await new WechatLoyaltyNotificationRepository(this.transaction).enqueuePointsCredited({
         awardId,
         pointsChange: creditedPoints,
@@ -359,6 +378,8 @@ export class LoyaltyAccrualRepository {
         occurredAt: input.occurredAt,
       })
     }
+    if(collection) await this.transaction.query('UPDATE mbox.ticket_dining_collections SET rewarded_minor=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,collection.id,additional])
     const historical = await this.applyHistoricalRefunds(row.order_id, row.payment_id, input.occurredAt, input.recoverDeferred === true)
     await this.evaluateMembershipTier(row.membership_id, input.occurredAt, row.order_id)
     return { applied: true, membershipId: row.membership_id,
@@ -676,6 +697,9 @@ export class LoyaltyAccrualRepository {
           COALESCE((SELECT SUM(receipt.amount_minor) FROM mbox.order_payment_facts receipt
             WHERE receipt.tenant_id=current.tenant_id AND receipt.store_id=current.store_id
               AND receipt.order_id=current.order_id AND receipt.succeeded_at<=current.completed_at
+              AND NOT EXISTS (SELECT 1 FROM mbox.payments supplement
+                WHERE (supplement.tenant_id,supplement.store_id,supplement.id)=(receipt.tenant_id,receipt.store_id,receipt.id)
+                  AND supplement.provider_snapshot ? 'ticketDiningCollection')
               AND receipt.status IN ('succeeded','partially_refunded','refunded')),0)
           - COALESCE((SELECT SUM(basis.amount_minor) FROM mbox.loyalty_order_item_basis basis
             WHERE basis.tenant_id=current.tenant_id AND basis.store_id=current.store_id
@@ -684,6 +708,9 @@ export class LoyaltyAccrualRepository {
             WHERE previous.tenant_id=current.tenant_id AND previous.store_id=current.store_id
               AND previous.order_id=current.order_id AND previous.status='succeeded'
               AND previous.id<>current.id
+              AND NOT EXISTS (SELECT 1 FROM mbox.payments supplement
+                WHERE (supplement.tenant_id,supplement.store_id,supplement.id)=(previous.tenant_id,previous.store_id,previous.payment_id)
+                  AND supplement.provider_snapshot ? 'ticketDiningCollection')
               AND ((previous.completed_at,previous.id)<(current.completed_at,current.id) OR EXISTS (
                 SELECT 1 FROM mbox.loyalty_award_refund_applications applied
                 WHERE applied.tenant_id=previous.tenant_id AND applied.store_id=previous.store_id
@@ -710,9 +737,29 @@ export class LoyaltyAccrualRepository {
       quantityReturn: row.quantity_return, priorReview: row.prior_review }
   }
 
+  private async hasTicketDining(){
+    const result=await this.transaction.query<{installed:boolean}>("SELECT to_regclass('mbox.ticket_dining_collections') IS NOT NULL AS installed")
+    return result.rows[0]?.installed===true
+  }
+
   private async eligibleSalesRefundAmount(input: Readonly<{
     orderId: string; paymentId: string; refundId: string
   }>, allocatedEligible: number): Promise<number | null> {
+    // Supplement refunds use that receipt's actual item allocations. A complete return after
+    // withdrawal can instead reverse the whole credited receipt without allocating items again.
+    const supplement=!(await this.hasTicketDining())?undefined:(await this.transaction.query<{eligible:string|null}>(`
+      SELECT CASE WHEN f.amount_minor=c.amount_minor THEN c.rewarded_minor
+        WHEN f.purpose='return_goods' AND f.amount_minor=sum(i.amount_minor) THEN
+          coalesce(sum(i.amount_minor) FILTER(WHERE item.loyalty_eligible_at_submission),0)
+        ELSE NULL END::text eligible
+      FROM mbox.ticket_dining_collections c JOIN mbox.refunds f
+        ON (f.tenant_id,f.store_id,f.payment_id)=(c.tenant_id,c.store_id,c.payment_id)
+      LEFT JOIN mbox.refund_items i ON(i.tenant_id,i.store_id,i.refund_id)=(f.tenant_id,f.store_id,f.id)
+      LEFT JOIN mbox.order_items item ON(item.tenant_id,item.store_id,item.id,item.order_id)=(i.tenant_id,i.store_id,i.order_item_id,c.order_id)
+      WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.order_id=$3 AND f.id=$4 AND f.payment_id=$5 AND f.status='succeeded'
+        AND c.rewarded_minor IS NOT NULL GROUP BY c.id,f.id`,
+      [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.orderId,input.refundId,input.paymentId])).rows[0]
+    if(supplement?.eligible!=null)return money(supplement.eligible)
     const approved = await this.transaction.query<{ eligible_amount_minor: string }>(`
       SELECT request.eligible_amount_minor::text FROM mbox.loyalty_refund_review_decisions decision
       JOIN mbox.loyalty_refund_review_requests request
@@ -1444,7 +1491,7 @@ export class LoyaltyAccrualRepository {
       SELECT id, remaining_points
       FROM mbox.loyalty_point_lots
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND membership_id=$3::uuid
-        AND status='available' AND remaining_points > 0
+        AND status='available' AND remaining_points > 0 AND source_type<>'table_ticket'
         AND (expires_at IS NULL OR expires_at > $4::timestamptz)
       ORDER BY expires_at NULLS LAST, available_at, id
       FOR UPDATE

@@ -269,7 +269,10 @@ export interface GuestCountChange {
   capacityOverrideReason?: string
 }
 
+export interface TicketInboxItem { activityId: string; title: string; waiting: number }
+
 export interface StaffActionsApiPort {
+  loadTicketInbox?(signal?: AbortSignal): Promise<TicketInboxItem[]>
   updateGuestCount(sessionId: string, change: GuestCountChange, key: string): Promise<number>
   loadMemberGiftWallet?(code:string,cursor?:string,signal?:AbortSignal):Promise<MemberGiftWallet>
   runMemberGiftCommand?(employeeId:string,command:MemberGiftCommand,key:string):Promise<MemberGiftReceipt>
@@ -562,6 +565,9 @@ export class StaffActionsApi implements StaffActionsApiPort {
     return data
   }
 
+  async loadTicketInbox(signal?: AbortSignal) {
+    return this.getData<TicketInboxItem[]>('/api/staff/activity-operations/ticket-reception-inbox',signal)
+  }
   async loadActivityBoard(station:'bar'|'kitchen'|'pickup',signal?:AbortSignal) {
     return this.getData<ActivityProductionBoard>(`/api/commerce/activity-service/board?station=${station}`,signal)
   }

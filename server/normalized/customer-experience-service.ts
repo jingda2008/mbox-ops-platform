@@ -65,6 +65,8 @@ import {
   assertEmployeeTableSessionAccess,
 } from './employee-table-access.js'
 
+import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
+import {buyTableTickets,publicTableTickets,type TablePurchaseInput} from './table-ticket-purchase.js'
 type TransactionRunner = Pick<ScopedPostgresTransactionRunner, 'run'>
 
 export interface PublicCustomerExperienceContext {
@@ -86,6 +88,7 @@ export class CustomerExperienceService {
     private readonly commands: Pick<NormalizedCommandExecutor, 'execute'>,
     private readonly customers: Pick<CustomerCommandService, 'updateProfile'>,
     private readonly activityPaymentProviderConfigured = false,
+    private readonly ticketContactProtection?:ActivityContactProtectionKeyring,
   ) {}
 
   portal(context: PublicCustomerExperienceContext): Promise<PublicPortalSnapshot> {
@@ -2058,6 +2061,23 @@ export class CustomerExperienceService {
       return commandOutcome(output, staffActor(context), `loyalty.supplement.${applied.status}`,
         'loyalty_supplement_request', request.id, context.businessDate,
         { reason: input.reason, pointsDelta: applied.pointsDelta, growthDelta: applied.growthDelta })
+    })
+  }
+
+  tableTicketOffers(scope: Readonly<StoreScope>) {
+    return this.transactions.run(scope,publicTableTickets,{readOnly:true})
+  }
+
+  purchaseTableTickets(context:PublicCustomerExperienceContext,input:TablePurchaseInput,key:string,ready:boolean) {
+    return this.commands.execute({scope:context.scope,operationScope:'community.table_ticket.purchase',
+      idempotencyKey:key,requestFingerprint:fingerprint({customer:context.customerId,input}),
+      resultCodec:objectCodec<Awaited<ReturnType<typeof buyTableTickets>>>(),retainReceipt:true,
+    },async tx=>{
+      if (!ready || !this.activityPaymentProviderConfigured || !this.ticketContactProtection) throw new CustomerExperienceRequestError('微信支付尚未就绪','WECHAT_IDENTITY_REQUIRED',409)
+      const result=await buyTableTickets(tx,context.customerId,input,deterministicProviderId('TT',context.scope.storeId,key),
+        deterministicProviderId('AP',context.scope.storeId,key),key,this.ticketContactProtection)
+      return commandOutcome(result,guestActor(context),'community.table_ticket.purchased','community_activity_registration',
+        result.id,context.businessDate,{quantity:input.quantity,offerId:input.offerId,amountMinor:result.amountMinor})
     })
   }
 

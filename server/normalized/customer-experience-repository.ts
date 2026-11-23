@@ -1599,7 +1599,7 @@ export class CustomerExperienceRepository {
       'ACTIVITY_MEMBERSHIP_REQUIRED',
       403,
     )
-    const activity = await this.transaction.query<ActivityRow & { id: string }>(`
+    const activity = await this.transaction.query<ActivityRow & { id: string;table_ticket_sales:boolean }>(`
       SELECT activity.id, activity.public_id, activity.activity_kind, activity.title,
         activity.summary, activity.cover_url, activity.starts_at::text, activity.ends_at::text,
         activity.assembly_location, activity.capacity, activity.fee_amount_minor,
@@ -1614,6 +1614,9 @@ export class CustomerExperienceRepository {
         activity.sales_copy, activity.activity_details, activity.included_items,
         activity.participation_requirements, activity.contact_instructions,
         activity.member_benefit_text, activity.package_selection_required,
+        EXISTS(SELECT 1 FROM mbox.table_ticket_offers ticket WHERE
+          (ticket.tenant_id,ticket.store_id,ticket.activity_id)=(activity.tenant_id,activity.store_id,activity.id)
+          AND ticket.status='published') AS table_ticket_sales,
         NULL::text AS registration_status,
         COALESCE((SELECT policy.online_payment_enabled
           FROM mbox.store_commerce_policies policy
@@ -1626,14 +1629,7 @@ export class CustomerExperienceRepository {
             AND (feature.effective_from IS NULL OR feature.effective_from <= clock_timestamp())
             AND (feature.effective_until IS NULL OR feature.effective_until > clock_timestamp())
         ) AS activity_payment_authorized,
-        COALESCE((
-          SELECT sum(COALESCE(registration.reserved_seats,registration.party_size))
-          FROM mbox.community_activity_registrations AS registration
-          WHERE registration.tenant_id = activity.tenant_id
-            AND registration.store_id = activity.store_id
-            AND registration.activity_id = activity.id
-            AND registration.status IN ('reserved', 'payment_pending', 'confirmed', 'checked_in')
-        ), 0)::text AS registered_count
+        mbox.ticket_event_committed(activity.tenant_id,activity.store_id,activity.id)::text AS registered_count
       FROM mbox.community_activities AS activity
       WHERE activity.tenant_id = $1::uuid AND activity.store_id = $2::uuid
         AND activity.public_id = $3 AND activity.status IN ('published', 'full')
@@ -1682,6 +1678,9 @@ export class CustomerExperienceRepository {
       input.activityPackagePublicId ?? null,
       row.package_selection_required,
     )
+    if (row.table_ticket_sales && !selectedPackage && !['single_dish','meal_package'].includes(input.purchaseKind ?? '')) {
+      throw new CustomerExperienceRequestError('请从本场门票选择桌区和票档','TICKET_OFFER_REQUIRED',409)
+    }
     const servicePurchase=await prepareActivityPurchase(this.transaction,{...input,customerId:registrationCustomerId,activityId:row.id,packageId:selectedPackage?.id??null,maxParticipants:selectedPackage?.max_participants??null,packageIncludesAdmission:selectedPackage?.includes_admission??true,packageHasMeal:selectedPackage?.has_meal??false,choiceGroups:selectedPackage?.choice_groups??[],mealOnlyAmount:selectedPackage?.meal_only_fee_amount_minor==null?null:Number(selectedPackage.meal_only_fee_amount_minor)});
     if(servicePurchase){const ends=[servicePurchase.deadline,row.ends_at,selectedPackage?.available_until].filter((v):v is string=>typeof v==='string');servicePurchase.deadline=ends.sort((a,b)=>Date.parse(a)-Date.parse(b))[0]??null;}
     const seats=servicePurchase?.reservedSeats??input.partySize;
@@ -3909,15 +3908,11 @@ export class CustomerExperienceRepository {
         payment_rule_text: string
       }>(`
         SELECT activity.public_id, activity.title, activity.status, activity.starts_at::text,
-          COALESCE(sum(COALESCE(registration.reserved_seats,registration.party_size)), 0)::text AS registrations,
+          mbox.ticket_event_committed(activity.tenant_id,activity.store_id,activity.id)::text AS registrations,
           activity.fee_amount_minor::text, activity.deposit_amount_minor::text,
           activity.fee_basis, activity.registration_payment_mode,
           activity.payment_deadline_minutes, activity.payment_rule_text
         FROM mbox.community_activities AS activity
-        LEFT JOIN mbox.community_activity_registrations AS registration
-          ON registration.tenant_id = activity.tenant_id AND registration.store_id = activity.store_id
-         AND registration.activity_id = activity.id
-         AND registration.status IN ('reserved', 'payment_pending', 'confirmed', 'checked_in')
         WHERE activity.tenant_id = $1::uuid AND activity.store_id = $2::uuid
           AND activity.status IN ('draft', 'published', 'full')
         GROUP BY activity.id
@@ -4286,13 +4281,8 @@ export class CustomerExperienceRepository {
             AND (feature.effective_from IS NULL OR feature.effective_from <= clock_timestamp())
             AND (feature.effective_until IS NULL OR feature.effective_until > clock_timestamp())
         ) AS activity_payment_authorized,
-        COALESCE(sum(COALESCE(active_registration.reserved_seats,active_registration.party_size)), 0)::text AS registered_count
+        mbox.ticket_event_committed(activity.tenant_id,activity.store_id,activity.id)::text AS registered_count
       FROM mbox.community_activities AS activity
-      LEFT JOIN mbox.community_activity_registrations AS active_registration
-        ON active_registration.tenant_id = activity.tenant_id
-       AND active_registration.store_id = activity.store_id
-       AND active_registration.activity_id = activity.id
-       AND active_registration.status IN ('reserved', 'payment_pending', 'confirmed', 'checked_in')
       LEFT JOIN LATERAL (
         SELECT candidate.status
         FROM mbox.community_activity_registrations candidate

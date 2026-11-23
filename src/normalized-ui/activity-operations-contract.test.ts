@@ -7,10 +7,10 @@ const read = (path: string) => readFileSync(new URL(path, root), 'utf8')
 describe('activity operations staff and customer contract', () => {
   it('routes v3 service and refund handling to the single authorized workbench while legacy buttons remain gated',()=>{
     const panel=read('src/normalized-ui/ActivityOperationsPanel.tsx')
-    expect(panel).toContain('registration.serviceVersion!==3 && canRequestRefund')
-    expect(panel).toContain('registration.serviceVersion!==3 && canApproveRefund')
-    expect(panel).toContain('registration.serviceVersion!==3 && canExecuteRefund')
-    expect(panel).toContain("canManage && registration.serviceVersion!==3 && registration.status === 'confirmed'")
+    expect(panel).toContain('registration.serviceVersion!==3 && registration.serviceVersion!==4 && canRequestRefund')
+    expect(panel).toContain('registration.serviceVersion!==3 && registration.serviceVersion!==4 && canApproveRefund')
+    expect(panel).toContain('registration.serviceVersion!==3 && registration.serviceVersion!==4 && canExecuteRefund')
+    expect(panel).toContain("canManage && registration.serviceVersion!==3 && registration.serviceVersion!==4 && registration.status === 'confirmed'")
     expect(panel).toContain('退款统一到“收银与退款 → 活动收银”核对原申请')
   })
   it('keeps published promises immutable and exposes the full draft configuration surface', () => {

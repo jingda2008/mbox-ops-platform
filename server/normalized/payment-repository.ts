@@ -1,3 +1,6 @@
+import {pendingTicketDining,ticketDiningAvailableSql} from './pending-ticket-dining.js'
+import {creditTableTicketGifts} from './table-ticket-gifts.js'
+import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
 import { orderHasPendingTableCreditSql, unpostedCaptureSql, verifiedCaptureSql } from './verified-capture-sql.js'
 import {readCarryoverDebt} from './carryover-debt.js'
 import {ActivityServiceRepository} from './activity-service-repository.js'
@@ -140,6 +143,7 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  ticket_dining_available?:boolean
   pending_table_credit?:boolean
   id: string
   table_session_id: string
@@ -150,6 +154,7 @@ interface OrderRow extends Record<string, unknown> {
 
 interface SettlementRow extends Record<string, unknown> {
   collection_due_minor: string | number
+  actual_receivable_minor?:string|number
   receivable_reduction_minor?: string | number
   has_unresolved_unpaid_stop?: boolean
   gross_paid_minor: string | number
@@ -490,7 +495,10 @@ export class PaymentRepository {
     // on collection. The order lock and confirmed settlement still bound new attempts.
     const dueMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
     if(dueMinor<=0)throw new OrderNotPayableError(order.id,'the order has no outstanding balance')
-    const outstandingMinor = input.amountMinor??dueMinor
+    const dining=order.ticket_dining_available?await pendingTicketDining(this.transaction,order.id):null
+    const supplementMinor=dining?toSafeMinor(dining.amount_minor,'confirmed dining supplement'):null
+    const outstandingMinor = input.amountMinor??supplementMinor??dueMinor
+    if(supplementMinor!==null && outstandingMinor!==supplementMinor)throw new PaymentEvidenceError('请按会员确认的原菜品补款金额单独收款')
     if(!Number.isSafeInteger(outstandingMinor)||outstandingMinor<=0||outstandingMinor>dueMinor||input.amountMinor!==undefined&&!carryover)throw new OrderNotPayableError(order.id,'收款金额超过剩余欠款或不支持单笔分次收款')
     if (outstandingMinor <= 0) {
       throw new OrderNotPayableError(order.id, 'the order has no outstanding balance')
@@ -503,7 +511,7 @@ export class PaymentRepository {
     // A refund records money leaving the venue. It must not by itself reopen a
     // customer payment link: an explicit, short-lived cashier authorization is
     // locked and consumed together with the replacement payment below.
-    const recollection = await new RecollectionAuthorizationRepository(this.transaction).prepareForPayment({
+    const recollection = supplementMinor!==null ? {authorizationId:null} : await new RecollectionAuthorizationRepository(this.transaction).prepareForPayment({
       orderId: order.id,
       outstandingMinor,
       refundedMinor: toSafeMinor(settlement.refunded_minor, 'refunded'),
@@ -534,7 +542,7 @@ export class PaymentRepository {
       outstandingMinor,
       order.currency,
       status,
-      JSON.stringify(sanitizeProviderSnapshot(input.evidence)),
+      JSON.stringify({...sanitizeProviderSnapshot(input.evidence),...(dining?{ticketDiningApprovalId:dining.id}:{})}),
     ])
     const payment = onePayment(inserted, 'Creating a payment did not insert exactly one row')
     await new RecollectionAuthorizationRepository(this.transaction).consume(recollection.authorizationId, payment.id)
@@ -651,7 +659,7 @@ export class PaymentRepository {
     if (registration === undefined) throw new OrderNotPayableError(input.registrationPublicId, 'activity registration was not found')
 
     const isRefunded = registration.status === 'refunded' || registration.payment_status === 'refunded'
-    if (isRefunded && registration.service_version === 3) throw new OrderNotPayableError(registration.id, '新版套餐退款记录不能重新收款，请新购一份；补偿退款保留原履约')
+    if (isRefunded && [3,4].includes(registration.service_version)) throw new OrderNotPayableError(registration.id, '新版套餐退款记录不能重新收款，请新购一份；补偿退款保留原履约')
     const amountMinor = isRefunded
       ? toSafeMinor(registration.paid_amount_minor, 'refunded activity payment')
       : toSafeMinor(registration.amount_due_minor, 'activity amount due')
@@ -732,7 +740,8 @@ export class PaymentRepository {
       amountMinor,
     ])
     if (linked.rowCount !== 1) throw new OrderNotPayableError(registration.id, 'activity registration changed while collecting')
-    await this.extendPaidActivityPackageReservationToActivityEnd(registration.id, payment.id)
+    if(registration.service_version===4)await this.postTableTicketGifts(registration.id,payment.id)
+    else await this.extendPaidActivityPackageReservationToActivityEnd(registration.id, payment.id)
     if (isRefunded) {
       await this.restoreActivityRegistrationContactForRecollection({
         registrationId: registration.id,
@@ -1342,6 +1351,18 @@ export class PaymentRepository {
     return row.payment_status
   }
 
+  private async postTableTicketGifts(registrationId:string,paymentId:string){
+        // Payment and tickets survive a gift failure. The original payment fact is retried by the promotion worker.
+        await this.transaction.query('SAVEPOINT table_ticket_gift')
+        try{
+          const control=await new LoyaltyOperationalControlRepository(this.transaction).state('points_accrual',true)
+          if(control.state!=='paused')await creditTableTicketGifts(this.transaction,registrationId,paymentId)
+        }catch{
+          await this.transaction.query('ROLLBACK TO SAVEPOINT table_ticket_gift')
+        }
+        await this.transaction.query('RELEASE SAVEPOINT table_ticket_gift')
+  }
+
   async syncActivityRegistrationPaymentStatus(payment: Readonly<Pick<Payment,
     'payableKind' | 'activityRegistrationId' | 'id' | 'amountMinor' | 'succeededAt' | 'status'>>): Promise<void> {
     if(payment.payableKind==='table_prepayment')return
@@ -1351,11 +1372,11 @@ export class PaymentRepository {
     if (payment.status === 'succeeded' || payment.status === 'partially_refunded') {
       // A late callback is not a late payment. Compare the verified channel time
       // with the original held deadline, and keep real funds even when fulfilment is no longer valid.
-      const service = (await this.transaction.query<{status:string;deadline:string|null}>(`
-        SELECT r.status,LEAST(r.payment_due_at,(SELECT action.expires_at FROM mbox.payment_provider_actions action
+      const service = (await this.transaction.query<{status:string;service_version:number;deadline:string|null}>(`
+        SELECT r.status,r.service_version,LEAST(r.payment_due_at,(SELECT action.expires_at FROM mbox.payment_provider_actions action
           WHERE action.tenant_id=r.tenant_id AND action.store_id=r.store_id AND action.payment_id=$4 LIMIT 1))::text deadline
         FROM mbox.community_activity_registrations r WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.id=$3
-          AND r.payment_id=$4 AND r.service_version=3 FOR UPDATE OF r`,
+          AND r.payment_id=$4 AND r.service_version IN(3,4) FOR UPDATE OF r`,
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,payment.activityRegistrationId,payment.id])).rows[0];
       if(service && (service.status==='cancelled' || (service.status==='payment_pending' && service.deadline!==null
         && Date.parse(payment.succeededAt??new Date().toISOString())>=Date.parse(service.deadline)))){
@@ -1400,6 +1421,10 @@ export class PaymentRepository {
         if (current.rows[0]?.payment_status !== 'paid') {
           throw new Error('Activity registration lost its payment confirmation transition')
         }
+      }
+      if(service?.service_version===4){
+        await this.postTableTicketGifts(payment.activityRegistrationId,payment.id)
+        return
       }
       await this.extendPaidActivityPackageReservationToActivityEnd(payment.activityRegistrationId, payment.id)
       await new ActivityServiceRepository(this.transaction).dispatchPaidAddon(payment.activityRegistrationId)
@@ -1540,6 +1565,7 @@ export class PaymentRepository {
   private async lockOrder(orderId: string): Promise<OrderRow> {
     const result = await this.transaction.query<OrderRow>(`
       SELECT id, table_session_id, total_amount_minor, currency, status,
+        ${ticketDiningAvailableSql} AS ticket_dining_available,
         ${orderHasPendingTableCreditSql} AS pending_table_credit
       FROM mbox.orders
       WHERE tenant_id = $1::uuid
@@ -1572,6 +1598,7 @@ export class PaymentRepository {
     const result = await this.transaction.query<SettlementRow>(`
       SELECT
         mbox.order_collection_due_amount_for_mode($1::uuid,$2::uuid,$3::uuid,true)::text AS collection_due_minor,
+        mbox.order_receivable_amount($1,$2,$3)::text AS actual_receivable_minor,
         -- Read after the order lock, in the same fresh statement as payment facts.
         -- A concurrent partial stop must commit before this amount is collected.
         COALESCE((SELECT SUM(adjustment.amount_minor) FROM mbox.item_receivable_adjustment_facts adjustment
@@ -1609,6 +1636,7 @@ function assertUnpaidStopsSettled(orderId:string,settlement:SettlementRow):void 
 }
 
 function effectiveOrderTotal(order: OrderRow, settlement: SettlementRow): number {
+  if(settlement.actual_receivable_minor!=null)return toSafeMinor(settlement.actual_receivable_minor,'current order receivable')
   const original = toSafeMinor(order.total_amount_minor, 'original order total')
   const reduction = toSafeMinor(settlement.receivable_reduction_minor ?? 0, 'stopped item receivable')
   if (!Number.isSafeInteger(reduction) || reduction > original) throw new PaymentEvidenceError('Stopped item receivable does not match the original order')

@@ -32,7 +32,7 @@ for(const mode of ['order_gate','prepaid'])test(`opens a table with ${mode}, exa
    await login(server,f,'tom');await server.getByRole('button',{name:new RegExp('^'+tableCode+' \\d+人')}).click()
    await expect(server.getByRole('button',{name:'取消整桌低消'})).toBeHidden()
    await server.getByRole('button',{name:'协助点单',exact:true}).click();const sheet=server.getByRole('dialog',{name:tableCode+'协助点单'})
-   await expect(sheet).toContainText('员工协助点单自动放行');await expect(sheet.getByRole('checkbox',{name:/低消/})).toBeHidden()
+   await expect(sheet).toContainText('员工协助点单按本桌生效规则结算');await expect(sheet.getByRole('checkbox',{name:/低消/})).toBeHidden()
    await sheet.getByLabel('搜索菜单商品').fill(f.orderableProductName);await sheet.getByRole('button',{name:'加入'+f.orderableProductName}).click()
    await sheet.getByRole('button',{name:'查看已选'}).click();await sheet.getByRole('dialog',{name:'购物车明细'}).getByRole('button',{name:'核对无误，确认下单'}).click()
    const submitted=server.waitForResponse(r=>r.url().endsWith('/commerce/orders')&&r.request().method()==='POST')

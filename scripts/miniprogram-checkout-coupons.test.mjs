@@ -14,6 +14,19 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     const choose=(portion='second')=>page.chooseCheckoutCoupon({currentTarget:{dataset:{portion}},detail:{value:1}})
     return{page,api,choose,calls,setScope:value=>{identity=value}}
   }
+  if(platform==='miniprogram')test('微信：550分、260元购物车的一键填数、手改与重试',async()=>{
+    const {page,api}=fixture()
+    api.points=async()=>{throw Error('弱网')}
+    await page.openCheckoutPoints()
+    assert.equal(page.data.maximumPoints,null)
+    assert.ok(page.data.pointsError)
+    api.points=async()=>({availablePoints:550,maximumPoints:260,minorPerPoint:100,allowCoupons:false})
+    await page.openCheckoutPoints()
+    page.fillMaximumCheckoutPoints()
+    assert.equal(page.data.pointsInput,'260')
+    page.onCheckoutPointsInput({detail:{value:'200'}})
+    assert.equal(page.data.pointsInput,'200')
+  })
   test(`${platform}: two identical products have independent coupon choices, not one quantity-wide discount`,async()=>{
     const {page,choose}=fixture();await page.openCheckoutCoupons();choose()
     assert.deepEqual(Array.from(page.data.couponSelections,s=>({...s})),[{portionId:'second',benefitId:'coupon'}])
@@ -61,7 +74,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   })
   test(`${platform}: exact points quote supports zero payable and excludes coupon selection`,async()=>{
     const {page,choose}=fixture();await page.openCheckoutCoupons();choose()
-    await page.openCheckoutPoints();assert.equal(page.data.couponSelections.length,0)
+    await page.openCheckoutPoints();assert.equal(page.data.couponSelections.length,platform==='miniprogram'?1:0)
     page.onCheckoutPointsInput({detail:{value:'10'}});assert.equal(page.couponCheckoutReady(),false)
     await page.quoteCheckoutPoints();assert.equal(page.data.couponQuote.payableMinor,0);assert.equal(page.couponCheckoutReady(),true)
     await page.openCheckoutCoupons();assert.equal(page.data.pointsInput,'');assert.equal(page.data.couponQuote,null)
@@ -240,7 +253,12 @@ for (const previous of ['member-coupon', 'points']) {
     await page.quoteCheckoutChannel()
     assert.deepEqual(Array.from(page.data.couponSelections),[]);assert.equal(page.data.pointsInput,'');assert.equal(page.data.couponQuote.id,'channel-only');assert.equal(page.couponCheckoutReady(),true)
     await page.openCheckoutPoints()
-    assert.equal(page.data.couponQuote,null);assert.equal(page.data.pointsPickerOpen,true)
+    assert.equal(page.data.couponQuote.id,'channel-only');assert.equal(page.data.pointsPickerOpen,true)
+    page.closeCheckoutPoints()
+    assert.equal(page.data.couponQuote.id,'channel-only')
+    await page.openCheckoutPoints()
+    page.onCheckoutPointsInput({detail:{value:'5'}})
+    assert.equal(page.data.couponQuote,null)
   })
 }
 

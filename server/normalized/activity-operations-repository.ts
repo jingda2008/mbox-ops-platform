@@ -833,6 +833,7 @@ export class ActivityOperationsRepository {
     const current = lockedResult.rows[0] as (LockedRegistrationRow & {service_version?:number})|undefined
     if (!current) throw new ActivityOperationsError('报名不存在或不属于当前门店', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
 
+    if(current.service_version===4)throw new ActivityOperationsError('请到门票接待选择原票办理','TABLE_TICKET_SELECT_ORIGINAL',409)
     if(current.service_version===3 && ['check_in','fulfill_package','no_show'].includes(operation))throw new ActivityOperationsError('新版套餐请使用专用扫码和出品记录，不能整体标记签到或交付','ACTIVITY_SERVICE_USE_DEDICATED_FLOW');
     if (operation === 'check_in') {
       if (current.status !== 'confirmed'

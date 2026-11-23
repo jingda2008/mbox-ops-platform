@@ -72,6 +72,7 @@ interface CatalogProduct {
   recommendationHoldMinutes: number
   recommendationUpgradeProductId: string | null
   menuSortOrder: number
+  visibleFrom:string|null;visibleUntil:string|null
   availableFrom: string | null
   availableUntil: string | null
   allowedChannels: string[]
@@ -88,6 +89,7 @@ interface CatalogProduct {
 }
 
 interface MenuCategory {
+  visibleFrom:string|null; visibleUntil:string|null
   id: string
   code: string
   displayName: string
@@ -100,6 +102,7 @@ interface MenuCategory {
 }
 
 interface MenuCategoryDraft {
+  visibleFrom:string; visibleUntil:string
   id: string | null
   code: string
   displayName: string
@@ -134,6 +137,7 @@ interface ProductDraft {
   recommendationUpgradeProductId: string
   sortOrder: string
   serviceWindow: ProductServiceWindow | null
+  visibleFrom:string;visibleUntil:string
   availableFrom: string
   availableUntil: string
   allowedChannels: string[]
@@ -427,6 +431,7 @@ export function CatalogManagementPanel({
 
   const startEditCategory = (category: MenuCategory) => {
     setCategoryDraft({
+      visibleFrom:localCategoryTime(category.visibleFrom),visibleUntil:localCategoryTime(category.visibleUntil),
       id: category.id,
       code: category.code,
       displayName: category.displayName,
@@ -456,6 +461,8 @@ export function CatalogManagementPanel({
         parentCode: categoryDraft.parentCode || null,
         sortOrder,
         guestVisible: categoryDraft.guestVisible,
+        visibleFrom:shanghaiInstant(categoryDraft.visibleFrom),
+        visibleUntil:shanghaiInstant(categoryDraft.visibleUntil),
       }
       const saved = categoryDraft.id === null
         ? await api.postEndpoint<MenuCategory>('/api/catalog/menu-categories', payload, { idempotencyKey: operationKey('menu-category-create') })
@@ -500,6 +507,7 @@ export function CatalogManagementPanel({
       recommendationUpgradeProductId: product.recommendationUpgradeProductId ?? '',
       sortOrder: integerText(product.menuSortOrder, '999'),
       serviceWindow: product.serviceWindow ?? null,
+      visibleFrom:localCategoryTime(product.visibleFrom),visibleUntil:localCategoryTime(product.visibleUntil),
       availableFrom: product.availableFrom ?? '',
       availableUntil: product.availableUntil ?? '',
       allowedChannels: product.allowedChannels,
@@ -734,6 +742,7 @@ export function CatalogManagementPanel({
     if(prepMinutes===null||holdMinutes===null||fulfillmentSlaSeconds===undefined)fieldProblems.push('制作、保留或出品时限：请填写有效时长')
     if(maxOrderQuantity===null)fieldProblems.push('单次限购数量：请填写有效整数')
     if(sceneTags===null||intentTags===null||tasteTags===null||dwellTags===null)fieldProblems.push('推荐标签：存在不符合格式或数量限制的内容，请检查各标签字段')
+    if(draft.visibleFrom && draft.visibleUntil && draft.visibleUntil<=draft.visibleFrom)fieldProblems.push('对客可见结束须晚于开始')
     if(draft.allowedChannels.length===0)fieldProblems.push('销售渠道：至少开放一个点单渠道')
     try { parseProductServiceWindow(draft.serviceWindow) } catch (error) { fieldProblems.push(error instanceof Error ? error.message : '时段配置无效') }
     if(!draft.serviceWindow&&(Boolean(draft.availableFrom)!==Boolean(draft.availableUntil)||draft.availableFrom!==''&&draft.availableFrom===draft.availableUntil))fieldProblems.push('供应时间：开始与结束需同时填写且不能相同；跨午夜可使用较早的结束时间')
@@ -839,6 +848,7 @@ export function CatalogManagementPanel({
       bundleChoiceGroups:draft.productKind==='bundle'?bundleChoiceGroups:[],
       productSnapshot,
       guestVisible: draft.guestVisible,
+      visibleFrom:shanghaiInstant(draft.visibleFrom),visibleUntil:shanghaiInstant(draft.visibleUntil),
       searchText: draft.searchText.trim(),
       recommendationEnabled: draft.recommendationEnabled,
       recommendationMinGuests: minimum,
@@ -905,6 +915,7 @@ export function CatalogManagementPanel({
             <label>上级分类<select value={categoryDraft.parentCode} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, parentCode: event.target.value })}><option value="">作为一级分类</option>{menuCategories.filter((item) => item.parentCode === null && item.code !== categoryDraft.code).map((item) => <option key={item.code} value={item.code}>{item.displayName}</option>)}</select></label>
             <label>菜单排序<NumberInputWithUnit inputMode="numeric" min={0} max={100000} unit="序号" value={categoryDraft.sortOrder} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, sortOrder: event.target.value })} /></label>
             <label className="catalog-check"><input type="checkbox" checked={categoryDraft.guestVisible} onChange={(event) => setCategoryDraft((current) => current === null ? null : { ...current, guestVisible: event.target.checked })} />顾客菜单可见</label>
+            <details><summary>对客可见时间</summary>{(['visibleFrom','visibleUntil'] as const).map(key=><label key={key}>{key==='visibleFrom'?'开始':'结束'}<input type="datetime-local" value={categoryDraft[key]} onChange={event=>setCategoryDraft({...categoryDraft,[key]:event.target.value})}/></label>)}</details>
             <div className="catalog-menu-category-form__actions"><button type="button" onClick={() => setCategoryDraft(null)}>取消</button><button type="submit" disabled={categoryBusy}>{categoryBusy ? '保存中' : '保存分类'}</button></div>
           </form>}
           {menuCategories.length === 0
@@ -945,6 +956,9 @@ export function CatalogManagementPanel({
             <label>推荐最少人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMinGuests} onChange={(event) => updateDraft('recommendationMinGuests', event.target.value)} /></label>
             <label>推荐最多人数<NumberInputWithUnit inputMode="numeric" unit="人" value={draft.recommendationMaxGuests} onChange={(event) => updateDraft('recommendationMaxGuests', event.target.value)} /></label>
             <label>推荐优先级<NumberInputWithUnit inputMode="numeric" unit="级" value={draft.recommendationPriority} onChange={(event) => updateDraft('recommendationPriority', event.target.value)} /></label>
+            <details><summary>菜品对客可见时间（北京时间）</summary>
+              <label>开始<input type="datetime-local" value={draft.visibleFrom} onChange={e=>updateDraft('visibleFrom',e.target.value)}/></label>
+              <label>结束<input type="datetime-local" value={draft.visibleUntil} onChange={e=>updateDraft('visibleUntil',e.target.value)}/></label></details>
             <label className="catalog-check"><input type="checkbox" checked={draft.guestVisible} onChange={(event) => updateDraft('guestVisible', event.target.checked)} />顾客菜单可见</label>
             <label className="catalog-check"><input type="checkbox" checked={draft.recommendationEnabled} onChange={(event) => updateDraft('recommendationEnabled', event.target.checked)} />参与商品推荐</label>
             {isInventoryFlow && <section className={`catalog-sale-readiness catalog-wide${currentSaleBlockers.length === 0 && currentProduct !== null ? ' is-ready' : ''}`} aria-label="酒水小程序可售检查"><header><div><strong>第 4 步：小程序可售检查</strong><small>{draft.id === null ? '新酒水先保存为停用；保存后可配置配方并读取真实可售状态。' : currentSaleBlockers.length === 0 ? '该商品已通过当前的售价、配方、库存和小程序菜单校验。' : '请按以下提示完成；保存商品状态不等于顾客已经可以下单。'}</small></div><em>{draft.id === null ? '待建档' : currentSaleBlockers.length === 0 ? '小程序可售' : '待完成'}</em></header>{currentProduct !== null && currentSaleBlockers.length > 0 && <ul>{currentSaleBlockers.map((item) => <li key={item}>{item}</li>)}</ul>}</section>}
@@ -1062,13 +1076,19 @@ function emptyDraft(categories: readonly MenuCategory[]): ProductDraft {
     recommendationSceneTags: '', recommendationIntentTags: '', recommendationTasteTags: '',
     recommendationDwellTags: '', recommendationSingleWaveEligible: true,
     recommendationExpectedPrepMinutes: '8', recommendationHoldMinutes: '10',
-    recommendationUpgradeProductId: '', sortOrder: '999', serviceWindow: null, availableFrom: '', availableUntil: '',
+    recommendationUpgradeProductId: '', sortOrder: '999', serviceWindow: null, visibleFrom:'',visibleUntil:'',availableFrom: '', availableUntil: '',
     allowedChannels: ['guest_qr', 'staff_assisted', 'cashier', 'reservation', 'integration'],
     maxOrderQuantity: '50', kdsPriority: '100', fulfillmentSlaSeconds: '',
     costYuan: '', costChangeReason: '', priceYuan: '', priceReason: '新增商品标准售价', description: '', acidity:'',sweetness:'',imageUrl: '', snapshot: {}, componentQuantities: {},choiceGroups:[],
   }
 }
 
+function shanghaiInstant(value:string){return value?new Date(value+':00+08:00').toISOString():null}
+function localCategoryTime(value:string|null){
+  if(!value)return ''
+  const date=new Date(value)
+  return new Date(date.getTime()+8*3600000).toISOString().slice(0,16)
+}
 function emptyMenuCategoryDraft(categories: readonly MenuCategory[]): MenuCategoryDraft {
   const sortOrder = categories.length === 0
     ? 100
@@ -1077,7 +1097,7 @@ function emptyMenuCategoryDraft(categories: readonly MenuCategory[]): MenuCatego
     id: null,
     code: '',
     displayName: '',
-    parentCode: '',
+    parentCode: '',visibleFrom:'',visibleUntil:'',
     sortOrder: String(sortOrder),
     guestVisible: true,
   }

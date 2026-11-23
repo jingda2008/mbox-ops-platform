@@ -1,3 +1,4 @@
+import {ticketDiningAvailableSql} from './pending-ticket-dining.js'
 import {sessionMoneySql} from './session-money-sql.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {pendingTabReviewSql} from './carryover-tab-review.js'
@@ -68,6 +69,8 @@ interface OrderRow extends Record<string, unknown> {
   channel: string
   status: string
   payment_status: string
+  ticket_dining_id?: string | null
+  ticket_dining_minor?: string | number | null
   collection_due_minor: string | number
   effective_amount_minor?: string | number
   total_amount_minor: string | number
@@ -270,7 +273,8 @@ export class PostgresCashierWorkbenchQuery {
       // SET LOCAL restores pooled connections on both commit and rollback.
       await transaction.query('SET LOCAL jit = off')
       const refundApprovalLimits=input.capabilities.includes('refund.approve')?await readRefundApprovalLimits(transaction,input.employeeId):{}
-      const schema=(await transaction.query<{present:boolean;direct:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct")).rows[0]
+      const schema=(await transaction.query<{present:boolean;direct:boolean;ticket_dining:boolean}>(`SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct, ${ticketDiningAvailableSql} AS ticket_dining`)).rows[0]
+      const ticketDiningAvailable=schema?.ticket_dining===true
       const reviewSchema=schema?.present===true
       const directCollectionSchema=schema?.direct===true
       const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'
@@ -330,6 +334,7 @@ export class PostgresCashierWorkbenchQuery {
             WHERE (fact.tenant_id,fact.store_id,fact.order_id)=(orders.tenant_id,orders.store_id,orders.id)
               AND session.status='closed' AND ${localUnpresentedPaymentSql()}
           ),'[]'::jsonb) AS closable_unpresented_payments,
+          dining.id AS ticket_dining_id,dining.amount_minor AS ticket_dining_minor,
           orders.amount AS persistent_due_minor,
           orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
           CASE WHEN ${carryoverDebtSql('orders')} THEN orders.amount
@@ -337,6 +342,7 @@ export class PostgresCashierWorkbenchQuery {
           orders.submitted_at::text, orders.created_at::text,
           orders.business_date::text,${cashierCouponRefundReviewCountSql} AS coupon_refund_review_count
         FROM collection_balances AS orders CROSS JOIN table_filter
+        LEFT JOIN LATERAL ${ticketDiningAvailable?'mbox.ticket_pending_dining(orders.tenant_id,orders.store_id,orders.id)':'(SELECT NULL::uuid AS id,NULL::bigint AS amount_minor WHERE false)'} dining ON true
         JOIN mbox.table_sessions AS session
           ON session.tenant_id = orders.tenant_id
          AND session.store_id = orders.store_id
@@ -916,6 +922,10 @@ function assembleView(
         remainingRefundableMinor: paymentRemaining,
         refundableItems: items.map((item) => {
           const reserved = reservedByItem.get(item.id) ?? 0
+          const supplementCaps=payment.provider_snapshot?.ticketDiningItemCaps
+          const itemPaid=supplementCaps && typeof supplementCaps==='object'
+            ? asSafeMinor(Number((supplementCaps as Record<string,unknown>)[item.id]??0),'supplement item amount')
+            : item.totalAmountMinor
           const fundsOnly=payment.provider_snapshot?.lateSuccessAfterClose===true&&(itemsByOrder.get(order.id)??[]).some(original=>original.id===item.id&&original.fully_waived_quantity===true)
           return {
             ...item,
@@ -923,7 +933,7 @@ function assembleView(
             reservedRefundAmountMinor: reserved,
             remainingRefundableMinor: fundsOnly&&captured?Math.min(Math.max(0,item.totalAmountMinor-reserved),paymentRemaining,asSafeMinor(payment.unreserved_excess_minor??0,'unreserved excess')):captured && (item.status !== 'cancelled'
               || payment.provider_snapshot.guestCheckoutAbandoned === true || payment.cancelled_after_attempt===true)
-              ? Math.min(Math.max(0, item.totalAmountMinor - reserved), paymentRemaining)
+              ? Math.min(Math.max(0, itemPaid - reserved), paymentRemaining)
               : 0,
           }
         }),
@@ -954,7 +964,9 @@ function assembleView(
       tableSessionStatus: order.table_session_status,
       ...(order.table_session_status==='closed'?{closedDebtRecovery:{
         ...(order.carryover_debt?{kind:'consumption' as const,reviewReason:order.carryover_debt.reviewReason}:{}),
-        status:order.carryover_debt?(Number(order.persistent_due_minor)<=0?'settled':order.carryover_debt.eligibility!=='confirmed'?'ineligible':!(order.carryover_collection_allowed??input.capabilities.includes('payment.history.collect'))?'permission_required':'available'):!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
+        ...(order.ticket_dining_id?{kind:'ticket_dining' as const,confirmationId:order.ticket_dining_id}:{}),
+        status:order.ticket_dining_id?((order.closed_debt_pending_payment_ids?.length??0)>0?'pending_payment':
+          ['payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?'available':'permission_required'):order.carryover_debt?(Number(order.persistent_due_minor)<=0?'settled':order.carryover_debt.eligibility!=='confirmed'?'ineligible':!(order.carryover_collection_allowed??input.capabilities.includes('payment.history.collect'))?'permission_required':'available'):!order.closed_debt_eligible?'ineligible':Number(order.persistent_due_minor)<=0?'settled':
           (order.closed_debt_pending_payment_ids?.length??0)>0?'pending_payment':
           !['payment.collect.all_tables','payment.recollect.authorize'].every(capability=>input.capabilities.includes(capability))?'permission_required':
           recollectionByOrder.has(order.id)?'available':'authorization_required',
@@ -971,7 +983,8 @@ function assembleView(
       originalAmountMinor,
       stoppedAmountMinor: Math.max(0,originalAmountMinor - totalAmountMinor),
       ...(totalAmountMinor>originalAmountMinor?{receivableIncreaseMinor:totalAmountMinor-originalAmountMinor}:{}),
-      outstandingAmountMinor: asSafeMinor(order.collection_due_minor, 'collectible balance'),
+      ...(order.ticket_dining_minor!=null?{confirmedTicketDiningMinor:asSafeMinor(order.ticket_dining_minor,'confirmed dining supplement')}:{}),
+      outstandingAmountMinor: asSafeMinor(order.ticket_dining_minor??order.collection_due_minor, 'collectible balance'),
       overCollectedAmountMinor: order.carryover_debt?.eligibility==='review_required'?0:Math.max(0, netCollectedMinor - totalAmountMinor),
       currency: order.currency,
       submittedAt: order.submitted_at,

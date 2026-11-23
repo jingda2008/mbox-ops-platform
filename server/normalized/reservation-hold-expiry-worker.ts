@@ -17,7 +17,7 @@ export interface ReservationHoldExpiryBatch {
 }
 
 export class ReservationHoldExpiryWorker {
-  constructor(private readonly transactions: ScopedPostgresTransactionRunner) {}
+  constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>) {}
 
   runBatch(
     scope: Readonly<StoreScope>,
@@ -72,6 +72,15 @@ async function claimExpiredReservations(
         ) OR (
           reservation.status = 'confirmed'
           AND reservation.arrival_grace_ends_at <= clock_timestamp()
+          AND NOT EXISTS(
+            SELECT 1 FROM mbox.reservation_table_locks l
+            JOIN mbox.table_ticket_purchases p ON (p.tenant_id,p.store_id)=(l.tenant_id,l.store_id)
+            JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.registration_id)=(p.tenant_id,p.store_id,p.registration_id)
+            LEFT JOIN mbox.ticket_reschedule_offers moved ON moved.id=k.reschedule_id
+            WHERE (l.tenant_id,l.store_id,l.reservation_id)=(reservation.tenant_id,reservation.store_id,reservation.id)
+              AND (k.reservation_lock_id=l.id OR (k.ordinal=1 AND k.reschedule_id IS NULL AND p.original_lock_id=l.id))
+              AND k.refunded_at IS NULL AND coalesce(moved.ends_at,p.ends_at)>clock_timestamp()
+          )
         )
       )
     ORDER BY reservation.arrival_at ASC, reservation.id ASC

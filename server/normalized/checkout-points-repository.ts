@@ -37,7 +37,7 @@ export class CheckoutPointsRepository {
     if(previous.rowCount)throw new CheckoutCartPricingError('积分报价已使用，请核对原订单')
     if(current.availablePoints<quote.points_used)throw new CheckoutCartPricingError('积分余额不足或已被其他订单占用，请重新核对')
     await this.tx.query(`INSERT INTO mbox.checkout_point_holds(tenant_id,store_id,quote_id,membership_id,customer_id,points) VALUES($1,$2,$3,$4,$5,$6)`,[...this.scope,quoteId,account.membership_id,account.customer_id,quote.points_used])
-    const lots=(await this.tx.query<{id:string;remaining_points:number}>(`SELECT id,remaining_points FROM mbox.loyalty_point_lots WHERE tenant_id=$1 AND store_id=$2 AND membership_id=$3 AND status='available' AND remaining_points>0 AND available_at<=clock_timestamp() AND (expires_at IS NULL OR expires_at>clock_timestamp()) ORDER BY expires_at NULLS LAST,available_at,id FOR UPDATE`,[...this.scope,account.membership_id])).rows
+    const lots=(await this.tx.query<{id:string;remaining_points:number}>(`SELECT id,remaining_points FROM mbox.loyalty_point_lots WHERE tenant_id=$1 AND store_id=$2 AND membership_id=$3 AND status='available' AND remaining_points>0 AND available_at<=clock_timestamp() AND (expires_at IS NULL OR expires_at>clock_timestamp()) ORDER BY expires_at NULLS LAST,available_at,ticket_ordinal NULLS LAST,id FOR UPDATE`,[...this.scope,account.membership_id])).rows
     let remaining=quote.points_used
     for(const lot of lots){
       if(!remaining)break
@@ -45,6 +45,17 @@ export class CheckoutPointsRepository {
       await this.tx.query(`UPDATE mbox.loyalty_point_lots SET remaining_points=$4,status=CASE WHEN $4=0 THEN 'consumed' ELSE 'available' END WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...this.scope,lot.id,after])
       await this.tx.query('INSERT INTO mbox.checkout_point_lots(tenant_id,store_id,quote_id,lot_id,points) VALUES($1,$2,$3,$4,$5)',[...this.scope,quoteId,lot.id,used])
       await this.tx.query(`INSERT INTO mbox.loyalty_point_lot_movements(tenant_id,store_id,lot_id,movement_type,points_delta,balance_after,source_type,source_id,idempotency_key) VALUES($1,$2,$3,'redeem',$4,$5,'redemption',$6,$7)`,[...this.scope,lot.id,-used,after,quoteId,`checkout-points:${quoteId}:${lot.id}`])
+      const allocation=await this.tx.query<{total:string}>(`WITH capacity AS(
+        SELECT q.portion_id,q.request_index,q.discount_minor-coalesce((SELECT sum(s.amount_minor) FROM mbox.checkout_point_portion_sources s
+          WHERE(s.tenant_id,s.store_id,s.quote_id,s.portion_id)=(q.tenant_id,q.store_id,q.quote_id,q.portion_id)),0) cap
+        FROM mbox.checkout_coupon_quote_lines q WHERE q.tenant_id=$1 AND q.store_id=$2 AND q.quote_id=$3 AND q.discount_minor>0),
+        totals AS(SELECT *,sum(cap) OVER() total FROM capacity WHERE cap>0), bases AS(
+          SELECT *,floor(cap*$5::numeric/total)::bigint base,mod(cap*$5::numeric,total) remainder FROM totals),
+        shares AS(SELECT *,base+CASE WHEN row_number() OVER(ORDER BY remainder DESC,request_index)<=$5::bigint-sum(base) OVER() THEN 1 ELSE 0 END share FROM bases),
+        saved AS(INSERT INTO mbox.checkout_point_portion_sources(tenant_id,store_id,quote_id,portion_id,lot_id,amount_minor)
+          SELECT $1,$2,$3,portion_id,$4,share FROM shares WHERE share>0 RETURNING amount_minor)
+        SELECT coalesce(sum(amount_minor),0)::text total FROM saved`,[...this.scope,quoteId,lot.id,used*100])
+      if(Number(allocation.rows[0]?.total)!==used*100)throw new CheckoutCartPricingError('菜品分摊与原批次不符')
       remaining-=used
     }
     if(remaining)throw new CheckoutCartPricingError('积分批次发生变化，请重新核对')
@@ -69,8 +80,7 @@ export class CheckoutPointsRepository {
     if(!(await this.tx.query<{present:boolean}>("SELECT to_regclass('mbox.checkout_point_holds') IS NOT NULL AS present")).rows[0]?.present)return 0
     const hold=(await this.tx.query<{quote_id:string}>(`SELECT l.quote_id FROM mbox.checkout_coupon_order_links l JOIN mbox.checkout_point_holds h ON (h.tenant_id,h.store_id,h.quote_id)=(l.tenant_id,l.store_id,l.quote_id) WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.order_id=$3 AND h.status='consumed' AND EXISTS(SELECT 1 FROM mbox.order_refund_facts r WHERE r.tenant_id=l.tenant_id AND r.store_id=l.store_id AND r.order_id=l.order_id AND r.id=$4 AND r.status='succeeded')`,[...this.scope,orderId,refundId])).rows[0]
     if(!hold)return 0
-    const target=await this.restorationTarget(orderId)
-    return this.restoreTo(hold.quote_id,target,`refund:${refundId}:${target}`)
+    return this.restoreBySource(hold.quote_id,orderId,'refund:'+refundId)
   }
   private async restorationTarget(orderId:string){
     const value=(await this.tx.query<{points:string}>(`WITH returned_units AS (
@@ -97,7 +107,7 @@ export class CheckoutPointsRepository {
     const header=(await this.tx.query<{order_id:string;requested_by_employee_id:string}>('SELECT order_id,requested_by_employee_id FROM mbox.item_after_sales_cases WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.scope,caseId])).rows[0]
     if(!header || !(await this.tx.query<{present:boolean}>("SELECT to_regclass('mbox.checkout_point_holds') IS NOT NULL AS present")).rows[0]?.present)return null
     if(!(await this.tx.query('SELECT 1 FROM mbox.checkout_coupon_order_links l JOIN mbox.checkout_point_holds h ON (h.tenant_id,h.store_id,h.quote_id)=(l.tenant_id,l.store_id,l.quote_id) WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.order_id=$3 AND h.status=\'consumed\'',[...this.scope,header.order_id])).rowCount)return null
-    const value=(await this.tx.query<{minor:string}>(`SELECT COALESCE(ceil(CASE WHEN bool_or(i.parent_order_item_id IS NOT NULL) THEN max((SELECT root.discount_amount_minor FROM mbox.order_items root WHERE (root.tenant_id,root.store_id,root.id)=(i.tenant_id,i.store_id,i.parent_order_item_id))) ELSE sum(i.discount_amount_minor::numeric/i.quantity) END),0)::text AS minor
+    const value=(await this.tx.query<{minor:string}>(`SELECT COALESCE(ceil(CASE WHEN bool_or(i.parent_order_item_id IS NOT NULL) THEN max((SELECT root.discount_amount_minor+mbox.tab_item_discount(root.tenant_id,root.store_id,root.id) FROM mbox.order_items root WHERE (root.tenant_id,root.store_id,root.id)=(i.tenant_id,i.store_id,i.parent_order_item_id))) ELSE sum((i.discount_amount_minor+mbox.tab_item_discount(i.tenant_id,i.store_id,i.id))::numeric/i.quantity) END),0)::text AS minor
       FROM mbox.item_after_sales_case_units s JOIN mbox.order_item_quantity_units u ON (u.tenant_id,u.store_id,u.id)=(s.tenant_id,s.store_id,s.unit_id)
       JOIN mbox.order_items i ON (i.tenant_id,i.store_id,i.id)=(u.tenant_id,u.store_id,u.order_item_id)
       WHERE s.tenant_id=$1 AND s.store_id=$2 AND s.case_id=$3`,[...this.scope,caseId])).rows[0]!
@@ -109,37 +119,70 @@ export class CheckoutPointsRepository {
     const hold=(await this.tx.query<{quote_id:string}>(`SELECT h.quote_id FROM mbox.checkout_point_holds h JOIN mbox.checkout_coupon_order_links l ON (l.tenant_id,l.store_id,l.quote_id)=(h.tenant_id,h.store_id,h.quote_id)
       WHERE l.tenant_id=$1 AND l.store_id=$2 AND l.order_id=$3 AND h.status='consumed'`,[...this.scope,info.orderId])).rows[0]
     if(!hold)return 0
-    const target=await this.restorationTarget(info.orderId)
-    return this.restoreTo(hold.quote_id,target,`case:${caseId}:${target}`)
+    return this.restoreBySource(hold.quote_id,info.orderId,'case:'+caseId)
   }
-  private async restoreTo(quoteId:string,targetPoints:number,sourceKey:string){
+  private async restoreBySource(quoteId:string,orderId:string,key:string){
+    const sources=(await this.tx.query<{lot_id:string;target:number}>(`SELECT lot_id,floor(sum(returned_minor)/100)::int target
+      FROM mbox.checkout_returned_sources($1,$2,$3) GROUP BY lot_id`,[...this.scope,quoteId])).rows
+    const byLot=sources.length?new Map(sources.map(s=>[s.lot_id,s.target])):null
+    const total=byLot?sources.reduce((n,s)=>n+s.target,0):await this.restorationTarget(orderId)
+    return this.restoreTo(quoteId,total,key+':'+total,byLot)
+  }
+  private async restoreTo(quoteId:string,targetPoints:number,sourceKey:string,byLot:Map<string,number>|null=null){
     const row=(await this.tx.query<Account & {points:number;restored_points:number}>(`SELECT a.*,h.points,h.restored_points FROM mbox.checkout_point_holds h JOIN mbox.loyalty_accounts a ON (a.tenant_id,a.store_id,a.membership_id)=(h.tenant_id,h.store_id,h.membership_id) WHERE h.tenant_id=$1 AND h.store_id=$2 AND h.quote_id=$3 FOR UPDATE OF a,h`,[...this.scope,quoteId])).rows[0]
     if(!row)return 0
     if(!Number.isSafeInteger(targetPoints)||targetPoints<0||targetPoints>row.points)throw new Error('Points restoration exceeds original deduction')
     const delta=targetPoints-row.restored_points
     if(delta<=0)return 0
-    const lots=(await this.tx.query<{lot_id:string;points:number;restored_points:number;unexpired:boolean}>(`SELECT a.*,l.expires_at IS NULL OR l.expires_at>clock_timestamp() AS unexpired FROM mbox.checkout_point_lots a JOIN mbox.loyalty_point_lots l ON (l.tenant_id,l.store_id,l.id)=(a.tenant_id,a.store_id,a.lot_id) WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.quote_id=$3 ORDER BY l.expires_at NULLS LAST,l.available_at,l.id FOR UPDATE OF a,l`,[...this.scope,quoteId])).rows
-    let left=delta,credited=0
+    const lots=(await this.tx.query<{lot_id:string;points:number;restored_points:number;unexpired:boolean;reversed_ticket:boolean}>(`SELECT a.*,(l.source_type='table_ticket' AND l.status='reversed') AS reversed_ticket,(l.source_type<>'table_ticket' OR l.status IN ('available','consumed','ticket_hold')) AND (l.expires_at IS NULL OR l.expires_at>clock_timestamp()) AS unexpired FROM mbox.checkout_point_lots a JOIN mbox.loyalty_point_lots l ON (l.tenant_id,l.store_id,l.id)=(a.tenant_id,a.store_id,a.lot_id) WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.quote_id=$3 ORDER BY l.expires_at NULLS LAST,l.available_at,l.ticket_ordinal NULLS LAST,l.id FOR UPDATE OF a,l`,[...this.scope,quoteId])).rows
+    let left=delta,credited=0,transferred=0
     for(const lot of lots){
-      const count=Math.min(left,lot.points-lot.restored_points)
+      const count=Math.min(left,(byLot?(byLot.get(lot.lot_id)??0):lot.points)-lot.restored_points)
       if(count<=0)continue
       left-=count
       await this.tx.query('UPDATE mbox.checkout_point_lots SET restored_points=restored_points+$5 WHERE tenant_id=$1 AND store_id=$2 AND quote_id=$3 AND lot_id=$4',[...this.scope,quoteId,lot.lot_id,count])
       if(lot.unexpired){
-        const changed=await this.tx.query(`UPDATE mbox.loyalty_point_lots SET remaining_points=remaining_points+$4,status='available' WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND remaining_points+$4<=original_points RETURNING remaining_points`,[...this.scope,lot.lot_id,count])
+        const changed=await this.tx.query(`UPDATE mbox.loyalty_point_lots SET remaining_points=remaining_points+$4,status=CASE WHEN status='ticket_hold' THEN status ELSE 'available' END WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND remaining_points+$4<=original_points RETURNING remaining_points`,[...this.scope,lot.lot_id,count])
         if(changed.rowCount!==1)throw new Error('Original points lot restoration exceeds its issued amount')
         await this.tx.query(`INSERT INTO mbox.loyalty_point_lot_movements(tenant_id,store_id,lot_id,movement_type,points_delta,balance_after,source_type,source_id,idempotency_key) VALUES($1,$2,$3,'restore',$4,$5,'redemption',$6,$7)`,[...this.scope,lot.lot_id,count,changed.rows[0]!.remaining_points,quoteId,`checkout-restore:${quoteId}:${targetPoints}:${lot.lot_id}`])
         credited+=count
+      } else if(lot.reversed_ticket){
+        transferred+=await this.restoreCorrectedBuyerUse(lot.lot_id,quoteId,count,sourceKey)
       }
     }
     if(left)throw new Error('Original points lots cannot cover restoration')
-    await this.tx.query('INSERT INTO mbox.checkout_point_restorations(tenant_id,store_id,quote_id,source_key,points,credited_points) VALUES($1,$2,$3,$4,$5,$6)',[...this.scope,quoteId,sourceKey,delta,credited])
+    await this.tx.query('INSERT INTO mbox.checkout_point_restorations(tenant_id,store_id,quote_id,source_key,points,credited_points) VALUES($1,$2,$3,$4,$5,$6)',[...this.scope,quoteId,sourceKey,delta,credited+transferred])
     await this.tx.query('UPDATE mbox.checkout_point_holds SET restored_points=$4 WHERE tenant_id=$1 AND store_id=$2 AND quote_id=$3',[...this.scope,quoteId,targetPoints])
     if(credited){
       await this.balance(row,row.available_points+credited)
       await this.tx.query(`INSERT INTO mbox.loyalty_point_ledger(tenant_id,store_id,membership_id,customer_id,entry_type,points_delta,balance_after,source_type,source_id,reason,idempotency_key) VALUES($1,$2,$3,$4,'restore',$5,$6,'redemption',$7,'结账取消或退款，按原积分批次和有效期返还',$8)`,[...this.scope,row.membership_id,row.customer_id,credited,row.available_points+credited,quoteId,`checkout-restore:${quoteId}:${targetPoints}`])
     }
     return delta
+  }
+  private async restoreCorrectedBuyerUse(original:string,quote:string,count:number,sourceKey:string) {
+    const args=[...this.scope,original]
+    const target=(await this.tx.query<{id:string;membership_id:string;customer_id:string}>(`SELECT l.id,l.membership_id,l.customer_id
+      FROM mbox.table_ticket_corrections c JOIN mbox.loyalty_point_lots l
+        ON(l.tenant_id,l.store_id,l.id)=(c.tenant_id,c.store_id,c.replacement_lot_id)
+      WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.original_lot_id=$3 AND c.status='approved' AND c.consumption_resolution='buyer_use'
+        AND l.status IN('available','consumed','ticket_hold') AND l.expires_at>clock_timestamp() FOR UPDATE OF l`,args)).rows[0]
+    if(!target)return 0
+    const lot=(await this.tx.query<{remaining_points:number}>(`UPDATE mbox.loyalty_point_lots
+      SET remaining_points=remaining_points+$4,status=CASE WHEN status='ticket_hold' THEN status ELSE 'available' END
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND remaining_points+$4<=original_points RETURNING remaining_points`,
+      [...this.scope,target.id,count])).rows[0]
+    if(!lot)throw new Error('归属更正后的退分超过原票发行额')
+    const account=(await this.tx.query<{available_points:number}>(`UPDATE mbox.loyalty_accounts SET available_points=available_points+$4
+      WHERE tenant_id=$1 AND store_id=$2 AND membership_id=$3 RETURNING available_points`,[...this.scope,target.membership_id,count])).rows[0]!
+    await this.tx.query('UPDATE mbox.customer_memberships SET points_balance=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3',
+      [...this.scope,target.membership_id,account.available_points])
+    const key='corrected-return:'+target.id+':'+sourceKey
+    await this.tx.query(`INSERT INTO mbox.loyalty_point_lot_movements(tenant_id,store_id,lot_id,movement_type,points_delta,balance_after,source_type,source_id,idempotency_key)
+      VALUES($1,$2,$3,'restore',$4,$5,'redemption',$6,$7)`,[...this.scope,target.id,count,lot.remaining_points,quote,key])
+    await this.tx.query(`INSERT INTO mbox.loyalty_point_ledger(tenant_id,store_id,membership_id,customer_id,entry_type,points_delta,balance_after,source_type,source_id,reason,idempotency_key)
+      VALUES($1,$2,$3,$4,'restore',$5,$6,'redemption',$7,'退回购票会员已确认的本票消费',$8)`,
+      [...this.scope,target.membership_id,target.customer_id,count,account.available_points,quote,key])
+    return count
   }
   private async balance(account:Account,points:number){
     await this.tx.query('UPDATE mbox.loyalty_accounts SET available_points=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...this.scope,account.id,points])

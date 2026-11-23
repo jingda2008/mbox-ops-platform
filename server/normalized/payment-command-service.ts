@@ -406,6 +406,11 @@ export class PaymentCommandService {
       const recovery=input.orderIds===undefined?await lockClosedDebtRecovery(transaction,input.orderId):null
       if(recovery){
         assertClosedDebtWritable(recovery)
+        if(recovery.ticketDiningId){
+          await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.collect.all_tables'})
+          await this.authorization.assertEmployeeCapability({transaction,employeeId,capability:'payment.recollect.authorize'})
+          if(!input.closedDebtGuard)throw new HistoricalCollectionChangedError('请刷新原票补款，核对会员确认的金额后在原订单收款')
+        }
         if(recovery.carryover)assertExpectedCarryoverBalance(input,recovery)
       }
       // Mutation-only: a successful original receipt remains replayable after settlement.

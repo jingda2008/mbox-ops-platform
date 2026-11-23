@@ -37,8 +37,8 @@ test('expanded checkout keeps payment visible and every form control scrollable 
       }
       await assertFooter()
       assert.equal(await page.locator('.checkout-points-picker__input').evaluate(el => getComputedStyle(el).color), 'rgb(180, 35, 24)')
-      assert.equal(await page.locator('[bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), false, 'points entry remains fixed beside total')
-      for (const selector of ['[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {
+      assert.equal(await page.locator('.checkout-points-entry [bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), false, 'points entry remains fixed beside total')
+      for (const selector of ['[bindtap="fillMaximumCheckoutPoints"]','[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {
         const control = page.locator(selector)
         assert.ok(await control.evaluate(el => Boolean(el.closest('scroll-view'))), `${selector} must share the scrolling form`)
         await control.scrollIntoViewIfNeeded()

@@ -1,12 +1,15 @@
-import {readFile} from 'node:fs/promises'
+import {mkdtemp,readFile,rm} from 'node:fs/promises'
+import {spawn} from 'node:child_process'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {expect,test,type Page} from '@playwright/test'
 import type {ActivityDoorCommand,ActivityServiceView} from '../../src/shared/activity-service'
 
 const credential='MBOX_ACTIVITY_V3:browser-registration-v3:12345678-1234-4234-8234-123456789abc'
 const initial:ActivityServiceView={registrationPublicId:'browser-registration-v3',activityPublicId:'browser-activity-v3',activityTitle:'活动核销界面测试',packageName:'五人固定套餐',hasMeal:true,partySize:2,maxParticipants:5,reservedSeats:5,admittedCount:0,remainingAdmission:5,includesAdmission:true,paymentStatus:'paid',meal:null}
-async function login(page:Page){
-  const fixture=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
-  await page.goto(fixture.staffUrl)
+async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string){
+  const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
+  await page.goto(origin?new URL(fixture.staffUrl,origin).href:fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill(fixture.adminEmployeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
   await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()
@@ -83,4 +86,111 @@ test('固定套餐编辑保留人数上限、菜量与时间字段，窄屏可�
   await expect(choices.getByText('已选择 2 项，需选2至8项。',{exact:true})).toBeVisible()
   expect(await page.evaluate(()=>document.documentElement.scrollWidth-window.innerWidth)).toBeLessThanOrEqual(1)
   await page.screenshot({path:testInfo.outputPath('package-editor-360.png'),fullPage:true})
+})
+
+test('运营在原场次上架桌票，公共菜单读回票价、赠分、预告和下架',async({page})=>{
+  test.setTimeout(120_000)
+  // First publication changes the entire store's opening rules. Give this test its own store.
+  const directory=await mkdtemp(join(tmpdir(),'mbox-ticket-browser-'))
+  const fixturePath=join(directory,'fixture.json')
+  const port=Number(process.env.NORMALIZED_E2E_PORT??18789)+10,origin='http://127.0.0.1:'+port
+  const server=spawn(process.execPath,['--import','tsx','scripts/start-normalized-browser-e2e.ts'],{stdio:'ignore',env:{
+    ...process.env,TEST_NORMALIZED_ADMIN_URL:process.env.TEST_NORMALIZED_ADMIN_URL??'postgresql://postgres:mbox_test_only@127.0.0.1:55441/postgres',
+    NORMALIZED_E2E_TABLE_TICKETS:'true',NORMALIZED_E2E_PORT:String(port),NORMALIZED_E2E_FIXTURE_FILE:fixturePath,MBOX_STATIC_DIR:'dist',
+  }})
+  const exited=new Promise<void>(resolve=>server.once('close',()=>resolve()))
+  try{
+    await expect.poll(async()=>{try{return (await fetch(origin+'/api/live')).ok}catch{return false}},{timeout:60000}).toBe(true)
+    const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
+    await page.setViewportSize({width:390,height:844})
+    await login(page,fixturePath,origin)
+    await page.goto(new URL('/staff/reservations',origin).href)
+    await page.getByRole('link',{name:'门票接待',exact:true}).click()
+    const workspace=page.getByRole('region',{name:'活动报名运营工作台'})
+    const open=workspace.getByRole('button',{name:'打开工作台',exact:true})
+    await expect(workspace).toBeVisible()
+    if(await open.isVisible())await open.click()
+    await workspace.getByRole('button',{name:/整桌演出票浏览器验收场/}).click()
+    await expect(workspace.getByText('本场暂无已付款门票',{exact:true})).toBeVisible()
+    await workspace.getByText('整桌门票',{exact:true}).click()
+    await workspace.getByText('首次上架，先核实本场公示资料').click()
+    const rules=[['举办主体','验收举办方'],['售票主体','验收售票方'],['批准文件号或适用依据','模拟场次批文'],['主要演员或团体','测试乐队'],
+      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['各退票时段、费率或金额、计算基数和售后入口','开演前可在原单全额退票']]
+    for(const [field,value] of rules)await workspace.getByLabel(field!,{exact:true}).fill(value!)
+    await workspace.getByRole('button',{name:'确认资料并保存本场版本'}).click()
+    await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()
+    await workspace.getByLabel('产品名称',{exact:true}).fill('中间区域整桌票')
+    await workspace.getByLabel('每桌售价（元）',{exact:true}).fill('500')
+    const points=workspace.getByLabel('每张赠送积分',{exact:true})
+    const price=workspace.getByLabel('每桌售价（元）',{exact:true})
+    const name=workspace.getByLabel('产品名称',{exact:true})
+    const publish=workspace.getByRole('button',{name:'保存并发布票档'})
+    for(const [field,invalid,valid] of [[name,'','中间区域整桌票'],[price,'0','500'],[points,'-1','550'],[points,'0.5','550'],[points,'','550']] as const){
+      await field.fill(invalid)
+      await publish.click()
+      await expect(field).toBeFocused()
+      await field.fill(valid)
+    }
+    let resume!:()=>void
+    const delayed=new Promise<void>(resolve=>{resume=resolve})
+    let failRead=false
+    const listRoute='**/api/staff/activity-operations/*/table-tickets'
+    await page.route(listRoute,async route=>{
+      if(route.request().method()==='GET'){
+        await delayed
+        if(failRead){await route.fulfill({status:503,contentType:'application/json',body:'{}'});return}
+      }
+      await route.continue()
+    })
+    try{
+      await publish.click()
+      await expect(workspace.getByText('已保存，正在核对最新版本…',{exact:true})).toBeVisible()
+      await expect(name).toBeDisabled()
+      await expect(publish).toBeDisabled()
+    }finally{resume()}
+    await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
+    const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',origin).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
+    await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
+    await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
+    await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')
+    failRead=true
+    await publish.click()
+    await expect.poll(published).toMatchObject([{saleState:'upcoming'}])
+    await expect(workspace.getByText('已保存，最新版本读取失败。请点「刷新票档」后继续。',{exact:true})).toBeVisible()
+    await expect(publish).toBeDisabled()
+    failRead=false
+    await workspace.getByRole('button',{name:'刷新票档'}).click()
+    await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
+    await workspace.getByRole('button',{name:'下架',exact:true}).click()
+    await expect.poll(published).toEqual([])
+
+    // The partial-liability form sends the same minor units checked by the database integration test.
+    await page.route('**/api/staff/activity-operations/*/ticket-reception',route=>route.fulfill({json:{data:{tables:[],orders:[{
+      id:'test-ticket',orderId:'test-order',name:'整桌票',ordinal:1,priceMinor:50000,consumedMinor:'55000',
+      refundCase:'test-case',refundStatus:'review',arrived:0,contactStatus:'onsite',showEnded:true,
+    }]}}}))
+    const submitted:unknown[]=[]
+    await page.route('**/table-ticket-refunds/test-case/dining',route=>{
+      submitted.push(route.request().postDataJSON())
+      return route.fulfill({json:{data:{amountMinor:50000}}})
+    })
+    await workspace.getByRole('button',{name:'刷新接待队列'}).click()
+    const customer=workspace.getByLabel('顾客应补菜款（元）')
+    const merchant=workspace.getByLabel('门店承担金额（元）')
+    await customer.fill('500')
+    await merchant.fill('49.99')
+    await workspace.getByLabel('菜款核定依据').fill('已核实售出条款和原餐单')
+    const propose=workspace.getByRole('button',{name:'发给会员核对逐菜补款'})
+    await propose.click()
+    await expect(workspace.getByText('请填齐两项金额，合计须等于本票已抵菜款')).toBeVisible()
+    expect(submitted).toEqual([])
+    await merchant.fill('50')
+    await propose.click()
+    await expect.poll(()=>submitted).toEqual([{reason:'已核实售出条款和原餐单',customerMinor:50000,merchantMinor:5000}])
+
+  }finally{
+    server.kill('SIGTERM')
+    await exited
+    await rm(directory,{recursive:true,force:true})
+  }
 })

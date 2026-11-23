@@ -1,3 +1,4 @@
+import {adoptAssistedPoints,readAssistedPoints} from './assisted-points-proposal.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
 import { ChannelPricingRepository } from './channel-pricing-repository.js'
 import { ChannelDistributionRepository } from './channel-distribution-repository.js'
@@ -19,9 +20,9 @@ import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
-import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
+import {CheckoutCartPricingError, quoteCheckoutCart} from './checkout-cart-pricing.js'
 import {CouponCalendarError} from './coupon-calendar.js'
-import {StackingPricingError} from './stacking-pricing.js'
+import {StackingPricingError, DEFAULT_STACKING_POLICY} from './stacking-pricing.js'
 import {PricingAuthorizationDeniedError} from './pricing-authorization-policy.js'
 import {BenefitUnavailableError,BenefitOwnershipError} from './benefit-repository.js'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -77,7 +78,7 @@ import {
   type GuestRequestContext,
   requireGuestCapability,
 } from './guest-request-context.js'
-import { OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
+import { OrderRepository, OrderProductUnavailableError, TableSessionUnavailableForOrderError } from './order-repository.js'
 import type { InitiatePaymentCommand, PaymentCommandService } from './payment-command-service.js'
 import { PaymentRepository,OrderNotPayableError, PaymentCapturePendingError, type Payment } from './payment-repository.js'
 import { GuestCheckoutCaptureConfirmedError, PaymentFulfillmentRepository } from './payment-fulfillment-repository.js'
@@ -460,9 +461,42 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const context=await requireTableContext(options,request,'guest.order.create')
     const data=await options.transactions.run(context.scope,async tx=>{
       if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
-      return new CheckoutPointsRepository(tx).available(context.customerId)
+      const policy = await new CheckoutPointsRepository(tx).available(context.customerId)
+      const query = readStrictObject(request.query, '积分额度', ['generation', 'version'])
+      if (query.generation === undefined && query.version === undefined) return policy
+      const expectedGeneration = readInteger(Number(query.generation), 'generation', 1, 2_147_483_647)
+      const expectedVersion = readInteger(Number(query.version), 'version', 0, 2_147_483_647)
+      const cart = await new GuestSharedCartRepository(tx, context.customerId).readOpen(context.tableSessionId, createSharedCartPublicId())
+      const standard = await quoteCheckoutCart(new OrderRepository(tx, context.customerId), cart, {
+        expectedGeneration, expectedVersion, channel: 'guest_qr',
+        policy: { ...DEFAULT_STACKING_POLICY, allowPoints: true, allowBundlePrice: true, allowCheckoutUpgrade: true },
+        effects: [],
+      })
+      return { ...policy, maximumPoints: Math.min(policy.availablePoints, Math.floor(standard.price.subtotalMinor / policy.minorPerPoint)) }
     })
     reply.header('cache-control','no-store');return{data}
+  }))
+  app.get('/guest/shared-cart/assisted-points',async(request,reply)=>handleRoute(reply,async()=>{
+    const ctx=await requireTableContext(options,request,'guest.order.create')
+    const data=await options.transactions.run(ctx.scope,async tx=>{
+      if(!await lockBoundGuestTablePosition(tx,ctx))throw new GuestAuthenticationRequiredError()
+      return readAssistedPoints(tx,ctx.tableSessionId,ctx.customerId)
+    })
+    return reply.header('cache-control','no-store').send({data})
+  }))
+  app.post('/guest/shared-cart/assisted-points',async(request,reply)=>handleRoute(reply,async()=>{
+    const ctx=await requireTableContext(options,request,'guest.order.create')
+    const body=readStrictObject(request.body,'本人确认',['id']),id=readUuid(body.id,'id')
+    const execution=await options.commandExecutor.execute<JsonObject>({scope:ctx.scope,operationScope:'guest.assisted_points.adopt',
+      idempotencyKey:readIdempotencyKey(request),requestFingerprint:JSON.stringify({id,customer:ctx.customerId,session:ctx.tableSessionId}),
+      retainReceipt:true,resultCodec:{encode:v=>v,decode:v=>v as JsonObject}},async tx=>{
+      if(!await lockBoundGuestTablePosition(tx,ctx))throw new GuestAuthenticationRequiredError()
+      const adopted=await adoptAssistedPoints(tx,ctx,id)
+      return {result:{cart:publicSharedCart(adopted.cart) as JsonObject,notes:adopted.notes,quote:adopted.quote},
+        auditEvents:[{actor:guestActor(ctx),action:'order.assisted_points.adopted',objectType:'assisted_points_proposal',objectId:id,
+          businessDate:ctx.businessDate,afterData:{points:adopted.quote.pointsUsed}}],outboxMessages:[]}
+    },async tx=>{if(!await lockBoundGuestTablePosition(tx,ctx))throw new GuestAuthenticationRequiredError()})
+    return reply.send({data:execution.value,meta:{replayed:execution.replayed}})
   }))
   app.post('/guest/shared-cart/points-quote',async(request,reply)=>handleRoute(reply,async()=>{
     const context=await requireTableContext(options,request,'guest.order.create')
@@ -1644,6 +1678,7 @@ export async function searchGuestCatalog(
       -- Unconfigured legacy codes stay visible until staff explicitly map
       -- them.  Once configured, parent and child visibility is authoritative
       -- for the customer menu without altering the product itself.
+      AND mbox.menu_category_visible_at(product.tenant_id,product.store_id,product.category_code,statement_timestamp())
       AND (menu_category.id IS NULL OR (
         menu_category.guest_visible
         AND (parent_menu_category.id IS NULL OR parent_menu_category.guest_visible)

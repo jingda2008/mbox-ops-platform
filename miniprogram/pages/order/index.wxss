@@ -1837,6 +1837,9 @@
 
 .checkout-points-picker__input { color: #b42318; }
 
+.ticket-date-strip {white-space:nowrap;margin:12rpx 0}
+.ticket-date-strip button {display:inline-block;margin-right:12rpx}
+
 .quantity-review-mask { position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:28rpx;box-sizing:border-box;background:rgba(0,0,0,.55); }
 .quantity-review-sheet { width:100%;max-width:680rpx;max-height:80vh;display:flex;flex-direction:column;padding:32rpx;box-sizing:border-box;border-radius:24rpx;background:#fff; }
 .quantity-review-title { display:block;font-size:32rpx;font-weight:700;line-height:1.5;color:#27241f; }

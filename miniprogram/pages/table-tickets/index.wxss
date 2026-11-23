@@ -1,0 +1,1 @@
+.page {padding:28rpx}.section {padding:28rpx 0;border-bottom:1px solid #ddd}.section view,.section label {display:block;margin-bottom:14rpx}.title {font-size:38rpx;font-weight:600}.ticket {padding:18rpx 0}.section input {border:1px solid #bbb;padding:12rpx}

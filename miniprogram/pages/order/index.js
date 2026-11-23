@@ -21,7 +21,7 @@ const {
   abandonGuestCheckout,
   getTodayPerformances,
   getCustomerBenefits,
-  getMiniBootstrap,
+  getMiniBootstrap, getTableTicketOffers, getTabPoints, confirmTabPoints, getAssistedPointsProposal, adoptAssistedPointsProposal,
   getVerifiedPhones,
   replaceVerifiedPhone,
   getWechatNotificationPrompt,
@@ -33,7 +33,7 @@ const { getRuntimeConfig } = require('../../config/index')
 const { getTableSession, tableSessionCacheScope, rememberTableConnection } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { randomId } = require('../../utils/id')
-const { money, dateTime } = require('../../utils/format')
+const { money, dateTime, beijingDate } = require('../../utils/format')
 const { checkoutRecommendationAttribution } = require('../../utils/recommendation-attribution')
 const { publicImageUrl } = require('../../utils/media')
 const { enablePublicShareMenu, publicSharePayload, publicTimelinePayload } = require('../../utils/public-share')
@@ -571,12 +571,14 @@ Page({
   ...checkoutCouponActions,
   openCheckoutPoints() {
     if (this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
-    const result = this.data.pointsPickerOpen ? undefined : checkoutCouponActions.openCheckoutPoints.call(this)
+    const result = this.data.pointsPickerOpen && this.data.pointsBalance !== null ? undefined : checkoutCouponActions.openCheckoutPoints.call(this)
     this.setData({ checkoutScrollTarget: '' }, () => {
       if (this.data.checkoutConfirmVisible && this.data.pointsPickerOpen) this.setData({ checkoutScrollTarget: 'checkout-points' })
     })
     return result
   },
+  fillMaximumCheckoutPoints() { return checkoutCouponActions.fillMaximumCheckoutPoints.call(this) },
+  closeCheckoutPoints() { return checkoutCouponActions.closeCheckoutPoints.call(this) },
   onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
   quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
   couponCheckoutReady() {
@@ -680,10 +682,67 @@ Page({
   },
 
   onLoad() { this.ensureTableRequestGuard() },
+  async readStaffPoints(event){
+    void this.readTabPoints(event)
+    if (this.data.connectionState!=='active')return
+    const guard=this.currentTableRequest()
+    try{
+      const proposal=await getAssistedPointsProposal()
+      if(!this.isCurrentTableRequest(guard))return
+      this.setData({assistedPointsProposal:proposal})
+      if(event && !proposal)wx.showToast({title:'本桌暂无待确认代点单',icon:'none'})
+    }catch(e){if(event && this.isCurrentTableRequest(guard))this.setData({error:e.message})}
+  },
+  async adoptStaffPoints(){
+    const proposal=this.data.assistedPointsProposal,guard=this.currentTableRequest()
+    if(!proposal||this.data.busy||this.data.checkoutLocked)return
+    this.setData({busy:true,error:''})
+    try{
+      const result=await adoptAssistedPointsProposal(proposal.id)
+      if(!this.isCurrentTableRequest(guard))return
+      this.updateCart(sharedCartView(result.cart,this.data.products),result.cart)
+      this.checkoutLineNotes=result.notes
+      this.setData({assistedPointsProposal:null,checkoutConfirmVisible:true,pointsPickerOpen:true,pointsInput:String(result.quote.pointsUsed),
+        couponSelections:[],couponQuote:result.quote,couponQuoteTotal:money(result.quote.payableMinor),couponNeedsReview:false})
+    }catch(e){if(this.isCurrentTableRequest(guard))this.setData({error:e.message||'代点单已变化，请核对'})}
+    finally{if(this.isCurrentTableRequest(guard))this.setData({busy:false})}
+  },
+  async loadTableTicketOffers() {
+    try {
+      const offers=await getTableTicketOffers()
+      this.ticketMenuRows=offers.map(o=>({id:o.id,name:o.name,price:(o.priceMinor/100).toFixed(2),day:beijingDate(o.startsAt),
+        time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt),giftPoints:o.giftPoints,
+        saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':o.remaining===0?'公共余量已售完':''}))
+      const days=[...new Set(this.ticketMenuRows.map(row=>row.day))]
+      const day=days.includes(this.data.ticketDay)?this.data.ticketDay:(days[0]||'')
+      this.setData({ticketDays:days,ticketDay:day,tableTicketOffers:this.ticketMenuRows.filter(row=>row.day===day)})
+    } catch { this.ticketMenuRows=[];this.setData({tableTicketOffers:[],ticketDays:[]}) }
+  },
+  chooseTicketDay(e){
+    const day=e.currentTarget.dataset.day
+    this.setData({ticketDay:day,tableTicketOffers:(this.ticketMenuRows||[]).filter(row=>row.day===day)})
+  },
+  async readTabPoints(event){
+    try{const rows=await getTabPoints();this.setData({tabPoints:Array.isArray(rows)?rows:[],tabPointsError:''})}
+    catch(e){this.setData({tabPoints:[],tabPointsError:event?'暂时无法读取，请重试':''})}
+  },
+  async confirmOldTab(event){
+    if(this.data.busy)return
+    const id=event.currentTarget.dataset.id,row=(this.data.tabPoints||[]).find(r=>r.id===id)
+    if(!row)return
+    this.setData({busy:true})
+    const answer=await new Promise(resolve=>wx.showModal({title:'确认原挂桌单用分',content:'使用 '+row.points+' 分结算原单，抵分后菜款 ¥'+((row.dueMinor-row.points*100)/100).toFixed(2)+'。已授权共享的本桌预收余额会优先结算剩余菜款。',success:resolve,fail:()=>resolve({confirm:false})}))
+    if(!answer.confirm){this.setData({busy:false});return}
+    try{await confirmTabPoints(id);await this.readTabPoints();wx.showToast({title:'已记入原单'})}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+  },
   async onShow() {
+    void this.readTabPoints()
+
+    void this.loadTableTicketOffers()
     if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/order/index') }
     enablePublicShareMenu()
     await this.preparePage()
+    void this.readStaffPoints()
     this.restoreIssuedCouponAttempt()
     if (wx.getStorageSync('mbox.issued-coupon-entry-request.v1')) {
       if (this.data.orderReady && this.data.connectionState === 'active') { wx.removeStorageSync('mbox.issued-coupon-entry-request.v1'); await this.openIssuedCouponEntry() }

@@ -282,3 +282,20 @@ test('explicit claim recovery survives restart and cannot issue again after its 
  await assert.rejects(restarted.api.recoverChannelClaim('ABCDEFGH2345'),{code:'COMMAND_RECOVERY_NOT_FOUND'})
  assert.equal(restarted.calls.length,1)
 })
+
+test('桌票首次明确余量不足可减桌重试，丢回执后保持原购买凭据',async()=>{
+ const rejected={status:409,data:{error:{code:'TICKET_CAPACITY_FULL',message:'可售桌数已变更',commitDisposition:'not_committed'}}}
+ const success={data:{data:{registrationPublicId:'T-one'}}}
+ const responses=[rejected,success]
+ const f=fixture(async()=>responses.shift())
+ const intent={offerId:'offer-a',quantity:2,safetyVersion:'v1',refundVersion:'v01',termsAcknowledged:true}
+ await assert.rejects(f.api.buyTableTickets(intent,'two-desks'))
+ assert.equal((await f.api.buyTableTickets({...intent,quantity:1},'one-desk')).registrationPublicId,'T-one')
+ assert.deepEqual(f.calls.map(c=>c.headers['idempotency-key']),['two-desks','one-desk'])
+ const unknown=fixture(async()=>{throw Error('丢失回执')})
+ await assert.rejects(unknown.api.buyTableTickets(intent,'original-buy'))
+ const resumed=fixture(async()=>rejected,{storage:unknown.storage})
+ await assert.rejects(resumed.api.buyTableTickets(intent,'new-attempt'))
+ await assert.rejects(resumed.api.buyTableTickets({...intent,quantity:1},'one-desk'))
+ assert.deepEqual(resumed.calls.map(c=>c.headers['idempotency-key']),['original-buy'])
+})

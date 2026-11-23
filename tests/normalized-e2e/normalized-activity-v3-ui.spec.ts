@@ -1,11 +1,14 @@
-import {readFile} from 'node:fs/promises'
+import {mkdtemp,readFile,rm} from 'node:fs/promises'
+import {spawn} from 'node:child_process'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import {expect,test,type Page} from '@playwright/test'
 import type {ActivityDoorCommand,ActivityServiceView} from '../../src/shared/activity-service'
 
 const credential='MBOX_ACTIVITY_V3:browser-registration-v3:12345678-1234-4234-8234-123456789abc'
 const initial:ActivityServiceView={registrationPublicId:'browser-registration-v3',activityPublicId:'browser-activity-v3',activityTitle:'活动核销界面测试',packageName:'五人固定套餐',hasMeal:true,partySize:2,maxParticipants:5,reservedSeats:5,admittedCount:0,remainingAdmission:5,includesAdmission:true,paymentStatus:'paid',meal:null}
-async function login(page:Page){
-  const fixture=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
+async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json'){
+  const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
   await page.goto(fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
   await page.getByLabel('员工账号').fill(fixture.adminEmployeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
@@ -87,44 +90,61 @@ test('固定套餐编辑保留人数上限、菜量与时间字段，窄屏可�
 
 test('运营在原场次上架桌票，公共菜单读回票价、赠分、预告和下架',async({page})=>{
   test.skip(process.env.NORMALIZED_E2E_TABLE_TICKETS!=='true','需要隔离票务场次')
-  const fixture=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
-  await page.setViewportSize({width:390,height:844})
-  await login(page)
-  await page.goto('/staff/reservations')
-  await page.getByRole('link',{name:'门票接待',exact:true}).click()
-  const workspace=page.getByRole('region',{name:'活动报名运营工作台'})
-  const open=workspace.getByRole('button',{name:'打开工作台',exact:true})
-  await expect(workspace).toBeVisible()
-  if(await open.isVisible())await open.click()
-  await workspace.getByRole('button',{name:/整桌演出票浏览器验收场/}).click()
-  await expect(workspace.getByText('本场暂无已付款门票',{exact:true})).toBeVisible()
-  await workspace.getByText('整桌门票',{exact:true}).click()
-  await workspace.getByText('首次上架，先核实本场公示资料').click()
-  const rules=[['举办主体','验收举办方'],['售票主体','验收售票方'],['批准文件号或适用依据','模拟场次批文'],['主要演员或团体','测试乐队'],
-    ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['各退票时段、费率或金额、计算基数和售后入口','开演前可在原单全额退票']]
-  for(const [field,value] of rules)await workspace.getByLabel(field!,{exact:true}).fill(value!)
-  await workspace.getByRole('button',{name:'确认资料并保存本场版本'}).click()
-  await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()
-  await workspace.getByLabel('产品名称',{exact:true}).fill('中间区域整桌票')
-  await workspace.getByLabel('每桌售价（元）',{exact:true}).fill('500')
-  const points=workspace.getByLabel('每张赠送积分',{exact:true})
-  const price=workspace.getByLabel('每桌售价（元）',{exact:true})
-  const name=workspace.getByLabel('产品名称',{exact:true})
-  const publish=workspace.getByRole('button',{name:'保存并发布票档'})
-  for(const [field,invalid,valid] of [[name,'','中间区域整桌票'],[price,'0','500'],[points,'-1','550'],[points,'0.5','550'],[points,'','550']] as const){
-    await field.fill(invalid)
-    await publish.click()
-    await expect(field).toBeFocused()
-    await field.fill(valid)
+  test.setTimeout(120_000)
+  // First publication changes the entire store's opening rules. Give this test its own store.
+  const directory=await mkdtemp(join(tmpdir(),'mbox-ticket-browser-'))
+  const fixturePath=join(directory,'fixture.json')
+  const port=Number(process.env.NORMALIZED_E2E_PORT??18789)+10,origin='http://127.0.0.1:'+port
+  const server=spawn(process.execPath,['--import','tsx','scripts/start-normalized-browser-e2e.ts'],{stdio:'ignore',env:{
+    ...process.env,TEST_NORMALIZED_ADMIN_URL:process.env.TEST_NORMALIZED_ADMIN_URL??'postgresql://postgres:mbox_test_only@127.0.0.1:55441/postgres',
+    NORMALIZED_E2E_PORT:String(port),NORMALIZED_E2E_FIXTURE_FILE:fixturePath,MBOX_STATIC_DIR:'dist',
+  }})
+  const exited=new Promise<void>(resolve=>server.once('close',()=>resolve()))
+  try{
+    await expect.poll(async()=>{try{return (await fetch(origin+'/api/live')).ok}catch{return false}},{timeout:60000}).toBe(true)
+    const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
+    await page.setViewportSize({width:390,height:844})
+    await login(page,fixturePath)
+    await page.goto(new URL('/staff/reservations',fixture.staffUrl).href)
+    await page.getByRole('link',{name:'门票接待',exact:true}).click()
+    const workspace=page.getByRole('region',{name:'活动报名运营工作台'})
+    const open=workspace.getByRole('button',{name:'打开工作台',exact:true})
+    await expect(workspace).toBeVisible()
+    if(await open.isVisible())await open.click()
+    await workspace.getByRole('button',{name:/整桌演出票浏览器验收场/}).click()
+    await expect(workspace.getByText('本场暂无已付款门票',{exact:true})).toBeVisible()
+    await workspace.getByText('整桌门票',{exact:true}).click()
+    await workspace.getByText('首次上架，先核实本场公示资料').click()
+    const rules=[['举办主体','验收举办方'],['售票主体','验收售票方'],['批准文件号或适用依据','模拟场次批文'],['主要演员或团体','测试乐队'],
+      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['各退票时段、费率或金额、计算基数和售后入口','开演前可在原单全额退票']]
+    for(const [field,value] of rules)await workspace.getByLabel(field!,{exact:true}).fill(value!)
+    await workspace.getByRole('button',{name:'确认资料并保存本场版本'}).click()
+    await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()
+    await workspace.getByLabel('产品名称',{exact:true}).fill('中间区域整桌票')
+    await workspace.getByLabel('每桌售价（元）',{exact:true}).fill('500')
+    const points=workspace.getByLabel('每张赠送积分',{exact:true})
+    const price=workspace.getByLabel('每桌售价（元）',{exact:true})
+    const name=workspace.getByLabel('产品名称',{exact:true})
+    const publish=workspace.getByRole('button',{name:'保存并发布票档'})
+    for(const [field,invalid,valid] of [[name,'','中间区域整桌票'],[price,'0','500'],[points,'-1','550'],[points,'0.5','550'],[points,'','550']] as const){
+      await field.fill(invalid)
+      await publish.click()
+      await expect(field).toBeFocused()
+      await field.fill(valid)
+    }
+    await workspace.getByRole('button',{name:'保存并发布票档'}).click()
+    await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
+    const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',fixture.staffUrl).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
+    await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
+    await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
+    await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')
+    await workspace.getByRole('button',{name:'保存并发布票档'}).click()
+    await expect.poll(published).toMatchObject([{saleState:'upcoming'}])
+    await workspace.getByRole('button',{name:'下架',exact:true}).click()
+    await expect.poll(published).toEqual([])
+  }finally{
+    server.kill('SIGTERM')
+    await exited
+    await rm(directory,{recursive:true,force:true})
   }
-  await workspace.getByRole('button',{name:'保存并发布票档'}).click()
-  await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
-  const published=async()=>(await (await page.request.get('/api/public/mini/table-ticket-offers')).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
-  await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
-  await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
-  await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')
-  await workspace.getByRole('button',{name:'保存并发布票档'}).click()
-  await expect.poll(published).toMatchObject([{saleState:'upcoming'}])
-  await workspace.getByRole('button',{name:'下架',exact:true}).click()
-  await expect.poll(published).toEqual([])
 })

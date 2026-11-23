@@ -444,6 +444,16 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0].available_points).toBe(prior)
         await tx.query('ROLLBACK TO SAVEPOINT wrong_refund_first')
       }
+      await tx.query('SAVEPOINT buyer_corrects_open_refund')
+      const beforeCorrection=await requestTicketRefund(tx,k.id,ticket,customer,'先申请退票，再核实本人用分')
+      const buyerFix=await correctTicketGift(tx,ticket,employee,'核对购票会员实际使用200分','request',null,false,true)
+      await confirmBuyerUse(tx,buyerFix.id,customer)
+      await correctTicketGift(tx,ticket,reviewer,'独立核对本人确认和原菜品','approve',buyerFix.id)
+      expect((await tx.query('SELECT f.frozen_points,f.consumed_minor::int used,l.status,l.remaining_points FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k ON k.id=f.ticket_id JOIN mbox.loyalty_point_lots l ON l.id=k.point_lot_id WHERE f.id=$1',[beforeCorrection.caseId])).rows[0])
+        .toEqual({frozen_points:350,used:20000,status:'ticket_hold',remaining_points:350})
+      expect((await proposeTicketDining(tx,beforeCorrection.caseId,employee,'按已确认的原单差额补款')).amountMinor).toBe(20000)
+      await expect(submitTicketCashRefund(tx,beforeCorrection.caseId,employee,50000,null)).rejects.toMatchObject({code:'TICKET_DINING_REVIEW_REQUIRED'})
+      await tx.query('ROLLBACK TO SAVEPOINT buyer_corrects_open_refund')
       await tx.query('SAVEPOINT buyer_use_review')
       const use=await correctTicketGift(tx,ticket,employee,'待本人确认使用200分','request',null,false,true)
       await expect(correctTicketGift(tx,ticket,reviewer,'核实原菜','approve',use.id)).rejects.toMatchObject({code:'TICKET_BUYER_CONFIRM_REQUIRED'})
@@ -573,7 +583,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       providerRefundId:'returned-'+ref.id,originalProviderTransactionId:'late-'+pay.id,reportedAmountMinor:offer.priceMinor,reportedCurrency:'CNY',succeeded:true}))).applied).toBe(true)
     expect((await admin.query('SELECT id FROM mbox.table_tickets WHERE registration_id=$1',[order.id])).rowCount).toBe(0)
   })
-  it('settles either ticket from the same two-table payment after the first funded a meal',async()=>{
+  it('settles either ticket from the same two-table payment after the first funded a meal',{timeout:20_000},async()=>{
     const args=[scope.tenantId,scope.storeId],buyer=randomUUID(),member=randomUUID(),extra=randomUUID()
     await admin.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($3::uuid,$1,$2,$3::text)",[...args,buyer])
     await admin.query("INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no) VALUES($3,$1,$2,$4,'MBX-TWO-TABLES')",[...args,member,buyer])

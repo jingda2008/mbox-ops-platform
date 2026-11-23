@@ -40,7 +40,7 @@ export async function ticketDiningHandoffs(tx:ScopedTransaction){
   return (await tx.query(`WITH pending AS (
     SELECT f.id AS case_id,c.order_id,o.public_id AS order_no,k.id AS ticket,c.amount_minor AS due,c.merchant_minor,
       c.consented_at IS NOT NULL AS confirmed,
-      pay.id IS NULL OR pay.status IN('failed','cancelled') AS collectable,
+      pay.id IS NULL OR pay.status IN('failed','closed') AS collectable,
       c.amount_minor=0 OR (coalesce(pay.status='succeeded' AND pay.order_id=c.order_id AND pay.amount_minor=c.amount_minor,false)
         AND NOT EXISTS(SELECT 1 FROM mbox.refunds rb WHERE (rb.tenant_id,rb.store_id,rb.payment_id)=(c.tenant_id,c.store_id,pay.id)
         AND rb.status NOT IN('cancelled','rejected'))) AS paid
@@ -53,8 +53,9 @@ export async function ticketDiningHandoffs(tx:ScopedTransaction){
     SELECT case_id,ticket,bool_and(confirmed AND paid) AS ready,sum(due+coalesce(merchant_minor,0)) AS compared
     FROM pending GROUP BY case_id,ticket
   )
-  SELECT p.ticket,p.case_id AS "caseId",'collect' AS step,p.order_no AS "orderNo",p.due::text AS amount
-  FROM pending p WHERE p.confirmed AND p.due>0 AND NOT p.paid AND p.collectable
+  SELECT p.ticket,p.case_id AS "caseId",CASE WHEN p.collectable THEN 'collect' ELSE 'check_receipt' END AS step,
+    p.order_no AS "orderNo",p.due::text AS amount
+  FROM pending p WHERE p.confirmed AND p.due>0 AND NOT p.paid
   UNION ALL
   SELECT c.ticket,c.case_id,'review',NULL,NULL FROM per_case c
   CROSS JOIN LATERAL mbox.ticket_refund_basis($1,$2,c.ticket) b

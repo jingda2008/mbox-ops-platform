@@ -570,6 +570,11 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const cashier=new PaymentRepository(tx)
       const attempt=await cashier.createForOrder({orderId:order.id,publicId:'DP'+randomUUID(),provider:'postar',method:'native_qr',
         initialStatus:'pending',principal:{type:'employee',employeeId:employee}})
+      expect((await ticketDiningHandoffs(tx)).filter(row=>row.caseId===f.caseId)).toMatchObject([{step:'check_receipt',amount:'20000'}])
+      await tx.query('SAVEPOINT closed_supplement_receipt')
+      await tx.query("UPDATE mbox.payments SET status='closed' WHERE id=$1",[attempt.id])
+      expect((await ticketDiningHandoffs(tx)).filter(row=>row.caseId===f.caseId)).toMatchObject([{step:'collect'}])
+      await tx.query('ROLLBACK TO SAVEPOINT closed_supplement_receipt')
       const venue=await submitTicketCashRefund(tx,f.caseId,employee,50000,'门店取消演出，补款渠道待确认')
       const refunds=new RefundRepository(tx)
       const ticket=await refunds.approve(venue.refundId,checker,'按门店责任退原票款')

@@ -136,12 +136,17 @@ export class LoyaltyAccrualRepository {
       paymentId: input.paymentId,
     })) return NO_OP
     const selected = await this.transaction.query<AwardContextRow>(`
-      WITH RECURSIVE ancestry AS (
+      WITH RECURSIVE payer AS (
+        SELECT coalesce(o.created_by_customer_id,q.customer_id) customer_id
+        FROM mbox.orders o LEFT JOIN mbox.checkout_coupon_order_links l ON (l.tenant_id,l.store_id,l.order_id)=(o.tenant_id,o.store_id,o.id)
+        LEFT JOIN mbox.checkout_coupon_quotes q ON q.id=l.quote_id AND to_jsonb(q)->>'tab_request_id' IS NOT NULL
+        WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3
+      ), ancestry AS (
         SELECT customer.id, customer.merged_into_customer_id
         FROM mbox.orders ordering
         JOIN mbox.customers customer
           ON customer.tenant_id=ordering.tenant_id AND customer.store_id=ordering.store_id
-         AND customer.id=ordering.created_by_customer_id
+         AND customer.id=(SELECT customer_id FROM payer)
         WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid
           AND ordering.id=$3::uuid
         UNION ALL
@@ -161,7 +166,7 @@ export class LoyaltyAccrualRepository {
         WHERE item.tenant_id=$1::uuid AND item.store_id=$2::uuid AND item.order_id=$3::uuid
           AND item.loyalty_eligible
       )
-      SELECT ordering.id AS order_id, ordering.created_by_customer_id AS customer_id,
+      SELECT ordering.id AS order_id, (SELECT customer_id FROM payer) AS customer_id,
         payment.id AS payment_id, ordering.loyalty_policy_version_id AS policy_version_id,
         membership.id AS membership_id, account.id AS account_id,
         account.available_points, account.pending_recovery_points, account.growth_value,
@@ -692,6 +697,9 @@ export class LoyaltyAccrualRepository {
           COALESCE((SELECT SUM(receipt.amount_minor) FROM mbox.order_payment_facts receipt
             WHERE receipt.tenant_id=current.tenant_id AND receipt.store_id=current.store_id
               AND receipt.order_id=current.order_id AND receipt.succeeded_at<=current.completed_at
+              AND NOT EXISTS (SELECT 1 FROM mbox.payments supplement
+                WHERE (supplement.tenant_id,supplement.store_id,supplement.id)=(receipt.tenant_id,receipt.store_id,receipt.id)
+                  AND supplement.provider_snapshot ? 'ticketDiningCollection')
               AND receipt.status IN ('succeeded','partially_refunded','refunded')),0)
           - COALESCE((SELECT SUM(basis.amount_minor) FROM mbox.loyalty_order_item_basis basis
             WHERE basis.tenant_id=current.tenant_id AND basis.store_id=current.store_id
@@ -700,6 +708,9 @@ export class LoyaltyAccrualRepository {
             WHERE previous.tenant_id=current.tenant_id AND previous.store_id=current.store_id
               AND previous.order_id=current.order_id AND previous.status='succeeded'
               AND previous.id<>current.id
+              AND NOT EXISTS (SELECT 1 FROM mbox.payments supplement
+                WHERE (supplement.tenant_id,supplement.store_id,supplement.id)=(previous.tenant_id,previous.store_id,previous.payment_id)
+                  AND supplement.provider_snapshot ? 'ticketDiningCollection')
               AND ((previous.completed_at,previous.id)<(current.completed_at,current.id) OR EXISTS (
                 SELECT 1 FROM mbox.loyalty_award_refund_applications applied
                 WHERE applied.tenant_id=previous.tenant_id AND applied.store_id=previous.store_id

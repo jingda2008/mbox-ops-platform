@@ -107,9 +107,9 @@ assert(project.compileType === 'mini', 'mini.project.json format 2 的 compileTy
 assert(!Object.prototype.hasOwnProperty.call(project, 'enableAppxNg'), 'format 2 不得保留旧版 enableAppxNg 配置')
 assert(!Object.prototype.hasOwnProperty.call(project, 'component2'), 'format 2 的 component2 必须迁移到 compileOptions')
 assert(project.compileOptions && project.compileOptions.component2 === true, 'mini.project.json 必须显式启用 compileOptions.component2')
-// Customer custody and channel distribution are WeChat-only in this scope. Keep all existing
+// Customer custody, channel distribution and verified-phone table tickets are WeChat-only. Keep all existing
 // Alipay pages checked; only these exact new routes are outside parity scope.
-const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index'])
+const wechatOnlyPages = new Set(['pages/profile-bottles/index', 'pages/profile-bottle-detail/index', 'pages/channel-coupons/index', 'pages/table-tickets/index'])
 for (const page of wechatOnlyPages) {
   assert(wechatApp.pages.includes(page) && !alipayApp.pages.includes(page), `微信独有页面范围变化: ${page}`)
   for (const extension of ['.js', '.json', '.wxml', '.wxss']) await stat(join(wechatRoot, page + extension))
@@ -148,8 +148,10 @@ const wechatPolicyTemplateDivergences = {
   // 2026-10-31: both platforms show prepaid balance and consent at the top; checkout names balance deduction.
   // 2026-11-08: both platforms show concise selling windows and flexible card footers; existing platform-specific policy blocks remain reviewed.
   // 2026-11-16: both platforms retain review-required amounts and show zero-due order confirmation; prior policy differences remain.
-  'pages/order/index': {"wechat": "4ccbb82d0c8adfe841ac48fbedb223393e34ed819682585940fa6fbded1917f4", "alipay": "bdf6e09103154d227ebc7d59403be0a85a8a4c412381a49bfd94261bf6750ef5"},
-  'pages/profile/index': {"wechat": "b0ff38b0e715accef87b1a788c4ae2536417bc16692d2c39f0ff8dda602590b3", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
+  // The WeChat detail page routes each table ticket to its own original after-sales entry.
+  'pages/community-detail/index': {wechat:'60954ca7930fd30e515852d2193f11a812c01f766733743faa7f0d8df609d786', alipay:'d97f851a0ea6450fcc273a0896c05ea440b1c0c71131ca386477166752d2e692'},
+  'pages/order/index': {"wechat": "89a4d58e83e5d51545328b2f5c87362e176296f609074e2e607229b087b4a584", "alipay": "bdf6e09103154d227ebc7d59403be0a85a8a4c412381a49bfd94261bf6750ef5", "wechatStyle": "978d82d02fe33d9fe08ee2f6e0bca20529dacd70fcc409518795dab4541c5ced", "alipayStyle": "0d47df0aabd911b2535543e9bf257f12d34a76664610b5109fd1d7800b530b58"},
+  'pages/profile/index': {"wechat": "0a1d13821558949176597256fd1cf9a653eeffe3827e0a8b3b7fdca90865a1c6", "alipay": "d2722a8b17622c065c6da8b1cc2be0c573f2f81aea681556c919abfad40969b3", "wechatStyle": "1fa5c72e694bc5efb80f28f0a50f92d69d60a552612309ac86206701e162c424", "alipayStyle": "0a138379f29010351fca2d688e41fbf3b8be6c7f0a9933de31c919dabf4f6e23"},
   'pages/community/index': {"wechat": "28632c76e3ffb25597311c97a90cccea5694f7536d0abb7e1d3ea03f6cfb8169", "alipay": "31652fbffa072e0ab56f52acd7fb99793ccab3066bdd39c045d2669ee25c8d2f"},
   'pages/reservations/index': {"wechat": "b2c4aaa0f832ac6cc3bd4ae3d85ad070f1404729af5e6ce44c687ce02f3c140c", "alipay": "20ea996ef29943ff51451163ce61a96ab42de0b022aa3e7cf6583a2ede3a0a9f"},
   // 2026-10-23: same ordinary-menu destination copy clarified; existing platform layout retained.

@@ -18,13 +18,13 @@ export function hasCarryoverDebtSchema(tx:ScopedTransaction):Promise<boolean>{
 export async function readCarryoverDebt(tx: ScopedTransaction, orderId: string): Promise<CarryoverDebt | null> {
   if(!await hasCarryoverDebtSchema(tx))return null
   const result = await tx.query<{eligibility: CarryoverDebt['eligibility']; receivable_minor: string; review_reason: string | null}>(`
-    SELECT mbox.carryover_collection_eligibility(tenant_id,store_id,order_id) AS eligibility,receivable_minor::text,
+    SELECT mbox.carryover_collection_eligibility(tenant_id,store_id,order_id) AS eligibility,mbox.order_financial_receivable_amount(tenant_id,store_id,order_id)::text AS receivable_minor,
       COALESCE(review_reason,'存在原预付款、退款或关桌后金额调整，请先核对原款及订单后处理') AS review_reason FROM mbox.order_carryover_debts
     WHERE tenant_id=$1 AND store_id=$2 AND order_id=$3`, [tx.scope.tenantId,tx.scope.storeId,orderId])
   const row=result.rows[0]
   if (!row) return null
   const receivableMinor=Number(row.receivable_minor)
-  if (!Number.isSafeInteger(receivableMinor) || receivableMinor<=0) throw new RangeError('历史应收金额无效')
+  if (!Number.isSafeInteger(receivableMinor) || receivableMinor<0) throw new RangeError('历史应收金额无效')
   return {eligibility:row.eligibility,receivableMinor,reviewReason:row.review_reason}
 }
 

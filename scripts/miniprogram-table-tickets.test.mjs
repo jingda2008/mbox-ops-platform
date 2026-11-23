@@ -6,7 +6,7 @@ import {loadMiniModule} from './load-miniprogram-test-module.mjs'
 
 const pageUrl=new URL('../miniprogram/pages/table-tickets/index.js',import.meta.url)
 const source=readFileSync(pageUrl,'utf8')
-function fixture(){
+function fixture(showModal){
   const calls=[],offer={id:'public-offer',areaId:'window',name:'靠窗桌票',priceMinor:50000,giftPoints:550,startsAt:'2026-11-23T12:00:00Z',endsAt:'2026-11-23T19:00:00Z',remaining:3}
   let member=null,page
   const api={
@@ -19,7 +19,7 @@ function fixture(){
     queryActivityRegistrationPayment:async id=>calls.push(['query',id]),
   }
   vm.runInNewContext(source,{require:name=>name.endsWith('/api')?api:name.endsWith('/id')?{randomId:()=> 'operation'}:loadMiniModule(new URL(name+'.js',pageUrl)),
-    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{requestPayment:()=>{throw Error('Unexpected payment sheet')}}})
+    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{showModal,requestPayment:()=>{throw Error('Unexpected payment sheet')}}})
   page.onLoad({id:offer.id,quantity:'2'})
   return {page,calls,api}
 }
@@ -66,4 +66,21 @@ test('页面离开后返回的支付状态不会调起微信收款',async()=>{
   release({allowedActions:['start_payment']})
   await pending
   assert.deepEqual(calls,[])
+})
+
+test('改期及错户消费由会员逐项确认，取消或连点不重复提交',async()=>{
+  let modal
+  const {page,api,calls}=fixture(options=>{modal=options})
+  api.decideTicketMove=async(id,accept)=>calls.push(['move',id,accept])
+  api.confirmTicketUse=async id=>calls.push(['use',id])
+  for(const [method,action,confirm] of [['changeShow','accept',false],['changeShow','decline',true],['changeShow','accept',true],['confirmUse','',true]]){
+    const event={currentTarget:{dataset:{id:'original',action,points:200}}}
+    const first=page[method](event)
+    assert.equal(page.data.busy,true)
+    await page[method](event)
+    modal.success({confirm})
+    await first
+    assert.equal(page.data.busy,false)
+  }
+  assert.deepEqual(calls,[['move','original',false],['move','original',true],['use','original']])
 })

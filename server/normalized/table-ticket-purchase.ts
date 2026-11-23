@@ -96,11 +96,7 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
     && r.areaId===offer.areaId && Date.parse(r.startsAt)<=Date.parse(offer.startsAt) && Date.parse(r.endsAt)>=Date.parse(offer.endsAt)):null
   if(input.reservationLockId && !original)throw new CustomerExperienceRequestError('原预约的会员、桌区、时段或占用情况已变化','TICKET_RESERVATION_MISMATCH',409)
   const capacity=await readReservationCapacity(tx,offer.startsAt,offer.endsAt,original?.reservationId??null)
-  const committed=(await tx.query<{seats:number}>(`SELECT coalesce(sum(coalesce(r.reserved_seats,r.party_size)-CASE WHEN p.quantity>0 THEN (r.reserved_seats/p.quantity)*
-      (SELECT count(*) FROM mbox.table_tickets k WHERE(k.tenant_id,k.store_id,k.registration_id)=(r.tenant_id,r.store_id,r.id) AND k.refunded_at IS NOT NULL) ELSE 0 END),0)::int seats
-    FROM mbox.community_activity_registrations r LEFT JOIN mbox.table_ticket_purchases p ON(p.tenant_id,p.store_id,p.registration_id)=(r.tenant_id,r.store_id,r.id)
-    WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.activity_id=$3
-      AND status IN('reserved','payment_pending','confirmed','checked_in')`,[...scope,offer.activityId])).rows[0]!.seats
+  const committed=(await tx.query<{seats:number}>(`SELECT mbox.ticket_event_committed($1,$2,$3)::int seats`,[...scope,offer.activityId])).rows[0]!.seats
   const seats=input.quantity*(offer.seatsPerTable??0)
   if (!Number.isSafeInteger(input.quantity)||input.quantity<1 || !seats || input.quantity>offer.remaining+(original?1:0) ||
       committed+seats>offer.capacity || seats+Number(capacity.committed_guests)>Number(capacity.total_capacity))

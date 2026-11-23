@@ -46,9 +46,13 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
     const fields=new FormData(form)
     const value=(name:string)=>String(fields.get(name)??'').trim()
     const name=value('name'), yuan=value('price'), points=value('points')
-    if (!name || !/^\d+(\.\d{1,2})?$/.test(yuan) || Number(yuan)<=0 ||
-        (points!=='' && !/^\d+$/.test(points)) || (status==='published' && points==='')) {
-      setNotice('请核对票名、每桌售价及每张赠分。无赠分时填 0。');return
+    const invalidField=!name?'name':(!/^\d+(\.\d{1,2})?$/.test(yuan) || Number(yuan)<=0)?'price':
+      ((points!=='' && !/^\d+$/.test(points)) || (status==='published' && points===''))?'points':null
+    if (invalidField) {
+      const input=form.elements.namedItem(invalidField) as HTMLInputElement
+      setNotice(invalidField==='points'?'请填写非负整数的赠分，无赠分时填 0。':invalidField==='price'?'请填写有效的每桌售价。':'请填写票名。')
+      input.focus()
+      return
     }
     const instant=(field:string)=>value(field)?new Date(value(field)+':00+08:00').toISOString():null
     const payload={areaId:area.areaId,expectedVersion:area.version??0,name,priceMinor:Math.round(Number(yuan)*100),
@@ -59,7 +63,7 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
     try {
       await api.postEndpoint(endpoint,payload,{idempotencyKey:retry.current.key})
       retry.current=null
-      setNotice(status==='published'?'票档版本已发布':status==='withdrawn'?'票档已下架':'票档草稿已保存')
+      setNotice(status==='published'?'票档版本已发布':status==='withdrawn'?'票档已下架':(canPublish?'票档草稿已保存':'草稿已保存，发布人员可在本场核对并上架'))
       setReload(n=>n+1)
     } catch(error) {setNotice(error instanceof Error?error.message:'保存失败，可重试')}
     finally {setBusy(false)}
@@ -100,7 +104,7 @@ export function TableTicketOffers({api,activityId,canManage,canPublish,canAssist
       <details><summary>分类、展示及售卖时间（选填，北京时间）</summary><label>大分类<select name="category" defaultValue={area.categoryCode??''}><option value="">门票</option>{area.categories.map(c=><option key={c.code} value={c.code}>{c.name}</option>)}</select></label><label>开始<input type="datetime-local" name="from" defaultValue={localTime(area.visibleFrom)}/></label>
       <label>结束<input type="datetime-local" name="until" defaultValue={localTime(area.visibleUntil)}/></label>
       <label>开售<input type="datetime-local" name="saleFrom" defaultValue={localTime(area.saleFrom)}/></label><label>停售<input type="datetime-local" name="saleUntil" defaultValue={localTime(area.saleUntil)}/></label></details>
-      {canManage && <button disabled={busy} value="draft">保存草稿</button>}
+      {canManage && <button disabled={busy} value="draft">{canPublish?'保存草稿':'保存并提交复核'}</button>}
       {canPublish && <button disabled={busy} value="published">保存并发布票档</button>}
       {canPublish && area.version!==null && <button disabled={busy} value="withdrawn">下架</button>}
     </form>}{canAssist && area?.status==='published' && <form onSubmit={e=>{e.preventDefault();void assist(e.currentTarget)}}>

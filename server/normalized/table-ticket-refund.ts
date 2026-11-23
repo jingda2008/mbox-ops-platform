@@ -29,16 +29,17 @@ export async function requestTicketRefund(tx:ScopedTransaction,registrationId:st
       WHERE tenant_id=$1 AND store_id=$2 AND source_type='activity' AND source_id=$3 AND entry_type='earn'`,[...scope,ticketId])).rowCount)
   }
   if(ticket.point_lot_id){
-    const lot=(await tx.query<{remaining_points:number;status:string}>(`SELECT remaining_points,status FROM mbox.loyalty_point_lots
-      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,ticket.point_lot_id])).rows[0]!
+    const lot=(await tx.query<{remaining_points:number;status:string;wrong:boolean}>(`SELECT remaining_points,status,
+      membership_id<>(SELECT p.membership_id FROM mbox.table_ticket_purchases p WHERE p.registration_id=$4 AND p.tenant_id=$1 AND p.store_id=$2) wrong FROM mbox.loyalty_point_lots
+      WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,ticket.point_lot_id,registrationId])).rows[0]!
     const usage=(await tx.query<{used:string;uncertain:boolean}>(`SELECT coalesce(sum(coalesce((SELECT sum(s.amount_minor-coalesce(rr.returned_minor,0)) FROM mbox.checkout_point_portion_sources s
         LEFT JOIN mbox.checkout_returned_sources(a.tenant_id,a.store_id,a.quote_id) rr ON (rr.portion_id,rr.lot_id)=(s.portion_id,s.lot_id)
         WHERE (s.tenant_id,s.store_id,s.quote_id,s.lot_id)=(a.tenant_id,a.store_id,a.quote_id,a.lot_id)),(a.points::bigint-a.restored_points)*100))
       FILTER(WHERE h.status='consumed'),0)::text used,
       coalesce(bool_or(h.status='held' OR (a.restored_points>0 AND a.restored_points<a.points)),false) uncertain
       FROM mbox.checkout_point_lots a JOIN mbox.checkout_point_holds h USING(tenant_id,store_id,quote_id)
-      WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.lot_id=$3`,[...scope,ticket.point_lot_id])).rows[0]!
-    consumedMinor=Number(usage.used);review=correctionOpen || usage.uncertain || consumedMinor>0 || lot.status==='reversed'
+      WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.lot_id IN(SELECT mbox.ticket_spending_lots($1,$2,$3))`,[...scope,ticket.point_lot_id])).rows[0]!
+    consumedMinor=Number(usage.used);review=lot.wrong || correctionOpen || usage.uncertain || consumedMinor>0 || lot.status==='reversed'
     frozen=lot.remaining_points
     if(lot.status==='available' || lot.status==='consumed')await tx.query(`UPDATE mbox.loyalty_point_lots SET status='ticket_hold'
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,ticket.point_lot_id])

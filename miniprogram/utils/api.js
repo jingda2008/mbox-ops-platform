@@ -248,6 +248,10 @@ async function getTicketReservations(){return (await publicRequest('/api/public/
 async function getTicketProposals(){return (await publicRequest('/api/public/mini/table-ticket-assistance')).data}
 async function getTableTicketOffers() { return (await request('/api/public/mini/table-ticket-offers',{requireTableSession:false,credentialDomain:'none'})).data }
 async function withdrawTicketRefund(id){return publicRequest('/api/public/mini/table-tickets/'+encodeURIComponent(id)+'/withdraw',{method:'POST',data:{}})}
+async function decideTicketMove(id,accept){return publicRequest('/api/public/mini/table-ticket-moves/'+encodeURIComponent(id),{method:'POST',data:{accept}})}
+async function getTabPoints(){return (await publicRequest('/api/public/mini/old-tab-points')).data}
+async function confirmTabPoints(id){return publicRequest('/api/public/mini/old-tab-points/'+encodeURIComponent(id)+'/confirm',{method:'POST',data:{confirmed:true}})}
+async function confirmTicketUse(id){return publicRequest('/api/public/mini/table-ticket-corrections/'+encodeURIComponent(id)+'/confirm',{method:'POST',data:{confirmed:true}})}
 async function confirmTicketDining(id){return publicRequest('/api/public/mini/table-ticket-dining/'+encodeURIComponent(id)+'/confirm',{method:'POST',data:{confirmed:true}})}
 async function refundTableTicket(orderId,ticketId,reason) {
   return recoverableMemberWrite('ticket-refund:'+(ticketId||orderId),'/api/public/mini/activity-registrations/'+encodeURIComponent(orderId)+'/refund-request','POST',{ticketId,reason},[])
@@ -929,7 +933,7 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
-  getAssistedPointsProposal, adoptAssistedPointsProposal, getTableTicketOffers, getMyTableTickets, getTicketReservations, getTicketProposals, buyTableTickets, refundTableTicket, withdrawTicketRefund, confirmTicketDining,
+  getAssistedPointsProposal, adoptAssistedPointsProposal, getTableTicketOffers, getMyTableTickets, getTicketReservations, getTicketProposals, buyTableTickets, refundTableTicket, withdrawTicketRefund, confirmTicketDining, getTabPoints, confirmTabPoints, confirmTicketUse, decideTicketMove,
   getCustomerBottles, getCustomerBottle, getCustomerBottlePhoto,
   getCustomerOrderHistory,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,

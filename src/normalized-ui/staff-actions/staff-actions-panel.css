@@ -788,3 +788,5 @@
 .staff-actions-panel .staff-table-tile.has-pending-payment { background: #fff0cc; border-color: #b8781b; }
 .staff-table-read-sheet article { padding-block: .6rem; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
 .staff-table-read-sheet section > button, .staff-table-read-sheet article > button { min-height: 44px; }
+
+.staff-ticket-inbox a { display: inline-flex; align-items: center; min-height: 44px; }

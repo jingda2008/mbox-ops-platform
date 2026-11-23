@@ -1,3 +1,4 @@
+import {offerTabPoints} from './existing-tab-points.js'
 import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import {staffPointsProposal} from './assisted-points-proposal.js'
 import type {OriginalReceiptSummary} from '../../src/shared/cashier-workbench-contracts.js'
@@ -655,6 +656,12 @@ export const commerceKdsApiPlugin: FastifyPluginAsync<CommerceKdsApiOptions> = a
     return reply.code(201).send({ data: issued })
   }))
 
+  app.post('/commerce/existing-tab-points',async(request,reply)=>handleCommerceRoute(reply,async()=>{
+    const ctx=await resolveContext(options,request),body=readObject(request.body,'原挂桌单用分')
+    const data=await options.staffAccessTransactions.run(ctx.scope,tx=>offerTabPoints(tx,ctx.employeeId,readRequiredString(body.orderNo,'原单号',100),
+      readRequiredString(body.memberNo,'会员号',80),body.points===null?null:readInteger(body.points,'积分',1,2147483647),readRequiredString(body.requestKey,'请求号',100)))
+    return reply.header('cache-control','no-store').send({data})
+  }))
   app.post('/commerce/assisted-points',async(request,reply)=>handleCommerceRoute(reply,async()=>{
     const ctx=await resolveContext(options,request),body=readObject(request.body,'代客用分')
     assertActorBinding(body,ctx.employeeId)

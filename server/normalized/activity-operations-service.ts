@@ -101,12 +101,12 @@ export class ActivityOperationsService {
     })
   }
 
-  changeTicketGift(context:ActivityOperationsStaffContext,id:string,reason:string,action:'request'|'approve'|'reject',caseId:string|null,key:string,merchantAssumes=false) {
+  changeTicketGift(context:ActivityOperationsStaffContext,id:string,reason:string,action:'request'|'approve'|'reject',caseId:string|null,key:string,merchantAssumes=false,buyerUse=false) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'loyalty.adjust.manual').execute({
-      scope:context.scope,operationScope:'table_ticket.correction',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,action,caseId,merchantAssumes,employee:context.employeeId}),
+      scope:context.scope,operationScope:'table_ticket.correction',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,action,caseId,merchantAssumes,buyerUse,employee:context.employeeId}),
       retainReceipt:true,resultCodec:objectCodec<{id:string;status:string}>(),
     },async tx=>{
-      const result=await correctTicketGift(tx,id,context.employeeId,reason,action,caseId,merchantAssumes)
+      const result=await correctTicketGift(tx,id,context.employeeId,reason,action,caseId,merchantAssumes,buyerUse)
       return {result,auditEvents:[audit(context,{action:'table_ticket.correction.'+action,objectType:'table_ticket',objectId:id,afterData:{reason,caseId:result.id}})],outboxMessages:[]}
     })
   }

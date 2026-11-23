@@ -323,6 +323,10 @@ export class PromotionalLoyaltyWorker {
        AND rule.policy_version_id=policy.id AND rule.enabled
        AND rule.trigger_kind=fact.trigger_kind
       WHERE fact.tenant_id=$1::uuid AND fact.store_id=$2::uuid AND fact.id=$3::uuid
+        AND NOT EXISTS (
+          SELECT 1 FROM mbox.table_ticket_purchases ticket
+          WHERE (ticket.tenant_id,ticket.store_id,ticket.registration_id)=(fact.tenant_id,fact.store_id,fact.registration_id)
+        )
         AND (fact.trigger_kind<>'activity_payment'
           OR (payment.id IS NOT NULL AND payment.amount_minor>=rule.minimum_paid_amount_minor))
       ORDER BY policy.stacking_group,policy.priority DESC,rule.points DESC,policy.id,rule.id

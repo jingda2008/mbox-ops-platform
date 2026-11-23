@@ -21,7 +21,7 @@ const {
   abandonGuestCheckout,
   getTodayPerformances,
   getCustomerBenefits,
-  getMiniBootstrap, getTableTicketOffers, getAssistedPointsProposal, adoptAssistedPointsProposal,
+  getMiniBootstrap, getTableTicketOffers, getTabPoints, confirmTabPoints, getAssistedPointsProposal, adoptAssistedPointsProposal,
   getVerifiedPhones,
   replaceVerifiedPhone,
   getWechatNotificationPrompt,
@@ -683,6 +683,7 @@ Page({
 
   onLoad() { this.ensureTableRequestGuard() },
   async readStaffPoints(event){
+    void this.readTabPoints(event)
     if (this.data.connectionState!=='active')return
     const guard=this.currentTableRequest()
     try{
@@ -721,7 +722,22 @@ Page({
     const day=e.currentTarget.dataset.day
     this.setData({ticketDay:day,tableTicketOffers:(this.ticketMenuRows||[]).filter(row=>row.day===day)})
   },
+  async readTabPoints(event){
+    try{const rows=await getTabPoints();this.setData({tabPoints:Array.isArray(rows)?rows:[],tabPointsError:''})}
+    catch(e){this.setData({tabPoints:[],tabPointsError:event?'暂时无法读取，请重试':''})}
+  },
+  async confirmOldTab(event){
+    if(this.data.busy)return
+    const id=event.currentTarget.dataset.id,row=(this.data.tabPoints||[]).find(r=>r.id===id)
+    if(!row)return
+    this.setData({busy:true})
+    const answer=await new Promise(resolve=>wx.showModal({title:'确认原挂桌单用分',content:'使用 '+row.points+' 分结算原单，抵分后菜款 ¥'+((row.dueMinor-row.points*100)/100).toFixed(2)+'。已授权共享的本桌预收余额会优先结算剩余菜款。',success:resolve,fail:()=>resolve({confirm:false})}))
+    if(!answer.confirm){this.setData({busy:false});return}
+    try{await confirmTabPoints(id);await this.readTabPoints();wx.showToast({title:'已记入原单'})}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+  },
   async onShow() {
+    void this.readTabPoints()
+
     void this.loadTableTicketOffers()
     if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/order/index') }
     enablePublicShareMenu()

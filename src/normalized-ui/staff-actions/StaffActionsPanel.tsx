@@ -158,7 +158,7 @@ function ReservationTicketInbox({api}: {api: StaffActionsApiPort}) {
     const timer = window.setInterval(refresh,20000)
     return () => { controller.abort(); window.clearInterval(timer) }
   }, [api])
-  return <section aria-label="门票接待">
+  return <section className="staff-ticket-inbox" aria-label="门票接待">
     <a href="/staff/customer-experience?ticketReception=1#work=activities">门票接待</a>
     {unavailable && <p role="status">待接待数量暂未更新</p>}
     {tasks.map(task => <p key={task.activityId}><a href={'/staff/customer-experience?ticketReception=1&activity='+encodeURIComponent(task.activityId)+'#work=activities'}>

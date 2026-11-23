@@ -8,9 +8,9 @@ const unavailable=(message:string)=>new ActivityOperationsError(message,'TICKET_
 
 export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
   return (await tx.query<{orderId:string;orderNo:string;portionId:string;productId:string;name:string;eligible:boolean;priceMinor:number;usedMinor:number;review:boolean}>(`
-    SELECT link.order_id AS "orderId",o.public_id AS "orderNo",s.portion_id AS "portionId",q.product_id AS "productId",pr.name,
+    SELECT link.order_id AS "orderId",o.public_id AS "orderNo",s.portion_id AS "portionId",q.product_id AS "productId",coalesce(original.product_snapshot->>'name',pr.name) AS name,
       (SELECT bool_and(i.loyalty_eligible_at_submission) FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id,i.product_id)=(o.tenant_id,o.store_id,o.id,q.product_id) AND i.parent_order_item_id IS NULL) AS eligible,
-      q.standard_minor::int AS "priceMinor",(s.amount_minor-coalesce(ret.returned_minor,0))::int AS "usedMinor",
+      coalesce((SELECT i.total_amount_minor FROM mbox.order_items i WHERE i.id=q.tab_item_id),q.standard_minor)::int AS "priceMinor" ,(s.amount_minor-coalesce(ret.returned_minor,0))::int AS "usedMinor",
       (a.restored_points<>coalesce((SELECT floor(sum(x.returned_minor)/100) FROM mbox.checkout_returned_sources(a.tenant_id,a.store_id,a.quote_id) x WHERE x.lot_id=a.lot_id),0)
        OR EXISTS(SELECT 1 FROM mbox.item_after_sales_cases y WHERE
          (y.tenant_id,y.store_id,y.order_id)=(link.tenant_id,link.store_id,link.order_id) AND y.status IN('requested','approved'))
@@ -21,13 +21,15 @@ export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
              OR y.amount_minor<>(SELECT coalesce(sum(i.amount_minor),0) FROM mbox.refund_items i
                WHERE (i.tenant_id,i.store_id,i.refund_id)=(y.tenant_id,y.store_id,y.id))))))) review
     FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.id)=(f.tenant_id,f.store_id,f.ticket_id)
-    JOIN mbox.checkout_point_portion_sources s ON (s.tenant_id,s.store_id,s.lot_id)=(k.tenant_id,k.store_id,k.point_lot_id)
+    JOIN mbox.checkout_point_portion_sources s ON (s.tenant_id,s.store_id)=(k.tenant_id,k.store_id) AND s.lot_id IN (SELECT mbox.ticket_spending_lots(k.tenant_id,k.store_id,k.point_lot_id))
     LEFT JOIN mbox.checkout_returned_sources(s.tenant_id,s.store_id,s.quote_id) ret ON (ret.portion_id,ret.lot_id)=(s.portion_id,s.lot_id)
     JOIN mbox.checkout_coupon_quote_lines q ON (q.tenant_id,q.store_id,q.quote_id,q.portion_id)=(s.tenant_id,s.store_id,s.quote_id,s.portion_id)
     JOIN mbox.checkout_point_lots a ON (a.tenant_id,a.store_id,a.quote_id,a.lot_id)=(s.tenant_id,s.store_id,s.quote_id,s.lot_id)
     JOIN mbox.checkout_coupon_order_links link ON (link.tenant_id,link.store_id,link.quote_id)=(s.tenant_id,s.store_id,s.quote_id)
     JOIN mbox.checkout_point_holds h ON (h.tenant_id,h.store_id,h.quote_id)=(s.tenant_id,s.store_id,s.quote_id) AND h.status='consumed'
     JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(link.tenant_id,link.store_id,link.order_id)
+    LEFT JOIN mbox.checkout_portion_order_items mapped ON (mapped.tenant_id,mapped.store_id,mapped.quote_id,mapped.portion_id)=(s.tenant_id,s.store_id,s.quote_id,s.portion_id)
+    LEFT JOIN mbox.order_items original ON original.id=mapped.order_item_id
     JOIN mbox.products pr ON (pr.tenant_id,pr.store_id,pr.id)=(q.tenant_id,q.store_id,q.product_id)
     WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.id=$3 ORDER BY link.order_id,q.request_index`,[tx.scope.tenantId,tx.scope.storeId,caseId])).rows
 }

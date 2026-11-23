@@ -34,12 +34,22 @@
       <view wx:if="{{!item.tickets.length && item.status==='refunded'}}">未出票款已原路退回</view>
       <view wx:if="{{item.lateUnissued}}">原单超时后收到票款，未出票及赠分。{{item.cashRefundPending ? '原票款退款已申请' : ''}}</view>
       <button wx:if="{{item.lateUnissued && !item.cashRefundPending}}" size="mini" data-order="{{item.registrationPublicId}}" bindtap="refund" disabled="{{busy}}">申请退回未出票款</button>
-      <view wx:for="{{item.tickets}}" wx:for-item="ticket" wx:key="id">第{{ticket.number}}张 · {{ticket.tableName || '桌号待安排'}} · 票号 {{ticket.id}}
+      <view wx:for="{{item.tickets}}" wx:for-item="ticket" wx:key="id">第{{ticket.number}}张 · {{ticket.deskClosed ? '本桌已清台' : ticket.tableName || '桌号待安排'}} · 票号 {{ticket.id}}
+        <view wx:if="{{ticket.currentShow}}">已接受改期 · {{ticket.currentShow.title}} · {{ticket.effectiveTime}}</view>
+        <view wx:if="{{ticket.move}}"><view>{{ticket.move.reason}}</view><view>拟改至 {{ticket.move.title}} · {{ticket.moveTime}} · {{ticket.move.tableName}}</view>
+          <button size="mini" data-id="{{ticket.move.id}}" data-action="accept" bindtap="changeShow" disabled="{{busy}}">接受新场次和桌号</button>
+          <button size="mini" data-id="{{ticket.move.id}}" data-action="decline" bindtap="changeShow" disabled="{{busy}}">保留原安排</button></view>
         <text wx:if="{{ticket.doorCode && !ticket.refundStatus}}">现场入场码 {{ticket.doorCode}}</text>
         <text wx:if="{{item.giftPoints && !ticket.refundStatus}}">{{ticket.pointsPosted ? "赠分已到账" : "赠分待入账"}} · 每张赠 {{item.giftPoints}} 分<text wx:if="{{ticket.pointsPosted}}">，批次剩余 {{ticket.remainingPoints}} 分</text> · 有效至 {{ticket.validThrough}}</text>
         <text wx:if="{{ticket.refundStatus}}">{{ticket.cashZero ? '退票已办结，本次应退现金为零' : ticket.refundStatus === 'refunded' ? '已退款' : ticket.refundStatus === 'review' ? '退票待核算' : '原退款审核处理中'}}</text>
         <view wx:if="{{ticket.refundDetail}}">申请原因：{{ticket.refundDetail.reason}}<text wx:if="{{ticket.refundDetail.decision}}"> · 处理依据：{{ticket.refundDetail.decision}}</text><text wx:if="{{ticket.refundDetail.cashMinor}}"> · {{ticket.refundDetail.cashStatus==='succeeded' ? '已退票款' : '申请退回票款'}} ¥{{ticket.refundDetail.cashMinor / 100}}</text></view>
         <button wx:if="{{ticket.refundStatus==='review'}}" size="mini" bindtap="withdraw" data-ticket="{{ticket.id}}" disabled="{{busy}}">撤回退票申请</button>
+        <view wx:if="{{ticket.buyerUse}}">
+          <view>门店核对本票消费归属 · {{ticket.buyerUse.points}}分</view>
+          <view wx:for="{{ticket.buyerUse.items}}" wx:key="index">{{item.orderNo}} · {{item.name}} · ¥{{item.minor / 100}}</view>
+          <button wx:if="{{!ticket.buyerUse.confirmed}}" data-id="{{ticket.buyerUse.id}}" data-points="{{ticket.buyerUse.points}}" bindtap="confirmUse" disabled="{{busy}}">核对并确认本人授权使用</button>
+          <text wx:else>已确认，待门店复核</text>
+        </view>
         <view wx:for="{{ticket.dining}}" wx:for-item="bill" wx:key="id">
           <view>{{bill.reason}}</view><view wx:for="{{bill.items}}" wx:for-item="line" wx:key="portionId">{{line.orderNo}} · {{line.name}} · 原价 ¥{{line.priceMinor / 100}} · 本票已抵 ¥{{line.usedMinor / 100}}</view>
           <button wx:if="{{!bill.confirmed && bill.caseStatus==='review' && !bill.closing}}" data-id="{{bill.id}}" data-amount="{{bill.amountMinor}}" bindtap="confirmDining" disabled="{{busy}}">确认补款 ¥{{bill.amountMinor / 100}}</button>

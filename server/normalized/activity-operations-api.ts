@@ -1,3 +1,4 @@
+import {proposeMove} from './table-ticket-reschedule.js'
 import {ticketStatement,ticketFinanceDay} from './table-ticket-reception.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
 import {ActivityServiceError} from './activity-service-repository.js'
@@ -39,6 +40,12 @@ export interface ActivityOperationsApiOptions {
 }
 
 export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsApiOptions> = async (app, options) => {
+  app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/reschedule',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.manage'])
+    const body=object(request.body,'改期安排')
+    return reply.send({data:await options.transactions.run(ctx.scope,tx=>proposeMove(tx,uuid(request.params.id,'票号'),uuid(body.offerId,'新场次票档'),
+      uuid(body.tableId,'桌号'),ctx.employeeId,text(body.reason,'变更原因',2,500),idempotencyKey(request)))})
+  }))
   app.get<{Querystring:{day?:string}}>('/staff/activity-operations/ticket-finance-day',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])
     const day=request.query.day??null
@@ -52,11 +59,17 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   }))
   app.get('/staff/activity-operations/ticket-reception-inbox',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
-    const tasks=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`SELECT a.public_id AS "activityId",a.title,count(*)::int AS waiting
+    const tasks=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`SELECT a.public_id AS "activityId",a.title,count(DISTINCT t.registration_id)::int AS waiting
       FROM mbox.ticket_reception_tasks t JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(t.tenant_id,t.store_id,t.registration_id)
-      JOIN mbox.community_activities a ON(a.tenant_id,a.store_id,a.id)=(r.tenant_id,r.store_id,r.activity_id)
-      WHERE t.tenant_id=$1 AND t.store_id=$2 AND a.ends_at>clock_timestamp() AND t.status IN('waiting','unreachable','claimed')
-        AND EXISTS(SELECT 1 FROM mbox.table_tickets k WHERE(k.tenant_id,k.store_id,k.registration_id)=(t.tenant_id,t.store_id,t.registration_id) AND k.refunded_at IS NULL)
+      JOIN mbox.table_tickets k ON(k.tenant_id,k.store_id,k.registration_id)=(t.tenant_id,t.store_id,t.registration_id) AND k.refunded_at IS NULL
+      JOIN mbox.table_ticket_purchases p ON (p.tenant_id,p.store_id,p.registration_id)=(k.tenant_id,k.store_id,k.registration_id)
+      LEFT JOIN mbox.ticket_reschedule_offers moved ON moved.id=k.reschedule_id
+      JOIN mbox.community_activities a ON(a.tenant_id,a.store_id,a.id)=(r.tenant_id,r.store_id,coalesce(moved.activity_id,r.activity_id))
+      WHERE t.tenant_id=$1 AND t.store_id=$2 AND coalesce(moved.ends_at,p.ends_at)>statement_timestamp()
+        AND (t.status IN('waiting','unreachable','claimed') OR (coalesce(moved.starts_at,p.starts_at)<=statement_timestamp()
+          AND NOT mbox.ticket_lock_active(k.tenant_id,k.store_id,k.reservation_lock_id)
+          AND NOT EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id))
+          AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE f.ticket_id=k.id AND f.status NOT IN('rejected','cancelled'))))
       GROUP BY a.id ORDER BY a.starts_at`,[ctx.scope.tenantId,ctx.scope.storeId])).rows,{readOnly:true})
     return reply.header('cache-control','no-store').send({data:tasks})
   }))
@@ -84,7 +97,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const action=body.action
     if(action!=='request'&&action!=='reject'&&action!=='approve')throw new ActivityOperationsError('请选择冲正操作','TICKET_CORRECTION_ACTION',400)
     const result=await options.service.changeTicketGift(ctx,uuid(request.params.id,'票号'),text(body.reason,'原因',3,240),action,
-      action==='request'?null:uuid(body.caseId,'冲正案'),idempotencyKey(request),body.merchantAssumes===true)
+      action==='request'?null:uuid(body.caseId,'冲正案'),idempotencyKey(request),body.merchantAssumes===true,body.buyerUse===true)
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-refunds/:id/dining',async(request,reply)=>handle(reply,async()=>{

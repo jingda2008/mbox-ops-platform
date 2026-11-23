@@ -107,7 +107,16 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
   await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()
   await workspace.getByLabel('产品名称',{exact:true}).fill('中间区域整桌票')
   await workspace.getByLabel('每桌售价（元）',{exact:true}).fill('500')
-  await workspace.getByLabel('每张赠送积分',{exact:true}).fill('550')
+  const points=workspace.getByLabel('每张赠送积分',{exact:true})
+  const price=workspace.getByLabel('每桌售价（元）',{exact:true})
+  const name=workspace.getByLabel('产品名称',{exact:true})
+  const publish=workspace.getByRole('button',{name:'保存并发布票档'})
+  for(const [field,invalid,valid] of [[name,'','中间区域整桌票'],[price,'0','500'],[points,'-1','550'],[points,'0.5','550'],[points,'','550']] as const){
+    await field.fill(invalid)
+    await publish.click()
+    await expect(field).toBeFocused()
+    await field.fill(valid)
+  }
   await workspace.getByRole('button',{name:'保存并发布票档'}).click()
   await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
   const published=async()=>(await (await page.request.get('/api/public/mini/table-ticket-offers')).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)

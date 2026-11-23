@@ -37,7 +37,7 @@ Page({
       const phones=bootstrap.membership?await api.getVerifiedPhones():[]
       if(generation!==this.readGeneration)return
       this.setData({proposals,reservations,eligibleReservations:this.forOffer(selected,reservations),member:bootstrap.membership||null,terms:bootstrap.membershipTerms||null,phone:phones[0]||null,
-        mine:orders.map(o=>({...o,tickets:o.tickets.map(t=>({...t,validThrough:beijingDate(parseInstant(t.expiresAt)-1000)})),total:money(Number(o.totalMinor)),time:dateTime(o.startsAt)}))})
+        mine:orders.map(o=>({...o,tickets:o.tickets.map(t=>({...t,moveTime:t.move?dateTime(t.move.startsAt)+' — '+dateTime(t.move.endsAt):'',effectiveTime:t.currentShow?dateTime(t.currentShow.startsAt)+' — '+dateTime(t.currentShow.endsAt):'',validThrough:beijingDate(parseInstant(t.expiresAt)-1000)})),total:money(Number(o.totalMinor)),time:dateTime(o.startsAt)}))})
     } catch(e){if(generation===this.readGeneration)this.setData({error:e.message||'读取失败，请刷新'})}
   },
   forOffer(offer,rows){
@@ -87,6 +87,22 @@ Page({
     if(!answer.confirm)return
     this.setData({busy:true,error:''})
     try{await api.withdrawTicketRefund(event.currentTarget.dataset.ticket);await this.refresh()}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+  },
+  async changeShow(event){
+    if(this.data.busy)return
+    const {id,action}=event.currentTarget.dataset,accept=action==='accept'
+    this.setData({busy:true,error:''})
+    const answer=await new Promise(resolve=>wx.showModal({title:accept?'确认新场次与桌号':'保留原票安排',content:accept?'确认后切换到所列场次和桌号，原购票赠分及有效期保留。':'门店可继续联系，您也可以从原票申请售后。',success:resolve,fail:()=>resolve({confirm:false})}))
+    if(!answer.confirm){this.setData({busy:false});return}
+    try{await api.decideTicketMove(id,accept);await this.refresh()}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+  },
+  async confirmUse(event){
+    if(this.data.busy)return
+    const {id,points}=event.currentTarget.dataset
+    this.setData({busy:true,error:''})
+    const answer=await new Promise(resolve=>wx.showModal({title:'确认本人授权消费',content:'确认上述菜品使用了本票 '+points+' 分，门店复核后该部分将计入本票已用积分。',success:resolve,fail:()=>resolve({confirm:false})}))
+    if(!answer.confirm){this.setData({busy:false});return}
+    try{await api.confirmTicketUse(id);await this.refresh()}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
   },
   async confirmDining(event){
     if(this.data.busy)return

@@ -8,7 +8,7 @@ export async function grantFixtureStaffPermissions(
   const roleId = randomUUID()
   await pool.query('INSERT INTO mbox.roles(id,tenant_id,store_id,code,name) VALUES($1::uuid,$2,$3,$4,\'Local service test\')', [roleId, scope.tenantId, scope.storeId, 'AUDIT_'+roleId.replaceAll('-', '').slice(0,24).toUpperCase()])
   for (const code of codes) await pool.query('INSERT INTO mbox.staff_permission_definitions(tenant_id,store_id,code,name) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING', [scope.tenantId, scope.storeId, code])
-  await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($4::text[])', [scope.tenantId, scope.storeId, roleId, codes])
+  await pool.query('INSERT INTO mbox.role_permission_assignments(tenant_id,store_id,role_id,permission_id) SELECT $1,$2,$3,id FROM mbox.staff_permission_definitions WHERE tenant_id=$1 AND store_id=$2 AND code=ANY($4::text[]) ON CONFLICT DO NOTHING', [scope.tenantId, scope.storeId, roleId, codes])
   for (const employeeId of employeeIds) await pool.query("INSERT INTO mbox.employee_roles(tenant_id,store_id,employee_id,role_id,starts_at) VALUES($1,$2,$3,$4,clock_timestamp()-interval '1 day')", [scope.tenantId, scope.storeId, employeeId, roleId])
 }
 

@@ -16,6 +16,11 @@
       <button bindtap="adoptStaffPoints" disabled="{{busy}}">本人核对，进入结账</button>
     </view>
   </view>
+  <view wx:for="{{tabPoints}}" wx:key="id"><view>原挂桌单 {{item.orderNo}}</view>
+    <view wx:for="{{item.lines}}" wx:for-item="line" wx:key="id">{{line.name}} × {{line.quantity}} · ¥{{line.amount / 100}}</view>
+    <view>原单待付 ¥{{item.dueMinor / 100}} · 使用 {{item.points}} 分 · 剩余 ¥{{item.dueMinor / 100 - item.points}}</view>
+    <button bindtap="confirmOldTab" data-id="{{item.id}}" disabled="{{busy}}">本人确认原账用分</button></view>
+  <text wx:if="{{tabPointsError}}">{{tabPointsError}}</text>
   <!-- Shared table prepayment -->
   <view wx:if="{{connectionState === 'active' && prepayment}}" class="table-prepayment-card">
     <text>预收款供本桌分次点单，按优惠前商品金额累计；不足时补款，余额可继续消费或经结算退回原付款人。</text>

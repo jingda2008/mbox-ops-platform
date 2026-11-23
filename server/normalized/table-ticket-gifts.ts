@@ -14,9 +14,11 @@ export async function creditTableTicketGifts(tx: ScopedTransaction, registration
   if (purchase.payment_id!==paymentId || purchase.status==='cancelled') return 0
   const tickets=(await tx.query<{id:string;ordinal:number;point_lot_id:string|null;closed:boolean;paid_at:string;expires_at:string}>(`
     SELECT id,ordinal,point_lot_id,(refunded_at IS NOT NULL OR EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f
-      WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('rejected','cancelled'))) closed,paid_at::text,mbox.table_ticket_expiry(paid_at)::text expires_at
+      WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('rejected','cancelled') AND NOT (f.status='review' AND f.close_intent IS NULL AND EXISTS(
+        SELECT 1 FROM mbox.table_ticket_corrections c WHERE (c.tenant_id,c.store_id,c.ticket_id)=(k.tenant_id,k.store_id,k.id)
+        AND c.id=$5::uuid AND c.status='requested')))) closed,paid_at::text,mbox.table_ticket_expiry(paid_at)::text expires_at
     FROM mbox.table_tickets k WHERE tenant_id=$1 AND store_id=$2 AND registration_id=$3 AND payment_id=$4
-    ORDER BY ordinal FOR UPDATE`,[...scope,registrationId,paymentId])).rows
+    ORDER BY ordinal FOR UPDATE`,[...scope,registrationId,paymentId,correction?.caseId??null])).rows
   if (tickets.length!==purchase.quantity) throw new Error('足额票款与出票数量待核对')
   if (!purchase.gift_points) return 0
   const account=(await tx.query<{id:string;customer_id:string;available_points:number;pending_recovery_points:number}>(`

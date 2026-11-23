@@ -92,6 +92,28 @@ interface CashierOnlinePaymentInput {
   customerAuthCode?: string
 }
 
+function ExistingTabPoints({api}:{api:NormalizedApiClient}) {
+  const [result,setResult]=useState(''),[busy,setBusy]=useState(false),[points,setPoints]=useState('')
+  return <details><summary>原挂桌单使用会员积分</summary><form onSubmit={async e=>{
+    e.preventDefault()
+    const form=e.currentTarget,fields=new FormData(form),button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement
+    const preview=button?.value==='maximum'
+    if(!preview && !/^[1-9]\d*$/.test(points)){setResult('请填写本次使用的积分');return}
+    setBusy(true)
+    try{
+      const response=await api.postEndpoint<{data:{maximumPoints:number;due:number}}>('/api/commerce/existing-tab-points',{
+        orderNo:String(fields.get('orderNo')).trim(),memberNo:String(fields.get('memberNo')).trim(),points:preview?null:Number(points),requestKey:crypto.randomUUID()
+      },{idempotencyKey:'tab-points-'+crypto.randomUUID()})
+      if(preview)setPoints(String(response.data.maximumPoints))
+      setResult(preview?'原单尚待支付 ¥'+(response.data.due/100).toFixed(2):'请购餐会员打开小程序点单页，核对原单后确认。')
+    }catch(error){setResult(error instanceof Error?error.message:'请重新核对原账')}finally{setBusy(false)}
+  }}><label>原挂桌单号<input name="orderNo" required onChange={()=>{setPoints('');setResult('')}}/></label>
+    <label>购餐会员号<input name="memberNo" required onChange={()=>{setPoints('');setResult('')}}/></label>
+    <label>使用积分<input inputMode="numeric" value={points} onChange={e=>setPoints(e.target.value)}/></label>
+    <button disabled={busy} value="maximum">填入本单最多可用的积分</button><button disabled={busy} value="offer">发给会员核对</button>
+    <p role="status">{result}</p></form></details>
+}
+
 export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavigate, refreshToken }: {
   api: NormalizedApiClient
   auth: StaffAuthView
@@ -321,6 +343,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
 
   const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
   return <><nav className="cashier-action-row" aria-label="账款范围">{([['workbench','收银待办'],['unsettled','未结账款'],['history','历史账单']] as const).map(([scope,label])=><button key={scope} type="button" className={collectionScope===scope?'cashier-primary-action':'cashier-secondary-action'} aria-pressed={collectionScope===scope} disabled={busyKey!==null} onClick={()=>{setCollectionScope(scope);setDebtPage(0);setPaymentState('all');setQuery('');setFromDate('');setToDate('')}}>{label}</button>)}</nav>
+    {auth.permissions.includes('order.create') && <ExistingTabPoints api={api}/>}
     {view?.selectedTable && view.query===query.trim()
       && <section aria-label="查询桌次实收"><b>{view.selectedTable.tableCode} · 当前桌次（{view.selectedTable.businessDate}）</b><SessionMoneySummary money={view.selectedTable.money}/>
         {phase==='error'&&<strong role="status">当前结果待核对。上次读取 {lastReadAt?.toLocaleTimeString('zh-CN',{hour12:false})}，请先查原付款。</strong>}</section>}

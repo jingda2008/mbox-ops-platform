@@ -22,6 +22,7 @@ for (const scenario of ['delayed success','refresh recovery','delayed panels','d
   await page.getByLabel('实际到店人数').fill('2')
   if(scenario.startsWith('delayed panels')) await page.getByLabel('本次开台最低消费（元）',{exact:true}).fill('100')
   await page.getByLabel('主服务员（必选）').selectOption({label:'李艳 · liyan'})
+  let actualMinimum:number|null=null
   let opening=false, failOnce=failRefresh, release!:()=>void
   const held=new Promise<void>(resolve=>{release=resolve})
   let releasePanels!:()=>void
@@ -34,6 +35,7 @@ for (const scenario of ['delayed success','refresh recovery','delayed panels','d
   await page.route('**/api/table-management/sessions/open',async route=>{
     opening=true
     const response=await route.fetch()
+    actualMinimum=(await response.json()).data.minimumSpendMinor
     await route.fulfill({response})
   })
   await page.route('**/api/operations',async route=>{
@@ -64,7 +66,11 @@ for (const scenario of ['delayed success','refresh recovery','delayed panels','d
     await orderButton.scrollIntoViewIfNeeded()
     const before=await orderButton.boundingBox()
     releasePanels()
-    await expect(actions.getByRole('region',{name:'本桌最低消费'})).toContainText('当前')
+    // Read the committed opening. A ticket-enabled store enforces zero even for legacy opening parameters.
+    expect([0,10000]).toContain(actualMinimum)
+    const minimumPanel=actions.getByRole('region',{name:'本桌最低消费'})
+    if(actualMinimum===0)await expect(minimumPanel).toHaveCount(0)
+    else await expect(minimumPanel).toContainText('当前')
     const after=await orderButton.boundingBox()
     expect(Math.abs(after!.y-before!.y)).toBeLessThanOrEqual(1)
   }

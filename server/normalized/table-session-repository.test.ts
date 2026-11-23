@@ -68,8 +68,9 @@ class RecordingCommandExecutor {
 }
 
 describe('TableSessionRepository', () => {
-  it('locks only the addressed table and records seats above capacity in the snapshot', async () => {
+  it('locks store capacity before the addressed table and records seats above capacity', async () => {
     const transaction = new ScriptedTransaction([
+      { rows: [] },
       { rows: [tableRow('W01', 4)] },
       { rows: [] },
       { rows: [sessionRow('W01', 'open', { occasion: 'friends', extraSeatCount: 2 }, 6)] },
@@ -87,12 +88,13 @@ describe('TableSessionRepository', () => {
 
     expect(session.guestCount).toBe(6)
     expect(session.guestProfileSnapshot).toEqual({ occasion: 'friends', extraSeatCount: 2 })
-    expect(transaction.calls[0]?.sql).toContain('WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND code = $3 FOR UPDATE')
-    expect(transaction.calls[0]?.values[2]).toBe('W01')
-    expect(transaction.calls[0]?.sql).not.toContain('mbox.table_sessions')
-    expect(transaction.calls[2]?.values[7]).toBe('现场加椅并保持通道畅通')
-    expect(transaction.calls[2]?.values[8]).toBe(employeeId)
-    expect(JSON.parse(String(transaction.calls[2]?.values[9]))).toEqual({
+    expect(transaction.calls[0]?.sql).toContain('pg_advisory_xact_lock')
+    expect(transaction.calls[1]?.sql).toContain('WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND code = $3 FOR UPDATE')
+    expect(transaction.calls[1]?.values[2]).toBe('W01')
+    expect(transaction.calls[1]?.sql).not.toContain('mbox.table_sessions')
+    expect(transaction.calls[3]?.values[7]).toBe('现场加椅并保持通道畅通')
+    expect(transaction.calls[3]?.values[8]).toBe(employeeId)
+    expect(JSON.parse(String(transaction.calls[3]?.values[9]))).toEqual({
       occasion: 'friends',
       extraSeatCount: 2,
     })
@@ -100,6 +102,7 @@ describe('TableSessionRepository', () => {
 
   it('rejects a second active session after taking the target table lock', async () => {
     const transaction = new ScriptedTransaction([
+      { rows: [] },
       { rows: [tableRow('VIP1', 8)] },
       { rows: [{ id: sessionId }] },
     ])
@@ -111,9 +114,9 @@ describe('TableSessionRepository', () => {
       guestCount: 8,
     })).rejects.toBeInstanceOf(TableAlreadyOpenError)
 
-    expect(transaction.calls).toHaveLength(2)
-    expect(transaction.calls[0]?.sql).toContain('id = $3::uuid')
-    expect(transaction.calls[0]?.sql).toContain('FOR UPDATE')
+    expect(transaction.calls).toHaveLength(3)
+    expect(transaction.calls[1]?.sql).toContain('id = $3::uuid')
+    expect(transaction.calls[1]?.sql).toContain('FOR UPDATE')
   })
 
   it('uses a session row lock and an explicit open -> closing transition', async () => {
@@ -145,6 +148,7 @@ describe('TableSessionRepository', () => {
     // SQL projection unit fixture; current-authority behavior has real database coverage.
     const permission = vi.spyOn(StaffAccessRepository.prototype, 'assertPermission').mockResolvedValue({} as never)
     const transaction = new ScriptedTransaction([
+      { rows: [] },
       { rows: [tableRow('L01', 4)] },
       { rows: [] },
       { rows: [sessionRow('L01', 'open', { extraSeatCount: 0 })] },
@@ -172,10 +176,12 @@ describe('TableSessionRepository', () => {
 
   it('has no process-wide queue, so different table repositories can progress independently', async () => {
     const w01 = new ScriptedTransaction([
+      { rows: [] },
       { rows: [tableRow('W01', 4)] }, { rows: [] },
       { rows: [sessionRow('W01', 'open', { extraSeatCount: 0 })] },
     ])
     const l01 = new ScriptedTransaction([
+      { rows: [] },
       { rows: [tableRow('L01', 4)] }, { rows: [] },
       { rows: [sessionRow('L01', 'open', { extraSeatCount: 0 })] },
     ])
@@ -186,8 +192,8 @@ describe('TableSessionRepository', () => {
     ])
 
     expect([first.tableCode, second.tableCode]).toEqual(['W01', 'L01'])
-    expect(w01.calls[0]?.values[2]).toBe('W01')
-    expect(l01.calls[0]?.values[2]).toBe('L01')
+    expect(w01.calls[1]?.values[2]).toBe('W01')
+    expect(l01.calls[1]?.values[2]).toBe('L01')
   })
 })
 

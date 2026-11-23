@@ -1,6 +1,7 @@
 import {TableSessionRepository} from './table-session-repository.js'
 import {WaitlistRepository} from './waitlist-repository.js'
-import {TableManagementCommandService} from './table-management-repository.js'
+import {tableManagementApiPlugin} from './table-management-api.js'
+import {TableManagementCommandService,TableManagementRepository} from './table-management-repository.js'
 import {MembershipConfigurationDraftService} from './membership-configuration-draft-service.js'
 import {PostgresMembershipConfigurationDraftRepository} from './membership-configuration-draft-repository.js'
 import {PaymentFulfillmentRepository} from './payment-fulfillment-repository.js'
@@ -102,6 +103,40 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
   })
   afterAll(async()=>{await admin?.end()})
   const offerInput={areaId:area,expectedVersion:0,name:'整桌演出票',priceMinor:50000,giftPoints:550,status:'published' as const,visibleFrom:null,visibleUntil:null}
+  it('commits concurrent reception and cashier opens once per desk before ticket sales',async()=>{
+    const scope={tenantId:randomUUID(),storeId:randomUUID()}
+    const walkInArea=randomUUID(),cashier=randomUUID(),employee=randomUUID()
+    await admin.query("INSERT INTO mbox.tenants(id,code,name) VALUES($1::uuid,$1::text,'并发测试')",[scope.tenantId])
+    await admin.query("INSERT INTO mbox.stores(id,tenant_id,code,name) VALUES($1::uuid,$2,$1::text,'并发测试')",[scope.storeId,scope.tenantId])
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'FLOOR','接待测试')",[scope.tenantId,scope.storeId,employee])
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'CASH','收银测试')",[scope.tenantId,scope.storeId,cashier])
+    await grantFixtureStaffPermissions(admin,scope,[employee,cashier],['table.open'])
+    await admin.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'BURST','并发测试区','indoor')",[scope.tenantId,scope.storeId,walkInArea])
+    const desks=await admin.query<{id:string}>(`INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity)
+      SELECT $1,$2,$3,'BURST'||n,'并发桌'||n,4 FROM generate_series(1,48)n RETURNING id`,[scope.tenantId,scope.storeId,walkInArea])
+    const service=new TableManagementCommandService(new NormalizedCommandExecutor(runner))
+    const commands=desks.rows.map(({id},index)=>({scope,actor:{type:'employee' as const,employeeId:index%2?employee:cashier},
+      businessDate:'2026-11-23',reason:'现场开台',primaryServiceEmployeeId:employee,tableId:id,publicId:randomUUID(),guestCount:2,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()}))
+    expect(await runner.run(scope,publicTableTickets)).toHaveLength(0)
+    const durations:number[]=[]
+    for(let index=0;index<commands.length;index+=8){
+      const batch=commands.slice(index,index+8)
+      const opens=await Promise.all(batch.map(async command=>{
+        const started=performance.now()
+        const result=await service.open(command)
+        durations.push(performance.now()-started)
+        return result
+      }))
+      const replays=await Promise.all(batch.map(command=>service.open(command)))
+      expect(replays.map(r=>r.value.id)).toEqual(opens.map(r=>r.value.id))
+      expect(replays.every(r=>r.replayed)).toBe(true)
+    }
+    const sessions=await admin.query(`SELECT s.table_id FROM mbox.table_sessions s JOIN mbox.tables t ON t.id=s.table_id
+      WHERE t.area_id=$1 AND s.status='open'`,[walkInArea])
+    expect(sessions.rows.map(row=>row.table_id).sort()).toEqual(desks.rows.map(row=>row.id).sort())
+    durations.sort((a,b)=>a-b)
+    console.info('Concurrent table opens (ms)',{count:durations.length,p95:Math.ceil(durations[Math.ceil(durations.length*0.95)-1]!),max:Math.ceil(durations.at(-1)!)})
+  })
   it('publishes an immutable offer, rejects stale edits and hides a withdrawn series',async()=>{
     await expect(run(tx=>saveTicketOffer(tx,activity,employee,offerInput))).rejects.toMatchObject({code:'TICKET_EVENT_TERMS_REQUIRED'})
     await run(tx=>approveEventTicketTerms(tx,activity,employee,{organizer:'测试举办方',seller:'测试售票方',approvalReference:'隔离测试场次资料',performers:'测试乐队',
@@ -168,6 +203,58 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     expect(lots[0]?.membership_id).toBe(lots[1]?.membership_id)
     expect((await admin.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0]?.available_points).toBe(1100)
   })
+  it('finishes an open or transfer already claiming a desk when ticket reception requests the same desk',async()=>{
+    const ticket=(await admin.query('SELECT id FROM mbox.table_tickets WHERE tenant_id=$1 ORDER BY ordinal LIMIT 1',[scope.tenantId])).rows[0]!.id
+    const desk=(await admin.query('SELECT id FROM mbox.tables WHERE area_id=$1 ORDER BY code LIMIT 1',[area])).rows[0]!.id
+    const other=(await admin.query('SELECT id FROM mbox.tables WHERE area_id=$1 AND id<>$2 ORDER BY code LIMIT 1',[area,desk])).rows[0]!.id
+    await grantFixtureStaffPermissions(admin,scope,[employee],['table.transfer','table.view_all'])
+    for(const surface of ['management','operations','transfer']){
+      const input={businessDate:'2026-11-23',guestCount:1,publicId:randomUUID(),openedByEmployeeId:employee,primaryServiceEmployeeId:employee}
+      const source=surface==='transfer'?await run(tx=>new TableManagementRepository(tx).open({...input,tableId:other})):undefined
+      const write=source?'FROM mbox.execute_table_customer_movement(':'INSERT INTO mbox.table_sessions'
+      let signal!:(pid:number)=>void,resume!:()=>void
+      const ready=new Promise<number>(resolve=>{signal=resolve})
+      const paused=new Promise<void>(resolve=>{resume=resolve})
+      const opening=run(async tx=>{
+        const pid=(await tx.query('SELECT pg_backend_pid() AS pid')).rows[0]!.pid
+        const instrumented:ScopedTransaction={scope,async query(sql,values){
+          if(sql.includes(write)){
+            signal(pid)
+            await paused
+          }
+          return tx.query(sql,values)
+        }}
+        if(source){
+          const service=new TableManagementCommandService(new NormalizedCommandExecutor({run:(_scope,fn)=>fn(instrumented)}))
+          const result=await service.transfer({scope,actor:{type:'employee',employeeId:employee},businessDate:input.businessDate,
+            tableSessionId:source.id,targetTableId:desk,reason:'同区整体转桌',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
+          return {id:result.value.tableSessionId}
+        }
+        return surface==='management'?new TableManagementRepository(instrumented).open({...input,tableId:desk})
+          :new TableSessionRepository(instrumented).open({...input,table:{kind:'id',value:desk}})
+      })
+      const holder=await Promise.race([ready,opening.then(()=>{throw Error('开桌未经过桌次写入')})])
+      const assigning=run(tx=>assignTicketTable(tx,ticket,desk,employee,null))
+      const outcomes=Promise.allSettled([opening,assigning])
+      let blocked=false
+      try{
+        for(let step=0;step<200 && !blocked;step++){
+          blocked=(await admin.query('SELECT EXISTS(SELECT FROM pg_stat_activity WHERE datname=current_database() AND $1::int=ANY(pg_blocking_pids(pid))) blocked',[holder])).rows[0].blocked
+          if(!blocked)await new Promise(resolve=>setTimeout(resolve,5))
+        }
+      }finally{resume()}
+      const [opened,assigned]=await outcomes
+      if(opened.status==='rejected')throw opened.reason
+      try{
+        expect(blocked).toBe(true)
+        expect(assigned).toMatchObject({status:'rejected',reason:{code:'TICKET_TABLE_UNAVAILABLE'}})
+        await expect(run(tx=>assignTicketTable(tx,ticket,desk,employee,null))).rejects.toMatchObject({code:'TICKET_TABLE_UNAVAILABLE'})
+        expect((await admin.query('SELECT reservation_lock_id FROM mbox.table_tickets WHERE id=$1',[ticket])).rows[0].reservation_lock_id).toBeNull()
+      }finally{
+        await run(tx=>new TableSessionRepository(tx).cancelOpenSession(opened.value.id,employee))
+      }
+    }
+  })
   it('assigns one physical lock and returns only the other ticket through the original payment',async()=>{
     const tickets=(await admin.query('SELECT * FROM mbox.table_tickets WHERE tenant_id=$1 ORDER BY ordinal',[scope.tenantId])).rows
     const first=tickets[0]!, second=tickets[1]!
@@ -175,7 +262,43 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     expect((await admin.query('SELECT count(*)::int n FROM mbox.refunds WHERE payment_id=$1',[first.payment_id])).rows[0].n).toBe(0)
 
     const table=(await admin.query('SELECT id FROM mbox.tables WHERE area_id=$1 ORDER BY code',[area])).rows[0]!.id
-    await run(tx=>assignTicketTable(tx,first.id,table,employee,null))
+    // One ticket takes A, the second still needs a desk. B and C cannot both open.
+    const others=(await admin.query<{id:string}>('SELECT id FROM mbox.tables WHERE area_id=$1 AND id<>$2 ORDER BY code',[area,table])).rows
+    const cashier=randomUUID()
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'MIXCASH','收银测试')",[scope.tenantId,scope.storeId,cashier])
+    await grantFixtureStaffPermissions(admin,scope,[employee,cashier],['table.open'])
+    const floor=Fastify()
+    await floor.register(tableManagementApiPlugin,{transactions:runner,commands:new TableManagementCommandService(new NormalizedCommandExecutor(runner)),
+      resolveContext:req=>({scope,employeeId:req.headers['test-staff']==='cashier'?cashier:employee,businessDate:'2026-11-23',capabilities:['table.open']})})
+    try{
+      const requests=others.map(({id},index)=>({method:'POST' as const,url:'/table-management/sessions/open',
+        headers:{'idempotency-key':randomUUID(),'test-staff':index?'cashier':'reception'},
+        payload:{publicId:randomUUID(),guestCount:2,tableId:id,primaryServiceEmployeeId:employee}}))
+      await floor.ready()
+      const [assigned,opens]=await Promise.all([run(tx=>assignTicketTable(tx,first.id,table,employee,null)),Promise.all(requests.map(req=>floor.inject(req)))])
+      expect(assigned).toEqual({id:first.id,tableId:table})
+      expect(opens.map(r=>r.statusCode).sort()).toEqual([201,409])
+      const replays=await Promise.all(requests.map(req=>floor.inject(req)))
+      for(const [index,response] of opens.entries()){
+        expect(replays[index]!.statusCode).toBe(response.statusCode)
+        if(response.statusCode===409){
+          expect(response.json().error.code).toBe('TABLE_TICKET_CAPACITY_RESERVED')
+          expect(replays[index]!.json().error).toEqual(response.json().error)
+        }else{
+          expect(replays[index]!.json().meta.replayed).toBe(true)
+        }
+      }
+      const [show]=await run(publicTableTickets)
+      expect(show!.remaining).toBe(0)
+      const bookAssignedDesk=()=>run(tx=>new ReservationRepository(tx).create({publicId:randomUUID(),source:'phone',guestCount:1,
+        customerName:'电话订桌',contactToken:'test',tableIds:[table],arrivalAt:show!.startsAt,expectedEndAt:show!.endsAt,
+        initialStatus:'confirmed',reservationPolicyVersion:1,arrivalGraceEndsAt:show!.endsAt}))
+      await expect(bookAssignedDesk()).rejects.toMatchObject({name:'ReservationConflictError'})
+      expect((await admin.query("SELECT count(*)::int n FROM mbox.reservation_table_locks WHERE table_id=$1 AND status IN ('held','confirmed')",[table])).rows[0].n).toBe(1)
+      const active=await admin.query('SELECT id,public_id FROM mbox.table_sessions WHERE table_id=ANY($1::uuid[]) AND status=\'open\'',[others.map(t=>t.id)])
+      expect(active.rows.map(s=>s.public_id)).toEqual([requests[opens.findIndex(r=>r.statusCode===201)]!.payload.publicId])
+      await run(tx=>new TableSessionRepository(tx).cancelOpenSession(active.rows[0]!.id,employee))
+    }finally{await floor.close()}
     expect(await run(tx=>assignTicketTable(tx,first.id,table,employee,null))).toEqual({id:first.id,tableId:table})
     expect((await run(publicTableTickets))[0]?.remaining).toBe(1)
     const awaitedOrderNo=(await admin.query('SELECT public_id FROM mbox.community_activity_registrations WHERE id=$1',[first.registration_id])).rows[0].public_id
@@ -1561,9 +1684,12 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(waiting.status).toBe('waiting')
       const buy=(offer:typeof offers[number],proposalId?:string)=>run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,proposalId,safetyVersion:offer.safetyVersion,refundVersion:offer.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection))
       const ready=channel==='phone'?run(tx=>new ReservationRepository(tx).create({publicId:randomUUID(),source:'phone',guestCount:1,customerName:'普通预约',contactToken:'test',tableIds:[desk],arrivalAt:second!.startsAt,expectedEndAt:first!.endsAt,initialStatus:'confirmed',reservationPolicyVersion:1,arrivalGraceEndsAt:first!.endsAt})):
-        run(tx=>new TableSessionRepository(tx).open({table:{kind:'id',value:desk},publicId:randomUUID(),guestCount:1,businessDate:new Date().toISOString().slice(0,10),openedByEmployeeId:employee}))
+        run(tx=>new TableSessionRepository(tx).open({table:{kind:'id',value:desk},publicId:randomUUID(),guestCount:1,businessDate:new Date().toISOString().slice(0,10),openedByEmployeeId:employee,primaryServiceEmployeeId:employee}))
       const outcomes=await Promise.allSettled([ready,buy(first!),buy(second!,assist.value.id)])
       expect(outcomes.filter(r=>r.status==='fulfilled')).toHaveLength(1)
+      for(const outcome of outcomes){
+        if(outcome.status==='rejected')expect(String(outcome.reason)).toMatch(/余量|已购桌票|时段.*占用|容量|桌位|可售/)
+      }
       const final=await run(publicTableTickets)
       expect(offers.map(o=>final.find(row=>row.id===o.id)?.remaining)).toEqual([0,0])
     }

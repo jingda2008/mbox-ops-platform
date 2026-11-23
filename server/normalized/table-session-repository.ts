@@ -1,3 +1,4 @@
+import { lockReservationPolicy } from './reservation-policy-lock.js'
 import { staffAuthorizedCommands } from './staff-authorized-command.js'
 import type {
   AuditActor,
@@ -137,13 +138,14 @@ export class TableSessionRepository {
 
   async open(input: Readonly<OpenTableSessionInput>): Promise<TableSession> {
     validateOpenInput(input)
+    // Ticket assignment takes the store capacity lock before the physical table.
+    await lockReservationPolicy(this.transaction)
     const tableRow = await this.selectTable(input.table, true)
     if (tableRow === null) throw new TableNotFoundError(input.table)
     if (tableRow.status !== 'available') {
       throw new TableUnavailableError(tableRow.code, tableRow.status)
     }
 
-    // Locking the one target table serializes competing opens for that table only.
     const active = await this.transaction.query<{ id: string }>(`
       SELECT id
       FROM mbox.table_sessions

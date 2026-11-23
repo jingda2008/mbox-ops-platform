@@ -1,3 +1,4 @@
+import { ticketCapacityConflict } from './reservation-policy-lock.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
 import {participantMovementHistory} from './participant-movement-history.js'
@@ -856,6 +857,8 @@ async function handle(reply: FastifyReply, operation: () => Promise<unknown>, gu
 }
 
 function mapError(error: unknown): { status: number; code: string; message: string; commitDisposition?: 'not_committed' } {
+  const capacity = ticketCapacityConflict(error)
+  if (capacity) return { status: 409, ...capacity }
   if (error instanceof Error && 'code' in error) {
     if (error.code === 'P3171') return { status: 403, code: 'TABLE_PERMISSION_DENIED', message: error.message }
     if (error.code === 'P3172') return { status: 409, code: 'TABLE_GUEST_COUNT_CHANGED', message: error.message }

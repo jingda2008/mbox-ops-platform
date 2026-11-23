@@ -126,6 +126,26 @@ const adminUrl=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.T
       const foreign=await tx.query(operatingHistorySummariesSql,[scope.tenantId,randomUUID(),'2026-01-01','2026-01-01'])
       expect(foreign.rows[0]?.summary).toMatchObject({orderCount:0,orderAmountMinor:'0'})
       console.info(JSON.stringify({check:'scoped-finance-summaries',orders:count+2,ms:Math.round(performance.now()-started)}))
+      // SQL functions use a generic plan. EXPLAIN the function body itself to
+      // detect repeated scans even on machines where the clock limit still passes.
+      const definition=await tx.query<{prosrc:string}>("SELECT prosrc FROM pg_proc WHERE oid='mbox.operating_day_summaries(uuid,uuid,date,date)'::regprocedure")
+      const body=definition.rows[0]!.prosrc.replaceAll('p_tenant','$1').replaceAll('p_store','$2').replaceAll('p_start','$3').replaceAll('p_end','$4')
+      await tx.query("SET LOCAL plan_cache_mode=force_generic_plan")
+      await tx.query("SET LOCAL jit=off")
+      await tx.query('PREPARE report_scope_plan(uuid,uuid,date,date) AS '+body)
+      try{
+        type Node = {Plans?:Node[];'CTE Name'?:string;'Actual Rows':number;'Actual Loops':number;'Rows Removed by Filter'?:number}
+        const plan=await tx.query<{'QUERY PLAN':{Plan:Node}[]}>(`EXPLAIN (ANALYZE, FORMAT JSON, TIMING OFF)
+          EXECUTE report_scope_plan(mbox.current_tenant_id(),mbox.current_store_id(),'2026-01-01','2026-01-01')`)
+        const scanned=(node:Node):number=>{
+          const own=node['CTE Name']==='window_orders'?node['Actual Loops']*(node['Actual Rows']+(node['Rows Removed by Filter']??0)):0
+          return own+(node.Plans??[]).reduce((n,child)=>n+scanned(child),0)
+        }
+        const visits=scanned(plan.rows[0]!['QUERY PLAN'][0]!.Plan)
+        expect(visits).toBeGreaterThanOrEqual(count+2)
+        expect(visits).toBeLessThan((count+2)*20)
+        console.info(JSON.stringify({check:'day-summary-window-scans',orders:count+2,rowsVisited:visits}))
+      }finally{await tx.query('DEALLOCATE report_scope_plan')}
     },{readOnly:true,isolation:'repeatable-read'})
   },60000)
 })

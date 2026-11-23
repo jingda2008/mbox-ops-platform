@@ -7,6 +7,11 @@ import type { ScopedTransaction } from './transaction-runner.js'
 export async function releaseUnusedChannelDiscounts(tx:ScopedTransaction,visitId:string){
  const scope=[tx.scope.tenantId,tx.scope.storeId]
  await tx.query(`SELECT pg_advisory_xact_lock(hashtextextended('table-customer-movement:'||$1::text||':'||$2::text,0))`,scope)
+  const cancelled=await tx.query(`SELECT 1 FROM mbox.channel_activations a
+    JOIN mbox.channel_price_applications p ON (p.tenant_id,p.store_id,p.activation_id)=(a.tenant_id,a.store_id,a.id)
+    JOIN mbox.orders o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.order_id)
+    WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.visit_id=$3 AND o.status='cancelled' LIMIT 1`,[...scope,visitId])
+  if(!cancelled.rows.length)return
   // Only a completely cancelled, never-paid, never-made order can return its
   // discount hold. A return after payment/production keeps used L and its cap.
   const rows=(await tx.query<{quote_id:string;activation_id:string;order_id:string;amount_minor:string}>(`SELECT p.quote_id,p.activation_id,p.order_id,p.amount_minor::text

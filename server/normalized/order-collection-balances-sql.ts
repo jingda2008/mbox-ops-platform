@@ -21,16 +21,21 @@ export const orderCollectionBalancesCtesSql = `
   ), collection_delivered AS (
     SELECT order_id,sum(total_amount_minor) amount FROM mbox.order_items
     WHERE tenant_id=$1 AND store_id=$2 AND status='delivered' GROUP BY order_id
+  ), revised_orders AS (
+    SELECT order_id FROM mbox.ticket_dining_collections WHERE tenant_id=$1 AND store_id=$2
+    UNION SELECT order_id FROM mbox.tab_points_requests WHERE tenant_id=$1 AND store_id=$2 AND state='applied'
   ), collection_balances AS MATERIALIZED (
     SELECT o.*,o.total_amount_minor AS original_minor,COALESCE(p.amount,0)::bigint AS received_minor,
-      COALESCE(CASE WHEN debt.eligibility='confirmed' THEN debt.receivable_minor END,o.total_amount_minor-COALESCE(a.amount,0))::bigint AS effective_minor,
+      CASE WHEN revised.order_id IS NOT NULL OR debt.eligibility='confirmed' THEN mbox.order_financial_receivable_amount(o.tenant_id,o.store_id,o.id)
+        ELSE (o.total_amount_minor-COALESCE(a.amount,0))::bigint END AS effective_minor,
       debt.eligibility AS carryover_eligibility,
       COALESCE(a.adjustment_count,0)::bigint AS adjustment_count,
-      CASE WHEN ${carryoverDebtSql('o')} THEN ${orderCollectionDueSql('o')} WHEN (CASE WHEN o.status='cancelled' THEN COALESCE(d.amount,0)
+      CASE WHEN revised.order_id IS NOT NULL OR debt.order_id IS NOT NULL THEN ${orderCollectionDueSql('o')} WHEN (CASE WHEN o.status='cancelled' THEN COALESCE(d.amount,0)
         ELSE o.total_amount_minor-COALESCE(a.amount,0) END)
         -COALESCE(p.amount,0)+COALESCE(r.amount,0)>0
         THEN ${orderCollectionDueSql('o')} ELSE 0 END AS amount
     FROM mbox.orders o
+    LEFT JOIN revised_orders revised ON revised.order_id=o.id
     LEFT JOIN collection_receipts p ON p.order_id=o.id
     LEFT JOIN collection_refunds r ON r.order_id=o.id
     LEFT JOIN collection_adjustments a ON a.order_id=o.id

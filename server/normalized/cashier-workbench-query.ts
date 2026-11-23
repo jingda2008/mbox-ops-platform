@@ -10,7 +10,6 @@ import {canonicalTableCode} from '../../src/shared/table-code-alias.js'
 import {historyTableIdSql} from './history-table-filter.js'
 import {approvedFailedRefundReservesSql} from './refund-attempt-sql.js'
 import {fullyWaivedQuantityItemSql,unreservedOrderExcessSql} from './quantity-late-capture-refund.js'
-import { orderReceivableSql } from './order-collection-sql.js'
 import type {
   CashierPaymentMethod as PaymentMethod,
   CashierPaymentProvider as PaymentProvider,
@@ -336,7 +335,7 @@ export class PostgresCashierWorkbenchQuery {
           ),'[]'::jsonb) AS closable_unpresented_payments,
           dining.id AS ticket_dining_id,dining.amount_minor AS ticket_dining_minor,
           orders.amount AS persistent_due_minor,
-          orders.total_amount_minor, ${orderReceivableSql('orders')} AS effective_amount_minor, orders.currency,
+          orders.total_amount_minor, orders.effective_minor AS effective_amount_minor, orders.currency,
           CASE WHEN ${carryoverDebtSql('orders')} THEN orders.amount
             ELSE mbox.order_collection_due_amount_for_mode(orders.tenant_id,orders.store_id,orders.id,true) END AS collection_due_minor,
           orders.submitted_at::text, orders.created_at::text,

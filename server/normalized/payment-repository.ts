@@ -1,4 +1,4 @@
-import {pendingTicketDining} from './pending-ticket-dining.js'
+import {pendingTicketDining,ticketDiningAvailableSql} from './pending-ticket-dining.js'
 import {creditTableTicketGifts} from './table-ticket-gifts.js'
 import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
 import { orderHasPendingTableCreditSql, unpostedCaptureSql, verifiedCaptureSql } from './verified-capture-sql.js'
@@ -143,6 +143,7 @@ interface PaymentRow extends Record<string, unknown> {
 }
 
 interface OrderRow extends Record<string, unknown> {
+  ticket_dining_available?:boolean
   pending_table_credit?:boolean
   id: string
   table_session_id: string
@@ -494,7 +495,7 @@ export class PaymentRepository {
     // on collection. The order lock and confirmed settlement still bound new attempts.
     const dueMinor = toSafeMinor(settlement.collection_due_minor, 'collectible balance')
     if(dueMinor<=0)throw new OrderNotPayableError(order.id,'the order has no outstanding balance')
-    const dining=await pendingTicketDining(this.transaction,order.id)
+    const dining=order.ticket_dining_available?await pendingTicketDining(this.transaction,order.id):null
     const supplementMinor=dining?toSafeMinor(dining.amount_minor,'confirmed dining supplement'):null
     const outstandingMinor = input.amountMinor??supplementMinor??dueMinor
     if(supplementMinor!==null && outstandingMinor!==supplementMinor)throw new PaymentEvidenceError('请按会员确认的原菜品补款金额单独收款')
@@ -1564,6 +1565,7 @@ export class PaymentRepository {
   private async lockOrder(orderId: string): Promise<OrderRow> {
     const result = await this.transaction.query<OrderRow>(`
       SELECT id, table_session_id, total_amount_minor, currency, status,
+        ${ticketDiningAvailableSql} AS ticket_dining_available,
         ${orderHasPendingTableCreditSql} AS pending_table_credit
       FROM mbox.orders
       WHERE tenant_id = $1::uuid

@@ -1,4 +1,4 @@
-import {hasTicketDiningReceipts} from './pending-ticket-dining.js'
+import {ticketDiningAvailableSql} from './pending-ticket-dining.js'
 import {sessionMoneySql} from './session-money-sql.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {pendingTabReviewSql} from './carryover-tab-review.js'
@@ -268,13 +268,13 @@ export class PostgresCashierWorkbenchQuery {
     )
     const canUseActivityCashier = (input.collectionScope??'workbench')==='workbench'&&input.capabilities.includes('community.activity.cashier')
     return this.transactions.run(input.scope, async (transaction) => {
-      const ticketDiningAvailable=await hasTicketDiningReceipts(transaction)
       // Statistics refreshes can push this RLS-heavy interactive read above
       // JIT's cost threshold, spending seconds compiling a millisecond query.
       // SET LOCAL restores pooled connections on both commit and rollback.
       await transaction.query('SET LOCAL jit = off')
       const refundApprovalLimits=input.capabilities.includes('refund.approve')?await readRefundApprovalLimits(transaction,input.employeeId):{}
-      const schema=(await transaction.query<{present:boolean;direct:boolean}>("SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct")).rows[0]
+      const schema=(await transaction.query<{present:boolean;direct:boolean;ticket_dining:boolean}>(`SELECT to_regclass('mbox.order_carryover_reviews') IS NOT NULL AS present, to_regprocedure('mbox.employee_can_collect_carryover(uuid,uuid,uuid,uuid)') IS NOT NULL AS direct, ${ticketDiningAvailableSql} AS ticket_dining`)).rows[0]
+      const ticketDiningAvailable=schema?.ticket_dining===true
       const reviewSchema=schema?.present===true
       const directCollectionSchema=schema?.direct===true
       const pendingReview=reviewSchema?pendingTabReviewSql('orders'):'false'

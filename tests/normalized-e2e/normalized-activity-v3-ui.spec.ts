@@ -259,7 +259,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
 test('收银在原案核定票款，收齐后的独立复核状态自动显示',async({page})=>{
   const ticket='7ea70994-95da-47d6-bcdb-57894a6dbeef'
   const row={id:ticket,ordinal:1,quantity:1,orderNo:'TT500',name:'A 区整桌票',memberNo:'M001',maskedPhone:'****0001',priceMinor:50000,
-    giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
+    personalRefundClosed:true,giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
     caseId:null as string|null,caseStatus:null as string|null,plannedRefundMinor:null as number|null,refundId:null as string|null,cashStatus:null as string|null}
   let manualSubmissions=0
   await page.route('**/api/staff/activity-operations/ticket-refund-preview?*',route=>route.fulfill({json:{data:[row]}}))
@@ -274,6 +274,11 @@ test('收银在原案核定票款，收齐后的独立复核状态自动显示',
   await page.getByLabel('查找收银订单').fill(ticket)
   await page.getByRole('button',{name:'查找',exact:true}).click()
   const desk=page.getByRole('region',{name:'整桌门票退票办理'})
+  await expect(desk.getByText(/本票已验票入场/)).toBeVisible()
+  await expect(desk.getByRole('button',{name:'受理本票退票'})).toHaveCount(0)
+  row.personalRefundClosed=false
+  await desk.getByRole('button',{name:'刷新原案'}).click()
+  await desk.getByLabel('退票原因').selectOption('customer')
   await desk.getByLabel('办理依据').fill('依据原单条款全额退票')
   await desk.getByLabel('按原条款核定退票款（元）').fill('500')
   await desk.getByRole('button',{name:'受理本票退票'}).click()

@@ -206,7 +206,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
   it('checks verified membership and capacity, then grants once per paid ticket on retry',async()=>{
     const v=(await run(tx=>ticketOfferCatalog(tx,activity)))[0]?.version??0
     const offer=await run(tx=>saveTicketOffer(tx,activity,employee,{...offerInput,expectedVersion:Number(v)}))
-    const buy=(quantity:number)=>run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity,safetyVersion:'activity-safety-v1',refundVersion:'activity-refund-v1'},randomUUID(),randomUUID(),randomUUID(),protection))
+    const terms=(await run(publicTableTickets)).find(row=>row.id===offer.id)!
+    expect(terms.refundSchedule).toContain('首次验票入场后')
+    await expect(run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,safetyVersion:terms.safetyVersion,refundVersion:'activity-refund-v1'},randomUUID(),randomUUID(),randomUUID(),protection))).rejects.toMatchObject({code:'TICKET_OFFER_CHANGED'})
+    const buy=(quantity:number)=>run(tx=>buyTableTickets(tx,customer,{offerId:offer.id,quantity,safetyVersion:'activity-safety-v1',refundVersion:terms.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection))
     await expect(buy(1)).rejects.toMatchObject({code:'TICKET_MEMBERSHIP_PHONE_REQUIRED'})
     const phone=protection.protectPhone('+8613800000000')
     await runner.run(scope,tx=>tx.query(`INSERT INTO mbox.customer_verified_contacts(tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,encrypted_value,
@@ -409,6 +412,12 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await run(tx=>admitTicketBatch(tx,first.id,first.door_code,2,employee,admissionKey))
       await run(tx=>admitTicketBatch(tx,first.id,first.door_code,1,employee,randomUUID()))
       expect((await admin.query('SELECT sum(quantity)::int n FROM mbox.ticket_admission_batches WHERE ticket_id=$1',[first.id])).rows[0].n).toBe(3)
+      expect((await run(tx=>ticketRefundPreview(tx,first.id)))[0]).toMatchObject({personalRefundClosed:true})
+      expect((await run(tx=>ticketRefundPreview(tx,second.id)))[0]).toMatchObject({personalRefundClosed:false})
+      await expect(run(tx=>requestTicketRefund(tx,first.registration_id,first.id,customer,'入场后个人退票'))).rejects.toMatchObject({code:'TICKET_ALREADY_ADMITTED'})
+      // Exercise the existing seating, dining and refund flows with a pre-policy purchase.
+      await admin.query(`UPDATE mbox.community_activity_registrations SET refund_policy_snapshot=
+        (refund_policy_snapshot-'personalRefundUntil') || jsonb_build_object('schedule','按购票时公示的原规则办理') WHERE id=$1`,[first.registration_id])
       let release!:()=>void,readyToSeat!:(pid:number)=>void
       const hold=new Promise<void>(resolve=>{release=resolve})
       const locked=new Promise<number>(resolve=>{readyToSeat=resolve})
@@ -979,7 +988,8 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await admin.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'BOX','卡座','indoor')",[...args,extra])
     await admin.query("INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity) SELECT $1,$2,$3,'BOX'||n,'卡座'||n,6 FROM generate_series(1,3) n",[...args,extra])
     const offer=await run(tx=>saveTicketOffer(tx,activity,employee,{...offerInput,areaId:extra}))
-    const sale=await run(tx=>buyTableTickets(tx,buyer,{offerId:offer.id,quantity:2,safetyVersion:'activity-safety-v1',refundVersion:'activity-refund-v1'},randomUUID(),randomUUID(),randomUUID(),protection))
+    const terms=(await run(publicTableTickets)).find(row=>row.id===offer.id)!
+    const sale=await run(tx=>buyTableTickets(tx,buyer,{offerId:offer.id,quantity:2,safetyVersion:'activity-safety-v1',refundVersion:terms.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection))
     const pay=(await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id='twotix-'||id,succeeded_at=clock_timestamp() WHERE activity_registration_id=$1 RETURNING id,succeeded_at",[sale.id])).rows[0]
     await run(tx=>new PaymentRepository(tx).syncActivityRegistrationPaymentStatus({id:pay.id,activityRegistrationId:sale.id,payableKind:'activity_registration',amountMinor:100000,succeededAt:pay.succeeded_at.toISOString(),status:'succeeded'}))
     const tickets=(await admin.query('SELECT id,point_lot_id FROM mbox.table_tickets WHERE registration_id=$1 ORDER BY ordinal',[sale.id])).rows
@@ -1419,7 +1429,8 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await admin.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'MATRIX','卡座','indoor')",[...args,extra])
     await admin.query("INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity) SELECT $1,$2,$3,'MATRIX'||n,'卡座'||n,6 FROM generate_series(1,3) n",[...args,extra])
     const offer=await run(tx=>saveTicketOffer(tx,activity,employee,{...offerInput,areaId:extra,giftPoints:150}))
-    const sale=await run(tx=>buyTableTickets(tx,buyer,{offerId:offer.id,quantity:2,safetyVersion:'activity-safety-v1',refundVersion:'activity-refund-v1'},randomUUID(),randomUUID(),randomUUID(),protection))
+    const terms=(await run(publicTableTickets)).find(row=>row.id===offer.id)!
+    const sale=await run(tx=>buyTableTickets(tx,buyer,{offerId:offer.id,quantity:2,safetyVersion:'activity-safety-v1',refundVersion:terms.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection))
     const pay=(await admin.query("UPDATE mbox.payments SET status='succeeded',provider_transaction_id='twotix-'||id,succeeded_at=clock_timestamp() WHERE activity_registration_id=$1 RETURNING id,succeeded_at",[sale.id])).rows[0]
     await run(tx=>new PaymentRepository(tx).syncActivityRegistrationPaymentStatus({id:pay.id,activityRegistrationId:sale.id,payableKind:'activity_registration',amountMinor:100000,succeededAt:pay.succeeded_at.toISOString(),status:'succeeded'}))
     const tickets=(await admin.query('SELECT id,point_lot_id FROM mbox.table_tickets WHERE registration_id=$1 ORDER BY ordinal',[sale.id])).rows
@@ -2027,7 +2038,11 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await tx.query('SAVEPOINT sold_rights')
       const code=(await tx.query('SELECT door_code FROM mbox.table_tickets WHERE id=$1',[first.id])).rows[0].door_code
       expect(await admitTicketBatch(tx,first.id,code,1,employee,randomUUID())).toMatchObject({quantity:1})
-      expect(await requestTicketRefund(tx,order.id,first.id,customer,'已停售的原票办理售后')).toMatchObject({status:'review',consumedMinor:0})
+      expect((await ticketRefundPreview(tx,first.id))[0]).toMatchObject({personalRefundClosed:true})
+      await expect(requestTicketRefund(tx,order.id,first.id,customer,'个人原因')).rejects.toMatchObject({code:'TICKET_ALREADY_ADMITTED'})
+      const merchant=await requestTicketRefund(tx,order.id,first.id,customer,'门店取消演出',undefined,true)
+      await expect(submitTicketCashRefund(tx,merchant.caseId,employee,50000,null)).rejects.toMatchObject({code:'TICKET_ALREADY_ADMITTED'})
+      expect(await submitTicketCashRefund(tx,merchant.caseId,employee,50000,'门店取消演出')).toHaveProperty('refundId')
       await tx.query('ROLLBACK TO SAVEPOINT sold_rights')
       const expiry=new ReservationHoldExpiryWorker({run:(_scope,fn)=>fn(tx)})
       expect((await expiry.runBatch(scope,'paid-not-yet-ended')).noShowReservationIds).not.toContain(reservation)

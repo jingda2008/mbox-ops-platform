@@ -194,7 +194,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(page.data.busy, false)
   })
 
-  for (const outcome of ['GUEST_CHECKOUT_NOT_FOUND', 'cancelled', 'NETWORK_ERROR']) {
+  if (platform === 'alipay-miniprogram') for (const outcome of ['GUEST_CHECKOUT_NOT_FOUND', 'cancelled', 'NETWORK_ERROR']) {
     check(`05 matching abandonment clears only known terminal results (${outcome})`, async () => {
       const { page, state, session } = setup('account', { abandonGuestCheckout: async () => {
         if (outcome === 'cancelled') return { operationalState: 'cancelled' }
@@ -357,7 +357,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     assert.equal(page.data.error, 'new-table-message')
   })
 
-  for (const differentTable of [false, true]) {
+  if (platform === 'alipay-miniprogram') for (const differentTable of [false, true]) {
     for (const outcome of ['GUEST_CHECKOUT_NOT_FOUND', 'GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_ORDER_ACCESS_FORBIDDEN', 'cancelled']) {
       check(`05 old abandonment preserves new recovery records (${differentTable ? 'new' : 'same'} table, ${outcome})`, async () => {
         const post = deferred()

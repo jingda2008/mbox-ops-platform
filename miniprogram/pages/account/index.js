@@ -1,16 +1,14 @@
 const { beginMemberPage } = require('../../utils/member-pagination')
 const {isPresentableWechatJsapiAction}=require('../../utils/wechat-payment')
-const { getTableOrders, getCustomerOrderHistory, payTableOrders, abandonGuestCheckout } = require('../../utils/api')
+const { getTableOrders, getCustomerOrderHistory, payTableOrders } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
-const { getTableSession, tableSessionCacheScope } = require('../../utils/session')
+const { parseScanValue, getTableSession, tableSessionCacheScope } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { randomId } = require('../../utils/id')
 const { money, dateTime } = require('../../utils/format')
 const { customerErrorMessage } = require('../../utils/customer-error')
 const {
   PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
-  createGuestPaymentAbandonmentRecord,
-  isRetryableGuestPaymentAbandonment,
 } = require('../../utils/guest-payment-abandonment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
@@ -43,15 +41,15 @@ const PAYMENT_STATUS = {
 
 Page({
   data: {
-    historyMode: false,
+    historyMode: false, readFailed: false,
     loading: true,
     error: '',
     isDevelopment: false,
     tableCode: '',
     orders: [],
-    outstandingText: '¥0.00', settlementReviewCount: 0,
+    outstandingText: '', settlementReviewCount: 0,
     busyOrderId: '', selectedPublicIds:[], selectedTotalText:'¥0.00', payingBatch:false,
-    success: '',
+    pendingBatch: false, originalAmountText: '', canResumeBatch: false, success: '',
   },
 
   onLoad(options) {
@@ -63,13 +61,9 @@ Page({
 
   onShow() { this.loadData() },
   onHide() {
-    const record = this.queuePendingGuestPaymentAbandonment()
-    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
   },
   onUnload() {
-    const record = this.queuePendingGuestPaymentAbandonment()
-    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
   },
 
@@ -105,62 +99,28 @@ Page({
     return stored
   },
 
-  queuePendingGuestPaymentAbandonment() {
-    if (this.historyMode) return null
-    const paymentScope = tableSessionCacheScope()
-    const pending = this.clearForeignPendingPayment(paymentScope)
-    const record = createGuestPaymentAbandonmentRecord(
-      pending,
-      paymentScope,
-      (orderPublicId) => randomId(`guest-checkout-abandon-${orderPublicId}`),
-    )
-    if (!record) return null
-    wx.setStorageSync(PENDING_PAYMENT_KEY, Object.assign({}, pending, {
-      abandonmentIdempotencyKey: record.idempotencyKey,
-    }))
-    wx.setStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY, record)
-    return record
-  },
-
-  async executePendingGuestPaymentAbandonment(record) {
-    if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
-      return this._guestPaymentAbandonmentPromise || null
-    }
-    this._guestPaymentAbandonmentInFlight = record.idempotencyKey
-    const execution = abandonGuestCheckout(record.orderPublicId, record.idempotencyKey)
-      .then((result) => {
-        if (result && result.operationalState === 'cancelled') {
-          this.clearCompletedGuestPaymentAbandonment(record)
+  retryRead() { return this.loadData() },
+  rescanTable() {
+    const scope = tableRequestScope(getTableSession())
+    const stillOnBill = () => getCurrentPages().slice(-1)[0] === this && scope === tableRequestScope(getTableSession())
+    wx.scanCode({
+      onlyFromCamera: true, scanType: ['qrCode', 'wxCode'],
+      success: result => {
+        if (!stillOnBill()) return
+        try {
+          const query = parseScanValue(result.path || result.result)
+          if (!query.token && !query.tableToken) throw new Error('桌码无效')
+          getApp().refreshRuntime({query, forceTableScan: true})
+          wx.switchTab({url: '/pages/order/index'})
+        } catch (_) { this.setData({error: '请扫描桌面的点单码。'}) }
+      },
+      fail: error => {
+        if (stillOnBill() && !String(error.errMsg || '').includes('cancel')) {
+          this.setData({error: '未能扫码，请再试一次。'})
         }
-        return result || null
-      })
-      .catch((error) => {
-        if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
-          this.clearCompletedGuestPaymentAbandonment(record)
-        }
-        return null
-      })
-    this._guestPaymentAbandonmentPromise = execution
-    try { return await execution }
-    finally {
-      if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
-        this._guestPaymentAbandonmentInFlight = null
-        this._guestPaymentAbandonmentPromise = null
-      }
-    }
+      },
+    })
   },
-
-  clearCompletedGuestPaymentAbandonment(record) {
-    const stored = wx.getStorageSync(PENDING_PAYMENT_KEY)
-    if (stored && stored.orderPublicId === record.orderPublicId
-      && stored.tableScope === record.tableScope) wx.removeStorageSync(PENDING_PAYMENT_KEY)
-    const persisted = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-    if (persisted && persisted.idempotencyKey === record.idempotencyKey
-      && persisted.orderPublicId === record.orderPublicId && persisted.tableScope === record.tableScope) {
-      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-    }
-  },
-
   loadMoreHistory() {
     if (this.data.loading || !this.data.hasMoreHistory || !this.data.orders.length) return
     return this.loadData(true, this.data.orders[this.data.orders.length - 1].publicId)
@@ -174,13 +134,13 @@ Page({
     const batchAtRead = this.historyMode ? null : wx.getStorageSync(batchKey)
     const scopeChanged = this.visibleTableScope !== request.scope
     this.visibleTableScope = request.scope
-    if (scopeChanged) this.batchPaymentOperation = null
+    if (scopeChanged) { this.batchPaymentOperation = null; this.hasReadBill = false }
     if (!this.historyMode) this.clearForeignPendingPayment(paymentScope)
     this.setData(Object.assign({
-      loading: true, error: '', tableCode: session.tableCode || '',
+      loading: true, readFailed: false, error: '', tableCode: session.tableCode || '',
     }, scopeChanged ? {
-      orders: [], outstandingText: '¥0.00', settlementReviewCount: 0, busyOrderId: '',
-      payingBatch: false, selectedPublicIds: [], selectedTotalText: '¥0.00',
+      orders: [], outstandingText: '', settlementReviewCount: 0, busyOrderId: '',
+      payingBatch: false, pendingBatch: false, originalAmountText: '', canResumeBatch: false, selectedPublicIds: [], selectedTotalText: '¥0.00',
     } : {}, this.historyMode && !before ? { orders: [], hasMoreHistory: false } : {}, preserveMessage ? {} : { success: '' }))
     try {
       const acceptPage = this.historyMode ? beginMemberPage(this, 'history', before) : null
@@ -195,7 +155,7 @@ Page({
         const currentBatch = wx.getStorageSync(batchKey)
         if (currentBatch && currentBatch.key === batchAtRead.key) wx.removeStorageSync(batchKey)
       }
-      const storedAbandonment = this.historyMode ? null : wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
+      if (!this.historyMode && wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)) wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
       const storedPending = this.historyMode ? null : this.clearForeignPendingPayment(paymentScope)
       const storedOrder = storedPending && (rawOrders || []).find((item) => item.publicId === storedPending.orderPublicId)
       if (storedPending && storedOrder && storedOrder.payableAmountMinor === 0 && storedOrder.paymentAccess === 'not_required') {
@@ -239,67 +199,86 @@ Page({
           statusText: item.progressText || ITEM_STATUS[item.status] || '出品状态待确认',
         })),
       }))
-      const selectedPublicIds=orders.filter(order=>order.canPay).map(order=>order.publicId)
+      const journal = this.historyMode ? null : wx.getStorageSync(batchKey)
+      const originalIds = journal && Array.isArray(journal.ids) ? journal.ids : []
+      const originalOrders = orders.filter(order => originalIds.includes(order.publicId))
+      const originalAvailable = originalIds.length > 0 && originalOrders.length === originalIds.length
+      const originalAmount = originalOrders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
+      const originalAmountText = journal && Number.isSafeInteger(journal.amountMinor) ? money(journal.amountMinor) : ''
+      const canResumeBatch = originalAvailable && originalOrders.every(order => order.canPay || order.paymentAccess === 'payment_in_progress')
+        && (!Number.isSafeInteger(journal.amountMinor) || journal.amountMinor === originalAmount)
+      const payableIds = orders.filter(order => order.canPay).map(order => order.publicId)
+      let selectedPublicIds = payableIds
+      if (journal) selectedPublicIds = originalIds
+      else if (batchAtRead) selectedPublicIds = []
+      else if (!scopeChanged && this.hasReadBill && !this.historyMode) selectedPublicIds = payableIds.filter(id => this.data.selectedPublicIds.includes(id))
+      this.hasReadBill = true
       orders.forEach(order=>{order.selected=selectedPublicIds.includes(order.publicId)})
       const outstanding = orders.reduce((sum, order) => sum + order.payableAmountMinor, 0)
       const nextOrders = before ? this.data.orders.concat(orders.filter(order => !this.data.orders.some(current => current.publicId === order.publicId))) : orders
-      this.setData({ loading: false, orders: nextOrders, settlementReviewCount: orders.filter(order => order.paymentAccess === 'status_review').length, selectedPublicIds, selectedTotalText:money(outstanding), hasMoreHistory: this.historyMode && rawOrders.length === 30, outstandingText: money(outstanding) })
-      const abandonmentOrder = storedAbandonment
-        && storedAbandonment.tableScope === paymentScope
-        && (rawOrders || []).find((item) => item.publicId === storedAbandonment.orderPublicId)
-      if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
-        void this.executePendingGuestPaymentAbandonment(storedAbandonment)
-      } else if (storedAbandonment) {
-        wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-      }
+      this.setData({ loading: false, orders: nextOrders, settlementReviewCount: orders.filter(order => order.paymentAccess === 'status_review').length, selectedPublicIds, pendingBatch: Boolean(journal), originalAmountText, canResumeBatch,
+        ...(batchAtRead && !journal ? {success: '上次所选订单已无待付金额。'} : {}),
+        selectedTotalText:money(orders.filter(order => order.selected).reduce((sum, order) => sum + order.payableAmountMinor, 0)), hasMoreHistory: this.historyMode && rawOrders.length === 30, outstandingText: money(outstanding) })
     } catch (error) {
       if (this.isCurrentTableRequest(request)) {
         if (error.memberPageOwnerChanged) this.setData({ orders: [], hasMoreHistory: false })
-        this.setData({ loading: false, error: customerErrorMessage(error, '桌账载入失败') })
+        const readFailed = !before || !this.data.orders.length
+        this.setData({
+          loading: false, readFailed,
+          ...(readFailed ? {orders: [], outstandingText: '', selectedPublicIds: [], hasMoreHistory: false} : {}),
+          error: customerErrorMessage(error, this.historyMode ? '订单暂时无法读取' : '桌账暂时无法读取'),
+        })
       }
     }
   },
 
   togglePaymentOrder(event){
-    if(this.data.payingBatch)return
+    if(this.data.payingBatch || this.data.pendingBatch)return
     const id=event.currentTarget.dataset.id
     const ids=this.data.selectedPublicIds.includes(id)?this.data.selectedPublicIds.filter(value=>value!==id):this.data.selectedPublicIds.concat(id)
     const orders=this.data.orders.map(order=>Object.assign({},order,{selected:ids.includes(order.publicId)}))
     this.setData({orders,selectedPublicIds:ids,selectedTotalText:money(orders.filter(order=>order.selected).reduce((sum,order)=>sum+order.payableAmountMinor,0))})
   },
   async paySelectedOrders(){
-    if(this.historyMode||this.data.payingBatch||!this.data.selectedPublicIds.length)return
+    if(this.historyMode||this.data.readFailed||this.data.loading||this.data.payingBatch||!this.data.selectedPublicIds.length)return
     const scope=tableSessionCacheScope(),ids=this.data.selectedPublicIds.slice().sort()
     const storageKey='mbox.table-batch-attempt:'+scope
     let attempt=wx.getStorageSync(storageKey)
     if(attempt && (!Array.isArray(attempt.ids) || typeof attempt.key !== 'string' || attempt.key.length < 8 || JSON.stringify(attempt.ids)!==JSON.stringify(ids))){
-      this.setData({error:'原付款结果尚未确认，请先选择原订单核对或联系服务人员；不能覆盖原付款请求。'})
+      this.setData({error:'上次付款的结果还未确认，请选择原订单查看，或联系服务员核对。'})
       return
     }
-    if(!attempt)attempt={ids,key:randomId('table-batch')}
+    if (this.data.pendingBatch && !attempt) return this.loadData()
+    if (this.data.pendingBatch && !this.data.canResumeBatch) return
+    if (!attempt) {
+      const amountMinor = (this.data.orders || []).filter(order => ids.includes(order.publicId)).reduce((sum, order) => sum + order.payableAmountMinor, 0)
+      attempt = {ids, key: randomId('table-batch'), amountMinor}
+    }
     wx.setStorageSync(storageKey,attempt)
     const operation = this.batchPaymentOperation = {}
     const ownsOperation = () => this.batchPaymentOperation === operation && scope === tableSessionCacheScope()
-    this.setData({payingBatch:true,error:'',success:''})
+    this.setData({payingBatch:true, pendingBatch:true, originalAmountText:Number.isSafeInteger(attempt.amountMinor) ? money(attempt.amountMinor) : '', canResumeBatch:false, error:'',success:''})
     try{
       const action=await payTableOrders(ids,attempt.key)
       if(!ownsOperation())return
       // Only an authoritative resolved payment ends the recovery journal.
       if(action && action.status==='resolved'){
         wx.removeStorageSync(storageKey)
-        this.setData({selectedPublicIds:[],selectedTotalText:money(0),success:'已恢复原付款结果，请核对最新桌账。'})
+        const paymentEnded = ['closed','failed'].includes(action.terminalPaymentStatus)
+        this.setData({selectedPublicIds:[], selectedTotalText:money(0), pendingBatch:false, canResumeBatch:false, originalAmountText:'',
+          success:paymentEnded ? '上次付款未成功，原订单保留。请核对待付金额。' : '已恢复原付款结果，请核对最新桌账。'})
         try { await this.loadData(true) } catch (_error) {
           if(ownsOperation())this.setData({error:'原付款结果已找到，最新桌账暂未读到，请刷新核对。'})
         }
         return
       }
       if(!isPresentableWechatJsapiAction(action)){
-        this.setData({error:action&&action.status==='failed'?'本次支付未能打开，请重试或联系员工收款':'本次支付结果尚未确认，可联系员工继续收款；后台会核对实际到账。'})
+        this.setData({error:action&&action.status==='failed'?'本次支付未能打开，请重试或联系员工收款':'付款结果还未确认，请刷新桌账或联系服务员核对，避免重复付款。'})
         return
       }
       await new Promise((resolve,reject)=>wx.requestPayment(Object.assign({},action.payload,{success:resolve,fail:reject})))
       if(ownsOperation()){this.setData({success:'支付操作已完成，金额以到账核对结果为准。'});await this.loadData(true)}
-    }catch(error){if(ownsOperation())this.setData({error:error&&/cancel/i.test(error.errMsg||'')?'已取消本次支付，原订单保留。':customerErrorMessage(error,'本次结果未确认，请重试同次请求或联系员工收款')})}
+    }catch(error){if(ownsOperation())this.setData({error:error&&/cancel/i.test(error.errMsg||'')?'已取消本次支付，原订单保留。':customerErrorMessage(error,'付款结果还未确认，请查看桌账或联系服务员核对，避免重复付款')})}
     finally{
       if(this.batchPaymentOperation === operation){this.batchPaymentOperation = null;this.setData({payingBatch:false})}
     }
@@ -309,7 +288,7 @@ Page({
     if (outstanding <= 0 || access === 'not_required') return '本轮已结清'
     if (access === 'staff_collecting') return '工作人员正在收款，请勿重复支付'
     if (access === 'payment_in_progress') return '同桌已有支付进行中，请稍候刷新'
-    if (access === 'status_review') return '支付结果待通道核对，请勿再次支付'
+    if (access === 'status_review') return '付款结果还在确认，请勿重复付款'
     return '本单尚有待付金额，可请有收款权限的员工直接收款'
   },
 })

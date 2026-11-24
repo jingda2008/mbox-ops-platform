@@ -198,6 +198,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       <button type="button" disabled={busy} onClick={()=>void loadReferences()}>从往期公示带入</button>
       {references.length>0 && <label>选择参考场次<select value={referenceId} onChange={e=>applyReference(e.target.value)}><option value="">选择场次</option>{references.map(r=><option value={r.id} key={r.id}>{r.title} · {localTime(r.starts_at).replace('T',' ')}</option>)}</select></label>}
       <form ref={ruleForm} key={area.terms?.version??0} onSubmit={e=>{e.preventDefault();void saveRules(e.currentTarget)}}>
+        <p>本票首次验票入场后不支持个人原因退票。请填写入场前适用的退票时段和费用。</p>
         {ruleFields.map(([field,column,label])=><label key={field}>{label}<input disabled={busy} name={field} required type={field==='durationMinutes'?'number':'text'} defaultValue={String(area.terms?.[column]??'')}/></label>)}
         <label><input disabled={busy} type="checkbox" name="named" value="yes" defaultChecked={area.terms?.requires_named_attendees===true}/>本场要求逐人实名</label>
         <button disabled={busy}>确认资料并保存本场版本</button></form></details>}{canPublish && !ownDraft && reviewable.length>0 && <fieldset><legend>本场待复核票档</legend>

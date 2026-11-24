@@ -16,6 +16,7 @@ const CHECKOUT_ATTEMPT_KEY = 'mbox.pending.guest.checkout.v1'
 for (const platform of ['miniprogram', 'alipay-miniprogram']) {
   test(`${platform} never awaits prior order release to review a separate cart`, async () => {
     const source=await readFile(new URL(`../${platform}/pages/order/index.js`,import.meta.url),'utf8')
+    if (platform==='miniprogram') {assert.doesNotMatch(source,/abandonGuestCheckout|queuePendingGuestPaymentAbandonment/);return}
     const start=source.indexOf('  async handlePendingPaymentBeforeCheckout() {')
     const end=source.indexOf('\n  async openCheckout()',start)
     assert.ok(start>=0&&end>start)
@@ -38,6 +39,10 @@ function guestPaymentAbandonmentModule(platform = 'miniprogram') {
 for (const client of ['miniprogram', 'alipay-miniprogram']) {
   test(client + ' preserves payments under review, including old queued exits', () => {
     const policy = loadMiniModule(new URL('../' + client + '/utils/guest-payment-abandonment.js', import.meta.url))
+    if (client === 'miniprogram') {
+      assert.deepEqual(Object.keys(policy), ['PENDING_GUEST_PAYMENT_ABANDONMENT_KEY'])
+      return
+    }
     const pending = { tableScope: 'scope', orderPublicId: 'test-order-0001', checkoutKind: 'guest_immediate_payment' }
     for (const state of ['result_unknown', 'recovered_from_bill', 'presenting']) {
       assert.equal(policy.createGuestPaymentAbandonmentRecord({ ...pending, paymentPresentationState: state }, 'scope', () => 'abandon-key'), null)
@@ -697,7 +702,7 @@ test('Order renders only the server-owned three questions and sends exactly thos
   }])
 })
 
-test('Order cancels a legacy pending checkout instead of retrying its old payment', async () => {
+test('Leaving a legacy pending checkout retains its original order', async () => {
   const paymentScope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
   const wrongTable = Object.assign(new Error('wrong table'), { code: 'GUEST_ORDER_ACCESS_FORBIDDEN', statusCode: 409 })
   const state = {
@@ -714,14 +719,10 @@ test('Order cancels a legacy pending checkout instead of retrying its old paymen
   }
   state.storage.set(PENDING_PAYMENT_KEY, pending)
   page.setData({ pendingPayment: pending })
-  await page.handlePendingPaymentBeforeCheckout()
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  page.onHide()
+  assert.equal(calls.abandonGuestCheckout.length, 0)
+  assert.equal(state.storage.get(PENDING_PAYMENT_KEY), pending)
 
-  assert.equal(calls.abandonGuestCheckout.length, 1)
-  assert.equal(calls.abandonGuestCheckout[0].orderPublicId, 'order-abandon-0001')
-  assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
-  assert.equal(page.data.pendingPayment, null)
-  assert.equal(page.data.error, '')
 })
 
 test('an unknown checkout result stays pending when the customer leaves the order page', async () => {
@@ -742,54 +743,14 @@ test('an unknown checkout result stays pending when the customer leaves the orde
   assert.equal(state.storage.get(PENDING_PAYMENT_KEY).paymentPresentationState, 'result_unknown')
 })
 
-for (const failure of ['slow', 'rejected']) {
-  test(`Order permits a fresh cart while previous payment release is ${failure}, retaining its financial recovery`, async () => {
-    const scope = 'cache.session:fixed-token:cart-scope-for-turn-b-000000002'
-    const release = deferred()
-    const state = {
-      session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
-      resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002', storage: new Map(),
-      ...(failure === 'slow' ? { abandonCheckoutDeferred: release } : { abandonCheckoutError: Object.assign(new Error('channel unavailable'), { code: 'GUEST_CHECKOUT_CANNOT_BE_CANCELLED' }) }),
-    }
-    const { page, calls } = await loadOrderPage(state)
-    await page.preparePage()
-    const pending = { orderPublicId: 'order-recovery-0001', retryIdempotencyKey: 'retry-recovery-0001', tableScope: scope, checkoutKind: 'guest_immediate_payment', paymentPresentationState: 'cancelled' }
-    state.storage.set(PENDING_PAYMENT_KEY, pending)
-    page.setData({ pendingPayment: pending })
-    const allowed = await Promise.race([page.handlePendingPaymentBeforeCheckout(), new Promise(resolve => setTimeout(() => resolve('blocked'), 50))])
-    assert.equal(allowed, false)
-    assert.equal(calls.abandonGuestCheckout.length, 1)
-    assert.equal(calls.checkoutSharedCart.length, 0)
-    assert.equal(calls.requestPayment.length, 0)
-    assert.equal(state.storage.get(PENDING_PAYMENT_KEY).orderPublicId, pending.orderPublicId)
-    assert.equal(page.data.checkoutLocked, false)
-    assert.equal(page.data.error, '')
-    if (failure === 'slow') {
-      release.resolve({ operationalState: 'cancelled', paymentState: 'reconciliation_pending' })
-      await new Promise(resolve => setTimeout(resolve, 0))
-      assert.equal(state.storage.get(PENDING_PAYMENT_KEY), undefined)
-    }
-  })
-}
-
-test('A late terminal payment release cannot remove another table recovery record', async () => {
-  const release = deferred()
-  const state = {
-    session: { tableCode: '', tableToken: 'fixed-token', scanNonce: 'scan-b' },
-    resolvedTableCode: 'VIP1', resolvedCartScope: 'cart-scope-for-turn-b-000000002', storage: new Map(),
-    abandonCheckoutDeferred: release,
-  }
-  const { page } = await loadOrderPage(state)
-  await page.preparePage()
-  const original = { orderPublicId: 'order-old-scope', tableScope: 'old-scope', idempotencyKey: 'release-old-scope' }
-  const execution = page.executePendingGuestPaymentAbandonment(original)
-  const current = { orderPublicId: 'order-new-scope', tableScope: 'new-scope', idempotencyKey: 'release-new-scope' }
-  state.storage.set('mbox.pending.guest.payment.abandon.v1', current)
-  state.storage.set(PENDING_PAYMENT_KEY, { orderPublicId: current.orderPublicId, tableScope: current.tableScope })
-  release.reject(Object.assign(new Error('old order ended'), { code: 'GUEST_CHECKOUT_ALREADY_PAID' }))
-  await execution
-  assert.deepEqual(state.storage.get('mbox.pending.guest.payment.abandon.v1'), current)
-  assert.equal(state.storage.get(PENDING_PAYMENT_KEY).orderPublicId, current.orderPublicId)
+test('reopening a bill discards an obsolete cancellation instruction without cancelling the ordered goods', async () => {
+  const session = {tableCode:'VIP1', tableToken:'fixed-token', cartScope:'cart-scope-for-turn-b-000000002'}
+  const legacyKey = 'mbox.pending.guest.payment.abandon.v1'
+  const state = {session, storage:new Map([[legacyKey,{orderPublicId:'previous'}]]), orderReads:[{promise:Promise.resolve([])}]}
+  const page = await loadAccountPage(state,'miniprogram')
+  page.onLoad({})
+  await page.loadData()
+  assert.equal(state.storage.has(legacyKey), false)
 })
 
 test('Account drops an A pending-payment record and late A orders after a B table switch', async () => {
@@ -868,7 +829,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     assert.equal(page.data.orders[0].canPay, false)
     assert.match(page.data.orders[0].paymentHint, /保留原桌订单/)
     assert.equal(page.data.orders[0].roundText, '原桌号未留存')
-    assert.equal(page.queuePendingGuestPaymentAbandonment(), null)
+    if (platform==='alipay-miniprogram') assert.equal(page.queuePendingGuestPaymentAbandonment(), null)
     page.onHide()
     assert.equal(state.storage.get('mbox.pending.guest.payment.v1'), pending)
   })
@@ -1239,4 +1200,22 @@ test('WeChat home table scan does not wait for optional homepage content', async
   await loading
   assert.equal(page.data.table.code, 'A01')
   assert.equal(state.guestSessionReads, 1)
+})
+
+test('微信桌账读取失败时清空金额和付款选择，重试成功才能显示零余额',async()=>{
+  const first=deferred(), failed=deferred(), recovered=deferred()
+  const state={session:{tableCode:'A1',tableToken:'fixed-token'},storage:new Map(),orderReads:[first,failed,recovered]}
+  const page=await loadAccountPage(state)
+  page.onLoad()
+  first.resolve([{publicId:'order-A',status:'submitted',payableAmountMinor:100,paymentAccess:'available',items:[]}])
+  await page.loadData()
+  assert.equal(page.data.selectedPublicIds.length,1)
+  const next=page.loadData()
+  failed.reject(Error('expired'));await next
+  assert.equal(page.data.readFailed,true)
+  assert.equal(page.data.outstandingText,'')
+  assert.equal(page.data.selectedPublicIds.length,0)
+  recovered.resolve([]);await page.retryRead()
+  assert.equal(page.data.readFailed,false)
+  assert.equal(page.data.outstandingText,'¥0')
 })

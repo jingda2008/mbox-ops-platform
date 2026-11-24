@@ -161,7 +161,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/refund-request',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorized(options,request,['refund.request'])
     const body=object(request.body,'退票')
-    const result=await options.service.openStaffTicketRefund(ctx,uuid(request.params.id,'票号'),text(body.reason,'退票原因',2,500),idempotencyKey(request),body.previewVersion===undefined?undefined:text(body.previewVersion,'核算版本',64,64),body.refundAmountMinor===undefined?undefined:integer(body.refundAmountMinor,'拟退票款',1,2147483647))
+    const result=await options.service.openStaffTicketRefund(ctx,uuid(request.params.id,'票号'),text(body.reason,'退票原因',2,500),idempotencyKey(request),body.previewVersion===undefined?undefined:text(body.previewVersion,'核算版本',64,64),body.refundAmountMinor===undefined?undefined:integer(body.refundAmountMinor,'拟退票款',1,2147483647),body.cause==='merchant')
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.get('/staff/activity-operations/ticket-rule-references',async(request,reply)=>handle(reply,async()=>{

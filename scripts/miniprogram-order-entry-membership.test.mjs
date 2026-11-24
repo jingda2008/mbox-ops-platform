@@ -4,51 +4,26 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { fixture, deferred } = require('./miniprogram-state-fixture.cjs')
-const phoneModule = { exports: {} }
-vm.runInNewContext(readFileSync(new URL('../miniprogram/utils/wechat-phone.js', import.meta.url), 'utf8'), {module:phoneModule})
-const phoneReader = phoneModule.exports
-const phone = { detail: { code: 'native-phone-proof' } }
-const verified = { status: 'active', publicId: 'CVC' + '1'.repeat(32) }
-function tabFixture(overrides = {}) {
+const { fixture } = require('./miniprogram-state-fixture.cjs')
+function tabFixture() {
   let definition
-  const routes = [], storage = new Map(), phoneCalls = []
+  const routes = []
   const page = {route:'pages/home/index',data:{},setData(patch){Object.assign(this.data,patch)}}
-  const api = { getMiniBootstrap: async () => ({ membership: null }), getVerifiedPhones: async () => [], replaceVerifiedPhone: async code => { phoneCalls.push(code); return verified }, ...overrides }
-  const wx = { getWindowInfo:()=>({screenHeight:844,safeArea:{bottom:810}}), getStorageSync: key => storage.get(key), setStorageSync: (key,value) => storage.set(key,value), switchTab: ({url}) => routes.push(url), showToast() {} }
+  const wx = { getWindowInfo:()=>({screenHeight:844,safeArea:{bottom:810}}), switchTab:({url})=>routes.push(url) }
   vm.runInNewContext(readFileSync(new URL('../miniprogram/custom-tab-bar/index.js', import.meta.url), 'utf8'), {
     Component: value => definition = value, getCurrentPages: () => [page], wx,
-    require: name => ({'../utils/api':api,'../utils/wechat-phone':phoneReader,'../utils/customer-error':{customerErrorMessage:(_e,fallback)=>fallback},'../config/index':{getRuntimeConfig:()=>({membershipInviteCooldownHours:24})}})[name],
   })
   const bar = { ...definition.methods, data: structuredClone(definition.data), setData(patch) { Object.assign(this.data,patch) } }
-  return {bar,definition,routes,storage,phoneCalls,api,page,wx}
+  return {bar,routes,page,wx}
 }
-test('menu tab uses native phone button only for known unverified nonmembers', async () => {
-  const h = tabFixture(); await h.bar.refresh('/pages/home/index'); assert.equal(h.bar.data.needsPhone,true)
-  for (const api of [{getMiniBootstrap:async()=>({membership:{memberNo:'123456'}})},{getVerifiedPhones:async()=>[verified]},{getMiniBootstrap:async()=>{throw Error('offline')}}]) {
-    const other=tabFixture(api); await other.bar.refresh(); assert.equal(other.bar.data.needsPhone,false)
-    other.bar.switchTab({currentTarget:{dataset:{index:2}}}); assert.deepEqual(other.routes,['/pages/order/index'])
-  }
-})
-test('native phone acceptance saves only phone and then enters menu', async () => {
-  const h=tabFixture(); await h.bar.refresh(); await h.bar.authorizeAndOrder(phone)
-  assert.deepEqual(h.phoneCalls,['native-phone-proof']); assert.deepEqual(h.routes,['/pages/order/index']); assert.equal(h.bar.data.needsPhone,false)
-})
-test('phone denial still enters menu without phone or membership writes and cools down', async () => {
-  const h=tabFixture(); await h.bar.refresh(); await h.bar.authorizeAndOrder({detail:{errMsg:'getPhoneNumber:fail user deny'}})
-  assert.deepEqual(h.phoneCalls,[]); assert.deepEqual(h.routes,['/pages/order/index']); await h.bar.refresh(); assert.equal(h.bar.data.needsPhone,false)
-})
-test('failed phone verification never blocks ordering; duplicate callbacks save once', async () => {
-  const pending=deferred(); let calls=0; const h=tabFixture({replaceVerifiedPhone:()=>{calls++;return pending.promise}})
-  const first=h.bar.authorizeAndOrder(phone); await h.bar.authorizeAndOrder(phone); pending.reject(Error('offline')); await first
-  assert.equal(calls,1); assert.deepEqual(h.routes,['/pages/order/index']); assert.equal(h.bar.data.busy,false)
-})
-test('stale identity cannot restore a phone prompt on a detached tab', async () => {
-  const pending=deferred(); const h=tabFixture({getMiniBootstrap:()=>pending.promise}); const reading=h.bar.refresh()
-  h.definition.lifetimes.detached.call(h.bar); pending.resolve({membership:null}); await reading; assert.equal(h.bar.data.needsPhone,false)
+test('menu tab opens directly without checking or requesting a phone', () => {
+  const {bar,routes}=tabFixture()
+  bar.refresh()
+  bar.switchTab({currentTarget:{dataset:{index:2}}})
+  assert.deepEqual(routes,['/pages/order/index'])
 })
 function orderFixture() {
-  const h=fixture('order'); h.page.setData({membershipStatus:'nonmember',membershipTerms:{version:1},menuPhoneStatus:'verified'})
+  const h=fixture('order'); h.page.setData({membershipStatus:'nonmember',membershipTerms:{version:1}})
   h.page.loadCheckoutUpgrade=()=>{}; return h
 }
 test('membership invitation opens on submit order, not entering menu or selecting dishes', async () => {
@@ -77,9 +52,9 @@ test('cart review route still offers membership before final payment and stale r
   h.wx.navigateTo=()=>{};h.page.joinFromCheckout();h.page.onHide();h.state.session={tableCode:'W21',tableToken:'other',cartScope:'other'};h.page.beginTableRequest();h.page.preparePage=async()=>{}
   await h.page.onShow();assert.equal(h.page.data.checkoutConfirmVisible,false);assert.equal(h.state.calls.length,0)
 })
-test('custom tab keeps explicit native authorization and five real navigation targets', () => {
+test('custom tab keeps five direct navigation targets', () => {
   const app=JSON.parse(readFileSync(new URL('../miniprogram/app.json',import.meta.url)));assert.equal(app.tabBar.custom,true);assert.equal(app.tabBar.list.length,5)
-  const markup=readFileSync(new URL('../miniprogram/custom-tab-bar/index.wxml',import.meta.url),'utf8');assert.match(markup,/open-type="getPhoneNumber" bindgetphonenumber="authorizeAndOrder"/)
+  const markup=readFileSync(new URL('../miniprogram/custom-tab-bar/index.wxml',import.meta.url),'utf8');assert.match(markup,/bindtap="switchTab"/);assert.doesNotMatch(markup,/getPhoneNumber/)
 })
 
 test('rapid submit taps cannot stack checkout under the membership invitation', async () => {

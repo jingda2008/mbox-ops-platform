@@ -10,6 +10,8 @@ const TITLE_NAMES = {
   loyalty_points_reversed: '积分变动提醒',
   loyalty_points_expiring: '积分到期提醒',
   activity_registration_confirmed: '活动报名结果提醒',
+  activity_performance_starting: '演出开场提醒',
+  activity_schedule_changed: '演出变更提醒',
   member_benefit_issued: '优惠券到账提醒',
   membership_tier_changed: '会员等级提醒',
 }
@@ -46,7 +48,7 @@ Page({
           templateId: item.templateId,
           authorizationVersion: item.authorizationVersion,
           title: TITLE_NAMES[item.notificationType] || '服务提醒',
-          statusText: banned ? '当前微信暂不支持' : usable ? '已准备好' : item.decision === 'granted' ? '下次操作时会再次确认' : '将在相关操作时由微信询问',
+          statusText: banned ? '当前微信暂不支持' : usable ? '已准备好' : item.decision === 'granted' ? '下次操作时会再次确认' : '',
         }
       })
       this.setData({ loading: false, options, official, error: errors.join('；') })

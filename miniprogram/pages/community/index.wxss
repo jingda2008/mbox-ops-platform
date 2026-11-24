@@ -317,3 +317,12 @@
   overflow-y: auto;
   padding-bottom: 34rpx;
 }
+
+.ticket-show { margin: 0 0 12rpx; border: 1rpx solid #d3dfd4; border-radius: 18rpx; overflow: hidden; background: #fff; }
+.page.page .ticket-show-head, .ticket-tier { box-sizing: border-box; display: flex; min-height: 48px; width: 100%; margin: 0; padding: 15rpx 20rpx; align-items: center; justify-content: space-between; gap: 14rpx; text-align: left; line-height: 1.45; }
+.page.page .ticket-show-head { background: #e6eee7; color: #214a37; border-radius: 0; }
+.ticket-show-head::after { border: 0; }
+.show-title, .tier-name { display: block; font-size: 27rpx; font-weight: 650; }
+.show-time { display: block; font-size: 23rpx; color: #56685c; }
+.show-link, .tier-price { flex: none; font-size: 24rpx; color: #27543d; }
+.ticket-tier { border-top: 1rpx solid #e2e7df; }

@@ -22,7 +22,7 @@ export type ActivityPaymentAllowedAction =
 
 export type ActivityRefundRequestBlockReason =
   | 'legacy_registration' | 'payment_not_refundable' | 'registration_not_active'
-  | 'rights_used' | 'active_addons' | 'refund_in_progress' | 'compensation_review_required'
+  | 'contact_store' | 'rights_used' | 'active_addons' | 'refund_in_progress' | 'compensation_review_required'
 
 export interface PublicActivityPaymentState {
   registrationPublicId: string
@@ -71,6 +71,7 @@ interface ActivityPaymentRow extends Record<string, unknown> {
   refund_status: string | null
   refund_public_id: string | null
   refund_decision_reason: string | null
+  staff_handles_order: boolean
   service_version: number
   service_refund_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
   refund_rights_used: boolean
@@ -358,6 +359,7 @@ async function ownedActivityPayment(
       provider_action.state AS provider_action_state,
       latest_refund.status AS refund_status, latest_refund.public_id AS refund_public_id,
       latest_refund.decision_reason AS refund_decision_reason,
+      (registration.service_version IN (3,4) OR registration.purchase_kind IS NOT NULL OR registration.fee_amount_minor > 0) AS staff_handles_order,
       registration.service_version, registration.service_refund_disposition,
       EXISTS (
         SELECT 1 FROM mbox.activity_admission_batches batch
@@ -462,7 +464,7 @@ async function staffActivityPayment(
 function view(row: Readonly<ActivityPaymentRow>): PublicActivityPaymentState {
   const resolutionState = resolution(row)
   const refundRequestBlockReason = fullRefundRequestBlockReason(row)
-  const cancellable = Date.parse(row.activity_starts_at) > Date.now()
+  const cancellable = !row.staff_handles_order && Date.parse(row.activity_starts_at) > Date.now()
     && ['not_required', 'action_required', 'pending', 'failed'].includes(resolutionState)
   const allowedActions: ActivityPaymentAllowedAction[] = resolutionState === 'action_required'
     ? ['start_payment', ...(cancellable ? ['cancel_registration' as const] : [])]
@@ -506,7 +508,7 @@ function fullRefundRequestBlockReason(row: Readonly<ActivityPaymentRow>): Activi
   if (row.refund_rights_used) return 'rights_used'
   if (row.refund_active_addons) return 'active_addons'
   if (row.refund_amount_reserved) return 'refund_in_progress'
-  return null
+  return row.staff_handles_order ? 'contact_store' : null
 }
 
 function resolution(row: Readonly<ActivityPaymentRow>): ActivityPaymentResolutionState {

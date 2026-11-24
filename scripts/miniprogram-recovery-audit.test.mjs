@@ -299,3 +299,69 @@ test('桌票首次明确余量不足可减桌重试，丢回执后保持原购�
  await assert.rejects(resumed.api.buyTableTickets({...intent,quantity:1},'one-desk'))
  assert.deepEqual(resumed.calls.map(c=>c.headers['idempotency-key']),['original-buy'])
 })
+
+test('用券复查桌次时核对信息已变化，发送绑定前停止',async()=>{
+  const f=fixture(async()=>({data:{data:{status:'active'}}}))
+  await assert.rejects(f.api.activateChannelCoupon('second',false,()=>false),/重新核对/)
+  assert.equal(f.calls.filter(call=>call.path.includes('/channel/activate')).length,0)
+})
+
+test('refresh or reopen restores just the original batch and never initiates payment', async () => {
+ const requests = []
+ let settled = false
+ const rows = ['first','second'].map((publicId,i) => ({publicId, round:i+1, status:'confirmed', paymentAccess:'available', payableAmountMinor:(i+1)*4000}))
+ const {page:p} = pageFixture('account', {
+   getTableOrders: async () => rows.map(r => settled && r.publicId==='first' ? {...r,paymentAccess:'not_required',payableAmountMinor:0} : r),
+   payTableOrders: async (ids,key) => { requests.push({ids:Array.from(ids),key}); if(requests.length===1) throw Error('timeout'); settled=true; return {status:'resolved'} },
+ })
+ p.onLoad({})
+ await p.loadData()
+ p.togglePaymentOrder({currentTarget:{dataset:{id:'second'}}})
+ await p.paySelectedOrders()
+ await p.loadData()
+ assert.deepEqual(Array.from(p.data.selectedPublicIds), ['first'])
+ assert.equal(p.data.canResumeBatch, true)
+ assert.match(p.data.originalAmountText,/40/)
+ p.togglePaymentOrder({currentTarget:{dataset:{id:'second'}}})
+ assert.equal(requests.length,1)
+ await p.paySelectedOrders()
+ assert.deepEqual(requests[1], requests[0])
+ assert.equal(p.data.pendingBatch,false)
+ assert.equal(p.data.selectedPublicIds.length,0)
+})
+
+test('registration history can retry an unavailable refund read without losing the paid receipt', async () => {
+ let offline=true
+ const row={publicId:'registration-4',activityTitle:'活动',paymentStatus:'paid'}
+ const {page}=pageFixture('profile-activities',{
+   getActivityRegistrationHistory:async()=>({items:[row]}),
+   getActivityRegistrationPayment:async()=>{if(offline)throw Error('timeout');return {refundStatus:'processing'}},
+ })
+ page.onLoad({id:row.publicId});await page.load()
+ assert.equal(page.data.selected.payment,'付款已确认')
+ assert.equal(page.data.selected.progressUnavailable,true)
+ offline=false
+ await page.retry()
+ assert.equal(page.data.selected.id,row.publicId)
+ assert.equal(page.data.selected.progress,'退款处理中')
+})
+
+test('reservations retry the identical time and party before advancing', async () => {
+ const requests=[]
+ const {page}=pageFixture('reservations',{getReservationAvailability:async(...args)=>{
+   requests.push(args);if(requests.length===1)throw Error('timeout');return {acceptingReservations:true}
+ }})
+ page.setData({step:1,reservationDate:'2026-12-25',reservationTime:'20:00',partySize:3})
+ await page.checkAvailability()
+ assert.equal(page.data.availabilityReadFailed,true)
+ await page.nextStep()
+ assert.deepEqual(requests[0],requests[1]);assert.equal(page.data.step,1)
+ page.nextStep()
+ assert.equal(page.data.step,2)
+})
+
+test('successful activity confirmation opens that registration even when the same event has other signups', async()=>{
+ const {page,state}=pageFixture('community-detail')
+ await page.showRegistrationOutcome({status:'confirmed',publicId:'registration-9'})
+ assert.equal(state.calls.find(([action])=>action==='navigate')[1].url,'/pages/profile-activities/index?id=registration-9')
+})

@@ -28,7 +28,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     page.chooseChannels({detail:{value:['sms']}});await page.submit();assert.equal(calls.length,0)
     page.acknowledge({detail:{value:['agree']}});await page.submit()
     assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['choices',{noticeId:'notice',expectedRevision:'none',choices:[{channel:'sms',purpose:'own_activities',decision:'granted'}]}]])
-    assert.equal(page.data.channels[1].capabilityText,'渠道尚未开通，不代表已能发送')
+    assert.equal(page.data.channels[1].capabilityText,platform === 'miniprogram' ? '该联系渠道暂未开放' : '渠道尚未开通，不代表已能发送')
   })
   test(platform+': joint activities need a separate choice and reopening resets native checkbox state',async()=>{
     let body;const page=await harness(platform,undefined,async(_action,input)=>{body=input})

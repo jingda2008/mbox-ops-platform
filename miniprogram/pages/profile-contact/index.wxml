@@ -2,20 +2,20 @@
   <view class="contact-hero">
     <text>M-BOX · 联系我们</text>
     <text>联系我们</text>
-    <text>可直接拨打预约电话，或通过企业微信咨询。</text>
+    <text>可直接拨打门店电话，或通过企业微信咨询。</text>
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取联系信息" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view class="contact-actions">
-      <button class="contact-action" bindtap="callStore" hover-class="contact-action--hover">拨打预约电话</button>
+      <button class="contact-action" bindtap="callStore" hover-class="contact-action--hover">拨打门店电话</button>
       <button class="contact-action" bindtap="openCustomerService" hover-class="contact-action--hover">打开企业微信会话</button>
     </view>
-    <text class="contact-phone-hint">预约电话 {{contact.phone}}</text>
+    <text class="contact-phone-hint">门店电话 {{contact.phone}}</text>
     <view wx:if="{{contact.wecomQrImageUrl}}" class="wecom-card">
       <image src="{{contact.wecomQrImageUrl}}" mode="aspectFit" bindtap="previewWecomQr" />
       <view><text>{{contact.wecomName}}</text><text>点二维码可放大保存，再用企业微信扫码添加好友。</text></view>
     </view>
-    <text class="contact-boundary">若暂时打不开客服，可稍后再试或直接拨打预约电话。</text>
+    <text class="contact-boundary">若暂时打不开客服，可稍后再试或直接拨打门店电话。</text>
   </block>
 </view>

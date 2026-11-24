@@ -387,6 +387,24 @@ describe('customer experience activity contact API', () => {
     expect(response.body).not.toMatch(/contactHash|encryptedContact|encryptionKeyId|customerId/)
   })
 
+  it('looks up the full original registration using the signed-in customer context and exact ID', async () => {
+    const id = 'activity-registration-1234567890abcdef12345678'
+    const activityRegistrations = vi.fn(async () => [{publicId: id, purchaseKind: 'single_dish'}])
+    const app = activityRegistrationsFixture(activityRegistrations)
+    const response = await app.inject({method: 'GET', url: '/public/mini/activity-registrations?id=' + id})
+    expect(response.statusCode).toBe(200)
+    expect(activityRegistrations).toHaveBeenCalledWith(expect.objectContaining({customerId: expect.any(String)}), {id})
+    expect(response.json().data).toEqual([{publicId: id, purchaseKind: 'single_dish'}])
+  })
+
+  it('directs a sold activity order to staff before touching a payment or registration', async () => {
+    const id = 'activity-registration-0123456789abcdef'
+    const app = activityRegistrationsFixture(vi.fn(async () => [{publicId:id, serviceVersion:3}]))
+    const result = await app.inject({method:'POST',url:'/public/mini/activity-registrations/'+id+'/cancel',payload:{reason:'顾客取消'},headers:{'idempotency-key':'legacy-cancel-0001'}})
+    expect(result.statusCode).toBe(409)
+    expect(result.json().error.code).toBe('ORDER_CONTACT_STORE')
+  })
+
   it('exposes the fixed activity payment read, action and query contracts', async () => {
     const state = {
       registrationPublicId: 'activity-registration-api-test',

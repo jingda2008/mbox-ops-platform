@@ -19,11 +19,16 @@
         <text wx:for="{{selected.items}}" wx:key="index">{{item.name}} × {{item.quantity}}</text>
         <text wx:if="{{selected.note}}">备注　{{selected.note}}</text>
         <text>{{selected.payment}}</text>
+        <text wx:if="{{selected.progress && selected.progress !== selected.payment}}">{{selected.progress}}</text>
+        <block wx:if="{{selected.progressUnavailable}}">
+          <text>暂时查不到最新付款和退款进度。</text>
+          <button class="action progress-retry" bindtap="retry">重新查询进度</button>
+        </block>
         <text wx:if="{{selected.total}}">报名金额　{{selected.total}}</text>
         <text wx:if="{{selected.paid}}">已付金额　{{selected.paid}}</text>
         <text wx:if="{{selected.refund}}" class="description">报名时的退款约定　{{selected.refund}}</text>
       </view>
-      <navigator wx:if="{{selected.ticket}}" class="action" url="/pages/table-tickets/index">查看我的门票 ›</navigator>
+      <navigator wx:if="{{selected.ticket}}" class="action" url="/pages/table-tickets/index?view=mine">查看我的门票 ›</navigator>
       <navigator wx:elif="{{selected.liveUrl}}" class="action" url="{{selected.liveUrl}}">进入活动办理 ›</navigator>
     </block>
     <block wx:elif="{{!id}}">

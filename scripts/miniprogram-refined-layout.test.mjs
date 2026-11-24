@@ -141,10 +141,11 @@ test('category grid stays inside the screen and remains pinned while the menu sc
     const styles = await css(resolve(root,'miniprogram/app.wxss')) + await css(resolve(root,'miniprogram/pages/order/index.wxss'))
     for(const width of widths) for(const browse of [true,false]) {
       await page.setViewportSize({width,height:740})
-      const labels=['全部','套餐组合','鸡尾酒','啤酒','葡萄酒与起泡酒','威士忌与烈酒','小食与果盘','无酒精饮品']
-      await page.setContent(`<style>${reset}${scale(styles,width)} .order-scroll{overflow-y:auto}</style><page><view class="page order-page"><scroll-view class="order-scroll"><view class="order-scroll__content"><view style="height:180px">扫码提示或桌台信息</view><view class="menu-tools ${browse?'menu-tools--browse':''}"><view class="category-grid">${labels.map((x,i)=>'<button class="category-chip '+(!i?'is-active':'')+'">'+x+'</button>').join('')}</view><view class="menu-filter-line"><button class="subcategory-trigger"><view class="menu-filter-surface">细分类 ⌄</view></button><button class="menu-search-trigger"><view class="menu-filter-surface">⌕ 搜索</view></button></view></view><view style="height:1800px">菜品列表</view></view></scroll-view></view></page>`)
+      const labels=['全部','门票','套餐组合','11月限定鸡尾酒','鸡尾酒','威士忌','其他烈酒','鲜果与冷食','啤酒','软饮']
+      await page.setContent(`<style>${reset}${scale(styles,width)} .order-scroll{overflow-y:auto}</style><page><view class="page order-page"><scroll-view class="order-scroll"><view class="order-scroll__content"><view style="height:180px">扫码提示或桌台信息</view><view class="menu-tools ${browse?'menu-tools--browse':''}"><view class="category-grid">${labels.map((x,i)=>'<button class="category-chip '+(!i?'is-active':'')+'">'+x+'</button>').join('')}</view><view class="menu-filter-line"><button class="subcategory-trigger"><view class="menu-filter-surface">细分类 ⌄</view></button><view class="search-box"><view class="menu-search-icon"></view><input placeholder="搜索菜品、门票或场次"><button class="menu-search-clear">清除</button></view></view></view><view style="height:1800px">菜品列表</view></view></scroll-view></view></page>`)
       inside(await geometry(page,'button'),width,'category/'+width)
-      for(const selector of ['.subcategory-trigger','.menu-search-trigger']) {
+      {
+        const selector = '.subcategory-trigger'
         const style = await page.locator(selector + ' .menu-filter-surface').evaluate(n=>{
           const s=getComputedStyle(n);return {font:parseFloat(s.fontSize),border:parseFloat(s.borderTopWidth),background:s.backgroundColor}
         })
@@ -156,10 +157,14 @@ test('category grid stays inside the screen and remains pinned while the menu sc
       }
       const grid = await page.locator('.category-grid').boundingBox()
       const detailButton = await page.locator('.subcategory-trigger').boundingBox()
-      const searchButton = await page.locator('.menu-search-trigger').boundingBox()
+      const searchBox = await page.locator('.search-box').boundingBox()
       assert.ok(detailButton.width < width * 0.5, 'short subcategory button must not stretch across the row')
-      assert.ok(searchButton.width < width * 0.25, 'search button should fit its label')
-      assert.ok(grid.height < 130, 'collapsed grid remains compact')
+      assert.equal(searchBox.height, 34)
+      assert.ok((await page.locator('.search-box input').boundingBox()).height >= 44)
+      assert.ok(searchBox.width > width / 2 && Math.abs(searchBox.y + searchBox.height / 2 - detailButton.y - detailButton.height / 2) < 2, 'search input shares the row with the category filter')
+      const lastCategory = await page.getByRole('button', {name:'软饮', exact:true}).boundingBox()
+      assert.ok(lastCategory.y > grid.y && lastCategory.y + lastCategory.height <= grid.y + grid.height + 1, 'last row fits inside the expanded category grid')
+      assert.ok(searchBox.y >= lastCategory.y + lastCategory.height - 1, 'search sits below every category')
       await page.locator('.order-scroll').evaluate(n=>{n.scrollTop=450})
       const bar=await page.locator('.menu-tools').boundingBox()
       assert.ok(Math.abs(bar.y)<2,'category bar must stick to scroll viewport')
@@ -184,7 +189,8 @@ test('compact pre-scan strip fits narrow screens and preserves a reachable scan 
       await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page order-page">${strip}</view></page>`)
       inside(await geometry(page, 'button'), width, 'scan/' + width)
       const box = await page.locator('.browse-intro--compact').boundingBox()
-      assert.ok(box.height <= 100, 'scan prompt must not become a hero')
+      assert.ok(box.height <= 52, 'keep the two-line scan banner compact')
+      assert.ok((await page.locator('.gate-button').boundingBox()).height >= 44, 'preserve the scan tap target')
     }
   } finally { await browser.close() }
 })

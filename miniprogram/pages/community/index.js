@@ -20,9 +20,25 @@ const PAYMENT_RESOLUTION_NAMES = {
   failed: '付款失败', expired: '付款已超时', refund_requested: '退款申请确认中', refunding: '退款处理中', refunded: '已退款',
 }
 
+function recommendedShows(offers) {
+  const shows = new Map()
+  for (const offer of offers) {
+    if (offer.recommendInCommunity !== true) continue
+    const id = offer.activityPublicId || offer.activityId || offer.id
+    if (!shows.has(id)) {
+      shows.set(id, { id, name: offer.title || offer.name, time: activityTimeText(offer), offers: [] })
+    }
+    shows.get(id).offers.push({
+      id: offer.id, name: offer.name, price: money(offer.priceMinor), giftPoints: offer.giftPoints,
+      saleText: offer.saleState === 'upcoming' ? '待开售' : offer.saleState === 'ended' ? '已停售' : offer.remaining === 0 ? '已售完' : '',
+    })
+  }
+  return Array.from(shows.values())
+}
+
 Page({
   data: {
-    loading: true, error: '', activities: [], ticketOffers: [],
+    loading: true, error: '', activities: [], ticketShows: [], expandedShow: '',
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
     pendingActivityId: '',
@@ -33,7 +49,7 @@ Page({
   onUnload() { this.clearMemberRead() },
   clearMemberRead() {
     this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ activities: [], ticketOffers: [], membership: null, membershipTerms: null, membershipInviteVisible: false,
+    this.setData({ activities: [], ticketShows: [], expandedShow: '', membership: null, membershipTerms: null, membershipInviteVisible: false,
       membershipInviteBusy: false, membershipInviteAgreed: false, pendingActivityId: '', loading: false })
   },
 
@@ -53,7 +69,7 @@ Page({
 
   async load() {
     const generation = this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ loading: true, error: '', activities: [], ticketOffers: [], membership: null, membershipTerms: null })
+    this.setData({ loading: true, error: '', activities: [], ticketShows: [], expandedShow: '', membership: null, membershipTerms: null })
     try {
       const [rawActivities, rawRegistrations, bootstrap, offers] = await Promise.all([
         getActivities(),
@@ -85,17 +101,18 @@ Page({
       this.setData({
         loading: false,
         activities,
-        ticketOffers: offers.filter(o=>o.recommendInCommunity===true).map(o=>({
-          id:o.id,name:o.name,price:money(o.priceMinor),giftPoints:o.giftPoints,
-          time:activityTimeText(o),area:o.areaName,
-          saleText:o.saleState==='upcoming'?'预告':o.saleState==='ended'?'已停售':o.remaining===0?'已售完':'查看门票',
-        })),
+        ticketShows: recommendedShows(offers),
         membership: bootstrap.membership || null,
         membershipTerms: bootstrap.membershipTerms || null,
         membershipInviteVisible: false,
         membershipInviteAgreed: false,
       })
     } catch (error) { if (generation === this.readGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '活动或会员服务暂时没有接上') }) }
+  },
+
+  toggleShow(event) {
+    const id = event.currentTarget.dataset.id
+    this.setData({ expandedShow: this.data.expandedShow === id ? '' : id })
   },
 
   openDetail(event) {

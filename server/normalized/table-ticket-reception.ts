@@ -122,6 +122,10 @@ export async function admitTicketBatch(tx:ScopedTransaction,ticketId:string,code
       AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('cancelled','rejected'))
     FOR UPDATE OF a,k`,[...args,code])).rows[0]
   if(!k)throw new ActivityOperationsError('请核对客人出示的本场票码、已排桌号及售后状态','TICKET_DOOR_INVALID',409)
+  // Re-read after taking the ticket lock if a refund transaction was ahead of us.
+  const refund=await tx.query(`SELECT 1 FROM mbox.table_ticket_refund_requests
+    WHERE tenant_id=$1 AND store_id=$2 AND ticket_id=$3 AND status NOT IN('cancelled','rejected')`,args)
+  if(refund.rowCount)throw new ActivityOperationsError('该票正在办理售后，请核对原案','TICKET_DOOR_INVALID',409)
   const previous=(await tx.query<{quantity:number}>('SELECT quantity FROM mbox.ticket_admission_batches WHERE tenant_id=$1 AND store_id=$2 AND ticket_id=$3 AND request_key=$4',[...args,key])).rows[0]
   if(previous)return {id:ticketId,quantity:previous.quantity}
   const counts=(await tx.query<{total:number}>(`SELECT (

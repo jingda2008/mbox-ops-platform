@@ -16,6 +16,16 @@
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取活动" />
   <state-panel wx:elif="{{error}}" type="error" title="活动暂时无法读取" message="{{error}}" action-text="重新加载" bindaction="load" />
   <block wx:else>
+    <view wx:if="{{ticketOffers.length}}" class="activity-section-head"><text>推荐演出门票</text></view>
+    <view wx:if="{{ticketOffers.length}}" class="activity-list">
+      <navigator wx:for="{{ticketOffers}}" wx:key="id" class="activity-card" url="/pages/table-tickets/index?id={{item.id}}">
+        <view class="activity-card__body">
+          <text class="activity-title">{{item.name}}</text>
+          <text class="activity-date">{{item.time}} · {{item.area}}</text>
+          <view class="activity-footer"><text class="activity-fee">{{item.price}}／桌<text wx:if="{{item.giftPoints}}"> · 赠{{item.giftPoints}}分</text></text><text>{{item.saleText}} ›</text></view>
+        </view>
+      </navigator>
+    </view>
     <view wx:if="{{activities.length}}" class="activity-section-head">
       <view><text>本期活动</text></view>
     </view>
@@ -47,7 +57,7 @@
       </view>
     </view>
 
-    <state-panel wx:if="{{!activities.length}}" type="empty" title="下一场正在准备" message="新活动会第一时间出现在这里" />
+    <state-panel wx:if="{{!activities.length && !ticketOffers.length}}" type="empty" title="下一场正在准备" message="新活动会第一时间出现在这里" />
   </block>
 
   <view wx:if="{{membershipInviteVisible}}" class="community-member-mask">

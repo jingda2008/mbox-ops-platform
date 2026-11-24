@@ -9,7 +9,9 @@ export interface DiningSplit { customerMinor:number; merchantMinor:number }
 
 const unavailable=(message:string)=>new ActivityOperationsError(message,'TICKET_DINING_REVIEW',409)
 
-export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
+export async function ticketDiningLines(tx:ScopedTransaction,id:string,lookup:'case'|'ticket'='case') {
+  const ticketMatch=lookup==='ticket'?'k.id=$3':`k.id=(SELECT f.ticket_id FROM mbox.table_ticket_refund_requests f
+    WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.id=$3)`
   return (await tx.query<{orderId:string;orderNo:string;portionId:string;productId:string;name:string;eligible:boolean;priceMinor:number;usedMinor:number;review:boolean}>(`
     SELECT link.order_id AS "orderId",o.public_id AS "orderNo",s.portion_id AS "portionId",q.product_id AS "productId",coalesce(original.product_snapshot->>'name',pr.name) AS name,
       (SELECT bool_and(i.loyalty_eligible_at_submission) FROM mbox.order_items i WHERE (i.tenant_id,i.store_id,i.order_id,i.product_id)=(o.tenant_id,o.store_id,o.id,q.product_id) AND i.parent_order_item_id IS NULL) AS eligible,
@@ -23,7 +25,7 @@ export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
            (original.purpose IS DISTINCT FROM 'service_compensation' AND (original.purpose IS DISTINCT FROM 'return_goods'
              OR y.amount_minor<>(SELECT coalesce(sum(i.amount_minor),0) FROM mbox.refund_items i
                WHERE (i.tenant_id,i.store_id,i.refund_id)=(y.tenant_id,y.store_id,y.id))))))) review
-    FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.id)=(f.tenant_id,f.store_id,f.ticket_id)
+    FROM mbox.table_tickets k
     JOIN mbox.checkout_point_portion_sources s ON (s.tenant_id,s.store_id)=(k.tenant_id,k.store_id) AND s.lot_id IN (SELECT mbox.ticket_spending_lots(k.tenant_id,k.store_id,k.point_lot_id))
     LEFT JOIN mbox.checkout_returned_sources(s.tenant_id,s.store_id,s.quote_id) ret ON (ret.portion_id,ret.lot_id)=(s.portion_id,s.lot_id)
     JOIN mbox.checkout_coupon_quote_lines q ON (q.tenant_id,q.store_id,q.quote_id,q.portion_id)=(s.tenant_id,s.store_id,s.quote_id,s.portion_id)
@@ -34,7 +36,7 @@ export async function ticketDiningLines(tx:ScopedTransaction,caseId:string) {
     LEFT JOIN mbox.checkout_portion_order_items mapped ON (mapped.tenant_id,mapped.store_id,mapped.quote_id,mapped.portion_id)=(s.tenant_id,s.store_id,s.quote_id,s.portion_id)
     LEFT JOIN mbox.order_items original ON original.id=mapped.order_item_id
     JOIN mbox.products pr ON (pr.tenant_id,pr.store_id,pr.id)=(q.tenant_id,q.store_id,q.product_id)
-    WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.id=$3 ORDER BY link.order_id,q.request_index,q.portion_id,s.lot_id`,[tx.scope.tenantId,tx.scope.storeId,caseId])).rows
+    WHERE k.tenant_id=$1 AND k.store_id=$2 AND ${ticketMatch} ORDER BY link.order_id,q.request_index,q.portion_id,s.lot_id`,[tx.scope.tenantId,tx.scope.storeId,id])).rows
 }
 
 // The proposal is not a receivable until the buyer confirms it on the original refund.

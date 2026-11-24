@@ -115,3 +115,16 @@
 .activity-operations-panel .activity-dish-options label{display:flex;flex-direction:row;gap:8px;align-items:center;flex-wrap:wrap;min-height:44px}
 .activity-operations-panel .activity-dish-options input[type=checkbox]{width:20px;min-width:20px;min-height:20px}
 .activity-operations-panel .activity-dish-options input[type=number]{width:72px;min-width:60px;min-height:44px;margin-left:auto}
+
+.activity-operations-detail { scroll-margin-top: 12rem; }
+.ticket-offer-editor { min-width: 0; }
+.ticket-offer-editor summary { min-height: 44px; align-content: center; cursor: pointer; }
+.ticket-offer-editor form { display: grid; gap: 10px; margin-block: 10px; }
+.ticket-offer-editor label { display: grid; gap: 4px; min-width: 0; }
+.ticket-offer-editor input:not([type="checkbox"]), .ticket-offer-editor select, .ticket-offer-editor textarea { box-sizing: border-box; width: 100%; min-width: 0; padding-inline: 8px; }
+.ticket-offer-editor .ticket-promotion, .ticket-offer-editor label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.ticket-offer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ticket-offer-editor p { overflow-wrap: anywhere; }
+.ticket-offer-editor textarea { font: inherit; padding-block: 6px; resize: vertical; }
+.ticket-draft-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(8rem,1fr)); gap:.6rem; align-items:end; grid-column:1/-1; border-top:1px solid #d9d9cb; padding:.6rem 0; }
+.ticket-draft-row label { min-width:0; }

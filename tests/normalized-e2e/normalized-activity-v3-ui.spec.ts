@@ -7,11 +7,13 @@ import type {ActivityDoorCommand,ActivityServiceView} from '../../src/shared/act
 
 const credential='MBOX_ACTIVITY_V3:browser-registration-v3:12345678-1234-4234-8234-123456789abc'
 const initial:ActivityServiceView={registrationPublicId:'browser-registration-v3',activityPublicId:'browser-activity-v3',activityTitle:'活动核销界面测试',packageName:'五人固定套餐',hasMeal:true,partySize:2,maxParticipants:5,reservedSeats:5,admittedCount:0,remainingAdmission:5,includesAdmission:true,paymentStatus:'paid',meal:null}
-async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string){
+async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string,roleName?:string){
   const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
   await page.goto(origin?new URL(fixture.staffUrl,origin).href:fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
-  await page.getByLabel('员工账号').fill(fixture.adminEmployeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
+  const employeeCode=roleName?fixture.employees.find((e:{roleNames:string[]})=>e.roleNames.includes(roleName))?.code:fixture.adminEmployeeCode
+  if(!employeeCode)throw Error('验收岗位缺少测试员工')
+  await page.getByLabel('员工账号').fill(employeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
   await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()
 }
 async function query(page:Page,code=credential){await page.getByLabel('会员号或套餐码',{exact:true}).fill(code);await page.getByRole('button',{name:'查询',exact:true}).click()}
@@ -88,7 +90,7 @@ test('固定套餐编辑保留人数上限、菜量与时间字段，窄屏可�
   await page.screenshot({path:testInfo.outputPath('package-editor-360.png'),fullPage:true})
 })
 
-test('运营在原场次上架桌票，公共菜单读回票价、赠分、预告和下架',async({page})=>{
+test('运营在原场次上架桌票，公共菜单读回票价、赠分、预告和下架',async({page},testInfo)=>{
   test.setTimeout(120_000)
   // First publication changes the entire store's opening rules. Give this test its own store.
   const directory=await mkdtemp(join(tmpdir(),'mbox-ticket-browser-'))
@@ -124,13 +126,36 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     const points=workspace.getByLabel('每张赠送积分',{exact:true})
     const price=workspace.getByLabel('每桌售价（元）',{exact:true})
     const name=workspace.getByLabel('产品名称',{exact:true})
-    const publish=workspace.getByRole('button',{name:'保存并发布票档'})
+    const publish=workspace.getByRole('button',{name:/^(复核场次并发布票档|保存并发布票档)$/})
     for(const [field,invalid,valid] of [[name,'','中间区域整桌票'],[price,'0','500'],[points,'-1','550'],[points,'0.5','550'],[points,'','550']] as const){
       await field.fill(invalid)
       await publish.click()
       await expect(field).toBeFocused()
       await field.fill(valid)
     }
+    for(const width of [320,390,1280]){
+      await page.setViewportSize({width,height:850})
+      const editor=workspace.locator('.ticket-offer-editor')
+      await expect(editor.getByLabel('同时在超嗨推荐')).not.toBeChecked()
+      const amountBox=await price.boundingBox(),pointsBox=await points.boundingBox()
+      expect(amountBox?.x).toBe(pointsBox?.x)
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+      await editor.screenshot({path:testInfo.outputPath('ticket-offer-'+width+'.png')})
+    }
+    await page.setViewportSize({width:390,height:844})
+    // Fail the offer update after the activity review, inside the same database transaction.
+    const offerPath='**/api/staff/activity-operations/*/table-tickets'
+    await page.route(offerPath,async route=>{
+      const request=route.request()
+      if(request.method()==='POST')return route.continue({postData:JSON.stringify({...request.postDataJSON(),expectedVersion:999})})
+      return route.continue()
+    })
+    await publish.click()
+    await page.getByRole('button',{name:'确认复核并发布'}).click()
+    await expect(workspace.getByText('票档已更新，请刷新后核对')).toBeVisible()
+    await page.unroute(offerPath)
+    await workspace.getByRole('button',{name:'刷新票档'}).click()
+    await expect(workspace.getByRole('button',{name:'复核场次并发布票档',exact:true})).toBeEnabled()
     let resume!:()=>void
     const delayed=new Promise<void>(resolve=>{resume=resolve})
     let failRead=false
@@ -144,6 +169,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     })
     try{
       await publish.click()
+      await page.getByRole('button',{name:'确认复核并发布'}).click()
       await expect(workspace.getByText('已保存，正在核对最新版本…',{exact:true})).toBeVisible()
       await expect(name).toBeDisabled()
       await expect(publish).toBeDisabled()
@@ -151,11 +177,15 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
     const published=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers',origin).href)).json()).data.filter((o:{activityPublicId:string})=>o.activityPublicId===fixture.ticketEvent)
     await expect.poll(published).toMatchObject([{name:'中间区域整桌票',giftPoints:550,priceMinor:50000,saleState:'open'}])
+    const recommended=async()=>(await (await page.request.get(new URL('/api/public/mini/table-ticket-offers?channel=community',origin).href)).json()).data
+    expect(await recommended()).toEqual([])
+    await workspace.getByLabel('同时在超嗨推荐').check()
     await workspace.getByText('分类、展示及售卖时间（选填，北京时间）',{exact:true}).click()
     await workspace.getByLabel('开售',{exact:true}).fill(new Date(Date.now()+86400000).toISOString().slice(0,10)+'T12:00')
     failRead=true
     await publish.click()
     await expect.poll(published).toMatchObject([{saleState:'upcoming'}])
+    await expect.poll(recommended).toMatchObject([{id:(await published())[0].id,priceMinor:50000,giftPoints:550}])
     await expect(workspace.getByText('已保存，最新版本读取失败。请点「刷新票档」后继续。',{exact:true})).toBeVisible()
     await expect(publish).toBeDisabled()
     failRead=false
@@ -163,11 +193,12 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await expect(workspace.getByText('票档版本已发布',{exact:true})).toBeVisible()
     await workspace.getByRole('button',{name:'下架',exact:true}).click()
     await expect.poll(published).toEqual([])
+    expect(await recommended()).toEqual([])
 
     // The partial-liability form sends the same minor units checked by the database integration test.
     await page.route('**/api/staff/activity-operations/*/ticket-reception',route=>route.fulfill({json:{data:{tables:[],orders:[{
       id:'test-ticket',orderId:'test-order',name:'整桌票',ordinal:1,priceMinor:50000,consumedMinor:'55000',
-      refundCase:'test-case',refundStatus:'review',arrived:0,contactStatus:'onsite',showEnded:true,
+      refundCase:'test-case',refundStatus:'review',plannedRefundMinor:50000,arrived:0,contactStatus:'onsite',showEnded:true,
     }]}}}))
     const submitted:unknown[]=[]
     await page.route('**/table-ticket-refunds/test-case/dining',route=>{
@@ -188,9 +219,88 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await propose.click()
     await expect.poll(()=>submitted).toEqual([{reason:'已核实售出条款和原餐单',customerMinor:50000,merchantMinor:5000}])
 
+    await page.setViewportSize({width:320,height:740})
+    await workspace.getByRole('button',{name:'新建门票场次'}).click()
+    await expect(workspace.getByText('活动套餐与加购',{exact:true})).toHaveCount(0)
+    await workspace.getByLabel('活动名称',{exact:true}).fill('跨日票档快速建场')
+    await workspace.getByLabel('活动详情',{exact:true}).fill('测试场次：本场演出提供整桌入场权益。')
+    await workspace.getByRole('spinbutton',{name:/人数上限/}).fill('80')
+    const day=(offset:number)=>new Date(Date.now()+offset*86400000).toISOString().slice(0,10)
+    await workspace.getByLabel('开始时间',{exact:true}).fill(day(3)+'T20:00')
+    await workspace.getByLabel('结束时间',{exact:true}).fill(day(4)+'T00:30')
+    await workspace.getByLabel('安全要求（每行一项）').fill('配合现场工作人员指引。')
+    await workspace.getByRole('button',{name:'添加桌区票档'}).click()
+    const row=workspace.locator('.ticket-draft-row').first()
+    await row.getByRole('combobox',{name:'桌区',exact:true}).selectOption({index:1})
+    await row.getByLabel('票名',{exact:true}).fill('A区复核票')
+    await row.getByLabel('每桌售价（元）',{exact:true}).fill('500')
+    await row.getByLabel('每张赠分',{exact:true}).fill('550')
+    const created=page.waitForResponse(res=>res.url().endsWith('/api/staff/activity-operations') && res.request().method()==='POST')
+    await workspace.getByRole('button',{name:'提交本场票档复核'}).click()
+    const createdResponse=await created
+    expect(createdResponse.status(),await createdResponse.text()).toBe(201)
+    const saved=(await createdResponse.json()).data
+    expect(saved.ticketOnly).toBe(true)
+    expect(new Date(saved.startsAt).toISOString()).toBe(day(3)+'T12:00:00.000Z')
+    expect(new Date(saved.endsAt).toISOString()).toBe(day(3)+'T16:30:00.000Z')
+    await expect(workspace.getByRole('button',{name:/跨日票档快速建场 草稿/})).toBeVisible()
+    await workspace.getByText('整桌门票',{exact:true}).click()
+    await expect(workspace.getByText('场次由你创建，保存票档草稿后由另一位发布人员复核上架。')).toBeVisible()
+    await expect(workspace.getByRole('button',{name:'下架',exact:true})).toHaveCount(0)
+    await expect(workspace.getByLabel('同时在超嗨推荐')).not.toBeChecked()
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
   }finally{
     server.kill('SIGTERM')
     await exited
     await rm(directory,{recursive:true,force:true})
   }
+})
+
+test('收银在原案核定票款，收齐后的独立复核状态自动显示',async({page})=>{
+  const ticket='7ea70994-95da-47d6-bcdb-57894a6dbeef'
+  const row={id:ticket,ordinal:1,quantity:1,orderNo:'TT500',name:'A 区整桌票',memberNo:'M001',maskedPhone:'****0001',priceMinor:50000,
+    giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
+    caseId:null as string|null,caseStatus:null as string|null,plannedRefundMinor:null as number|null,refundId:null as string|null,cashStatus:null as string|null}
+  let manualSubmissions=0
+  await page.route('**/api/staff/activity-operations/ticket-refund-preview?*',route=>route.fulfill({json:{data:[row]}}))
+  await page.route('**/api/staff/activity-operations/table-tickets/*/refund-request',route=>{
+    expect(route.request().postDataJSON()).toMatchObject({refundAmountMinor:50000})
+    Object.assign(row,{caseId:'original-case',caseStatus:'review',plannedRefundMinor:50000})
+    return route.fulfill({json:{data:{caseId:row.caseId}}})
+  })
+  await page.route('**/api/staff/activity-operations/table-ticket-refunds/*/submit',route=>{manualSubmissions++;return route.fulfill({status:409})})
+  await login(page)
+  await page.goto('/staff/payments')
+  await page.getByLabel('查找收银订单').fill(ticket)
+  await page.getByRole('button',{name:'查找',exact:true}).click()
+  const desk=page.getByRole('region',{name:'整桌门票退票办理'})
+  await desk.getByLabel('办理依据').fill('依据原单条款全额退票')
+  await desk.getByLabel('按原条款核定退票款（元）').fill('500')
+  await desk.getByRole('button',{name:'受理本票退票'}).click()
+  await expect(desk.getByText(/收齐后自动提交复核/)).toBeVisible()
+  await expect(desk.getByRole('button',{name:'提交原路退款复核'})).toHaveCount(0)
+  Object.assign(row,{refundId:'original-refund',cashStatus:'requested',caseStatus:'requested'})
+  await expect(desk.getByText(/已提交，等待独立复核/)).toBeVisible({timeout:15000})
+  expect(manualSubmissions).toBe(0)
+})
+
+test('同单逐票送达复核人，可直接审核指定一张',async({page})=>{
+  const rows=[1,2].map(ordinal=>({ordinal,quantity:2,ticketId:'ticket-'+ordinal,refundId:'refund-'+ordinal,name:'A 区整桌票',
+    requestedByEmployeeId:'another-employee',amountMinor:50000,currency:'CNY',reason:'按原票条款核定',automatic:true}))
+  const approved:string[]=[]
+  await page.route('**/api/staff/activity-operations/ticket-refund-reviews',route=>route.fulfill({json:{data:rows.filter(r=>!approved.includes(r.refundId))}}))
+  await page.route('**/api/refunds/*/approve',route=>{
+    expect(route.request().postDataJSON()).toEqual({reason:'已核对第二张原票及收款'})
+    approved.push(new URL(route.request().url()).pathname.split('/').at(-2)!)
+    return route.fulfill({json:{data:{status:'approved'}}})
+  })
+  await login(page,undefined,undefined,'收银员')
+  await page.goto('/staff/payments')
+  const queue=page.getByRole('region',{name:'门票退款待复核'})
+  await queue.getByRole('button',{name:/第 2／2 张/}).click()
+  await queue.getByLabel('复核意见').fill('已核对第二张原票及收款')
+  await queue.getByRole('button',{name:'复核通过'}).click()
+  await expect(queue.getByRole('button',{name:/第 2／2 张/})).toHaveCount(0)
+  await expect(queue.getByRole('button',{name:/第 1／2 张/})).toBeVisible()
+  expect(approved).toEqual(['refund-2'])
 })

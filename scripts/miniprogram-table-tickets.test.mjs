@@ -6,7 +6,7 @@ import {loadMiniModule} from './load-miniprogram-test-module.mjs'
 
 const pageUrl=new URL('../miniprogram/pages/table-tickets/index.js',import.meta.url)
 const source=readFileSync(pageUrl,'utf8')
-function fixture(showModal,requestPayment=()=>{throw Error('Unexpected payment sheet')}){
+function fixture(showModal,requestPayment=()=>{throw Error('Unexpected payment sheet')},extraWx={}){
   const calls=[],offer={id:'public-offer',areaId:'window',name:'靠窗桌票',priceMinor:50000,giftPoints:550,startsAt:'2026-11-23T12:00:00Z',endsAt:'2026-11-23T19:00:00Z',remaining:3}
   let member=null,page
   const api={
@@ -19,7 +19,7 @@ function fixture(showModal,requestPayment=()=>{throw Error('Unexpected payment s
     queryActivityRegistrationPayment:async id=>calls.push(['query',id]),
   }
   vm.runInNewContext(source,{require:name=>name.endsWith('/api')?api:name.endsWith('/id')?{randomId:()=> 'operation'}:loadMiniModule(new URL(name+'.js',pageUrl)),
-    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{showModal,requestPayment}})
+    Page:object=>{page=object;page.setData=patch=>Object.assign(page.data,patch)},wx:{showModal,requestPayment,...extraWx}})
   page.onLoad({id:offer.id,quantity:'2'})
   return {page,calls,api}
 }
@@ -150,8 +150,8 @@ test('原订桌不再可用或退票条款更新时重新确认，再买一单�
   assert.equal(page.data.reservationLockId,null)
 })
 
-test('退票、撤回和补款弹窗防连点，离开又重进后旧确认作废',async()=>{
-  for(const [method,endpoint] of [['withdraw','withdrawTicketRefund'],['confirmDining','confirmTicketDining'],['refund','refundTableTicket']]){
+test('顾客补款确认防连点，离开又重进后旧确认作废',async()=>{
+  for(const [method,endpoint] of [['confirmDining','confirmTicketDining']]){
     const modals=[]
     const {page,api,calls}=fixture(options=>modals.push(options))
     api[endpoint]=async()=>calls.push(endpoint)
@@ -212,4 +212,100 @@ test('购票回执晚于页面回访时保留本人原单，换会员不展示�
     assert.equal(page.data.originalOrder,switchMember?null:'delayed-first')
     assert.deepEqual(calls.map(c=>c[0]),['enroll'])
   }
+})
+
+test('menu shows individual ticket cards in browse and seated menus, filters by category/date and ignores stale offers', async () => {
+  const {createOrderPage, deferred} = await import('./test-support/order-performance-harness.mjs')
+  const first = {id:'middle', title:'周五演出', name:'中区整桌票', areaName:'A区', priceMinor:50000, giftPoints:550,
+    remaining:2, startsAt:'2026-11-27T12:00:00Z', endsAt:'2026-11-27T16:30:00Z', coverUrl:'/menu/poster.jpg'}
+  const second = {...first, id:'vip', name:'VIP卡座', categoryCode:'special', categoryName:'限定活动',
+    startsAt:'2026-11-28T12:00:00Z', endsAt:'2026-11-28T16:30:00Z', saleState:'upcoming', coverUrl:null}
+  const stale = deferred()
+  let source = [first, second]
+  const h = createOrderPage({menuCount:2, overrides:{getTableTicketOffers:() => source}})
+  const page = h.page
+  const select = code => page.selectCategory({currentTarget:{dataset:{code}}})
+  try {
+    for (const browse of [true, false]) {
+      if (browse) await page.loadBrowseData()
+      else await page.preparePage()
+      await page.loadTableTicketOffers()
+      select('all')
+      assert.equal(page.data.visibleProducts.length, 2)
+      assert.equal(page.data.visibleTickets.length, 2)
+      assert.equal(page.data.categoryPreview.find(c => c.name === '门票').code, page.data.ticketCategoryCode)
+      select(page.data.ticketCategoryCode)
+      assert.equal(page.data.visibleProducts.length, 0)
+      assert.equal(page.data.visibleTickets[0].price, '¥500.00')
+      assert.equal(page.data.visibleTickets[0].giftPoints, 550)
+      assert.match(page.data.visibleTickets[0].cover, /menu-thumbnail/)
+      page.chooseTicketDay({currentTarget:{dataset:{day:'2026-11-28'}}})
+      assert.equal(page.data.visibleTickets[0].saleText, '待开售')
+      assert.equal(page.data.visibleTickets.length, 1)
+      page.chooseTicketDay({currentTarget:{dataset:{day:''}}})
+      select('special')
+      assert.equal(page.data.visibleTickets[0].id, 'vip')
+      select('all')
+      page.onSearchInput({detail:{value:'A区'}})
+      assert.equal(page.data.visibleProducts.length, 0)
+      assert.equal(page.data.visibleTickets.length, 2)
+      page.clearMenuSearch()
+    }
+    source = stale.promise
+    const previous = page.loadTableTicketOffers()
+    source = []
+    await page.loadTableTicketOffers()
+    stale.resolve([first])
+    await previous
+    assert.equal(page.data.visibleTickets.length, 0)
+    assert.equal(page.data.categories.some(c => c.name === '门票'), false)
+    assert.equal(page.data.visibleProducts.length, 2)
+    const markup = readFileSync(new URL('../miniprogram/pages/order/index.wxml',import.meta.url),'utf8')
+    assert.equal((markup.match(/<template is="menuTicketCard"/g)||[]).length, 2)
+    const card = markup.match(/<template name="menuTicketCard">([\s\S]+?)<\/template>/)[1]
+    assert.match(card, /class="product-row"[^>]+url="\/pages\/table-tickets\/index\?id={{ticket.id}}"/)
+    assert.doesNotMatch(card, /addProduct|checkoutSharedCart/)
+    assert.doesNotMatch(markup, /tableTicketOffers.length/)
+  } finally { h.dispose() }
+})
+
+test('购票页切换须知不代替勾选，增减桌数遵守可售量及代选单锁定', async () => {
+  const {page} = fixture()
+  await page.refresh()
+  page.toggleRules()
+  assert.equal(page.data.rulesOpen, true)
+  assert.equal(page.data.agreed, false)
+  const step = delta => page.stepQuantity({currentTarget:{dataset:{delta}}})
+  step(1)
+  assert.equal(page.data.quantity, '3')
+  assert.match(page.data.summary, /1500\.00.*1650/)
+  step(1)
+  assert.equal(page.data.quantity, '3')
+  page.setData({reservationLockId:'own-table'})
+  step(1)
+  assert.equal(page.data.quantity, '4')
+  page.setData({proposalId:'staff-proposal'})
+  step(-1)
+  assert.equal(page.data.quantity, '4')
+})
+
+test('联系门店仅复制选中原票或拨打原单客服，页面关闭后不泄露原票',()=>{
+  let menu, copied, number
+  const {page,calls}=fixture(undefined,undefined,{
+    showActionSheet:options=>{menu=options},
+    setClipboardData:({data})=>{copied=data},
+    makePhoneCall:({phoneNumber})=>{number=phoneNumber},
+  })
+  page.visible=true
+  page.data.mine=[{registrationPublicId:'TT-ONE',name:'A区整桌票',time:'周五 20:00',quantity:3,purchaseTerms:{serviceContact:'021-12345678'},tickets:[{id:'ticket-two',number:2}]}]
+  page.contactStoreForTicket({currentTarget:{dataset:{order:'TT-ONE',ticket:'ticket-two'}}})
+  menu.success({tapIndex:0})
+  assert.match(copied,/周五 20:00[\s\S]*TT-ONE[\s\S]*第 2 张／共 3 张[\s\S]*ticket-two/)
+  menu.success({tapIndex:1})
+  assert.equal(number,'02112345678')
+  page.visible=false
+  copied=null
+  menu.success({tapIndex:0})
+  assert.equal(copied,null)
+  assert.deepEqual(calls,[])
 })

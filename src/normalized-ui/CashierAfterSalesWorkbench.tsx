@@ -1,3 +1,5 @@
+import {TicketRefundReviewQueue} from './TicketRefundReviewQueue'
+import {TicketRefundDesk} from './TicketRefundDesk'
 import {SessionMoneySummary} from './SessionMoneySummary'
 import {refundReviewBlockReason} from '../shared/refund-review-availability'
 import {StaffTableCreditPanel} from './staff-actions/StaffTableCreditPanel'
@@ -341,6 +343,25 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     }
   }, [api, onLoginRequired, refreshQueue])
 
+  const [ticketLookup,setTicketLookup]=useState('')
+  const [handoffs,setHandoffs]=useState<{ticket:string;caseId:string;step:string;orderNo:string|null;amount:string|null}[]>([])
+  const [handoffError,setHandoffError]=useState(false)
+  const mayReadHandoffs=auth.permissions.some(p=>['refund.request','refund.approve','community.activity.cashier'].includes(p))
+  useEffect(()=>{
+    if(!mayReadHandoffs || collectionScope!=='workbench')return
+    let active=true,running=false
+    const read=async()=>{
+      if(running)return
+      running=true
+      try{
+        const r=await api.getEndpoint<{data:typeof handoffs}>('/api/staff/activity-operations/ticket-dining-handoffs')
+        if(!Array.isArray(r.data))throw new Error('门票补款待办格式异常')
+        if(active){setHandoffs(r.data);setHandoffError(false)}
+      }catch{if(active){setHandoffs([]);setHandoffError(true)}}finally{running=false}
+    }
+    void read();const timer=window.setInterval(()=>void read(),20000)
+    return ()=>{active=false;window.clearInterval(timer)}
+  },[api,auth.employee.id,collectionScope,mayReadHandoffs])
   const financePanel=auth.permissions.includes('reconciliation.view')?<PaymentFinanceReviewPanel api={api} canManage={auth.permissions.includes('reconciliation.manage')}/>:null
   return <><nav className="cashier-action-row" aria-label="账款范围">{([['workbench','收银待办'],['unsettled','未结账款'],['history','历史账单']] as const).map(([scope,label])=><button key={scope} type="button" className={collectionScope===scope?'cashier-primary-action':'cashier-secondary-action'} aria-pressed={collectionScope===scope} disabled={busyKey!==null} onClick={()=>{setCollectionScope(scope);setDebtPage(0);setPaymentState('all');setQuery('');setFromDate('');setToDate('')}}>{label}</button>)}</nav>
     {auth.permissions.includes('order.create') && <ExistingTabPoints api={api}/>}
@@ -348,6 +369,11 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       && <section aria-label="查询桌次实收"><b>{view.selectedTable.tableCode} · 当前桌次（{view.selectedTable.businessDate}）</b><SessionMoneySummary money={view.selectedTable.money}/>
         {phase==='error'&&<strong role="status">当前结果待核对。上次读取 {lastReadAt?.toLocaleTimeString('zh-CN',{hour12:false})}，请先查原付款。</strong>}</section>}
     <CashierPageUpdateNotice blocked={busyKey!==null||mutationCoordinator.current.hasPending()}/>
+    {collectionScope==='workbench' && mayReadHandoffs && (handoffError?<p role="status">门票补款待办读取失败，正在重试。</p>:handoffs.map(row=>row.step==='collect'||row.step==='check_receipt'?
+      <button key={row.caseId+row.orderNo} onClick={()=>{setDebtPage(0);setQuery(row.orderNo!);setCollectionScope('history');setFromDate('');setToDate('');setPaymentState('all')}}>{row.step==='collect'?'收补菜款':'核对原补款回执'} ¥{(Number(row.amount)/100).toFixed(2)} · 原餐单 {row.orderNo}</button>:
+      auth.permissions.some(p=>p==='refund.request'||p==='refund.approve') && <button key={row.caseId} onClick={()=>setTicketLookup(row.ticket)}>{row.step==='issue'?'自动送审待核对':'补款已收齐，核定原案票款'} · 原票 {row.ticket}</button>))}
+    {collectionScope==='workbench' && auth.permissions.includes('refund.approve') && view && <TicketRefundReviewQueue key={'ticket-review-'+auth.employee.id} api={api} employeeId={auth.employee.id} actions={view.actions} busy={busyKey!==null} onOpenTicket={setTicketLookup} onMutation={mutate}/>}
+    {ticketLookup && auth.permissions.some(p=>p==='refund.request'||p==='refund.approve') && <div><button onClick={()=>setTicketLookup('')}>关闭原票办理单</button><TicketRefundDesk key={ticketLookup} api={api} auth={auth} reference={ticketLookup}/></div>}
     {collectionScope!=='workbench'&&<div className="cashier-action-row"><label className="cashier-field"><span>起始营业日（留空不限）</span><input type="date" value={fromDate} onChange={event=>{setFromDate(event.target.value);setDebtPage(0)}}/></label><label className="cashier-field"><span>结束营业日（留空不限）</span><input type="date" value={toDate} onChange={event=>{setToDate(event.target.value);setDebtPage(0)}}/></label><p>按原营业日和原账单查询；已关闭桌次的欠款不会转给新客。</p></div>}
 
     {!view&&<CashierReadState phase={phase} message={message} onReload={()=>void load(query)}/>}
@@ -367,7 +393,8 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     activityFilter={activityFilter}
       activitySummary={activitySummary}
     areaOptions={areaOptions}
-    onSearch={value=>{setDebtPage(0);setQuery(value)}}
+    onOpenTicket={setTicketLookup}
+    onSearch={value=>{setDebtPage(0);setQuery(value);setTicketLookup(/^(?:(?:TT|AP)[a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|[0-9A-F]{12})$/i.test(value.trim())?value.trim():'')}}
     onAreaId={value=>{setDebtPage(0);setAreaId(value)}}
     onPaymentState={value=>{setDebtPage(0);setPaymentState(value)}}
     onReload={() => void load(query)}
@@ -403,7 +430,7 @@ export function CashierAfterSalesWorkbenchView({
   activityFilter = 'all',
   activitySummary = null,
   areaOptions = [],
-  initialExpandedOrderId = null,
+  initialExpandedOrderId = null,onOpenTicket,
   onSearch,
   onAreaId,
   onPaymentState,
@@ -426,6 +453,7 @@ export function CashierAfterSalesWorkbenchView({
   activityFilter?: string
   activitySummary?: ActivityTodoSummary | null
   areaOptions?: readonly { id: string; name: string }[]
+  onOpenTicket?:(reference:string)=>void
   initialExpandedOrderId?: string | null
   onSearch(query: string): void
   onAreaId?: (areaId: string) => void
@@ -686,7 +714,7 @@ export function CashierAfterSalesWorkbenchView({
     </p>}
 
     {activityFilter !== 'all' && <p className="cashier-guidance">活动筛选：{activityFilter === 'unpaid' ? '待收款' : activityFilter === 'requested' ? '待复核' : '待执行或核对退款'}；普通订单保持原筛选。<button type="button" disabled={!onNavigate} onClick={() => onNavigate?.('/staff/payments')}>显示全部活动事项</button></p>}
-    {view.actions.canUseActivityCashier === true && <ActivityCashierPanel
+    {view.actions.canUseActivityCashier === true && <ActivityCashierPanel onOpenTicket={onOpenTicket}
       registrations={view.activityRegistrations ?? []}
       auth={auth}
       actions={view.actions}
@@ -1194,7 +1222,8 @@ function ManualCollectionPanel({ order: sourceOrder, actions, busyKey, onMutatio
  * rendered as table orders and never reveal attendee contact data.  All
  * controls are capability-gated again by the server on command execution.
  */
-function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutation }: {
+function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutation,onOpenTicket }: {
+  onOpenTicket?:(ref:string)=>void
   registrations: readonly CashierWorkbenchActivityRegistration[]
   auth: StaffAuthView
   actions: CashierWorkbenchView['actions']
@@ -1211,7 +1240,7 @@ function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutatio
       ? <p className="cashier-guidance">本营业日没有待处理的活动收银事项。已完成的活动收款和退款会进入日结对账。</p>
       : <div className="cashier-order-list">
         {registrations.map((registration) => <ActivityCashierRegistrationCard
-          key={registration.id}
+          key={registration.id} onOpenTicket={onOpenTicket}
           registration={registration}
           auth={auth}
           actions={actions}
@@ -1224,7 +1253,8 @@ function ActivityCashierPanel({ registrations, auth, actions, busyKey, onMutatio
   </section>
 }
 
-function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey, expanded, onToggle, onMutation }: {
+function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey, expanded, onToggle, onMutation,onOpenTicket }: {
+  onOpenTicket?:(ref:string)=>void
   registration: CashierWorkbenchActivityRegistration
   auth: StaffAuthView
   actions: CashierWorkbenchView['actions']
@@ -1374,7 +1404,8 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
           <button type="button" disabled={busyKey!==null||!actions.canRequestRefund||!!refundRecoveryError} onClick={()=>void onMutation(`activity-refund-request-${registration.id}`,
             `/api/staff/community-activity-registrations/${encodeURIComponent(registration.publicId)}/refunds`,refundRecovery.body,'原活动退款申请已核对，请按当前审核状态继续。')}>恢复原活动退款申请</button>
         </div>}
-        {canRequestRefund && !refundRecovery && !refundRecoveryError && <div className="cashier-refund-form">
+        {registration.serviceVersion===4 && actions.canRequestRefund && onOpenTicket && <button type="button" disabled={busyKey!==null} onClick={()=>onOpenTicket(registration.publicId)}>退款 · 办理原票</button>}
+        {registration.serviceVersion!==4 && canRequestRefund && !refundRecovery && !refundRecoveryError && <div className="cashier-refund-form">
           <h4>发起活动退款</h4>
           <p className="cashier-guidance">本次原付款还可退 ¥{formatAmount(payment.remainingRefundableMinor)}。申请后由非申请人复核，再走原渠道执行；顾客端整份退订申请也进入原审核队列。</p>
           {serviceV3&&<label className="cashier-field"><span>退款处理</span><select aria-label="活动退款处理" value={compensation?'compensation':'unused'} onChange={event=>{setCompensation(event.target.value==='compensation');setCustomerConfirmed(false)}}><option value="unused">未使用整份退订</option><option value="compensation">已核定的补偿退款</option></select></label>}

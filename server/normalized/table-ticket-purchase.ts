@@ -15,9 +15,11 @@ const currentOffers = `
   SELECT o.id,o.activity_id AS "activityId", a.public_id AS "activityPublicId",o.area_id AS "areaId",
     o.sale_from::text AS "saleFrom",o.sale_until::text AS "saleUntil",
     CASE WHEN o.sale_from>clock_timestamp() THEN 'upcoming' WHEN o.sale_until<=clock_timestamp() THEN 'ended' ELSE 'open' END AS "saleState",
-    o.name, ar.name AS "areaName", a.title, a.starts_at::text AS "startsAt",a.ends_at::text AS "endsAt",
-    o.price_minor AS "priceMinor",o.gift_points AS "giftPoints", a.assembly_location AS location,
-    et.refund_schedule AS "refundSchedule",et.organizer,et.seller,et.approval_reference AS "approvalReference",et.performers,et.duration_minutes AS "durationMinutes",et.program_note AS "programNote",et.service_contact AS "serviceContact",a.refund_policy_summary AS "refundSummary",a.refund_policy_version AS "refundVersion",
+    o.name, ar.name AS "areaName", a.title, a.cover_url AS "coverUrl", a.activity_details AS "activityDetails",
+    c.code AS "categoryCode", c.display_name AS "categoryName", c.sort_order AS "categorySortOrder",
+    p.code AS "categoryParentCode", p.display_name AS "categoryParentName", coalesce(p.sort_order,c.sort_order) AS "topCategorySortOrder", a.starts_at::text AS "startsAt",a.ends_at::text AS "endsAt",
+    o.recommend_in_community AS "recommendInCommunity",o.price_minor AS "priceMinor",o.gift_points AS "giftPoints", a.assembly_location AS location,
+    et.version AS "eventTermsVersion",et.refund_schedule AS "refundSchedule",et.organizer,et.seller,et.approval_reference AS "approvalReference",et.performers,et.duration_minutes AS "durationMinutes",et.program_note AS "programNote",et.service_contact AS "serviceContact",a.refund_policy_summary AS "refundSummary",a.refund_policy_version AS "refundVersion",
     a.safety_policy_version AS "safetyVersion",a.safety_acknowledgement_text AS "safetySummary",
     a.capacity,a.payment_deadline_minutes AS "paymentMinutes",
     to_char((mbox.table_ticket_expiry(statement_timestamp())-interval '1 second') AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS "validThroughIfPaidToday",
@@ -27,6 +29,8 @@ const currentOffers = `
   FROM current_offers o JOIN mbox.community_activities a ON (a.tenant_id,a.store_id,a.id)=(o.tenant_id,o.store_id,o.activity_id)
   JOIN mbox.table_ticket_event_terms et ON(et.tenant_id,et.store_id,et.activity_id,et.id)=(o.tenant_id,o.store_id,o.activity_id,o.event_terms_id)
   JOIN mbox.areas ar ON (ar.tenant_id,ar.store_id,ar.id)=(o.tenant_id,o.store_id,o.area_id)
+  LEFT JOIN mbox.menu_categories c ON (c.tenant_id,c.store_id,c.code)=(o.tenant_id,o.store_id,o.category_code)
+  LEFT JOIN mbox.menu_categories p ON (p.tenant_id,p.store_id,p.code)=(c.tenant_id,c.store_id,c.parent_code)
   WHERE o.status='published' AND NOT (SELECT latest.requires_named_attendees FROM mbox.table_ticket_event_terms latest
     WHERE(latest.tenant_id,latest.store_id,latest.activity_id)=(o.tenant_id,o.store_id,o.activity_id) ORDER BY latest.version DESC LIMIT 1)
     AND ar.status='active' AND a.visibility='public' AND a.status='published'
@@ -37,10 +41,10 @@ const currentOffers = `
 interface Offer extends Record<string,unknown> {
   id:string;activityId:string;activityPublicId:string;areaId:string;name:string;areaName:string;startsAt:string;endsAt:string
   title:string;priceMinor:number;giftPoints:number;capacity:number;paymentMinutes:number;remaining:number
-  seatsPerTable:number|null;refundSummary:string;refundVersion:string;safetyVersion:string;safetySummary:string
+  seatsPerTable:number|null;refundSummary:string;refundVersion:string;safetyVersion:string;safetySummary:string;serviceContact:string;eventTermsVersion:number
 }
-export async function publicTableTickets(tx:ScopedTransaction) {
-  return (await tx.query<Offer>(currentOffers+' ORDER BY a.starts_at,o.price_minor,o.id',[tx.scope.tenantId,tx.scope.storeId])).rows
+export async function publicTableTickets(tx:ScopedTransaction,recommendedOnly=false) {
+  return (await tx.query<Offer>(currentOffers+(recommendedOnly?' AND o.recommend_in_community':'')+' ORDER BY a.starts_at,o.price_minor,o.id',[tx.scope.tenantId,tx.scope.storeId])).rows
 }
 export async function memberTicketReservations(tx:ScopedTransaction,customer:string){
   return (await tx.query<{id:string;reservationId:string;reference:string;tableName:string;areaId:string;startsAt:string;endsAt:string}>(`
@@ -112,7 +116,7 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
       least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),
       $11::jsonb,$12,$13,clock_timestamp(),'mini_program','full','jsapi',$7,4,$14,true) RETURNING id`,
     [...scope,registrationPublicId,offer.activityId,buyer.customer_id,buyer.membership_id,total,key,offer.paymentMinutes,offer.endsAt,
-      JSON.stringify({policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,offerId:offer.id,area:offer.areaName,startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
+      JSON.stringify({policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
   await tx.query(`INSERT INTO mbox.table_ticket_purchases(tenant_id,store_id,registration_id,offer_id,quantity,membership_id,contact_id,starts_at,ends_at,original_lock_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[...scope,registered.id,offer.id,input.quantity,buyer.membership_id,buyer.contact_id,offer.startsAt,offer.endsAt,original?.id??null])
   if (!protection.revealPhone) throw new CustomerExperienceRequestError('会员联系方式服务暂不可用','TICKET_CONTACT_UNAVAILABLE',503)

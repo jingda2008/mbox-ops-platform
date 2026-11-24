@@ -15,8 +15,22 @@ test('points: leaving clears private ledger and ignores delayed reads', async()=
   assert.equal(page.data.membership,null);assert.equal(page.data.points.length,0)
 })
 test('community: hidden-page response cannot restore the former membership',async()=>{
-  const d=deferred();const {page}=pageFixture('community',{getActivities:async()=>[],getActivityRegistrations:async()=>[],getMiniBootstrap:()=>d.promise})
+  const d=deferred();const {page}=pageFixture('community',{getTableTicketOffers:async()=>[],getActivities:async()=>[],getActivityRegistrations:async()=>[],getMiniBootstrap:()=>d.promise})
   const loading=page.load();hide(page);d.resolve({membership:{memberNo:'100001'}});await loading;assert.equal(page.data.membership,null)
+})
+test('community: recommended tickets use their own per-table price and ordinary activities stay separate',async()=>{
+  const {page}=pageFixture('community',{getActivities:async()=>[],getActivityRegistrations:async()=>[],
+    getMiniBootstrap:async()=>({}),getTableTicketOffers:async channel=>{
+      assert.equal(channel,'community')
+      const ticket={id:'offer',name:'周五 A 区',priceMinor:50000,giftPoints:550,startsAt:'2030-11-22T12:00:00Z',areaName:'中区',remaining:3}
+      return [{...ticket,recommendInCommunity:true},{...ticket,id:'menu-only',recommendInCommunity:false}]
+    }})
+  await page.load()
+  assert.equal(page.data.ticketOffers.length,1)
+  assert.equal(page.data.ticketOffers[0].id,'offer')
+  assert.equal(page.data.ticketOffers[0].price,'¥500.00')
+  assert.equal(page.data.ticketOffers[0].giftPoints,550)
+  assert.equal(page.data.activities.length,0)
 })
 test('songs: repeated tap creates one request and changing table isolates completion',async()=>{
   const d=deferred();let writes=0;const {page,state}=pageFixture('songs',{getTodayPerformances:async()=>({schedules:[]}),submitSongRequest:()=>{writes++;return d.promise}})

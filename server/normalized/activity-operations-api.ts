@@ -1,3 +1,4 @@
+import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {proposeMove} from './table-ticket-reschedule.js'
 import {ticketStatement,ticketFinanceDay} from './table-ticket-reception.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
@@ -57,6 +58,19 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const id=uuid(request.params.id,'票号')
     return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketStatement(tx,id),{readOnly:true})})
   }))
+  app.get('/staff/activity-operations/ticket-refund-reviews',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.approve'])
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketRefundReviewQueue(tx,ctx.employeeId),{readOnly:true})})
+  }))
+  app.get('/staff/activity-operations/ticket-dining-handoffs',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.request','refund.approve','community.activity.cashier'])
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,ticketDiningHandoffs,{readOnly:true})})
+  }))
+  app.get<{Querystring:{reference:string}}>('/staff/activity-operations/ticket-refund-preview',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])
+    const ref=text(request.query.reference,'原购票单号或票号',6,128)
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketRefundPreview(tx,ref),{readOnly:true})})
+  }))
   app.get('/staff/activity-operations/ticket-reception-inbox',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorizedAny(options,request,['community.activity.verify','community.activity.manage'])
     const tasks=await options.transactions.run(ctx.scope,async tx=>(await tx.query(`SELECT a.public_id AS "activityId",a.title,count(DISTINCT t.registration_id)::int AS waiting
@@ -107,7 +121,7 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
       customerMinor:integer(body.customerMinor,'顾客应补菜款',0,Number.MAX_SAFE_INTEGER),
       merchantMinor:integer(body.merchantMinor,'门店承担金额',0,Number.MAX_SAFE_INTEGER),
     }
-    const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(body.reason,'菜款核定依据',2,500),idempotencyKey(request),split)
+    const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(body.reason,'菜款核定依据',2,500),idempotencyKey(request),split,body.refundAmountMinor===undefined?undefined:integer(body.refundAmountMinor,'拟退票款',1,2147483647))
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-offers/:id/assist',async(request,reply)=>handle(reply,async()=>{
@@ -146,7 +160,50 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/refund-request',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorized(options,request,['refund.request'])
-    const result=await options.service.openStaffTicketRefund(ctx,uuid(request.params.id,'票号'),text(object(request.body,'退票').reason,'退票原因',2,500),idempotencyKey(request))
+    const body=object(request.body,'退票')
+    const result=await options.service.openStaffTicketRefund(ctx,uuid(request.params.id,'票号'),text(body.reason,'退票原因',2,500),idempotencyKey(request),body.previewVersion===undefined?undefined:text(body.previewVersion,'核算版本',64,64),body.refundAmountMinor===undefined?undefined:integer(body.refundAmountMinor,'拟退票款',1,2147483647))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.get('/staff/activity-operations/ticket-rule-references',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.publish'])
+    const rows=await options.transactions.run(ctx.scope,async tx=>(await tx.query(
+      `SELECT e.activity_id,e.id,e.version,a.title,e.organizer,e.seller,e.service_contact,e.refund_schedule,a.starts_at
+        FROM mbox.table_ticket_event_terms e JOIN mbox.community_activities a ON(a.tenant_id,a.store_id,a.id)=(e.tenant_id,e.store_id,e.activity_id)
+        WHERE e.tenant_id=$1 AND e.store_id=$2 AND a.published_at IS NOT NULL
+        AND e.version=(SELECT max(v.version) FROM mbox.table_ticket_event_terms v WHERE(v.tenant_id,v.store_id,v.activity_id)=(e.tenant_id,e.store_id,e.activity_id))
+        AND trim(e.refund_schedule)<>trim(e.service_contact) AND e.refund_schedule !~ '^[+()0-9[:space:].－—-]+$'
+        ORDER BY a.starts_at DESC,e.id LIMIT 12`,[ctx.scope.tenantId,ctx.scope.storeId])).rows,{readOnly:true})
+    return reply.header('cache-control','no-store').send({data:rows})
+  }))
+  app.get('/staff/activity-operations/ticket-areas',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.manage'])
+    const areas=await options.transactions.run(ctx.scope,async tx=>(await tx.query(
+      `SELECT a.id,a.name FROM mbox.areas a WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.status='active'
+       AND EXISTS(SELECT 1 FROM mbox.tables t WHERE(t.tenant_id,t.store_id,t.area_id)=(a.tenant_id,a.store_id,a.id) AND t.status='available')
+       ORDER BY a.sort_order,a.code`,[ctx.scope.tenantId,ctx.scope.storeId])).rows,{readOnly:true})
+    return reply.send({data:areas})
+  }))
+  app.get('/staff/activity-operations/ticket-review-inbox',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.publish'])
+    const rows=await options.transactions.run(ctx.scope,async tx=>(await tx.query(
+      `SELECT a.public_id AS "activityId",a.title,a.starts_at AS "startsAt" FROM mbox.community_activities a
+       WHERE a.tenant_id=$1 AND a.store_id=$2 AND a.status IN('draft','published') AND a.ends_at>clock_timestamp()
+       AND (a.status='published' OR a.created_by_employee_id<>$3)
+       AND EXISTS (SELECT 1 FROM mbox.table_ticket_offers o WHERE (o.tenant_id,o.store_id,o.activity_id)=(a.tenant_id,a.store_id,a.id)
+         AND o.status='draft' AND o.created_by<>$3 AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_offers n WHERE
+           (n.tenant_id,n.store_id,n.activity_id,n.area_id)=(o.tenant_id,o.store_id,o.activity_id,o.area_id) AND n.version>o.version))
+       ORDER BY a.starts_at,a.id`,[ctx.scope.tenantId,ctx.scope.storeId,ctx.employeeId])).rows,{readOnly:true})
+    return reply.header('cache-control','no-store').send({data:rows})
+  }))
+  app.post<{Params:{id:string}}>('/staff/activity-operations/:id/publish-ticket-drafts',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.publish']),body=object(request.body,'复核票档')
+    if(!Array.isArray(body.drafts) || !body.drafts.length || body.drafts.length>100)throw invalid('请选择本次复核的票档')
+    const drafts=body.drafts.map(value=>{const entry=object(value,'草稿');return {areaId:uuid(entry.areaId,'桌区'),version:integer(entry.version,'草稿版本',1,2147483647)}})
+    if(new Set(drafts.map(entry=>entry.areaId)).size!==drafts.length)throw invalid('桌区重复')
+    const expectedUpdatedAt=text(body.activityUpdatedAt,'场次版本',10,64)
+    if(!Number.isFinite(Date.parse(expectedUpdatedAt)))throw invalid('场次版本无效')
+    const result=await options.activityPublisher.publishActivity(ctx,{publicId:publicId(request.params.id),idempotencyKey:idempotencyKey(request),
+      draftBatch:{drafts,termsVersion:integer(body.termsVersion,'公示版本',1,2147483647)},expectedUpdatedAt})
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   const offerPath = '/staff/activity-operations/:publicId/table-tickets'
@@ -164,13 +221,26 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const saleFrom=body.saleFrom===undefined?undefined:body.saleFrom?timestamp(body.saleFrom,'开售时间'):null
     const saleUntil=body.saleUntil===undefined?undefined:body.saleUntil?timestamp(body.saleUntil,'停售时间'):null
     if(saleFrom && saleUntil && saleUntil<=saleFrom)throw invalid('停售时间须晚于开售时间')
-    const result = await options.service.saveTicketOffer(context,publicId(request.params.publicId),{
+    if(body.recommendInCommunity!==undefined && typeof body.recommendInCommunity!=='boolean')throw invalid('请选择是否在超嗨推荐')
+    const offer = {
+      ...(body.expectedTermsVersion===undefined?{}:{expectedTermsVersion:integer(body.expectedTermsVersion,'公示版本',1,2147483647)}),
+      ...(body.recommendInCommunity===undefined?{}:{recommendInCommunity:body.recommendInCommunity}),
       ...(saleFrom!==undefined?{saleFrom}:{}),...(saleUntil!==undefined?{saleUntil}:{}),
       categoryCode:body.categoryCode?text(body.categoryCode,'分类',1,64):null,areaId:uuid(body.areaId,'桌区'),name:text(body.name,'票名',1,120),status,visibleFrom,visibleUntil,
       expectedVersion:integer(body.expectedVersion,'票档版本',0,2147483646),
       priceMinor:integer(body.priceMinor,'每桌价格（分）',1,2147483647),
       giftPoints:body.giftPoints===null && status!=='published'?null:integer(body.giftPoints,'每张赠分',0,2147483647),
-    },idempotencyKey(request))
+    }
+    const activityId=publicId(request.params.publicId)
+    const key=idempotencyKey(request)
+    if (body.reviewActivity===true) {
+      if (status!=='published' || !offer.expectedTermsVersion) throw invalid('场次复核需要已确认的公示和待发布票档')
+      const expectedUpdatedAt=text(body.activityUpdatedAt,'场次版本',10,64)
+      if (!Number.isFinite(Date.parse(expectedUpdatedAt))) throw invalid('场次版本无效，请刷新')
+      const combined=await options.activityPublisher.publishActivity(context,{publicId:activityId,idempotencyKey:key,ticketOffer:offer,expectedUpdatedAt})
+      return reply.send({data:combined.value,meta:{replayed:combined.replayed}})
+    }
+    const result=await options.service.saveTicketOffer(context,activityId,offer,key)
     return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.post('/staff/activity-operations/scan',async(request,reply)=>handle(reply,async()=>{const context=await authorizedAny(options,request,['community.activity.view','community.activity.manage','community.activity.verify']);return reply.send({data:await options.service.scanService(context,text(object(request.body,'扫码').code,'套餐核销码',10,300))})}))
@@ -193,17 +263,25 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
   app.post('/staff/activity-operations', async (request, reply) => handle(reply, async () => {
     const context = await authorized(options, request, ['community.activity.manage'])
     const body = object(request.body, '活动草稿')
+    const draft=parseActivityDraft(body)
+    let ticketRows
+    if(body.ticketRows!==undefined){
+      if(!draft.ticketOnly || !Array.isArray(body.ticketRows) || !body.ticketRows.length || body.ticketRows.length>100)throw invalid('门票场次至少选择一个桌区')
+      ticketRows=body.ticketRows.map(raw=>{const row=object(raw,'票档');return {areaId:uuid(row.areaId,'桌区'),name:text(row.name,'票名',1,120),
+        priceMinor:integer(row.priceMinor,'票价',1,2147483647),giftPoints:integer(row.giftPoints,'赠分',0,2147483647)}})
+      if(new Set(ticketRows.map(row=>row.areaId)).size!==ticketRows.length)throw invalid('同一场次的桌区不可重复')
+    }
     const result = await options.service.createDraft(context, {
-      draft: parseActivityDraft(body),
+      draft,...(ticketRows?{ticketRows}:{}),
       reason: text(body.reason, '建立原因', 2, 500),
       idempotencyKey: idempotencyKey(request),
     })
     return reply.code(result.replayed ? 200 : 201).send({ data: result.value, meta: { replayed: result.replayed } })
   }))
 
-  app.get('/staff/activity-operations', async (request, reply) => handle(reply, async () => {
+  app.get<{Querystring:{catalog?:string}}>('/staff/activity-operations', async (request, reply) => handle(reply, async () => {
     const context = await authorizedAny(options, request, ['community.activity.view', 'community.activity.manage', 'community.activity.publish'])
-    return reply.send({ data: await options.service.list(context) })
+    return reply.send({ data: await options.service.list(context,request.query.catalog==='tickets') })
   }))
 
   app.get('/staff/activity-operations/product-catalog',async(request,reply)=>handle(reply,async()=>{const context=await authorized(options,request,['community.activity.manage']);return reply.send({data:await options.service.productCatalog(context)})}))
@@ -387,6 +465,7 @@ export function parseActivityDraft(value: Record<string, unknown>): ActivityDraf
   const packages = activityPackages(value.packages, capacity, endsAt)
   if (packageSelectionRequired && packages.length === 0) throw invalid('套餐必选活动至少需要一档套餐')
   return {
+    ...(value.ticketOnly===undefined?{}:{ticketOnly:optionalBoolean(value.ticketOnly,false,'整桌演出场次')}),
     kind: enumeration(value.kind, '活动类型', ['member_night','hike','camping','city_walk','music_picnic','proposal','other'] as const),
     title: text(value.title, '活动名称', 2, 120),
     summary: text(value.summary, '列表摘要', 2, 600),

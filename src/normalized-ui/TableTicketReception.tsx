@@ -1,3 +1,4 @@
+import {TicketRefundDesk} from './TicketRefundDesk'
 import {useEffect,useState,type FormEvent,type ReactNode} from 'react'
 import type {NormalizedApiClient} from '../normalized-api'
 
@@ -6,7 +7,7 @@ interface Ticket extends TicketContact {
   id:string;orderId:string;ordinal:number;name:string;areaId:string;tableName:string|null;maskedPhone:string
   originalReservation:string|null;originalTable:string|null;contactStatus:string;contactOwner:string|null;arrived:number
   deskClosed:boolean;showEnded:boolean;awaitingDuringShow:boolean;startsAt:string;endsAt:string;refundedAt:string|null;effectiveTitle:string|null;moveStatus:string|null;giftPoints:number;issuedPoints:number|null;remainingPoints:number|null;correctionId:string|null;correctionReason:string|null;correctionUsed:number|null;resolution:string|null;wrongGift:boolean
-  refundCase:string|null;refundStatus:string|null;cashZero:boolean;needsReview:boolean;consumedMinor:string|null;priceMinor:number
+  plannedRefundMinor:number|null;autoReviewError:string|null;refundCase:string|null;refundStatus:string|null;cashZero:boolean;needsReview:boolean;consumedMinor:string|null;priceMinor:number
 }
 interface Statement {
   ticket:{receipt:string;priceMinor:number;paidAt:string}
@@ -26,6 +27,7 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
   const [open,setOpen]=useState(initiallyOpen),[refresh,setRefresh]=useState(0),[working,setWorking]=useState(false)
   const [message,setMessage]=useState(''),[queue,setQueue]=useState<Queue>({orders:[],tables:[]})
   const [statement,setStatement]=useState<{id:string;data:Statement}|null>(null)
+  const [handling,setHandling]=useState('')
   const [day,setDay]=useState('')
   const [daily,setDaily]=useState<{day:string;amounts:Record<string,string>}|null>(null)
   async function inspectDay(){
@@ -99,7 +101,8 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
     if(split && (customer==='' || merchant==='' || split.customerMinor+split.merchantMinor!==Number(ticket.consumedMinor))){
       setMessage('请填齐两项金额，合计须等于本票已抵菜款');return
     }
-    const payload={reason,...split}
+    const refundAmount=String(fields.get('planned')??'')
+    const payload={reason,...split,...(refundAmount?{refundAmountMinor:Math.round(Number(refundAmount)*100)}:{})}
     const fingerprint=JSON.stringify({caseId:ticket.refundCase,...payload})
     if(form.dataset.fingerprint!==fingerprint){
       form.dataset.fingerprint=fingerprint
@@ -110,7 +113,7 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
       await api.postEndpoint('/api/staff/activity-operations/table-ticket-refunds/'+ticket.refundCase+'/dining',payload,{idempotencyKey:form.dataset.operation!})
       delete form.dataset.fingerprint
       delete form.dataset.operation
-      setMessage('已发至购票会员的原退票案。会员确认后从原餐饮单收款。');setRefresh(v=>v+1)
+      setMessage('补款明细已发给购票会员。顾客确认且原餐单收齐后，按核定票款自动提交复核。');setRefresh(v=>v+1)
     }catch(e){setMessage(e instanceof Error?e.message:'菜款核算失败')}
     finally{setWorking(false)}
   }
@@ -139,6 +142,8 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
     </details>}
     {queue.orders.map(ticket=><article key={ticket.id}><strong>{ticket.name} · 第{ticket.ordinal}桌</strong>
       <p>购票单 {ticket.orderId} · {queue.orders.find(row=>row.orderId===ticket.orderId)?.id===ticket.id?renderContact(ticket):ticket.maskedPhone} · {ticket.deskClosed?'本桌已清台':ticket.showEnded?(ticket.arrived?'场次已结束 · 已登记 '+ticket.arrived+' 人':'场次已结束 · 无到场登记'):ticket.tableName??(ticket.awaitingDuringShow?'演出已开始，请尽快排桌':'待排桌')}</p>
+      {(canRefund || canApproveRefund) && <button type="button" onClick={()=>setHandling(handling===ticket.id?'':ticket.id)}>办理退票</button>}
+      {handling===ticket.id && <TicketRefundDesk key={ticket.id} api={api} auth={{permissions:[...(canRefund?['refund.request']:[]),...(canApproveRefund?['refund.approve']:[]),...(canManage?['community.activity.manage']:[])]}} reference={ticket.id}/>}
       {(canRefund||canApproveRefund) && <button type="button" onClick={()=>void inspect(ticket.id)}>核对原票、积分和菜款</button>}
       {statement?.id===ticket.id && <section aria-label="原票对账"><p>本票票款 {money(statement.data.ticket.priceMinor)} · 原收款 {statement.data.ticket.receipt}</p>
         {statement.data.points.map((row,i)=><p key={row.lot+i}>积分{statusText[row.kind]??row.kind} {row.delta} 分 · 批次余额 {row.remaining} 分 · {new Date(row.at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</p>)}
@@ -174,12 +179,14 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
           <select name="action"><option value="cancelled">顾客撤回，按原收款退回补款</option><option value="rejected">拒绝申请，保留原票</option><option value="zero">终止票权，应退现金为零</option></select>
           <label>决定依据<input name="reason" minLength={3} required/></label><button disabled={working}>按依据办理</button></form></details>}
       {ticket.refundStatus==='review' && Number(ticket.consumedMinor)>0 && canApproveRefund && <form onSubmit={e=>void proposeDining(e,ticket)}>
+        {ticket.plannedRefundMinor!=null && !ticket.autoReviewError?<p>拟退 {money(ticket.plannedRefundMinor)}，补款收齐后自动提交复核。</p>:
+          canRefund?<label>按原条款拟退票款（元）<input type="number" name="planned" min=".01" max={ticket.priceMinor/100} step=".01" required/></label>:<p>请有退款申请权限的同事在原案核定拟退票款。</p>}
         <label>顾客应补菜款（元）<input type="number" name="customer" min="0" step="0.01" required={Number(ticket.consumedMinor)>ticket.priceMinor}/></label>
         <label>门店承担金额（元）<input type="number" name="merchant" min="0" step="0.01" required={Number(ticket.consumedMinor)>ticket.priceMinor}/></label>
-        <label>菜款核定依据<input name="reason" minLength={2} maxLength={500} required/></label><button disabled={working}>发给会员核对逐菜补款</button></form>}
-      {ticket.refundStatus==='review' && canRefund && <form onSubmit={e=>void handle(e,ticket,'refund')}>
+        <label>菜款核定依据<input name="reason" minLength={2} maxLength={500} required/></label><button disabled={working || (!canRefund && (ticket.plannedRefundMinor==null || !!ticket.autoReviewError))}>发给会员核对逐菜补款</button></form>}
+      {ticket.refundStatus==='review' && canRefund && (ticket.plannedRefundMinor==null || ticket.autoReviewError || canManage) && <form onSubmit={e=>void handle(e,ticket,'refund')}>
         <label>按原条款应退票款（元）<input required type="number" min=".01" max={ticket.priceMinor/100} step=".01" name="yuan"/></label>
-        {canManage && <label>门店履约原因（门店原因单独处理应退票款时填写）<input name="merchantReason"/></label>}
+        {canManage && <label>门店履约原因（门店原因单独处理应退票款时填写）<input name="merchantReason" required={ticket.plannedRefundMinor!=null && !ticket.autoReviewError}/></label>}
         <button disabled={working}>提交原路退款复核</button></form>}
     </article>)}<p role="status">{message}</p><button type="button" onClick={()=>setRefresh(v=>v+1)}>刷新接待队列</button></>}
   </details>

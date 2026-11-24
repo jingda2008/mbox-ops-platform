@@ -1,1 +1,53 @@
-.page {padding:28rpx}.section {padding:28rpx 0;border-bottom:1px solid #ddd}.section view,.section label {display:block;margin-bottom:14rpx}.title {font-size:38rpx;font-weight:600}.ticket {padding:18rpx 0}.section input {border:1px solid #bbb;padding:12rpx}
+.page { padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom)); color: #282c26; font-size: 27rpx; line-height: 1.55; word-break: break-word; }
+.pass, .sheet { margin-bottom: 18rpx; border-radius: 24rpx; overflow: hidden; }
+.pass { background: linear-gradient(115deg, #142c23, #28513d); color: #fffdf5; }
+.pass-main { position: relative; padding: 30rpx 196rpx 28rpx 30rpx; min-height: 184rpx; }
+.pass-kind { color: #dfc99f; font-size: 23rpx; letter-spacing: 2rpx; }
+.pass-title { margin-top: 12rpx; font-size: 42rpx; line-height: 1.25; font-weight: 700; }
+.pass-sub { margin-top: 8rpx; color: #e2e9dd; font-size: 25rpx; }
+.pass-image, .pass-mark { position: absolute; top: 30rpx; right: 30rpx; width: 128rpx; height: 128rpx; border-radius: 15rpx; }
+.pass-mark { top: 36rpx; right: 40rpx; width: 108rpx; height: 108rpx; border-radius: 50%; }
+.pass-foot { display: flex; position: relative; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8rpx 16rpx; padding: 20rpx 30rpx; border-top: 2rpx dashed rgba(234,222,192,.42); }
+.pass-foot::before, .pass-foot::after { content: ''; position: absolute; top: -11rpx; width: 20rpx; height: 20rpx; background: #f7f4ef; border-radius: 50%; }
+.pass-foot::before { left: -10rpx; } .pass-foot::after { right: -10rpx; }
+.pass-price { font-size: 42rpx; font-weight: 700; line-height: 1.2; }
+.pass-unit { color: #d7e2d5; font-size: 24rpx; }
+.pass-gift { color: #f2ddad; font-size: 26rpx; font-weight: 600; }
+.sheet { padding: 24rpx 28rpx; background: #fffdfa; border: 1rpx solid #e4dfd4; }
+.sheet-title { font-size: 32rpx; font-weight: 650; }
+.fact { display: flex; gap: 24rpx; margin-bottom: 10rpx; }
+.key { flex: 0 0 auto; color: #716e63; }
+.note, .summary, .auth-note, .empty-note { color: #62675c; font-size: 24rpx; }
+.note { padding-top: 14rpx; border-top: 1rpx solid #e9e5da; margin-top: 18rpx; }
+.rules-copy { margin-top: 14rpx; }
+.inline-label, .rule-title { font-weight: 600; }
+.rule-title { display: block; margin-bottom: 4rpx; }
+.disclosure, .offer-row, .refresh { box-sizing: border-box; margin: 0; background: transparent; color: #315940; font-size: 26rpx; line-height: 1.5; text-align: left; }
+.disclosure::after, .offer-row::after, .refresh::after, .stepper button::after { border: 0; }
+.disclosure, .offer-row { width: 100% !important; display: flex; justify-content: space-between; gap: 12rpx; align-items: center; padding: 16rpx 0 0; margin-top: 18rpx; min-height: 76rpx; border-top: 1rpx solid #e5e2d8; border-radius: 0; }
+.disclosure text { flex: none; font-size: 24rpx; }
+.rules { margin-top: 10rpx; border-top: 1rpx solid #e5e2d8; }
+.rules > view { margin-top: 18rpx; color: #555b50; white-space: pre-line; }
+.rules .rule-title { color: #30392f; }
+.quantity-row, .stepper { display: flex; align-items: center; }
+.quantity-row { justify-content: space-between; gap: 10rpx; }
+.stepper { border: 1rpx solid #d6dcce; border-radius: 14rpx; overflow: hidden; }
+.stepper button, .stepper input { height: 72rpx; margin: 0; padding: 0; text-align: center; }
+.stepper button { width: 72rpx !important; color: #244935; background: #eff3ec; font-size: 32rpx; line-height: 72rpx; border-radius: 0; }
+.stepper button[disabled] { color: #858a81; background: #f4f3ee; }
+.stepper input { width: 80rpx; font-size: 29rpx; }
+.summary { margin-top: 14rpx; font-weight: 600; color: #3f5845; }
+.agreement, .reservation label { display: flex; align-items: center; min-height: 80rpx; }
+.agreement { margin: 14rpx 0 4rpx; border-top: 1rpx solid #e5e2d8; color: #52594f; font-size: 25rpx; }
+.agreement checkbox, .reservation radio { flex: none; margin-right: 8rpx; }
+.reservation { display: block; margin-bottom: 20rpx; }
+.auth-note { margin-bottom: 12rpx; }
+.auth-note navigator { display: inline; color: #315940; }
+.sale-state { padding: 18rpx; border-radius: 16rpx; text-align: center; background: #f1eee7; color: #5c594f; }
+.switch-offers { padding: 0; margin: 0; border: 0; min-height: 66rpx; }
+.offer-row { color: #474e43; padding-bottom: 10rpx; } .offer-price { flex-shrink: 0; color: #39583f; }
+.empty-note { margin-top: 12rpx; }
+.ticket { padding: 20rpx 0; border-top: 1rpx solid #e6e3d7; }
+.ticket view, .ticket text { display: block; margin-top: 8rpx; }
+.history button { margin-top: 12rpx; }
+.refresh { margin: 0 auto; padding: 18rpx; text-align: center; }

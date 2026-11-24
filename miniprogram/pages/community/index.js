@@ -1,4 +1,4 @@
-const { getActivities, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
+const { getActivities, getTableTicketOffers, getActivityRegistrations, getMiniBootstrap, enrollMembership } = require('../../utils/api')
 const { money } = require('../../utils/format')
 const { currentActivities, activityTimeText } = require('../../utils/activity-display')
 const { publicImageUrl } = require('../../utils/media')
@@ -22,7 +22,7 @@ const PAYMENT_RESOLUTION_NAMES = {
 
 Page({
   data: {
-    loading: true, error: '', activities: [],
+    loading: true, error: '', activities: [], ticketOffers: [],
     membership: null, membershipTerms: null,
     membershipInviteVisible: false, membershipInviteAgreed: false, membershipInviteBusy: false,
     pendingActivityId: '',
@@ -33,7 +33,7 @@ Page({
   onUnload() { this.clearMemberRead() },
   clearMemberRead() {
     this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ activities: [], membership: null, membershipTerms: null, membershipInviteVisible: false,
+    this.setData({ activities: [], ticketOffers: [], membership: null, membershipTerms: null, membershipInviteVisible: false,
       membershipInviteBusy: false, membershipInviteAgreed: false, pendingActivityId: '', loading: false })
   },
 
@@ -53,12 +53,13 @@ Page({
 
   async load() {
     const generation = this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ loading: true, error: '', activities: [], membership: null, membershipTerms: null })
+    this.setData({ loading: true, error: '', activities: [], ticketOffers: [], membership: null, membershipTerms: null })
     try {
-      const [rawActivities, rawRegistrations, bootstrap] = await Promise.all([
+      const [rawActivities, rawRegistrations, bootstrap, offers] = await Promise.all([
         getActivities(),
         getActivityRegistrations().catch(() => []),
         getMiniBootstrap(),
+        getTableTicketOffers('community').catch(() => []),
       ])
       if (generation !== this.readGeneration) return
       const registrations = new Map((rawRegistrations || []).map((item) => [item.activityPublicId, item]))
@@ -84,6 +85,11 @@ Page({
       this.setData({
         loading: false,
         activities,
+        ticketOffers: offers.filter(o=>o.recommendInCommunity===true).map(o=>({
+          id:o.id,name:o.name,price:money(o.priceMinor),giftPoints:o.giftPoints,
+          time:activityTimeText(o),area:o.areaName,
+          saleText:o.saleState==='upcoming'?'预告':o.saleState==='ended'?'已停售':o.remaining===0?'已售完':'查看门票',
+        })),
         membership: bootstrap.membership || null,
         membershipTerms: bootstrap.membershipTerms || null,
         membershipInviteVisible: false,

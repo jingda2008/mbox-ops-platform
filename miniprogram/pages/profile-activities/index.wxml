@@ -1,0 +1,38 @@
+<view class="page history-page">
+  <state-panel wx:if="{{loading}}" type="loading" title="正在读取报名记录" />
+  <block wx:else>
+    <view wx:if="{{error}}" class="error-banner">{{error}}<button bindtap="retry">重试</button></view>
+    <block wx:if="{{selected}}">
+      <view class="record">
+        <text class="status">{{selected.status}}{{selected.ended ? ' · 活动已结束' : ''}}</text>
+        <text class="title">{{selected.title}}</text>
+        <text class="time">{{selected.start}}{{selected.end ? ' 至 ' + selected.end : ''}}</text>
+        <text wx:if="{{selected.location}}">{{selected.location}}</text>
+        <text wx:if="{{selected.description}}" class="description">{{selected.description}}</text>
+      </view>
+      <view class="record">
+        <text class="heading">报名详情</text>
+        <text wx:if="{{selected.registered}}">报名时间　{{selected.registered}}</text>
+        <text>报名编号　{{selected.id}}</text>
+        <text wx:if="{{selected.packageName}}">所选套餐　{{selected.packageName}}</text>
+        <text wx:if="{{selected.party}}">报名人数　{{selected.party}} 人</text>
+        <text wx:for="{{selected.items}}" wx:key="index">{{item.name}} × {{item.quantity}}</text>
+        <text wx:if="{{selected.note}}">备注　{{selected.note}}</text>
+        <text>{{selected.payment}}</text>
+        <text wx:if="{{selected.total}}">报名金额　{{selected.total}}</text>
+        <text wx:if="{{selected.paid}}">已付金额　{{selected.paid}}</text>
+        <text wx:if="{{selected.refund}}" class="description">报名时的退款约定　{{selected.refund}}</text>
+      </view>
+      <navigator wx:if="{{selected.ticket}}" class="action" url="/pages/table-tickets/index">查看我的门票 ›</navigator>
+      <navigator wx:elif="{{selected.liveUrl}}" class="action" url="{{selected.liveUrl}}">进入活动办理 ›</navigator>
+    </block>
+    <block wx:elif="{{!id}}">
+      <navigator wx:for="{{rows}}" wx:key="id" class="record entry" url="{{item.detailUrl}}">
+        <view><text class="status">{{item.status}}{{item.ended ? ' · 活动已结束' : ''}}</text><text class="heading">{{item.title}}</text><text>{{item.start}}{{item.packageName ? ' · ' + item.packageName : ''}}</text></view><text aria-hidden="true">›</text>
+      </navigator>
+      <button wx:if="{{nextCursor && !error}}" class="action" bindtap="loadMore" loading="{{loadingMore}}" disabled="{{loadingMore}}">查看更多报名记录</button>
+      <state-panel wx:if="{{!rows.length && !error}}" type="empty" title="暂无报名记录" />
+      <button class="action" bindtap="discover">发现超嗨活动 ›</button>
+    </block>
+  </block>
+</view>

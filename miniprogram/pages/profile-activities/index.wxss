@@ -1,0 +1,11 @@
+.history-page { padding: 28rpx; }
+.record { display: flex; flex-direction: column; gap: 14rpx; margin-bottom: 20rpx; padding: 28rpx; border: 1rpx solid #ddd7cd; border-radius: 20rpx; background: #fffdfa; color: #403c35; font-size: 26rpx; line-height: 1.5; overflow-wrap: anywhere; }
+.entry { flex-direction: row; align-items: center; justify-content: space-between; gap: 16rpx; }
+.entry view { display: flex; flex-direction: column; gap: 6rpx; min-width: 0; }
+.status { color: #315d46; font-weight: 600; }
+.title, .heading { color: #27251f; font-weight: 650; }
+.title { font-size: 40rpx; }
+.heading { font-size: 32rpx; }
+.time { color: #685e52; }
+.description { white-space: pre-line; }
+.action { display: block; margin: 20rpx 0; padding: 22rpx; border-radius: 16rpx; text-align: center; background: #eaf1ea; color: #315d46; font-size: 28rpx; }

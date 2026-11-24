@@ -5,8 +5,6 @@ const {
   getMiniBootstrap,
   getCustomerBenefits,
   getReservations,
-  getActivityRegistrations,
-  getActivityRegistrationPayment,
   startMembershipRecovery,
   verifyMembershipRecovery,
   getCustomerPreferenceFacts,
@@ -44,20 +42,6 @@ const MEMBER_CARD_PREVIEW_PROGRESS = {
   gold: { rollingGrowth: 5680, upgradeThreshold: null, upgradeRemaining: null, nextTier: null },
 }
 const BENEFIT_NAMES = { gift_product: '赠送好礼', discount: '折扣权益', credit: '金额权益', access: '专属资格', other: '会员权益' }
-const REGISTRATION_STATUS_NAMES = {
-  reserved: '名额已暂留', payment_pending: '付款未完成', confirmed: '已报名',
-  waitlisted: '候补中', checked_in: '已签到', no_show: '未到场',
-  cancelled: '已取消', refunded: '已退款', expired: '已失效',
-}
-const PAYMENT_RESOLUTION_NAMES = {
-  not_required: '无需在线付款', action_required: '等待付款', pending: '付款确认中',
-  unknown: '付款结果待确认', confirmed: '付款已确认', failed: '付款失败', expired: '付款已超时',
-  refund_requested: '退款申请确认中', refunding: '退款处理中', refunded: '已退款',
-}
-const REFUND_STATUS_NAMES = {
-  requested: '退款申请已提交', approved: '退款申请已确认', processing: '退款处理中',
-  succeeded: '已退款', failed: '退款处理失败', rejected: '退款未通过',
-}
 const REDEMPTION_STATUS_NAMES = {
   authorizing: '正在确认', awaiting_fulfillment: '待门店交付', fulfilled: '已交付',
   cancelled: '已取消并返还积分', failed: '未完成', expired: '已失效',
@@ -103,31 +87,6 @@ const CONTENT_CARD_TAB_TARGETS = new Set([
   '/pages/home/index', '/pages/reservations/index', '/pages/order/index',
   '/pages/community/index', '/pages/profile/index',
 ])
-
-function activeActivityRegistrationRows(items) {
-  return (items || [])
-    .filter((item) => !['cancelled', 'refunded', 'expired'].includes(item.status))
-    .sort((left, right) => String(left.startsAt || '').localeCompare(String(right.startsAt || '')))
-    .slice(0, 5)
-}
-
-async function activityRegistrationViews(items) {
-  const rows = activeActivityRegistrationRows(items)
-  const paymentStates = await Promise.all(rows.map((item) => (
-    getActivityRegistrationPayment(item.publicId).catch(() => null)
-  )))
-  return rows.map((item, index) => {
-    const state = paymentStates[index] || {}
-    return Object.assign({}, item, state, {
-      title: item.activityTitle || '超嗨活动',
-      startsText: dateTime(item.startsAt),
-      statusText: REFUND_STATUS_NAMES[state.refundStatus]
-        || PAYMENT_RESOLUTION_NAMES[state.resolutionState]
-        || REGISTRATION_STATUS_NAMES[item.status]
-        || '状态待确认',
-    })
-  })
-}
 
 function memberCardPreviewLevel() {
   try {
@@ -285,8 +244,8 @@ function clearMemberLocalCache() {
 Page({
   data: {
     loading: true, busy: false, logoutBusy: false, recoveryBusy: false, recoveryMessage: '', benefitBusyId: '', redemptionBusyId: '',
-    error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '',
-    membership: null, points: [], benefits: [], reservations: [], registrations: [], contentCards: [],
+    error: '', benefitError: '', redemptionError: '', preferenceError: '',
+    membership: null, points: [], benefits: [], reservations: [], contentCards: [],
     membershipTerms: null, supportContact: null,
     agreedToPolicies: false,
     redemptionItems: [], redemptions: [], showRedemptions: false,
@@ -334,7 +293,7 @@ Page({
     const generation = this._memberLoadGeneration
     const isCurrent = () => !this._pageHidden && generation === this._memberLoadGeneration
 
-    if (isCurrent()) this.setData({ loading: true, error: '', benefitError: '', registrationError: '', redemptionError: '', preferenceError: '' })
+    if (isCurrent()) this.setData({ loading: true, error: '', benefitError: '', redemptionError: '', preferenceError: '' })
     try {
       const soft = (error) => {
         const message = String((error && error.message) || '')
@@ -348,7 +307,6 @@ Page({
           return null
         }),
         getReservations().catch(() => ({ reservations: [] })),
-        getActivityRegistrations().catch((error) => { if (isCurrent()) this.setData({ registrationError: soft(error) || '' }); return [] }),
         getRedemptionCatalog().catch((error) => { if (isCurrent()) this.setData({ redemptionError: soft(error) || '' }); return { items: [] } }),
         getRedemptions().catch(() => []),
         getProductRestrictions().catch(() => []),
@@ -372,21 +330,19 @@ Page({
       }).map((item) => ({
         publicId: item.publicId, title: `${dateTime(item.arrivalAt)} · ${item.guestCount}人`, statusText: ({ pending: '等待确认', confirmed: '预约已确认' })[item.status] || '状态待确认',
       })).slice(0, 3)
-      const registrations = await activityRegistrationViews(results[3])
-      if (!isCurrent()) return
       const membership = data.membership ? membershipView(data.membership) : null
-      const productRestrictions = (results[6] || []).map((item) => Object.assign({}, item, {
+      const productRestrictions = (results[5] || []).map((item) => Object.assign({}, item, {
         restrictionText: item.restrictionType === 'allergy_or_cannot_consume'
           ? '过敏或不能饮用' : '不喜欢',
       }))
       const tableConnection = getTableConnection()
       const expiryNotificationOption = membership && membership.expiryText
-        ? ((results[7] && results[7].authorizations) || []).find((item) => (
+        ? ((results[6] && results[6].authorizations) || []).find((item) => (
           item.notificationType === 'loyalty_points_expiring'
           && item.usesRemaining <= 0 && item.platformResult !== 'ban'
         )) || null
         : null
-      const redemptionItems = ((results[4] && results[4].items) || []).map((item) => {
+      const redemptionItems = ((results[3] && results[3].items) || []).map((item) => {
         const display = item.display || {}
         const inventoryText = item.remainingDailyInventory === null
           ? (item.remainingInventory === null ? '数量以页面确认结果为准' : `剩余 ${item.remainingInventory} 份`)
@@ -398,11 +354,11 @@ Page({
           actionText: item.eligible ? `${item.pointsRequired}积分兑换` : (item.ineligibleReason || '暂不可兑换'),
         })
       })
-      const redemptions = (results[5] || []).map((item) => Object.assign({}, item, {
+      const redemptions = (results[4] || []).map((item) => Object.assign({}, item, {
         statusText: REDEMPTION_STATUS_NAMES[item.status] || '状态待确认',
         canCancel: item.status === 'awaiting_fulfillment',
       })).slice(0, 5)
-      const preferenceView = customerPreferenceView(results[10])
+      const preferenceView = customerPreferenceView(results[9])
       const contentCards = (data.content || [])
         .map(memberContentCardView)
         .sort((left, right) => left.priority - right.priority)
@@ -418,19 +374,18 @@ Page({
           ? benefits.reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0)
           : null,
         reservations,
-        registrations,
         redemptionItems,
         redemptions,
         productRestrictions,
         contentCards,
         expiryNotificationOption,
-        wechatNotificationAuthorizations: (results[7] && results[7].authorizations) || [],
+        wechatNotificationAuthorizations: (results[6] && results[6].authorizations) || [],
         wechatNotificationPromptOptions: mergeWechatNotificationPromptOptions(
+          results[7] && results[7].authorizations,
           results[8] && results[8].authorizations,
-          results[9] && results[9].authorizations,
         ),
-        wechatSubscriptionPresentationOptions: extractPromptPresentation(results[8]),
-        wechatMemberCardPresentationOptions: extractPromptPresentation(results[9]),
+        wechatSubscriptionPresentationOptions: extractPromptPresentation(results[7]),
+        wechatMemberCardPresentationOptions: extractPromptPresentation(results[8]),
         showRedemptions: Boolean(membership && (redemptionItems.length || redemptions.length)),
         hasTableContext: ['active', 'already_active'].includes(tableConnection.status),
         displayName: wx.getStorageSync('mbox.member.displayName') || '',
@@ -438,8 +393,8 @@ Page({
         ...preferenceView,
       })
       if (isCurrent() && typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/profile/index') }
-      if (isCurrent()) rememberPresentationOptions('coupon_open', extractPromptPresentation(results[8]))
-      if (isCurrent()) rememberPresentationOptions('member_card', extractPromptPresentation(results[9]))
+      if (isCurrent()) rememberPresentationOptions('coupon_open', extractPromptPresentation(results[7]))
+      if (isCurrent()) rememberPresentationOptions('member_card', extractPromptPresentation(results[8]))
     } catch (error) {
       if (!isCurrent()) return
       const message = String((error && error.message) || '')
@@ -455,7 +410,7 @@ Page({
       if (isCurrent()) this.setData({
         loading: false,error:soft,
         membership:null,membershipTerms,supportContact:null,points:[],benefits:[],benefitCount:null,
-        reservations:[],registrations:[],redemptionItems:[],redemptions:[],productRestrictions:[],contentCards:[],
+        reservations:[],redemptionItems:[],redemptions:[],productRestrictions:[],contentCards:[],
         expiryNotificationOption:null,wechatNotificationAuthorizations:[],wechatNotificationPromptOptions:[],showRedemptions:false,
         preferenceFacts:[],preferenceSources:[],preferenceSourceCount:0,preferenceActiveCount:0,
       })
@@ -627,14 +582,12 @@ Page({
           recoveryMessage: '',
           error: '',
           benefitError: '',
-          registrationError: '',
           redemptionError: '',
           preferenceError: '',
           benefits: [],
           benefitCount: 0,
           points: [],
           reservations: [],
-          registrations: [],
           redemptionItems: [],
           redemptions: [],
           showRedemptions: false,
@@ -1051,38 +1004,10 @@ Page({
   openReservations() {
     wx.switchTab({ url: '/pages/reservations/index' })
   },
-  async openSuperhighService() {
-    const action = beginMemberAction(this, 'navigation')
-    if (!action) return
-    try {
-      if (!this.requireMembership('superhigh')) return
-      try {
-        const registrations = await activityRegistrationViews(await getActivityRegistrations())
-        if (!action.current()) return
-        this.setData({ registrations, registrationError: '' })
-        if (!registrations.length) return this.openSuperhighTab()
-        // Wait for the view update without treating a completed action as stale.
-        await new Promise((resolve) => this.setData({}, () => {
-          if (action.current()) wx.pageScrollTo({
-            selector: '#registered-activities',
-            duration: 320,
-            fail: () => { if (action.current()) wx.showToast({ title: '已报名活动正在显示，请稍后重试', icon: 'none' }) },
-          })
-          resolve()
-        }))
-      } catch (error) {
-        if (!action.current()) return
-        this.setData({ registrationError: customerErrorMessage(error, '报名记录暂时无法读取') })
-        wx.showModal({
-          title: '暂时无法读取报名记录',
-          content: '为避免重复报名，当前不会跳转到活动列表。请稍后重试。',
-          showCancel: false,
-          confirmText: '知道了',
-        })
-      }
-    } finally { action.finish() }
+  openSuperhighService() {
+    if (!this.requireMembership('superhigh')) return
+    wx.navigateTo({ url: '/pages/profile-activities/index' })
   },
-  openSuperhighTab() { wx.switchTab({ url: '/pages/community/index' }) },
   openPoints() {
     if (!this.requireMembership('points')) return
     wx.navigateTo({ url: '/pages/points/index' })
@@ -1140,12 +1065,5 @@ Page({
   openNotificationSettings() {
     if (!this.requireMembership('notifications')) return
     wx.navigateTo({ url: '/pages/profile-notifications/index' })
-  },
-  openCommunity(event) {
-    if (!this.requireMembership()) return
-    const activityId = String(event.currentTarget.dataset.id || '').trim()
-    if (!activityId) return
-    const registrationId = String(event.currentTarget.dataset.registrationId || '').trim()
-    wx.navigateTo({ url: `/pages/community-detail/index?id=${encodeURIComponent(activityId)}${registrationId ? '&registrationId=' + encodeURIComponent(registrationId) : ''}` })
   },
 })

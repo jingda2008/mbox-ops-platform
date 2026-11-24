@@ -1,3 +1,4 @@
+import {ticketRefundPreview} from './table-ticket-refund-preview.js'
 import {creditTableTicketGifts} from './table-ticket-gifts.js'
 import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
 import {PaymentRepository} from './payment-repository.js'
@@ -6,7 +7,7 @@ import type {ScopedTransaction} from './transaction-runner.js'
 
 // Freeze the exact lot on the original ticket. Already expired points are
 // distinguished from settled food discounts by the checkout source records.
-export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string) {
+export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string,previewVersion?:string) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   const ticket=(await tx.query<{point_lot_id:string|null;gift_points:number;price_minor:number;refunded_at:string|null}>(`
     SELECT k.point_lot_id,o.gift_points,o.price_minor,k.refunded_at FROM mbox.table_tickets k
@@ -22,14 +23,17 @@ export async function requestTicketRefund(tx:ScopedTransaction,registrationId:st
     WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.ticket_id=$3 AND f.status NOT IN('rejected','cancelled')`,[...scope,ticketId])).rows[0]
   if(previous)return {caseId:previous.id,status:previous.status,ticketId,amountMinor:ticket.price_minor,consumedMinor:Number(previous.consumed_minor)}
   if(ticket.refunded_at)throw new CustomerExperienceRequestError('该票已退款','TICKET_ALREADY_REFUNDED',409)
-  let frozen=0
+  let frozen=0,holdLot=false
   if(ticket.point_lot_id){
     const lot=(await tx.query<{remaining_points:number;status:string}>(`SELECT remaining_points,status FROM mbox.loyalty_point_lots
       WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,ticket.point_lot_id])).rows[0]!
     frozen=lot.remaining_points
-    if(lot.status==='available' || lot.status==='consumed')await tx.query(`UPDATE mbox.loyalty_point_lots SET status='ticket_hold'
-      WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,ticket.point_lot_id])
+    holdLot=lot.status==='available' || lot.status==='consumed'
   }
+  if(previewVersion && (await ticketRefundPreview(tx,ticketId))[0]?.previewVersion!==previewVersion)
+    throw new CustomerExperienceRequestError('原票金额或积分已变化，请刷新本票后重新核对','TICKET_PREVIEW_CHANGED',409)
+  if(holdLot)await tx.query(`UPDATE mbox.loyalty_point_lots SET status='ticket_hold'
+    WHERE tenant_id=$1 AND store_id=$2 AND id=$3`,[...scope,ticket.point_lot_id])
   const basis=(await tx.query<{consumed_minor:string;requires_review:boolean}>('SELECT * FROM mbox.ticket_refund_basis($1,$2,$3)',[...scope,ticketId])).rows[0]!
   const consumedMinor=Number(basis.consumed_minor),review=basis.requires_review
   const saved=(await tx.query<{id:string}>(`INSERT INTO mbox.table_ticket_refund_requests(tenant_id,store_id,ticket_id,
@@ -45,19 +49,15 @@ async function hasConfirmedDining(tx:ScopedTransaction,caseId:string){
 
 async function diningDifferencePaid(tx:ScopedTransaction,caseId:string,consumed:string){
   const scope=[tx.scope.tenantId,tx.scope.storeId,caseId,consumed]
-  const totals=await tx.query<{cleared:boolean}>(`SELECT count(*)>0 AND sum(c.amount_minor+coalesce(c.merchant_minor,0))=$4::bigint
-    AND bool_and((c.amount_minor=0 OR coalesce(p.status='succeeded' AND p.order_id=c.order_id AND p.amount_minor=c.amount_minor,false))
-      AND NOT EXISTS(SELECT 1 FROM mbox.refunds r WHERE (r.tenant_id,r.store_id,r.payment_id)=(p.tenant_id,p.store_id,p.id)
-        AND r.status NOT IN('cancelled','rejected'))) AS cleared
-    FROM mbox.ticket_dining_collections c LEFT JOIN mbox.payments p ON (p.tenant_id,p.store_id,p.id)=(c.tenant_id,c.store_id,c.payment_id)
-    WHERE (c.tenant_id,c.store_id,c.case_id)=($1,$2,$3) AND c.consented_at IS NOT NULL`,scope)
+  const totals=await tx.query<{cleared:boolean}>(`SELECT mbox.ticket_dining_cleared($1,$2,$3) AND sum(c.amount_minor+coalesce(c.merchant_minor,0))=$4::bigint AS cleared
+    FROM mbox.ticket_dining_collections c WHERE (c.tenant_id,c.store_id,c.case_id)=($1,$2,$3) AND c.superseded_at IS NULL`,scope)
   return totals.rows[0]?.cleared===true
 }
 
-export async function submitTicketCashRefund(tx:ScopedTransaction,caseId:string,employee:string,amountMinor:number,merchantReason:string|null) {
+export async function submitTicketCashRefund(tx:ScopedTransaction,caseId:string,employee:string,amountMinor:number,merchantReason:string|null,origin:'staff'|'automatic'='staff') {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
-  const row=(await tx.query<{refund_id:string|null;status:string;price_minor:number;payment_id:string;reason:string;source_review_required:boolean;unresolved:boolean;consumed_minor:string}>(`
-    SELECT f.refund_id,f.status,f.reason,b.requires_review AS source_review_required,b.unresolved,b.consumed_minor,o.price_minor,k.payment_id
+  const row=(await tx.query<{planned_refund_minor:number|null;planned_refund_employee:string|null;refund_id:string|null;status:string;price_minor:number;payment_id:string;reason:string;source_review_required:boolean;unresolved:boolean;consumed_minor:string}>(`
+    SELECT f.planned_refund_minor,f.planned_refund_employee,f.refund_id,f.status,f.reason,b.requires_review AS source_review_required,b.unresolved,b.consumed_minor,o.price_minor,k.payment_id
     FROM mbox.table_ticket_refund_requests f JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.id)=(f.tenant_id,f.store_id,f.ticket_id)
     JOIN mbox.table_ticket_purchases p ON (p.tenant_id,p.store_id,p.registration_id)=(k.tenant_id,k.store_id,k.registration_id)
     JOIN mbox.table_ticket_offers o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
@@ -72,6 +72,8 @@ export async function submitTicketCashRefund(tx:ScopedTransaction,caseId:string,
   }
   const confirmed=await hasConfirmedDining(tx,caseId)
   if(!merchantReason && (row.unresolved || ((row.source_review_required || confirmed) && !await diningDifferencePaid(tx,caseId,row.consumed_minor))))throw new CustomerExperienceRequestError('请先核对本票关联菜款及收款记录','TICKET_DINING_REVIEW_REQUIRED',409)
+  if(!merchantReason && row.planned_refund_minor!==null && (origin!=='automatic' || row.planned_refund_minor!==amountMinor || row.planned_refund_employee!==employee))
+    throw new CustomerExperienceRequestError('本案已安排自动送审，请从原案查看进度','TICKET_AUTO_REVIEW_PLANNED',409)
   if(amountMinor<=0 || !Number.isSafeInteger(amountMinor) || amountMinor>row.price_minor)throw new CustomerExperienceRequestError('退款金额超出原票实付')
   const pay=(await tx.query<{status:string;amount_minor:string}>(`SELECT status,amount_minor FROM mbox.payments
     WHERE tenant_id=$1 AND store_id=$2 AND id=$3 FOR UPDATE`,[...scope,row.payment_id])).rows[0]!
@@ -83,7 +85,7 @@ export async function submitTicketCashRefund(tx:ScopedTransaction,caseId:string,
   const saved=(await tx.query<{id:string}>(`INSERT INTO mbox.refunds(tenant_id,store_id,payment_id,public_id,amount_minor,
     currency,status,reason,requested_by_employee_id,provider_snapshot)
     VALUES($1,$2,$3,$4,$5,'CNY','requested',$6,$7,$8::jsonb) RETURNING id`,[...scope,row.payment_id,'TTR'+caseId.replaceAll('-',''),
-    amountMinor,merchantReason??row.reason,employee,JSON.stringify({tableTicketCaseId:caseId,merchantReason})])).rows[0]!
+    amountMinor,merchantReason??row.reason,employee,JSON.stringify({tableTicketCaseId:caseId,merchantReason,...(origin==='automatic'&&{submittedAfterDiningCollection:true})})])).rows[0]!
   await tx.query("UPDATE mbox.table_ticket_refund_requests SET refund_id=$4,status='requested',merchant_assumes_dining=$5 WHERE tenant_id=$1 AND store_id=$2 AND id=$3",
     [...scope,caseId,saved.id,Boolean(merchantReason)])
   if(merchantReason && confirmed){

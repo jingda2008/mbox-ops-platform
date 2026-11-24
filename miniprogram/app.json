@@ -8,6 +8,7 @@
     "pages/table-tickets/index",
     "pages/community-detail/index",
     "pages/profile/index",
+    "pages/profile-activities/index",
     "pages/profile-preferences/index",
     "pages/profile-contact/index",
     "pages/profile-coupons/index",

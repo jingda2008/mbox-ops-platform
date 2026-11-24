@@ -1,3 +1,4 @@
+import {processTicketRefundReviews} from './table-ticket-auto-review.js'
 import { ChannelReconciliationWorker } from './channel-reconciliation-worker.js'
 import {OfficialPointsNotificationWorker} from './official-points-notification-worker.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
@@ -150,6 +151,7 @@ export function createNormalizedWorkerRuntime(
     serviceSla: new ServiceTaskSlaWorker(transactions),
     reservationExpiry: new ReservationHoldExpiryWorker(transactions),
     paymentReservationExpiry: new PaymentReservationExpiryWorker(transactions),
+    ticketRefundReview: {runBatch:scope=>transactions.run(scope,processTicketRefundReviews)},
     activityRegistrationExpiry: new ActivityRegistrationExpiryWorker(transactions),
     activityWaitlistPromotion: new ActivityWaitlistPromotionWorker(
       transactions,

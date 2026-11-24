@@ -429,10 +429,10 @@ function menuCategoryIdentity(item) {
   }
 }
 
-function menuCategoryState(products, selectedTopCategory, selectedSubcategory, connected = false) {
+function menuCategoryState(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = []) {
   const roots = new Map()
   const childrenByRoot = new Map()
-  ;(products || []).forEach((item) => {
+  ;(products || []).concat(tickets.filter(ticket => ticket.categoryCode)).forEach((item) => {
     const category = menuCategoryIdentity(item)
     const existingRoot = roots.get(category.topCode)
     if (!existingRoot || category.topSortOrder < existingRoot.sortOrder) {
@@ -447,6 +447,9 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
       childrenByRoot.set(category.topCode, children)
     }
   })
+  const configuredTickets = Array.from(roots.values()).find(category => category.name === '门票')
+  const ticketCategoryCode = configuredTickets ? configuredTickets.code : '@tickets'
+  if (tickets.length) roots.set(ticketCategoryCode, {code: ticketCategoryCode, name: '门票', sortOrder: -1})
   // Keep the full catalogue independent from the connected-only recommendation tab.
   const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -2 }]
   // Recommendations have a separate helper entry, not a catalogue category.
@@ -467,6 +470,7 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
     ? selectedSubcategory : 'all'
   return {
     categories,
+    ticketCategoryCode,
     categoryPreview: categories.length <= 8 ? categories : topCode === 'recommendation' || categories.slice(0, 7).some((item) => item.code === topCode)
       ? categories.slice(0, 7) : categories.slice(0, 6).concat(categories.find((item) => item.code === topCode)),
     selectedSubcategoryName: (subcategories.find((item) => item.code === subcategoryCode) || {name:'全部'}).name,
@@ -620,6 +624,7 @@ Page({
     menuUpdateBusy: false,
     menuUpdatedAt: '',
     visibleProducts: [],
+    visibleTickets: [], ticketDays: [], ticketDay: '', ticketCategoryCode: '@tickets',
     detailProduct: null,
     detailInformationExpanded: false,
     detailSelectionsComplete: true,
@@ -708,19 +713,36 @@ Page({
     finally{if(this.isCurrentTableRequest(guard))this.setData({busy:false})}
   },
   async loadTableTicketOffers() {
+    const generation = this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
+    let rows = []
     try {
-      const offers=await getTableTicketOffers()
-      this.ticketMenuRows=offers.map(o=>({id:o.id,name:o.name,price:(o.priceMinor/100).toFixed(2),day:beijingDate(o.startsAt),
-        time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt),giftPoints:o.giftPoints,
-        saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':o.remaining===0?'公共余量已售完':''}))
-      const days=[...new Set(this.ticketMenuRows.map(row=>row.day))]
-      const day=days.includes(this.data.ticketDay)?this.data.ticketDay:(days[0]||'')
-      this.setData({ticketDays:days,ticketDay:day,tableTicketOffers:this.ticketMenuRows.filter(row=>row.day===day)})
-    } catch { this.ticketMenuRows=[];this.setData({tableTicketOffers:[],ticketDays:[]}) }
+      const offers = await getTableTicketOffers()
+      rows = offers.map(offer => ({
+        id: offer.id, name: offer.name, title: offer.title, areaName: offer.areaName,
+        categoryCode: offer.categoryCode, categoryName: offer.categoryName, categorySortOrder: offer.categorySortOrder,
+        categoryParentCode: offer.categoryParentCode, categoryParentName: offer.categoryParentName, topCategorySortOrder: offer.topCategorySortOrder,
+        cover: offer.coverUrl ? publicImageUrl(offer.coverUrl, 'menu') : '',
+        price: money(offer.priceMinor), giftPoints: offer.giftPoints, day: beijingDate(offer.startsAt),
+        time: dateTime(offer.startsAt), endTime: dateTime(offer.endsAt),
+        saleText: offer.saleState === 'upcoming' ? '待开售' : offer.saleState === 'ended' ? '已停售' : offer.remaining === 0 ? '公共余量已售完' : '',
+      }))
+    } catch { /* Keep the dining menu available when tickets cannot be read. */ }
+    if (generation !== this.ticketReadGeneration) return
+    this.ticketMenuRows = rows
+    const ticketDays = [...new Set(rows.map(ticket => ticket.day))]
+    this.setData({
+      ticketDays, ticketDay: ticketDays.includes(this.data.ticketDay) ? this.data.ticketDay : '',
+      ...menuCategoryState(this.data.products, this.data.selectedCategory, this.data.selectedSubcategory, !this.data.browseOnly, rows),
+    }, () => this.applyFilters())
   },
-  chooseTicketDay(e){
-    const day=e.currentTarget.dataset.day
-    this.setData({ticketDay:day,tableTicketOffers:(this.ticketMenuRows||[]).filter(row=>row.day===day)})
+  chooseTicketDay(event) {
+    this.setData({ticketDay: event.currentTarget.dataset.day}, () => this.applyFilters())
+  },
+  ticketCoverFailed(event) {
+    const {id, cover} = event.currentTarget.dataset
+    this.ticketMenuRows = (this.ticketMenuRows || []).map(ticket =>
+      ticket.id === id && ticket.cover === cover ? {...ticket, cover: ''} : ticket)
+    this.applyFilters()
   },
   async readTabPoints(event){
     try{const rows=await getTabPoints();this.setData({tabPoints:Array.isArray(rows)?rows:[],tabPointsError:''})}
@@ -769,6 +791,7 @@ Page({
     })
   },
   onHide() {
+    this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
     this.selectionNotificationPending = null
     this.setData({ membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview || !!(this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote'))
@@ -778,6 +801,7 @@ Page({
     this.stopMenuWindowRefresh(); this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
   onUnload() {
+    this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
     this.invalidateCheckoutCoupons(true, false)
     const record = this.queuePendingGuestPaymentAbandonment()
     if (record) void this.executePendingGuestPaymentAbandonment(record)
@@ -984,7 +1008,7 @@ Page({
     this.menuDisplayStartedAt = Date.now()
     this.setData({ loading: false, browseOnly: false, products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       menuImageGeneration: this.data.menuImageGeneration + 1,
-      ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
+      ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows) })
     this.applyFilters(() => {
       if (!request || this.isCurrentTableRequest(request)) this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
     })
@@ -1013,11 +1037,12 @@ Page({
     if (!request || !this.isCurrentTableRequest(request)) return false
     const readVersion = (this.menuWindowReadVersion || 0) + 1
     this.menuWindowReadVersion = readVersion
+    void this.loadTableTicketOffers()
     try {
       const menu = await (this.data.browseOnly ? getPublicMenu({}) : getMenu({}))
       if (!this.isCurrentTableRequest(request) || this.menuWindowReadVersion !== readVersion) return false
       const products = menuProducts(menu)
-      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true) })
+      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows) })
       this.applyFilters()
       if (!this.data.browseOnly) await this.refreshSharedCart(true, request)
       return true
@@ -1165,7 +1190,7 @@ Page({
       const categoryState = menuCategoryState(
         products,
         this.data.selectedCategory,
-        this.data.selectedSubcategory,
+        this.data.selectedSubcategory, false, this.ticketMenuRows,
       )
       this.setData({
         loading: false,
@@ -1201,9 +1226,9 @@ Page({
         serviceStaffName: '',
         serviceSummary: { status: 'ready', label: '到店后可呼叫服务', detail: '扫码开台后显示本桌服务进度', live: false },
         products: [],
-        visibleProducts: [],
+        ...menuCategoryState([], this.data.selectedCategory, this.data.selectedSubcategory, false, this.ticketMenuRows),
         error: connectionError || customerErrorMessage(error, '今晚菜单暂时无法读取，请稍后再试'),
-      })
+      }, () => this.applyFilters())
       return false
     }
   },
@@ -1225,7 +1250,7 @@ Page({
       products,
         this.data.selectedCategory,
         this.data.selectedSubcategory,
-        true,
+        true, this.ticketMenuRows,
     )
     const sharedCart = results[1]
     const cart = sharedCartView(sharedCart, products)
@@ -1531,7 +1556,7 @@ Page({
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
   selectCategory(event) {
     const selectedCategory = event.currentTarget.dataset.code
-    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly)
+    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly, this.ticketMenuRows)
     this.setData(Object.assign(categoryState, {categoriesExpanded:false,subcategoriesExpanded:false,menuScrollTarget:''}), () => {
       this.applyFilters()
       this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
@@ -1595,7 +1620,15 @@ Page({
       const searchable = [item.name, item.description, item.includedText].concat(item.aliases || [], item.tasteLabels || []).join(' ').toLowerCase()
       return topCategoryMatches && subcategoryMatches && (!search || searchable.includes(search))
     })
-    this.setData({ visibleProducts }, onVisible)
+    const visibleTickets = (this.ticketMenuRows || []).filter(ticket => {
+      const inTicketCategory = this.data.selectedCategory === this.data.ticketCategoryCode
+      const category = ticket.categoryCode ? menuCategoryIdentity(ticket) : null
+      if (this.data.selectedCategory !== 'all' && !inTicketCategory && this.data.selectedCategory !== category?.topCode) return false
+      if (this.data.selectedSubcategory !== 'all' && this.data.selectedSubcategory !== category?.childCode) return false
+      if (inTicketCategory && this.data.ticketDay && ticket.day !== this.data.ticketDay) return false
+      return !search || ['门票', ticket.name, ticket.title, ticket.areaName, ticket.day, ticket.time, ticket.endTime].join(' ').toLowerCase().includes(search)
+    })
+    this.setData({ visibleProducts, visibleTickets }, onVisible)
   },
 
   ensureInitialRecommendations(request) {

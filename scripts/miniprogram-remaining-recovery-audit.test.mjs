@@ -104,7 +104,7 @@ for(const result of [null,{}, {publicId:'other',status:'cancelled'}])test(`activ
 test('activity native payment hide and return reconciles original registration without repeating charge',async()=>{
  let queries=0;const f=activity({startActivityRegistrationPayment:async()=>({providerAction:payment}),queryActivityRegistrationPayment:async()=>{queries++;return {registrationPublicId:'registration-a',registrationStatus:'confirmed',resolutionState:'confirmed',allowedActions:[]}}}),p=f.page
  f.wx.requestPayment=o=>{f.state.calls.push(['pay']);p.onHide();p.onShow();o.success({})}
- await p.startPayment();assert.equal(queries,1);assert.equal(f.state.calls.filter(c=>c[0]==='pay').length,1);assert.match(p.data.success,/支付通道确认/);assert.equal(p.data.busy,false)
+ await p.startPayment();assert.equal(queries,1);assert.equal(f.state.calls.filter(c=>c[0]==='pay').length,1);assert.match(p.data.success,/付款已确认/);assert.equal(p.data.busy,false)
 })
 test('activity normal cancellation requires matching authoritative receipt',async()=>{
  const f=activity({cancelActivityRegistration:async()=>({publicId:'registration-a',status:'cancelled'})}),p=f.page;await p.cancelRegistration()
@@ -134,7 +134,7 @@ test('activity changed payment cannot replace original unknown action',async()=>
 })
 test('reservation history failure keeps booking creation disabled',async()=>{
  const f=pageFixture('reservations',{getReservations:async()=>{throw Error('history unavailable')},getReservationPerformanceImpacts:async()=>({impacts:[]}),getReservationPerformanceNotificationAuthorizations:async()=>({authorizations:[]}),getPendingCustomerReservation:async()=>null})
- f.page.preloadWechatSubscriptionPresentationOptions=async()=>[];await f.page.loadData();assert.equal(f.page.data.reservationRecoveryReady,false);assert.match(f.page.data.error,/history/)
+ f.page.preloadWechatSubscriptionPresentationOptions=async()=>[];await f.page.loadData();assert.equal(f.page.data.reservationRecoveryReady,false);assert.equal(f.page.data.error,'暂时无法查看预约，请稍后刷新')
 })
 test('bottle photo finishing after hide is removed and cannot reappear',async()=>{
  const f=pageFixture('profile-bottle-detail',{getCustomerBottlePhoto:async()=>({base64:'private-photo'})}),p=f.page;let writing;const removed=[]

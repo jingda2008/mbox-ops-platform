@@ -1,3 +1,4 @@
+import {requirePersonalTicketRefund} from './table-ticket-admission-policy.js'
 import {ticketRefundPreview} from './table-ticket-refund-preview.js'
 import {creditTableTicketGifts} from './table-ticket-gifts.js'
 import {LoyaltyOperationalControlRepository} from './loyalty-operational-control-repository.js'
@@ -7,7 +8,7 @@ import type {ScopedTransaction} from './transaction-runner.js'
 
 // Freeze the exact lot on the original ticket. Already expired points are
 // distinguished from settled food discounts by the checkout source records.
-export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string,previewVersion?:string) {
+export async function requestTicketRefund(tx:ScopedTransaction,registrationId:string,ticketId:string,customerId:string,reason:string,previewVersion?:string,merchant=false) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   const ticket=(await tx.query<{point_lot_id:string|null;gift_points:number;price_minor:number;refunded_at:string|null}>(`
     SELECT k.point_lot_id,o.gift_points,o.price_minor,k.refunded_at FROM mbox.table_tickets k
@@ -23,6 +24,7 @@ export async function requestTicketRefund(tx:ScopedTransaction,registrationId:st
     WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.ticket_id=$3 AND f.status NOT IN('rejected','cancelled')`,[...scope,ticketId])).rows[0]
   if(previous)return {caseId:previous.id,status:previous.status,ticketId,amountMinor:ticket.price_minor,consumedMinor:Number(previous.consumed_minor)}
   if(ticket.refunded_at)throw new CustomerExperienceRequestError('该票已退款','TICKET_ALREADY_REFUNDED',409)
+  if(!merchant)await requirePersonalTicketRefund(tx,ticketId,'ticket')
   let frozen=0,holdLot=false
   if(ticket.point_lot_id){
     const lot=(await tx.query<{remaining_points:number;status:string}>(`SELECT remaining_points,status FROM mbox.loyalty_point_lots
@@ -70,6 +72,7 @@ export async function submitTicketCashRefund(tx:ScopedTransaction,caseId:string,
     if(!original.rowCount)throw new CustomerExperienceRequestError('原退款已提交，本次金额或退票原因与原申请不一致，请查询原退款','TICKET_REFUND_CHANGED',409)
     return {caseId,refundId:row.refund_id}
   }
+  if(!merchantReason)await requirePersonalTicketRefund(tx,caseId,'case')
   const confirmed=await hasConfirmedDining(tx,caseId)
   if(!merchantReason && (row.unresolved || ((row.source_review_required || confirmed) && !await diningDifferencePaid(tx,caseId,row.consumed_minor))))throw new CustomerExperienceRequestError('请先核对本票关联菜款及收款记录','TICKET_DINING_REVIEW_REQUIRED',409)
   if(!merchantReason && row.planned_refund_minor!==null && (origin!=='automatic' || row.planned_refund_minor!==amountMinor || row.planned_refund_employee!==employee))

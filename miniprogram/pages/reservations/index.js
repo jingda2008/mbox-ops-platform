@@ -1,4 +1,4 @@
-const { parseInstant, money, dateTime } = require('../../utils/format')
+const { parseInstant, money, dateTime, beijingDate } = require('../../utils/format')
 const {
   getReservations,
   getReservationAvailability,
@@ -50,13 +50,22 @@ function shanghaiDate(days) {
   return new Date(Date.now() + days * 86400000 + 8 * 3600000).toISOString().slice(0, 10)
 }
 
-function performanceRows(view) {
-  return (view && view.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => ({
-    id: item.id,
-    name: item.performerStageName,
-    timeText: `${dateTime(item.startsAt)}–${dateTime(item.endsAt).slice(6)}`,
-    imageUrl: item.performerProfile && item.performerProfile.imageUrl,
-  }))
+function performanceRows(view, reservationDate) {
+  return (view && view.schedules || []).filter((item) => item.status !== 'cancelled').map((item) => {
+    const start = dateTime(item.startsAt)
+    const end = dateTime(item.endsAt)
+    const startDay = beijingDate(item.startsAt, '')
+    const endDay = beijingDate(item.endsAt, '')
+    const nextDay = startDay && beijingDate(parseInstant(item.startsAt) + 86400000)
+    const endLabel = endDay === startDay ? end.slice(6) : endDay === nextDay ? '次日 ' + end.slice(6) : end
+    const startLabel = startDay === reservationDate ? start.slice(6) : start
+    return {
+      id: item.id, name: item.performerStageName,
+      timeText: startDay && endDay ? start + '–' + endLabel : '时间待定',
+      shortTimeText: startDay && endDay ? startLabel + '–' + endLabel : '时间待定',
+      imageUrl: item.performerProfile && item.performerProfile.imageUrl,
+    }
+  })
 }
 
 function impactView(impact) {
@@ -196,7 +205,7 @@ Page({
         showForm: !pendingReservation && reservations.length === 0,
       })
       await Promise.all([this.checkAvailability(), this.loadPerformances()])
-    } catch (error) { if (generation === this.loadGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '预约信息载入失败') }) }
+    } catch (error) { if (generation === this.loadGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '暂时无法查看预约，请稍后刷新') }) }
   },
 
   retryImpacts() { this.loadData() },
@@ -286,13 +295,13 @@ Page({
   async checkAvailability() {
     const generation = this.availabilityGeneration = (this.availabilityGeneration || 0) + 1
     if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) {
-      this.setData({ checking: false, availability: null, availabilityText: '请先填写有效人数' })
+      this.setData({ checking: false, availabilityReadFailed: false, availability: null, availabilityText: '请先填写有效人数' })
       return
     }
     const arrivalAt = this.arrivalAt()
     const partySize = this.data.partySize
     const current = () => generation === this.availabilityGeneration && arrivalAt === this.arrivalAt() && partySize === this.data.partySize
-    this.setData({ checking: true })
+    this.setData({ checking: true, availabilityReadFailed: false, availability: null, depositText: '' })
     try {
       const availability = await getReservationAvailability(arrivalAt, partySize)
       if (!current()) return
@@ -308,7 +317,7 @@ Page({
       })
     } catch (error) {
       if (!current()) return
-      this.setData({ availability: null, availabilityText: customerErrorMessage(error, '暂时无法确认容量'), depositText: '' })
+      this.setData({ availability: null, availabilityReadFailed: true, availabilityText: '暂时查不到这个时段的余位，你选的时间和人数已保留。', depositText: '' })
     } finally { if (current()) this.setData({ checking: false }) }
   },
 
@@ -320,7 +329,7 @@ Page({
     try {
       const view = await getReservationPerformances(date)
       if (!current()) return
-      const performances = performanceRows(view)
+      const performances = performanceRows(view, date)
       const selectedPerformanceId = performances.some((item) => item.id === this.data.selectedPerformanceId) ? this.data.selectedPerformanceId : ''
       this.setData({
         performances,
@@ -352,8 +361,8 @@ Page({
         confirmText: '确认取消',
         cancelText: '再想想',
         success: (result) => resolve(Boolean(result.confirm)),
-        fail: (error) => {
-          wx.showToast({ title: (error && error.errMsg) || '确认弹窗未能打开', icon: 'none' })
+        fail: () => {
+          wx.showToast({ title: '尚未取消预约，请稍后再试', icon: 'none' })
           resolve(false)
         },
       })
@@ -375,7 +384,7 @@ Page({
 
   onNameInput(event) { this.setData({ customerName: event.detail.value }) },
   onContactInput(event) { this.setData({ contact: event.detail.value }) },
-  onPartySizeInput(event) { this.setData({ partySize: Number(event.detail.value) || 0 }) },
+  onPartySizeInput(event) { this.setData({ partySize: Number(event.detail.value) || 0, availability: null, availabilityReadFailed: false, checking: false, depositText: '', availabilityText: '填写人数后查询余位' }) },
   onPartySizeConfirm() { this.checkAvailability() },
   onDateChange(event) {
     this.setData({ reservationDate: event.detail.value }, () => Promise.all([this.checkAvailability(), this.loadPerformances()]))
@@ -400,7 +409,9 @@ Page({
       if (this.data.partySize < 1 || this.data.partySize > this.data.maxGuestCount) {
         return this.setData({ error: `预约人数需在1至${this.data.maxGuestCount}人之间` })
       }
-      if (!this.data.availability || !this.data.availability.acceptingReservations) {
+      if (this.data.checking) return
+      if (!this.data.availability) return this.checkAvailability()
+      if (!this.data.availability.acceptingReservations) {
         return this.setData({ error: '请先选择当前可接受预约的时间与人数' })
       }
     }

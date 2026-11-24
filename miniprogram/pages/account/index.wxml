@@ -3,6 +3,13 @@
     <view class="brand-row"><view><text class="eyebrow">{{historyMode ? '个人订单' : '当前桌台'}}</text><text class="account-table">{{historyMode ? '我的订单' : tableCode + ' 桌账摘要'}}</text></view></view>
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="{{historyMode ? '正在读取我的订单' : '正在查看桌账'}}" />
+  <view wx:elif="{{readFailed}}" class="panel">
+    <state-panel type="error" title="{{historyMode ? '暂时查不到本人订单' : '暂时查不到本桌账单'}}" message="{{error}}" action-text="重新读取" bindaction="retryRead" />
+    <block wx:if="{{!historyMode}}">
+      <button class="secondary-button" bindtap="rescanTable">重新扫描桌码</button>
+      <navigator class="section-link" url="/pages/account/index?mode=history">查看我的订单 ›</navigator>
+    </block>
+  </view>
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view>
     <view wx:if="{{success}}" class="success-banner">{{success}}</view>
@@ -10,15 +17,22 @@
       <text class="eyebrow">{{settlementReviewCount ? '可直接支付余额' : '当前未结余额'}}</text>
       <text class="account-total__amount">{{outstandingText}}</text>
       <text wx:if="{{settlementReviewCount}}" class="account-note">另有 {{settlementReviewCount}} 单待核对，未计入此金额。</text>
-      <text class="account-note">勾选本桌订单合并付款，原订单分别保留。</text>
-      <button wx:if="{{selectedPublicIds.length}}" loading="{{payingBatch}}" disabled="{{payingBatch}}" bindtap="paySelectedOrders">支付所选 {{selectedPublicIds.length}} 单 · {{selectedTotalText}}</button>
+      <block wx:if="{{pendingBatch}}">
+        <text class="account-note">上次付款{{originalAmountText ? ' ' + originalAmountText : ''}}待核对。刷新可查看原订单的最新状态。</text>
+        <button class="batch-refresh" disabled="{{payingBatch}}" bindtap="retryRead">刷新原单状态</button>
+        <button wx:if="{{canResumeBatch}}" disabled="{{payingBatch}}" bindtap="paySelectedOrders">继续原付款</button>
+      </block>
+      <text wx:else class="account-note">勾选本桌订单合并付款，原订单分别保留。</text>
+      <button wx:if="{{!pendingBatch && selectedPublicIds.length}}" loading="{{payingBatch}}" disabled="{{payingBatch}}" bindtap="paySelectedOrders">支付所选 {{selectedPublicIds.length}} 单 · {{selectedTotalText}}</button>
     </view>
     <view class="warning payment-boundary">{{historyMode ? '显示本人在各桌的订单，可继续翻页；不包含同桌其他客人的订单。' : '付款或退款到账后更新金额。如需帮助，请联系员工。'}}</view>
+    <navigator wx:if="{{orders.length}}" class="section-link" url="/pages/profile-contact/index">取消订单请联系工作人员 ›</navigator>
     <view class="section">
       <view class="section-title"><text>{{historyMode ? '我的点单记录' : '本桌订单'}}</text><text class="section-link">下拉刷新</text></view>
       <view wx:if="{{orders.length}}" class="order-list">
         <view wx:for="{{orders}}" wx:key="publicId" class="panel order-card">
-          <button wx:if="{{item.canPay}}" disabled="{{payingBatch}}" data-id="{{item.publicId}}" bindtap="togglePaymentOrder">{{item.selected ? '☑ 已选，点击取消' : '☐ 选择本单'}}</button>
+          <text wx:if="{{pendingBatch && item.selected}}" class="account-note">上次付款所选订单</text>
+          <button wx:if="{{!pendingBatch && item.canPay}}" disabled="{{payingBatch}}" data-id="{{item.publicId}}" bindtap="togglePaymentOrder">{{item.selected ? '☑ 已选，点击取消' : '☐ 选择本单'}}</button>
           <view class="order-card__head">
             <view>
               <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>

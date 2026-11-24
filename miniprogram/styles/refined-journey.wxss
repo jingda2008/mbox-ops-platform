@@ -145,7 +145,7 @@
   .page.page .checkout-confirm__footer { grid-template-columns:minmax(0,1fr); }
 }
 /* Browsing keeps the menu first; scan remains a reachable compact action. */
-.page.page .browse-intro--compact { display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:0;padding:16rpx 20rpx;border-radius:18rpx;box-shadow:none; }
+.page.page .browse-intro--compact { display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:0;padding:4rpx 20rpx;border-radius:18rpx;box-shadow:none; }
 .page.page .browse-intro--compact .browse-intro__copy { flex:1;min-width:0;padding:0; }
 .page.page .scan-strip-title { display:block;font-size:26rpx;line-height:1.5;font-weight:600; }
 .page.page .scan-strip-copy { display:block;font-size:22rpx;line-height:1.5;color:#e4e8df; }

@@ -18,19 +18,15 @@ const {
   removeSharedCartLine,
   clearSharedCart,
   getTableOrders,
-  abandonGuestCheckout,
   getTodayPerformances,
   getCustomerBenefits,
   getMiniBootstrap, getTableTicketOffers, getTabPoints, confirmTabPoints, getAssistedPointsProposal, adoptAssistedPointsProposal,
-  getVerifiedPhones,
-  replaceVerifiedPhone,
   getWechatNotificationPrompt,
   createServiceTask,
   getServiceRequests,
 } = require('../../utils/api')
-const { readWechatPhoneAuthorization } = require('../../utils/wechat-phone')
 const { getRuntimeConfig } = require('../../config/index')
-const { getTableSession, tableSessionCacheScope, rememberTableConnection } = require('../../utils/session')
+const { parseScanValue, getTableSession, tableSessionCacheScope, rememberTableConnection } = require('../../utils/session')
 const { createTableRequestGuard, tableRequestScope } = require('../../utils/table-request-scope')
 const { randomId } = require('../../utils/id')
 const { money, dateTime, beijingDate } = require('../../utils/format')
@@ -43,8 +39,6 @@ const { rememberPresentationOptions } = require('../../utils/wechat-subscription
 const { isPresentableWechatJsapiAction } = require('../../utils/wechat-payment')
 const {
   PENDING_GUEST_PAYMENT_ABANDONMENT_KEY,
-  createGuestPaymentAbandonmentRecord,
-  isRetryableGuestPaymentAbandonment,
 } = require('../../utils/guest-payment-abandonment')
 
 const PENDING_PAYMENT_KEY = 'mbox.pending.guest.payment.v1'
@@ -72,7 +66,6 @@ const CHECKOUT_REJECTED_BEFORE_ORDER = new Set([
   'GUEST_ORDER_DUPLICATE_CONFIRMATION_REQUIRED',
   'GUEST_ORDER_RATE_LIMITED',
 ])
-const MEMBERSHIP_INVITE_DISMISSED_KEY = 'mbox.membership.invite.dismissed.until.v1'
 
 function repeatedQuantityLines(lines) {
   const grouped = new Map()
@@ -217,22 +210,6 @@ function applyWechatSubscriptionOutcomes(options, outcomes) {
       usesRemaining: platformResult === 'accept' ? 1 : 0,
     })
   })
-}
-
-function parseScanValue(value) {
-  const raw = String(value || '').trim()
-  if (!raw) return {}
-  const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw
-  if (!query.includes('=')) return { token: raw }
-  return query.split('&').reduce((result, pair) => {
-    const position = pair.indexOf('=')
-    if (position < 1) return result
-    const key = decodeURIComponent(pair.slice(0, position))
-    const item = decodeURIComponent(pair.slice(position + 1))
-    if (key === 'scene') return Object.assign(result, parseScanValue(item))
-    result[key] = item
-    return result
-  }, {})
 }
 
 // Display only the authoritative selling window; purchase eligibility still
@@ -429,14 +406,16 @@ function menuCategoryIdentity(item) {
   }
 }
 
-function menuCategoryState(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = []) {
+function menuCategoryState(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = [], ticketState = {}, readError = ticketState.ticketReadError) {
+  const previousTicketCode = readError || selectedTopCategory === ticketState.ticketCategoryCode ? ticketState.ticketCategoryCode : ''
   const roots = new Map()
   const childrenByRoot = new Map()
   ;(products || []).concat(tickets.filter(ticket => ticket.categoryCode)).forEach((item) => {
     const category = menuCategoryIdentity(item)
     const existingRoot = roots.get(category.topCode)
     if (!existingRoot || category.topSortOrder < existingRoot.sortOrder) {
-      roots.set(category.topCode, { code: category.topCode, name: category.topName, sortOrder: category.topSortOrder })
+      const monthly = /^(\d{1,2}月限定)(.{1,4})$/.exec(category.topName)
+      roots.set(category.topCode, { code: category.topCode, name: category.topName, monthLabel: monthly ? monthly[1] : '', monthSubject: monthly ? monthly[2] : '', sortOrder: category.topSortOrder })
     }
     if (category.childCode) {
       const children = childrenByRoot.get(category.topCode) || new Map()
@@ -448,14 +427,15 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
     }
   })
   const configuredTickets = Array.from(roots.values()).find(category => category.name === '门票')
-  const ticketCategoryCode = configuredTickets ? configuredTickets.code : '@tickets'
-  if (tickets.length) roots.set(ticketCategoryCode, {code: ticketCategoryCode, name: '门票', sortOrder: -1})
+  const ticketCategoryCode = configuredTickets ? configuredTickets.code : previousTicketCode || '@tickets'
+  if (tickets.length || previousTicketCode) roots.set(ticketCategoryCode, {code: ticketCategoryCode, name: '门票', sortOrder: -1})
   // Keep the full catalogue independent from the connected-only recommendation tab.
   const leadingCategories = [{ code: 'all', name: '全部', sortOrder: -2 }]
   // Recommendations have a separate helper entry, not a catalogue category.
   const categories = leadingCategories.concat(
     Array.from(roots.values()).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN')),
   )
+  if (previousTicketCode && selectedTopCategory === previousTicketCode) selectedTopCategory = ticketCategoryCode
   const fallbackTopCode = 'all'
   const topCode = (connected && selectedTopCategory === 'recommendation')
     || categories.some((item) => item.code === selectedTopCategory) ? selectedTopCategory : fallbackTopCode
@@ -471,8 +451,6 @@ function menuCategoryState(products, selectedTopCategory, selectedSubcategory, c
   return {
     categories,
     ticketCategoryCode,
-    categoryPreview: categories.length <= 8 ? categories : topCode === 'recommendation' || categories.slice(0, 7).some((item) => item.code === topCode)
-      ? categories.slice(0, 7) : categories.slice(0, 6).concat(categories.find((item) => item.code === topCode)),
     selectedSubcategoryName: (subcategories.find((item) => item.code === subcategoryCode) || {name:'全部'}).name,
     selectedCategory: topCode,
     subcategories,
@@ -624,7 +602,7 @@ Page({
     menuUpdateBusy: false,
     menuUpdatedAt: '',
     visibleProducts: [],
-    visibleTickets: [], ticketDays: [], ticketDay: '', ticketCategoryCode: '@tickets',
+    ticketReadError: false, ticketReading: false, visibleTickets: [], ticketDays: [], ticketDay: '', ticketCategoryCode: '@tickets',
     detailProduct: null,
     detailInformationExpanded: false,
     detailSelectionsComplete: true,
@@ -634,10 +612,7 @@ Page({
     detailEditVersion: null,
     categories: [{ code: 'all', name: '全部' }],
     selectedCategory: 'all',
-    categoryPreview: [{code:'all',name:'全部'}],
-    categoriesExpanded: false,
     subcategoriesExpanded: false,
-    searchExpanded: false,
     menuScrollTarget: '',
     selectedSubcategoryName: '全部',
     subcategories: [],
@@ -675,12 +650,8 @@ Page({
     checkoutLocked: false,
     paymentResult: null,
     benefitCount: 0,
-    membershipInviteVisible: false,
     checkoutMemberInviteVisible: false,
-    membershipBusy: false,
     membershipStatus: 'unknown',
-    menuPhoneStatus: 'unknown',
-    membershipInviteError: '',
     membershipTerms: null,
     wechatNotificationPromptOptions: [],
     wechatOrderSelectionPromptOptions: [],
@@ -696,7 +667,7 @@ Page({
       if(!this.isCurrentTableRequest(guard))return
       this.setData({assistedPointsProposal:proposal})
       if(event && !proposal)wx.showToast({title:'本桌暂无待确认代点单',icon:'none'})
-    }catch(e){if(event && this.isCurrentTableRequest(guard))this.setData({error:e.message})}
+    }catch(e){if(event && this.isCurrentTableRequest(guard))this.setData({error:customerErrorMessage(e,'暂时无法查看这笔代点单，请联系服务员')})}
   },
   async adoptStaffPoints(){
     const proposal=this.data.assistedPointsProposal,guard=this.currentTableRequest()
@@ -709,16 +680,19 @@ Page({
       this.checkoutLineNotes=result.notes
       this.setData({assistedPointsProposal:null,checkoutConfirmVisible:true,pointsPickerOpen:true,pointsInput:String(result.quote.pointsUsed),
         couponSelections:[],couponQuote:result.quote,couponQuoteTotal:money(result.quote.payableMinor),couponNeedsReview:false})
-    }catch(e){if(this.isCurrentTableRequest(guard))this.setData({error:e.message||'代点单已变化，请核对'})}
+    }catch(e){if(this.isCurrentTableRequest(guard))this.setData({error:customerErrorMessage(e,'请和服务员核对这笔代点单')})}
     finally{if(this.isCurrentTableRequest(guard))this.setData({busy:false})}
   },
   async loadTableTicketOffers() {
     const generation = this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
     let rows = []
+    let ticketReadError = false
+    this.setData({ ticketReading: true })
     try {
       const offers = await getTableTicketOffers()
       rows = offers.map(offer => ({
         id: offer.id, name: offer.name, title: offer.title, areaName: offer.areaName,
+        showArea: Boolean(offer.areaName && !(offer.name || '').includes(offer.areaName)),
         categoryCode: offer.categoryCode, categoryName: offer.categoryName, categorySortOrder: offer.categorySortOrder,
         categoryParentCode: offer.categoryParentCode, categoryParentName: offer.categoryParentName, topCategorySortOrder: offer.topCategorySortOrder,
         cover: offer.coverUrl ? publicImageUrl(offer.coverUrl, 'menu') : '',
@@ -726,13 +700,13 @@ Page({
         time: dateTime(offer.startsAt), endTime: dateTime(offer.endsAt),
         saleText: offer.saleState === 'upcoming' ? '待开售' : offer.saleState === 'ended' ? '已停售' : offer.remaining === 0 ? '公共余量已售完' : '',
       }))
-    } catch { /* Keep the dining menu available when tickets cannot be read. */ }
+    } catch { ticketReadError = true }
     if (generation !== this.ticketReadGeneration) return
     this.ticketMenuRows = rows
     const ticketDays = [...new Set(rows.map(ticket => ticket.day))]
     this.setData({
-      ticketDays, ticketDay: ticketDays.includes(this.data.ticketDay) ? this.data.ticketDay : '',
-      ...menuCategoryState(this.data.products, this.data.selectedCategory, this.data.selectedSubcategory, !this.data.browseOnly, rows),
+      ticketReadError, ticketReading: false, ticketDays, ticketDay: ticketDays.includes(this.data.ticketDay) ? this.data.ticketDay : '',
+      ...menuCategoryState(this.data.products, this.data.selectedCategory, this.data.selectedSubcategory, !this.data.browseOnly, rows, this.data, ticketReadError),
     }, () => this.applyFilters())
   },
   chooseTicketDay(event) {
@@ -755,7 +729,7 @@ Page({
     this.setData({busy:true})
     const answer=await new Promise(resolve=>wx.showModal({title:'确认原挂桌单用分',content:'使用 '+row.points+' 分结算原单，抵分后菜款 ¥'+((row.dueMinor-row.points*100)/100).toFixed(2)+'。已授权共享的本桌预收余额会优先结算剩余菜款。',success:resolve,fail:()=>resolve({confirm:false})}))
     if(!answer.confirm){this.setData({busy:false});return}
-    try{await confirmTabPoints(id);await this.readTabPoints();wx.showToast({title:'已记入原单'})}catch(e){this.setData({error:e.message})}finally{this.setData({busy:false})}
+    try{await confirmTabPoints(id);await this.readTabPoints();wx.showToast({title:'已记入原单'})}catch(e){this.setData({error:customerErrorMessage(e,'请联系服务员核对这笔餐单的积分抵扣结果')})}finally{this.setData({busy:false})}
   },
   async onShow() {
     void this.readTabPoints()
@@ -793,18 +767,14 @@ Page({
   onHide() {
     this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
     this.selectionNotificationPending = null
-    this.setData({ membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipStatus: 'unknown', menuPhoneStatus: 'unknown' })
+    this.setData({ checkoutMemberInviteVisible: false, membershipStatus: 'unknown' })
     this.invalidateCheckoutCoupons(true, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview || !!(this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote'))
-    const record = this.queuePendingGuestPaymentAbandonment()
-    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
     this.stopMenuWindowRefresh(); this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
   onUnload() {
     this.ticketReadGeneration = (this.ticketReadGeneration || 0) + 1
     this.invalidateCheckoutCoupons(true, false)
-    const record = this.queuePendingGuestPaymentAbandonment()
-    if (record) void this.executePendingGuestPaymentAbandonment(record)
     this.invalidateTableRequests()
     this.stopMenuWindowRefresh(); this.stopWaitingPoll(); this.stopSharedCartPolling(); this.stopServicePolling(); this.stopShakeRecommendation()
   },
@@ -830,78 +800,6 @@ Page({
   currentTableRequest() { return this.ensureTableRequestGuard().current() },
   isCurrentTableRequest(request) { return this.ensureTableRequestGuard().isCurrent(request) },
   invalidateTableRequests() { this.finishQuantityReview(false); this.ensureTableRequestGuard().invalidate() },
-
-  queuePendingGuestPaymentAbandonment(pendingOverride) {
-    const paymentScope = tableSessionCacheScope()
-    const pendingPayment = pendingOverride || this.data.pendingPayment || wx.getStorageSync(PENDING_PAYMENT_KEY) || null
-    const record = createGuestPaymentAbandonmentRecord(
-      pendingPayment,
-      paymentScope,
-      (orderPublicId) => randomId(`guest-checkout-abandon-${orderPublicId}`),
-    )
-    if (!record) return null
-    const retained = Object.assign({}, pendingPayment, { abandonmentIdempotencyKey: record.idempotencyKey })
-    wx.setStorageSync(PENDING_PAYMENT_KEY, retained)
-    wx.setStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY, record)
-    // Lifecycle callbacks must not wait on network.  They persist this exact
-    // idempotency key first; the caller starts the request (or a later fresh
-    // table-order read retries it) without creating a second cancellation.
-    return record
-  },
-
-  async executePendingGuestPaymentAbandonment(record) {
-    if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
-      return this._guestPaymentAbandonmentPromise || null
-    }
-    this._guestPaymentAbandonmentInFlight = record.idempotencyKey
-    const execution = (async () => {
-      const result = await abandonGuestCheckout(record.orderPublicId, record.idempotencyKey)
-      const operationallyCancelled = result && result.operationalState === 'cancelled'
-      if (operationallyCancelled) {
-        const currentRecord = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-        if (currentRecord && currentRecord.idempotencyKey === record.idempotencyKey) {
-          wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-        }
-        const pendingPayment = wx.getStorageSync(PENDING_PAYMENT_KEY)
-        if (pendingPayment && pendingPayment.tableScope === record.tableScope
-          && pendingPayment.orderPublicId === record.orderPublicId) {
-          wx.removeStorageSync(PENDING_PAYMENT_KEY)
-          if (this.data.pendingPayment && this.data.pendingPayment.orderPublicId === record.orderPublicId) {
-            this.setData({ pendingPayment: null, checkoutLocked: false })
-          }
-        }
-      }
-      return result || null
-    })().catch((error) => {
-      // Known successful/terminal states are no longer a customer checkout.
-      // Network/unknown outcomes retain the exact same key for a later retry;
-      // the server worker separately reconciles the financial rail.
-      if (error && ['GUEST_CHECKOUT_ALREADY_PAID', 'GUEST_CHECKOUT_NOT_FOUND', 'GUEST_ORDER_ACCESS_FORBIDDEN'].includes(error.code)) {
-        const currentRecord = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-        if (currentRecord && currentRecord.idempotencyKey === record.idempotencyKey
-          && currentRecord.tableScope === record.tableScope) {
-          wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-        }
-        const pendingPayment = wx.getStorageSync(PENDING_PAYMENT_KEY)
-        if (pendingPayment && pendingPayment.tableScope === record.tableScope
-          && pendingPayment.orderPublicId === record.orderPublicId) {
-          wx.removeStorageSync(PENDING_PAYMENT_KEY)
-          if (this.data.pendingPayment && this.data.pendingPayment.orderPublicId === record.orderPublicId) {
-            this.setData({ pendingPayment: null, checkoutLocked: false })
-          }
-        }
-      }
-      return null
-    })
-    this._guestPaymentAbandonmentPromise = execution
-    try { return await execution }
-    finally {
-      if (this._guestPaymentAbandonmentInFlight === record.idempotencyKey) {
-        this._guestPaymentAbandonmentInFlight = null
-        this._guestPaymentAbandonmentPromise = null
-      }
-    }
-  },
 
   stopWaitingPoll() {
     if (this.waitingTimer) clearTimeout(this.waitingTimer)
@@ -1008,7 +906,7 @@ Page({
     this.menuDisplayStartedAt = Date.now()
     this.setData({ loading: false, browseOnly: false, products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()),
       menuImageGeneration: this.data.menuImageGeneration + 1,
-      ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows) })
+      ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows, this.data) })
     this.applyFilters(() => {
       if (!request || this.isCurrentTableRequest(request)) this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
     })
@@ -1042,7 +940,7 @@ Page({
       const menu = await (this.data.browseOnly ? getPublicMenu({}) : getMenu({}))
       if (!this.isCurrentTableRequest(request) || this.menuWindowReadVersion !== readVersion) return false
       const products = menuProducts(menu)
-      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows) })
+      this.setData({ products, menuUpdatePending: false, menuUpdatedAt: dateTime(new Date().toISOString()), ...menuCategoryState(products, this.data.selectedCategory, this.data.selectedSubcategory, true, this.ticketMenuRows, this.data) })
       this.applyFilters()
       if (!this.data.browseOnly) await this.refreshSharedCart(true, request)
       return true
@@ -1069,7 +967,7 @@ Page({
     const session = getTableSession()
     const request = this.beginTableRequest(session)
     this.orderLoadStartedAt = Date.now()
-    this.setData({ menuUpdateBusy: false, orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', membershipInviteVisible: false, checkoutMemberInviteVisible: false, membershipTerms: null, menuPhoneStatus: 'unknown', membershipInviteError: '' })
+    this.setData({ menuUpdateBusy: false, orderReady: false, paymentStateReady: false, membershipStatus: 'unknown', checkoutMemberInviteVisible: false, membershipTerms: null })
     const scopeChanged = this.visibleTableScope !== request.scope
     const retainedCartScope = !scopeChanged && session.cartScope
       && this.data.connectionState === 'active' && this.cartSnapshotScope === tableSessionCacheScope()
@@ -1190,7 +1088,7 @@ Page({
       const categoryState = menuCategoryState(
         products,
         this.data.selectedCategory,
-        this.data.selectedSubcategory, false, this.ticketMenuRows,
+        this.data.selectedSubcategory, false, this.ticketMenuRows, this.data,
       )
       this.setData({
         loading: false,
@@ -1211,7 +1109,6 @@ Page({
       this.recordOrderTiming('menu', this.orderLoadStartedAt, true)
       this.startMenuWindowRefresh(request)
       void this.loadOrderExtra('performance', request)
-      void this.loadOrderExtra('membership', request)
       return true
     } catch (error) {
       if (request && !this.isCurrentTableRequest(request)) return false
@@ -1226,7 +1123,7 @@ Page({
         serviceStaffName: '',
         serviceSummary: { status: 'ready', label: '到店后可呼叫服务', detail: '扫码开台后显示本桌服务进度', live: false },
         products: [],
-        ...menuCategoryState([], this.data.selectedCategory, this.data.selectedSubcategory, false, this.ticketMenuRows),
+        ...menuCategoryState([], this.data.selectedCategory, this.data.selectedSubcategory, false, this.ticketMenuRows, this.data),
         error: connectionError || customerErrorMessage(error, '今晚菜单暂时无法读取，请稍后再试'),
       }, () => this.applyFilters())
       return false
@@ -1250,7 +1147,7 @@ Page({
       products,
         this.data.selectedCategory,
         this.data.selectedSubcategory,
-        true, this.ticketMenuRows,
+        true, this.ticketMenuRows, this.data,
     )
     const sharedCart = results[1]
     const cart = sharedCartView(sharedCart, products)
@@ -1271,7 +1168,6 @@ Page({
       ...categoryState,
       recommendations,
       recommendationAttribution,
-      membershipInviteVisible: false,
     })
     this.updateCart(cart, sharedCart)
     this.applyFilters()
@@ -1313,11 +1209,7 @@ Page({
     const tableOrdersAvailable = Array.isArray(orders)
     const tableOrders = tableOrdersAvailable ? orders : []
     const paymentScope = tableSessionCacheScope()
-    let storedAbandonment = wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY) || null
-    if (storedAbandonment && storedAbandonment.tableScope !== paymentScope) {
-      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-      storedAbandonment = null
-    }
+    if (wx.getStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)) wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
     let storedPending = wx.getStorageSync(PENDING_PAYMENT_KEY) || null
     let completedPayment = null
     // Pending-payment records created before table scopes existed cannot be
@@ -1343,18 +1235,16 @@ Page({
       }
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-      storedAbandonment = null
       storedPending = null
     } else if (storedPending && storedPending.paymentPresentationState !== 'resolved' && tableOrdersAvailable && !storedOrder) {
       wx.removeStorageSync(PENDING_PAYMENT_KEY)
       wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-      storedAbandonment = null
       storedPending = null
     }
     // The table bill is shared, but an unpaid payment rail is not.  Only the
     // current customer's own QR order can become a local recovery candidate;
     // a neighbor's or a waiter-held order must never lock this customer's
-    // cart, nor be eligible for this page to abandon.
+    // cart. Only staff can cancel a submitted order.
     const pendingFromOrders = tableOrders.find((item) => item.isMine === true
       && item.channel === 'guest_qr'
       && Number(item.payableAmountMinor || 0) > 0
@@ -1406,12 +1296,7 @@ Page({
       success: completedPayment ? completedPayment.title : this.data.success,
       checkoutLocked,
     })
-    const abandonmentOrder = storedAbandonment && tableOrders.find((item) => item.publicId === storedAbandonment.orderPublicId)
-    if (isRetryableGuestPaymentAbandonment(storedAbandonment, paymentScope, abandonmentOrder)) {
-      void this.executePendingGuestPaymentAbandonment(storedAbandonment)
-    } else if (storedAbandonment && tableOrdersAvailable) {
-      wx.removeStorageSync(PENDING_GUEST_PAYMENT_ABANDONMENT_KEY)
-    }
+
   },
 
   loadOrderExtras(request) {
@@ -1426,9 +1311,7 @@ Page({
       benefits: async () => ({ benefitCount: (await getCustomerBenefits() || []).reduce((sum,item) => sum + Number(item.quantityAvailable || 0),0) }),
       membership: async () => {
         const result = await getMiniBootstrap()
-        const phones = result && result.membership === null ? await getVerifiedPhones() : null
         return {
-          menuPhoneStatus: Array.isArray(phones) ? (phones.length ? 'verified' : 'missing') : 'unknown',
           membershipTerms: result && result.membershipTerms || null,
           // Only an explicit server null proves this customer is not a member.
           membershipStatus: result && result.membership === null ? 'nonmember'
@@ -1445,11 +1328,6 @@ Page({
       const update = await loaders[name]()
       if (!current()) return
       this.setData(update)
-      if (name === 'membership') {
-        this.membershipInviteRequest = request || this.currentTableRequest()
-        if (update.membershipStatus !== 'nonmember') this.setData({ membershipInviteVisible: false })
-        this.maybeShowMembershipInvite()
-      }
       if (name === 'order_checkout') rememberPresentationOptions(name, update.wechatNotificationPromptOptions)
       if (name === 'order_selection') rememberPresentationOptions(name, update.wechatOrderSelectionPromptOptions)
       if (name === 'recommendation') { this.recommendationFeatureDisabled = false; this.ensureInitialRecommendations(request) }
@@ -1463,65 +1341,9 @@ Page({
         this.setData({ recommendationError: '门店暂未开放推荐，请直接从菜单选择。', recommendationQuestionVisible: false })
         return
       }
-      if (name === 'membership') this.setData({ membershipStatus: 'unknown', membershipInviteVisible: false })
+      if (name === 'membership') this.setData({ membershipStatus: 'unknown' })
       this.orderExtraErrors[name] = true
       if (name === 'recommendation') this.setData({ recommendationError: '推荐暂时无法读取，点此重试；菜单仍可正常点单。' })
-    }
-  },
-
-  maybeShowMembershipInvite() {
-    if ((this.membershipInviteShown && !this.resumeMembershipInvite) || this.selectionNotificationPending) return
-    if (!this.membershipInviteRequest || !this.isCurrentTableRequest(this.membershipInviteRequest)) return
-    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
-    if ((!this.data.orderReady && !this.data.browseCatalogLoaded) || this.data.busy
-      || this.data.detailProduct || this.data.checkoutConfirmVisible || this.data.checkoutLocked
-      || this.data.paymentResult || this.data.recommendationQuestionVisible) return
-    if (Number(wx.getStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY)) > Date.now()) return
-    this.membershipInviteShown = true
-    this.resumeMembershipInvite = false
-    this.setData({ membershipInviteVisible: true, membershipInviteError: '' })
-  },
-
-  dismissMembershipInvite() {
-    this.resumeMembershipInvite = false
-    const configuredHours = Number(getRuntimeConfig().membershipInviteCooldownHours)
-    const cooldownHours = Number.isFinite(configuredHours) && configuredHours >= 1 && configuredHours <= 2160
-      ? configuredHours : 24
-    wx.setStorageSync(MEMBERSHIP_INVITE_DISMISSED_KEY, Date.now() + cooldownHours * 60 * 60 * 1000)
-    this.setData({ membershipInviteVisible: false })
-  },
-
-  openPrivacy() { wx.navigateTo({ url: '/pages/privacy/index' }) },
-
-  openInvitePrivacy() {
-    this.resumeMembershipInvite = this.data.membershipInviteVisible
-    this.openPrivacy()
-  },
-
-  async authorizeMenuPhone(event) {
-    if (this.data.membershipBusy || !this.data.membershipInviteVisible) return
-    if (this.data.membershipStatus !== 'nonmember' || this.data.menuPhoneStatus !== 'missing') return
-    const request = this.currentTableRequest()
-    if (!request || !this.isCurrentTableRequest(request)) return
-    const authorization = readWechatPhoneAuthorization(event)
-    if (!authorization.code) {
-      this.setData({ membershipInviteError: authorization.message })
-      return
-    }
-    this.setData({ membershipBusy: true, membershipInviteError: '' })
-    try {
-      // Phone verification is independent of membership terms and enrollment.
-      // The native authorization alone must never create a membership.
-      const verified = await replaceVerifiedPhone(authorization.code)
-      if (!verified || verified.status !== 'active' || !verified.publicId) throw new Error('手机号验证结果不完整，请重试')
-      if (!this.isCurrentTableRequest(request)) return
-      this.dismissMembershipInvite()
-      this.setData({ menuPhoneStatus: 'verified' })
-      wx.showToast({ title: '手机号已授权', icon: 'success' })
-    } catch (error) {
-      if (this.isCurrentTableRequest(request)) this.setData({ membershipInviteError: customerErrorMessage(error, '手机号授权未完成，可重试或继续点菜。') })
-    } finally {
-      this.setData({ membershipBusy: false })
     }
   },
 
@@ -1556,20 +1378,18 @@ Page({
   onSearchInput(event) { this.setData({ searchText: event.detail.value }, () => this.applyFilters()) },
   selectCategory(event) {
     const selectedCategory = event.currentTarget.dataset.code
-    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly, this.ticketMenuRows)
-    this.setData(Object.assign(categoryState, {categoriesExpanded:false,subcategoriesExpanded:false,menuScrollTarget:''}), () => {
+    const categoryState = menuCategoryState(this.data.products, selectedCategory, 'all', !this.data.browseOnly, this.ticketMenuRows, this.data)
+    this.setData(Object.assign(categoryState, {subcategoriesExpanded:false,menuScrollTarget:''}), () => {
       this.applyFilters()
       this.setData({menuScrollTarget:this.data.browseOnly?'browse-menu-anchor':'connected-menu-anchor'})
     })
   },
   openAllBundles() {
-    this.setData({ searchText: '', searchExpanded: false }, () =>
+    this.setData({ searchText: '' }, () =>
       this.selectCategory({ currentTarget: { dataset: { code: 'bundles' } } }))
   },
-  toggleCategories() { this.setData({categoriesExpanded:!this.data.categoriesExpanded,subcategoriesExpanded:false}) },
-  toggleSubcategories() { this.setData({subcategoriesExpanded:!this.data.subcategoriesExpanded,categoriesExpanded:false}) },
-  toggleMenuSearch() { this.setData({searchExpanded:!this.data.searchExpanded || Boolean(this.data.searchText)}) },
-  clearMenuSearch() { this.setData({searchText:'',searchExpanded:false}, () => this.applyFilters()) },
+  toggleSubcategories() { this.setData({subcategoriesExpanded:!this.data.subcategoriesExpanded}) },
+  clearMenuSearch() { this.setData({searchText:''}, () => this.applyFilters()) },
   selectSubcategory(event) {
     const code = event.currentTarget.dataset.code
     const item = this.data.subcategories.find((value) => value.code === code)
@@ -1601,7 +1421,7 @@ Page({
       }),
       detailSelectionsComplete:(detailProduct.bundleChoiceGroups||[]).length===0,detailEditUnitIndex:-1 })
   },
-  closeProductDetail() { const issued = this.data.detailProduct && this.data.detailProduct.issuedCouponBenefitId; this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1, ...(issued ? { checkoutConfirmVisible: true, couponEntryOpen: true } : {}) }); if (!issued) this.maybeShowMembershipInvite() },
+  closeProductDetail() { const issued = this.data.detailProduct && this.data.detailProduct.issuedCouponBenefitId; this.setData({ detailProduct: null,detailInformationExpanded:false,detailSelectionsComplete:true,detailEditUnitIndex:-1, ...(issued ? { checkoutConfirmVisible: true, couponEntryOpen: true } : {}) }) },
   toggleDetailInformation() { this.setData({ detailInformationExpanded: !this.data.detailInformationExpanded }) },
   keepProductDetailOpen() {},
   previewProductImage() {
@@ -1628,7 +1448,10 @@ Page({
       if (inTicketCategory && this.data.ticketDay && ticket.day !== this.data.ticketDay) return false
       return !search || ['门票', ticket.name, ticket.title, ticket.areaName, ticket.day, ticket.time, ticket.endTime].join(' ').toLowerCase().includes(search)
     })
-    this.setData({ visibleProducts, visibleTickets }, onVisible)
+    // The catalogue comes in show-time, then price order from the ticket API.
+    const leadTicket = this.data.selectedCategory === 'all' && !search && visibleProducts.length
+      ? visibleTickets.find(ticket => !ticket.saleText) : null
+    this.setData({ visibleProducts, visibleTickets, leadTicket: leadTicket || null }, onVisible)
   },
 
   ensureInitialRecommendations(request) {
@@ -1928,12 +1751,10 @@ Page({
     this.selectionNotificationPending = notification
     void notification.then(() => {
       if (this.selectionNotificationPending === notification) this.selectionNotificationPending = null
-      if (this.isCurrentTableRequest(tableRequest)) this.maybeShowMembershipInvite()
     })
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (!await this.adjustSharedCart(productId, 1,bundleSelections)) return false
     if (!this.isCurrentTableRequest(tableRequest)) return false
-    this.maybeShowMembershipInvite()
     // 推荐只影响当前购物车。体验承诺必须在有效订单且付款门禁通过后由服务端建立，
     // 这里不能提前派发服务节点或把“选择推荐”误当作已购买权益。
     if (source === 'recommendation' && this.data.recommendationPublicId) {
@@ -2296,7 +2117,7 @@ Page({
       || !this.data.membershipTerms || !this.data.cart.length || this.data.checkoutLocked
       || this.checkoutMemberInvitedScope === request.scope) return false
     this.checkoutMemberInvitedScope = request.scope
-    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, membershipInviteVisible: false, cartExpanded: false })
+    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, cartExpanded: false })
     return true
   },
 
@@ -2319,17 +2140,6 @@ Page({
     })
   },
 
-  async handlePendingPaymentBeforeCheckout() {
-    const pending = this.data.pendingPayment
-    if (!pending || !pending.orderPublicId) return false
-    // A previous order's financial recovery is independent of this new cart.
-    // Persist its original cancellation key, but never await an unavailable
-    // rail here or erase its receivable/unknown result to make checkout work.
-    const record = this.queuePendingGuestPaymentAbandonment(pending)
-    if (record) void this.executePendingGuestPaymentAbandonment(record)
-    return false
-  },
-
   issuedCouponAttemptStorageKey() {
     const principal = wx.getStorageSync('mbox.wechat.identity.principal.v1') || {}
     return 'mbox.issued-coupon-add.v1:' + tableSessionCacheScope() + ':' + (principal.principalId || principal.memberId || 'guest')
@@ -2340,7 +2150,7 @@ Page({
     try { attempt = wx.getStorageSync(this.issuedCouponAttemptStorageKey()) } catch (_error) { return }
     if (attempt && !attempt.resolved && typeof attempt.productId === 'string' && typeof attempt.issuedCouponBenefitId === 'string' && Array.isArray(attempt.bundleSelections)) {
       this.setData({ issuedCouponPending: attempt, cartSyncing: false, couponEntryOpen: true, checkoutConfirmVisible: true, couponPickerOpen: true,
-        couponError: '原加入结果未确认，请先核对原加入；不会重复增加一份。' })
+        couponError: '请先查看购物车，确认这份商品是否已经加入。' })
     } else this.setData({ issuedCouponPending: null, ...(this.data.issuedCouponPending ? { cartSyncing: false } : {}) })
   },
   async openIssuedCouponEntry() {
@@ -2374,7 +2184,7 @@ Page({
     if (!request || !this.isCurrentTableRequest(request)) return false
     if (this.data.issuedCouponPending && JSON.stringify(this.data.issuedCouponPending) !== JSON.stringify(attempt)) return false
     const storageKey = this.issuedCouponAttemptStorageKey()
-    try { wx.setStorageSync(storageKey, attempt) } catch (_error) { this.setData({ couponError: '无法保存原加入请求，请稍后重试。' }); return false }
+    try { wx.setStorageSync(storageKey, attempt) } catch (_error) { this.setData({ couponError: '暂时无法加入购物车，请稍后再试。' }); return false }
     const guard = this.ensureTableRequestGuard(), write = guard.beginWrite(request.scope, 'cart')
     this.setData({ issuedCouponPending: attempt, cartSyncing: true, couponError: '' })
     try {
@@ -2408,7 +2218,6 @@ Page({
     if (!tableRequest || !this.isCurrentTableRequest(tableRequest)) return
     if (this.data.checkoutLocked) return this.retryCheckout(tableRequest)
     if (!this.data.cart.length) return
-    if (await this.handlePendingPaymentBeforeCheckout()) return
     if (!this.isCurrentTableRequest(tableRequest)) return
     if (this.data.checkoutMemberInviteVisible) return
     if (this.data.cartWritesFrozen) {
@@ -2490,7 +2299,6 @@ Page({
       if (!await this.checkoutUpgradeReady()) return
       if (!this.isCurrentTableRequest(tableRequest)) return
       if (!this.couponCheckoutReady()) return
-      if (await this.handlePendingPaymentBeforeCheckout()) return
       if (!this.isCurrentTableRequest(tableRequest)) return
       if (this.data.cartWritesFrozen) {
         this.setData({ checkoutConfirmVisible: false, error: '服务人员正在核对本桌点单，完成后才能付款。' })
@@ -2659,7 +2467,7 @@ Page({
         if (!this.isCurrentTableRequest(tableRequest)) return
         if (recovering) {
           this.setData({ checkoutLocked: true,
-            error: '原订单结果尚未确认，原请求已保留。请查看桌账或联系服务人员核对，不要重新提交订单。' })
+            error: '暂时查不到这笔订单。请查看桌账或联系服务人员核对，不要重新提交订单。' })
           return
         }
         if (error && error.code === 'SHARED_CART_VERSION_CONFLICT') {
@@ -2864,8 +2672,6 @@ Page({
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       this.setData({ pendingPayment })
-      const abandonment = this.queuePendingGuestPaymentAbandonment(pendingPayment)
-      if (abandonment) void this.executePendingGuestPaymentAbandonment(abandonment)
       if (!this.isCurrentTableRequest(tableRequest)) return
       this.setData({
         paymentResult: {
@@ -2882,8 +2688,8 @@ Page({
               : identityRejected
                 ? '本次没有发起扣款。请重新进入小程序刷新微信身份，或请服务员协助收款。'
                 : configurationUnavailable
-                  ? '本次没有发起扣款。订单正在释放，请联系服务员改用扫码、POS 或现金收款。'
-                  : '本次没有发起扣款。订单正在释放，你可以继续选购后重新付款。',
+                  ? '本次没有发起扣款。原订单已保留，请联系服务员改用扫码、POS 或现金收款。'
+                  : '本次没有发起扣款。原订单已保留，请在本桌账单核对或联系工作人员。',
           canRetry: false,
         },
       })
@@ -2923,23 +2729,21 @@ Page({
       if (!ownsPayment()) return
       const cancelled = isWechatCancellation(error)
       const pendingPayment = Object.assign({}, this.data.pendingPayment, {
-        statusText: cancelled ? '付款已取消，正在释放本次付款' : '付款结果确认中，请勿重复付款',
+        statusText: cancelled ? '已退出付款，原订单保留' : '付款结果确认中，请勿重复付款',
         canContinue: false,
         paymentPresentationState: cancelled ? 'cancelled' : 'result_unknown',
         paymentPresentationInFlight: false,
       })
       wx.setStorageSync(PENDING_PAYMENT_KEY, pendingPayment)
       this.setData({ pendingPayment })
-      const abandonment = this.queuePendingGuestPaymentAbandonment(pendingPayment)
-      if (abandonment) void this.executePendingGuestPaymentAbandonment(abandonment)
       this.setData({
         error: '',
         paymentResult: {
           kind: cancelled ? 'cancelled' : 'pending',
           mark: cancelled ? '×' : '…',
-          title: cancelled ? '付款已取消' : '正在核对付款结果',
+          title: cancelled ? '已退出付款' : '正在核对付款结果',
           copy: cancelled
-            ? '本次订单正在释放，你可以继续选购后重新付款。'
+            ? '原订单已保留。你可以查看本桌账单，如需取消请联系工作人员。'
             : '请在本桌账单查看原付款结果，核对期间请勿重复付款。',
           canRetry: false,
         },

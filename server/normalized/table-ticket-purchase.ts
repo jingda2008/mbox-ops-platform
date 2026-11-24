@@ -19,7 +19,7 @@ const currentOffers = `
     c.code AS "categoryCode", c.display_name AS "categoryName", c.sort_order AS "categorySortOrder",
     p.code AS "categoryParentCode", p.display_name AS "categoryParentName", coalesce(p.sort_order,c.sort_order) AS "topCategorySortOrder", a.starts_at::text AS "startsAt",a.ends_at::text AS "endsAt",
     o.recommend_in_community AS "recommendInCommunity",o.price_minor AS "priceMinor",o.gift_points AS "giftPoints", a.assembly_location AS location,
-    et.version AS "eventTermsVersion",et.refund_schedule AS "refundSchedule",et.organizer,et.seller,et.approval_reference AS "approvalReference",et.performers,et.duration_minutes AS "durationMinutes",et.program_note AS "programNote",et.service_contact AS "serviceContact",a.refund_policy_summary AS "refundSummary",a.refund_policy_version AS "refundVersion",
+    et.version AS "eventTermsVersion",concat_ws(chr(10),'本票首次验票入场后，不支持因个人原因退票。',et.refund_schedule) AS "refundSchedule",et.organizer,et.seller,et.approval_reference AS "approvalReference",et.performers,et.duration_minutes AS "durationMinutes",et.program_note AS "programNote",et.service_contact AS "serviceContact",a.refund_policy_summary AS "refundSummary",md5(concat_ws(':','first_admission',a.refund_policy_version,et.id::text)) AS "refundVersion",
     a.safety_policy_version AS "safetyVersion",a.safety_acknowledgement_text AS "safetySummary",
     a.capacity,a.payment_deadline_minutes AS "paymentMinutes",
     to_char((mbox.table_ticket_expiry(statement_timestamp())-interval '1 second') AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS "validThroughIfPaidToday",
@@ -116,7 +116,7 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
       least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),
       $11::jsonb,$12,$13,clock_timestamp(),'mini_program','full','jsapi',$7,4,$14,true) RETURNING id`,
     [...scope,registrationPublicId,offer.activityId,buyer.customer_id,buyer.membership_id,total,key,offer.paymentMinutes,offer.endsAt,
-      JSON.stringify({policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
+      JSON.stringify({personalRefundUntil:'first_admission',policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
   await tx.query(`INSERT INTO mbox.table_ticket_purchases(tenant_id,store_id,registration_id,offer_id,quantity,membership_id,contact_id,starts_at,ends_at,original_lock_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[...scope,registered.id,offer.id,input.quantity,buyer.membership_id,buyer.contact_id,offer.startsAt,offer.endsAt,original?.id??null])
   if (!protection.revealPhone) throw new CustomerExperienceRequestError('会员联系方式服务暂不可用','TICKET_CONTACT_UNAVAILABLE',503)

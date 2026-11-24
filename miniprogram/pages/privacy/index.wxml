@@ -20,7 +20,7 @@
   <view class="privacy-contact-tools">
     <button class="privacy-contact-toggle" bindtap="toggleContactTools">{{contactToolsOpen ? '收起我的联系方式' : '管理我的联系方式'}}</button>
     <view wx:if="{{contactToolsOpen}}" class="privacy-contact-body">
-      <text class="privacy-contact-note">仅显示掩码。更换或停用不会删除订单、退款、会员合并等必要审计事实。</text>
+      <text class="privacy-contact-note">为保护隐私，这里只显示部分联系方式。更换或停用后，订单、退款和会员合并等必要记录仍会保留。</text>
       <text wx:if="{{contactMessage}}" class="privacy-contact-message">{{contactMessage}}</text>
       <text wx:if="{{loadingContacts}}" class="privacy-contact-note">正在读取…</text>
       <view class="privacy-contact-group">

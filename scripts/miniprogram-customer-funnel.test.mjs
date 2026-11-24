@@ -35,7 +35,7 @@ test('customer navigation promotes familiar choices without mutating custom or o
     assert.equal(products.filter(p => identity(p).topCode === 'bundles').length, 1, 'unavailable bundles remain in catalogue')
     const recommendation = state(products,'recommendation','all',true)
     assert.equal(recommendation.selectedCategory,'recommendation')
-    assert.ok(recommendation.categoryPreview.every(Boolean), 'helper state must not inject an undefined category')
+    assert.ok((platform === 'miniprogram' ? recommendation.categories : recommendation.categoryPreview).every(Boolean), 'helper state must not inject an undefined category')
     assert.equal(state(products,'obsolete','missing',true).selectedCategory,'all')
     assert.equal(JSON.stringify(products),before, 'display grouping must not mutate product IDs, status, or backend category')
     const productStart = source.indexOf('function salesTimeText(')
@@ -56,7 +56,7 @@ test('customer navigation promotes familiar choices without mutating custom or o
     assert.equal(tasted.find(p=>p.productId==='invalid').tasteLabels.length,0)
     assert.equal(views.recommend([{productId:'choice'}],presented)[0].selectionActionText,'选款并加入')
     const methodStart = source.indexOf('  openAllBundles() {')
-    const methodEnd = source.indexOf('  toggleCategories()',methodStart)
+    const methodEnd = source.indexOf('  },',methodStart) + '  },'.length
     const page = vm.runInNewContext('({' + source.slice(methodStart,methodEnd) + '})')
     const data = {searchText:'不匹配搜索',searchExpanded:true}
     page.setData = (patch,done) => { Object.assign(data,patch); done() }
@@ -122,12 +122,28 @@ test('bundle catalogue remains exhaustive and separate from scanned recommendati
     const connected = state(more,'c11','all',true)
     assert.equal(connected.categories.some(c => c.code === 'recommendation'), false)
     assert.equal(state(more,'recommendation','all',true).selectedCategory,'recommendation')
-    assert.equal(connected.categoryPreview.length, 7)
-    assert.ok(connected.categoryPreview.some(c => c.code === 'c11'))
+    if (platform === 'miniprogram') {
+      for (const seated of [false, true]) {
+        const menu = state(more, 'c11', 'all', seated)
+        assert.equal(menu.categories.length, 14)
+        assert.equal(menu.selectedCategory, 'c11')
+      }
+    } else {
+      assert.equal(connected.categoryPreview.length, 7)
+      assert.ok(connected.categoryPreview.some(c => c.code === 'c11'))
+    }
     assert.equal(state(more,'recommendation','all',false).selectedCategory,'all')
     assert.match(source, /menuRecommendations\(result.recommendations, this.data.products\)\.slice\(0, 3\)/)
     const ext = platform === 'miniprogram' ? 'wxml' : 'axml'
     const template = await read(`${platform}/pages/order/index.${ext}`)
+    if (platform === 'miniprogram') {
+      assert.doesNotMatch(template, /browse-menu__heading|价格透明|categoryPreview|toggleCategories/)
+      assert.match(template, /bindtap="scanTable">到店扫码点单/)
+      assert.equal((template.match(/<view class="category-grid">\s*<button wx:for="{{categories}}"[^>]*bindtap="selectCategory"/g) || []).length, 2)
+      assert.doesNotMatch(template, /toggleMenuSearch|searchExpanded/)
+      assert.equal((template.match(/confirm-type="search" bindinput="onSearchInput"/g) || []).length, 2)
+      assert.equal((template.match(/<button wx:if="{{searchText}}" class="menu-search-clear"/g) || []).length, 2)
+    }
     const scanned = template.indexOf('<block ' + (platform === 'miniprogram' ? 'wx' : 'a') + ':else>')
     assert.ok(template.indexOf('<text>不知道怎么选？</text>') > scanned)
     assert.doesNotMatch(template.slice(0, scanned), /recommend-entry/)
@@ -237,7 +253,7 @@ test('customer pages avoid duplicate status labels and backstage implementation 
   assert.doesNotMatch(serviceView, /需要值班经理/)
 })
 
-test('customer checkout keeps cancellation recovery and offers explicit current-table batch payment', async () => {
+test('customer checkout retains submitted orders and offers explicit current-table batch payment', async () => {
   const [orderLogic, orderView, accountLogic, accountView, alipayAccountLogic, alipayAccountView] = await Promise.all([
     read('miniprogram/pages/order/index.js'),
     read('miniprogram/pages/order/index.wxml'),
@@ -247,9 +263,9 @@ test('customer checkout keeps cancellation recovery and offers explicit current-
     read('alipay-miniprogram/pages/account/index.axml'),
   ])
 
-  assert.match(orderLogic, /async handlePendingPaymentBeforeCheckout\(\)/)
-  assert.match(orderLogic, /abandonGuestCheckout/)
-  assert.match(orderLogic, /queuePendingGuestPaymentAbandonment/)
+  assert.doesNotMatch(orderLogic, /async handlePendingPaymentBeforeCheckout\(\)/)
+  assert.doesNotMatch(orderLogic, /abandonGuestCheckout/)
+  assert.doesNotMatch(orderLogic, /queuePendingGuestPaymentAbandonment/)
   assert.match(orderLogic, /paymentPresentationInFlight/)
   assert.doesNotMatch(orderLogic, /本桌付款确认中，可继续加购/)
   assert.doesNotMatch(orderLogic, /confirmText: '继续付款'/)
@@ -328,7 +344,7 @@ test('activity registration distinguishes confirmed, payment-pending, and waitli
   assert.doesNotMatch(detailView, /确认报名/)
   assert.match(detailLogic, /报名成功，名额已为您确认。/)
   assert.match(detailLogic, /showRegistrationOutcome/)
-  assert.match(detailLogic, /confirmText: '我的活动'/)
+  assert.match(detailLogic, /confirmText: '查看报名'/)
   assert.match(detailLogic, /await this\.refreshActivityAvailability\(\)/)
   assert.match(detailLogic, /完成付款后才算报名成功。/)
   assert.match(detailLogic, /requiresPaymentOnSubmit/)
@@ -540,7 +556,7 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(orderLogic, /EMPTY_RECOMMENDATION_CONFIGURATION/)
   assert.doesNotMatch(orderLogic, /FALLBACK_RECOMMENDATION_CONFIGURATION/)
   assert.doesNotMatch(orderView, /记录今晚偏好|recommend-preference/)
-  assert.ok(orderView.indexOf('class="category-grid"') < orderView.indexOf('class="search-box"'), 'category grid appears before optional search')
+  assert.ok(orderView.indexOf('class="category-grid"') < orderView.indexOf('class="search-box"'), 'category grid appears before search')
   assert.match(orderLogic, /recommendationError: customerErrorMessage\(error, '今夜推荐正在更新'\)/)
   assert.doesNotMatch(orderView, /class="recommendation-note"/)
   assert.match(orderView, /单点约 \{\{item\.separatePriceText\}\}/)
@@ -579,12 +595,12 @@ test('tonight ordering keeps live service separate from recommendation and deleg
   assert.match(recommendationService, /recommendationIntent: RecommendationIntent/)
   assert.match(orderStyle, /\.quick-service button[\s\S]*?min-height:\s*88rpx/)
   assert.match(orderStyle, /\.table-strip__service \{ min-height: 88rpx/)
-  assert.match(orderStyle, /\.product-row \{[\s\S]*?height:\s*520rpx/)
-  assert.match(orderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx auto minmax\(110rpx, auto\)/)
+  assert.match(orderStyle, /\.product-row \{[^}]*min-height:\s*0/)
+  assert.match(orderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx 1fr auto/)
   assert.match(orderStyle, /\.product-media \{[\s\S]*?height:\s*100%/)
   assert.match(orderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.match(orderStyle, /\.product-copy \{[^}]*height:\s*27rpx[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/)
-  assert.match(orderStyle, /\.product-action \{[^}]*height:\s*auto[^}]*min-height:\s*110rpx/)
+  assert.match(orderStyle, /\.product-action \{[^}]*height:\s*auto[^}]*min-height:\s*0/)
   assert.match(alipayOrderStyle, /\.product-row \{[^}]*display:\s*grid[^}]*grid-template-rows:\s*274rpx auto minmax\(110rpx, auto\)/)
   assert.match(alipayOrderStyle, /\.product-main \{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/)
   assert.doesNotMatch(orderStyle, /\.product-detail-sheet\.is-bundle \.product-detail-hero/)
@@ -776,15 +792,16 @@ test('customers can browse a read-only menu before scanning, but the browse view
     read('miniprogram/utils/api.js'),
   ])
   const browseStart = orderView.indexOf("connectionState === 'needs_scan' || connectionState === 'waiting'")
-  const browseEnd = orderView.indexOf('<block wx:else>')
+  const browseEnd = orderView.indexOf('\n  <block wx:else>\n', browseStart)
   assert.ok(browseStart >= 0 && browseEnd > browseStart)
   const browseView = orderView.slice(browseStart, browseEnd)
 
   assert.match(browseView, /今晚菜单/)
   assert.match(browseView, /可先浏览，扫码后下单/)
   assert.match(browseView, /请联系服务人员开台/)
-  assert.match(browseView, /等待期间可以先查看今晚真实菜单/)
-  assert.match(browseView, /\{\{item\.scheduledDisplay \? '可销售时间' : item\.availabilityText\}\}/)
+  assert.match(browseView, /等候时可以先看菜单/)
+  assert.doesNotMatch(browseView, /到店扫码后可下单/)
+  assert.match(browseView, /\{\{item\.scheduledDisplay \? '供应时间' : item\.availabilityText\}\}/)
   assert.match(browseView, /product-list--browse/)
   assert.doesNotMatch(browseView, /preview-product-grid/)
   assert.match(browseView, /bindtap="scanTable"/)
@@ -826,7 +843,7 @@ test('customer menu categories come from the editable backend hierarchy and reve
   assert.match(orderLogic, /categoryParentCode/)
   assert.match(orderLogic, /categoryParentName/)
   assert.match(orderLogic, /topCategorySortOrder/)
-  assert.match(orderLogic, /function menuCategoryState\(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = \[\]\)/)
+  assert.match(orderLogic, /function menuCategoryState\(products, selectedTopCategory, selectedSubcategory, connected = false, tickets = \[\], ticketState = \{\}, readError = ticketState\.ticketReadError\)/)
   assert.doesNotMatch(orderLogic, /code: 'recommendation', name: '今夜推荐'|includeRecommendations/)
   assert.match(orderLogic, /const leadingCategories = \[\{ code: 'all', name: '全部'/)
   assert.match(orderLogic, /selectSubcategory\(event\)/)
@@ -1244,7 +1261,7 @@ test('WeChat community loads actual activities without Intl or a performance dep
   const template=await read('miniprogram/pages/community/index.wxml')
   assert.doesNotMatch(template,/ops-section|openPerformances|openReservations|openOrder|今晚现场|今晚菜单与套餐/)
   assert.match(template,/wx:elif="\{\{error\}\}"[^>]*action-text="重新加载"[^>]*bindaction="load"/)
-  assert.match(template,/wx:if="\{\{!activities.length && !ticketOffers.length\}\}"[^>]*type="empty"/)
+  assert.match(template,/wx:if="\{\{!activities.length && !ticketShows.length\}\}"[^>]*type="empty"/)
 })
 
 test('WeChat customer errors hide JavaScript reference failures while preserving business messages',async()=>{
@@ -1252,5 +1269,25 @@ test('WeChat customer errors hide JavaScript reference failures while preserving
   vm.runInNewContext(await read('miniprogram/utils/customer-error.js'),{module})
   const message=module.exports.customerErrorMessage
   assert.equal(message({message:'Intl is not defined'},'活动暂时无法读取'),'活动暂时无法读取')
+  for (const detail of ['request:fail timeout', '服务接口配置异常', '数据库字段不存在', '请求失败 HTTP 500']) {
+    assert.equal(message({message:detail},'活动暂时无法读取'),'活动暂时无法读取')
+  }
   assert.equal(message({message:'当前活动已结束'},'活动暂时无法读取'),'当前活动已结束')
+})
+
+test('浏览与已开台菜单都能从门票读取失败恢复到原分类或确认无票', async () => {
+  const source = await read('miniprogram/pages/order/index.js')
+  const functions = source.slice(source.indexOf('function categoryText('), source.indexOf('function publicServiceName('))
+  const state = vm.runInNewContext(functions + ';menuCategoryState', { LEGACY_MENU_CATEGORY_HIERARCHY: {} })
+  const dishes = [{categoryCode:'drink', categoryName:'软饮'}]
+  const tickets = [{categoryCode:'show', categoryName:'门票'}]
+  for (const seated of [false, true]) {
+    const failed = state(dishes,'all','all',seated,[],{ticketCategoryCode:'@tickets'},true)
+    assert.ok(failed.categories.some(row => row.name === '门票'))
+    const recovered = state(dishes,'@tickets','all',seated,tickets,failed,false)
+    assert.equal(recovered.selectedCategory, 'show')
+    const empty = state(dishes,'show','all',seated,[],recovered,false)
+    assert.equal(empty.selectedCategory, 'show')
+    assert.ok(empty.categories.some(row => row.name === '软饮'))
+  }
 })

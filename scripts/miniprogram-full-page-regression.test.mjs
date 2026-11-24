@@ -22,15 +22,30 @@ test('community: recommended tickets use their own per-table price and ordinary 
   const {page}=pageFixture('community',{getActivities:async()=>[],getActivityRegistrations:async()=>[],
     getMiniBootstrap:async()=>({}),getTableTicketOffers:async channel=>{
       assert.equal(channel,'community')
-      const ticket={id:'offer',name:'周五 A 区',priceMinor:50000,giftPoints:550,startsAt:'2030-11-22T12:00:00Z',areaName:'中区',remaining:3}
-      return [{...ticket,recommendInCommunity:true},{...ticket,id:'menu-only',recommendInCommunity:false}]
+      const ticket={activityPublicId:'friday',id:'offer',name:'周五 A 区',priceMinor:50000,giftPoints:550,startsAt:'2030-11-22T12:00:00Z',areaName:'中区',remaining:3}
+      return [{...ticket,recommendInCommunity:true},{...ticket,id:'vip',recommendInCommunity:true},{...ticket,activityPublicId:'saturday',id:'other',recommendInCommunity:true},{...ticket,id:'menu-only',recommendInCommunity:false}]
     }})
   await page.load()
-  assert.equal(page.data.ticketOffers.length,1)
-  assert.equal(page.data.ticketOffers[0].id,'offer')
-  assert.equal(page.data.ticketOffers[0].price,'¥500.00')
-  assert.equal(page.data.ticketOffers[0].giftPoints,550)
+  assert.equal(page.data.ticketShows.length,2)
+  assert.deepEqual(Array.from(page.data.ticketShows[0].offers,tier=>tier.id),['offer','vip'])
+  const toggle=()=>page.toggleShow({currentTarget:{dataset:{id:'friday'}}})
+  toggle();assert.equal(page.data.expandedShow,'friday');toggle();assert.equal(page.data.expandedShow,'')
+  assert.equal(page.data.ticketShows[0].offers[0].id,'offer')
+  assert.equal(page.data.ticketShows[0].offers[0].price,'¥500.00')
+  assert.equal(page.data.ticketShows[0].offers[0].giftPoints,550)
   assert.equal(page.data.activities.length,0)
+})
+test('reservation: cards distinguish a show crossing midnight from one starting the next day', async () => {
+  const schedules = [
+    {id:'late', performerStageName:'晚场', startsAt:'2030-11-22T15:45:00Z', endsAt:'2030-11-22T16:30:00Z'},
+    {id:'after', performerStageName:'凌晨场', startsAt:'2030-11-22T16:45:00Z', endsAt:'2030-11-22T17:30:00Z'},
+  ]
+  const {page} = pageFixture('reservations', {getReservationPerformances: async () => ({schedules})})
+  page.data.reservationDate = '2030-11-22'
+  await page.loadPerformances()
+  assert.equal(page.data.performances[0].shortTimeText, '23:45–次日 00:30')
+  assert.equal(page.data.performances[0].timeText, '11-22 23:45–次日 00:30')
+  assert.equal(page.data.performances[1].shortTimeText, '11-23 00:45–01:30')
 })
 test('songs: repeated tap creates one request and changing table isolates completion',async()=>{
   const d=deferred();let writes=0;const {page,state}=pageFixture('songs',{getTodayPerformances:async()=>({schedules:[]}),submitSongRequest:()=>{writes++;return d.promise}})

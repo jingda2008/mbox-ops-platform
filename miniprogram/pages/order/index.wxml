@@ -26,16 +26,6 @@
   <view wx:if="{{connectionState === 'active' && minimumSpendMessage}}" class="checkout-confirm__notice" role="status">{{minimumSpendMessage}}</view>
   <!-- End shared table prepayment -->
 
-  <view wx:if="{{membershipInviteVisible}}" class="menu-phone-entry">
-    <text class="menu-phone-entry__copy">授权手机号，方便识别你的账户</text>
-    <view class="menu-phone-entry__actions">
-      <button open-type="getPhoneNumber" bindgetphonenumber="authorizeMenuPhone" loading="{{membershipBusy}}" disabled="{{membershipBusy}}">授权手机号</button>
-      <button bindtap="dismissMembershipInvite">暂不授权</button>
-    </view>
-    <text wx:if="{{membershipInviteError}}" class="menu-phone-entry__error">{{membershipInviteError}}</text>
-    <button class="menu-phone-entry__privacy" bindtap="openInvitePrivacy">隐私政策</button>
-  </view>
-
   <button wx:if="{{connectionState === 'active'}}" class="secondary-button" bindtap="openIssuedCouponEntry" disabled="{{!orderReady || busy || cartSyncing || checkoutLocked || cartWritesFrozen}}">使用已有兑换券</button>
   <view wx:if="{{menuUpdatePending}}" class="error-banner"><text>菜单暂未更新，选择已保留。{{menuUpdatedAt ? '上次成功更新：' + menuUpdatedAt : ''}}</text><button class="secondary-button" bindtap="retryMenuWindow" loading="{{menuUpdateBusy}}" disabled="{{menuUpdateBusy}}">点此核对菜单</button></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在确认桌次与菜单" />
@@ -48,7 +38,7 @@
         <text class="gate-copy">{{connectionMessage}}</text>
       </view>
       <button class="secondary-button gate-button" bindtap="retryTable">刷新开台状态</button>
-      <text class="gate-note">等待期间可以先查看今晚真实菜单</text>
+      <text class="gate-note">等候时可以先看菜单</text>
     </view>
     <view wx:elif="{{connectionState === 'upgrade_required'}}" class="browse-intro">
       <view class="browse-intro__copy">
@@ -65,45 +55,47 @@
     <view wx:if="{{error}}" class="error-banner gate-error">{{error}}</view>
 
     <view class="browse-menu">
-      <view class="browse-menu__heading"><view><text>今晚菜单</text><text>价格透明 · {{connectionState === 'waiting' ? '开台后即可下单' : '到店后即可下单'}}</text></view><text>{{visibleProducts.length + visibleTickets.length}} 款</text></view>
       <view id="browse-menu-anchor"></view>
 <view class="menu-tools menu-tools--browse">
-      <view wx:if="{{!categoriesExpanded}}" class="category-grid">
-        <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">全部分类 ⌄</button>
+      <view class="category-grid">
+        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory"><view wx:if="{{item.monthLabel}}"><text class="category-word">{{item.monthLabel}}</text><text class="category-word">{{item.monthSubject}}</text></view><block wx:else>{{item.name}}</block></button>
       </view>
-      <scroll-view wx:else scroll-y class="category-options"><view class="category-grid">
-        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button class="category-chip category-more" bindtap="toggleCategories">收起分类</button>
-      </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
-        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
-        <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
+        <text wx:elif="{{selectedCategory !== ticketCategoryCode || (!ticketReadError && !ticketReading)}}" class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
+        <view class="search-box">
+          <view class="menu-search-icon" aria-hidden="true"></view>
+          <input value="{{searchText}}" aria-label="搜索菜品、门票或场次" placeholder="搜索菜品、门票或场次" confirm-type="search" bindinput="onSearchInput" />
+          <button wx:if="{{searchText}}" class="menu-search-clear" bindtap="clearMenuSearch" aria-label="清除搜索">清除</button>
+        </view>
       </view>
       <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
       </view></scroll-view>
-      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索菜品、门票或场次" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
     </view>
+      <view wx:if="{{selectedCategory === ticketCategoryCode && ticketReadError}}" class="ticket-menu-status">
+        <text>门票暂时没加载出来。</text>
+        <button class="ticket-menu-retry" size="mini" loading="{{ticketReading}}" disabled="{{ticketReading}}" bindtap="loadTableTicketOffers">重新加载门票</button>
+      </view>
       <scroll-view wx:if="{{selectedCategory === ticketCategoryCode && ticketDays.length > 1}}" scroll-x class="ticket-date-strip">
         <button size="mini" data-day="" bindtap="chooseTicketDay" disabled="{{!ticketDay}}">全部日期</button>
         <button wx:for="{{ticketDays}}" wx:key="*this" size="mini" data-day="{{item}}" bindtap="chooseTicketDay" disabled="{{ticketDay === item}}">{{item}}</button>
       </scroll-view>
       <view wx:if="{{visibleProducts.length || visibleTickets.length}}" class="product-list product-list--browse">
+        <template wx:if="{{leadTicket}}" is="menuTicketCard" data="{{ticket: leadTicket}}" />
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available || item.scheduledDisplay ? '' : 'is-unavailable'}} {{item.scheduledDisplay ? 'is-scheduled' : ''}}" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
           <view class="product-media">
             <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
             <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片暂未加载，可查看详情' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
-            <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
-          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.scheduledDisplay ? '可销售时间' : item.availabilityText}}</text><text class="product-availability-copy">{{item.available ? (connectionState === 'waiting' ? '服务人员开台后可下单' : '到店扫码后可下单') : (item.scheduledDisplay ? item.salesTimeText : item.availabilityDetail)}}</text></view></view>
+          <view class="product-main"><text class="product-name">{{item.name}}</text><text wx:if="{{item.productKind === 'bundle'}}" class="product-kind">{{item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配'}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><block wx:if="{{!item.available || item.scheduledDisplay}}"><text class="product-availability is-unavailable">{{item.scheduledDisplay ? '供应时间' : item.availabilityText}}</text><text class="product-availability-copy">{{item.scheduledDisplay ? item.salesTimeText : item.availabilityDetail}}</text></block></view></view>
         </view>
-        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" data="{{ticket: item}}" /></block>
+        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" wx:if="{{!leadTicket || item.id !== leadTicket.id}}" data="{{ticket: item}}" /></block>
       </view>
-      <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
+      <state-panel wx:elif="{{selectedCategory === ticketCategoryCode && !ticketDays.length && !ticketReadError && !ticketReading}}" type="empty" title="暂无可售场次" />
+      <state-panel wx:elif="{{selectedCategory !== ticketCategoryCode || (!ticketReadError && !ticketReading)}}" type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
   </view>
 
@@ -113,7 +105,7 @@
     <view wx:if="{{cartWritesFrozen}}" class="status-banner status-banner--waiting">本桌点单正在确认，当前选择已保留，稍后即可继续调整。</view>
 
     <view class="table-strip">
-      <view class="table-strip__table"><text class="table-strip__label">本桌</text><text class="table-strip__value">{{table.displayName}}</text></view>
+      <navigator class="table-strip__table" url="/pages/account/index" aria-label="查看本桌账单"><text class="table-strip__label">本桌账单 ›</text><text class="table-strip__value">{{table.displayName}}</text></navigator>
       <view class="table-strip__content">
         <view wx:if="{{performance}}" class="show-brief"><text>{{performance.state}}</text><text>{{performance.name}} · {{performance.time}}</text></view>
         <button wx:elif="{{performanceError}}" class="show-brief show-brief--retry" bindtap="retryPerformance"><text>演出待更新</text><text>点此重试</text></button>
@@ -132,23 +124,21 @@
 
     <view id="connected-menu-anchor"></view>
 <view class="menu-tools">
-      <view wx:if="{{!categoriesExpanded}}" class="category-grid">
-        <button wx:for="{{categoryPreview}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button wx:if="{{categories.length > 8}}" class="category-chip category-more" bindtap="toggleCategories">全部分类 ⌄</button>
+      <view class="category-grid">
+        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory"><view wx:if="{{item.monthLabel}}"><text class="category-word">{{item.monthLabel}}</text><text class="category-word">{{item.monthSubject}}</text></view><block wx:else>{{item.name}}</block></button>
       </view>
-      <scroll-view wx:else scroll-y class="category-options"><view class="category-grid">
-        <button wx:for="{{categories}}" wx:key="code" class="category-chip {{selectedCategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectCategory">{{item.name}}</button>
-        <button class="category-chip category-more" bindtap="toggleCategories">收起分类</button>
-      </view></scroll-view>
       <view class="menu-filter-line">
         <button wx:if="{{subcategories.length}}" class="subcategory-trigger {{subcategoriesExpanded ? 'is-active' : ''}}" hover-class="menu-filter-pressed" bindtap="toggleSubcategories"><view class="menu-filter-surface">{{selectedSubcategory === 'all' ? '细分类' : selectedSubcategoryName}} {{subcategoriesExpanded ? '⌃' : '⌄'}}</view></button>
-        <text wx:else class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
-        <button class="menu-search-trigger {{searchExpanded || searchText ? 'is-active' : ''}}" hover-class="menu-filter-pressed" aria-label="搜索菜单" bindtap="toggleMenuSearch"><view class="menu-filter-surface">⌕ 搜索{{searchText ? ' ·' : ''}}</view></button>
+        <text wx:elif="{{selectedCategory !== ticketCategoryCode || (!ticketReadError && !ticketReading)}}" class="menu-result-count">{{selectedCategory === 'recommendation' ? '按本桌情况精选' : (visibleProducts.length + visibleTickets.length) + ' 款'}}</text>
+        <view class="search-box">
+          <view class="menu-search-icon" aria-hidden="true"></view>
+          <input value="{{searchText}}" aria-label="搜索菜品、门票或场次" placeholder="搜索菜品、门票或场次" confirm-type="search" bindinput="onSearchInput" />
+          <button wx:if="{{searchText}}" class="menu-search-clear" bindtap="clearMenuSearch" aria-label="清除搜索">清除</button>
+        </view>
       </view>
       <scroll-view wx:if="{{subcategoriesExpanded}}" scroll-y class="category-options"><view class="category-grid">
         <button wx:for="{{subcategories}}" wx:key="code" class="category-chip {{selectedSubcategory === item.code ? 'is-active' : ''}}" data-code="{{item.code}}" bindtap="selectSubcategory">{{item.name}}</button>
       </view></scroll-view>
-      <view wx:if="{{searchExpanded || searchText}}" class="search-box"><text>⌕</text><input value="{{searchText}}" placeholder="搜索菜品、门票或场次" bindinput="onSearchInput" /><button class="menu-search-clear" bindtap="clearMenuSearch">清除</button></view>
     </view>
 
     <view class="menu-filter-line" aria-label="选购帮助">
@@ -172,24 +162,29 @@
     </view>
     <view wx:if="{{selectedCategory !== 'recommendation'}}" class="section product-section">
       <view class="section-title"><text>菜单</text><text wx:if="{{benefitCount}}" class="section-link" bindtap="openBenefits">{{benefitCount}}项权益可用</text></view>
+      <view wx:if="{{selectedCategory === ticketCategoryCode && ticketReadError}}" class="ticket-menu-status">
+        <text>门票暂时没加载出来。</text>
+        <button class="ticket-menu-retry" size="mini" loading="{{ticketReading}}" disabled="{{ticketReading}}" bindtap="loadTableTicketOffers">重新加载门票</button>
+      </view>
       <scroll-view wx:if="{{selectedCategory === ticketCategoryCode && ticketDays.length > 1}}" scroll-x class="ticket-date-strip">
         <button size="mini" data-day="" bindtap="chooseTicketDay" disabled="{{!ticketDay}}">全部日期</button>
         <button wx:for="{{ticketDays}}" wx:key="*this" size="mini" data-day="{{item}}" bindtap="chooseTicketDay" disabled="{{ticketDay === item}}">{{item}}</button>
       </scroll-view>
       <view wx:if="{{visibleProducts.length || visibleTickets.length}}" class="product-list">
+        <template wx:if="{{leadTicket}}" is="menuTicketCard" data="{{ticket: leadTicket}}" />
         <view wx:for="{{visibleProducts}}" wx:key="productId" class="product-row {{item.available || item.scheduledDisplay ? '' : 'is-unavailable'}} {{item.scheduledDisplay ? 'is-scheduled' : ''}}">
           <view class="product-media" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail">
             <image wx:if="{{item.imageUrl && !item.imageFailed}}" src="{{item.listImageUrl || item.imageUrl}}" lazy-load="{{index > 3}}" mode="aspectFill" data-image-index="{{index}}" data-load-generation="{{menuImageGeneration}}" bindload="recordFirstScreenImage" data-id="{{item.productId}}" binderror="productImageFailed" />
             <view wx:else class="product-media__placeholder"><text>{{item.imageFailed ? '图片暂未加载，可查看详情' : 'M-BOX'}}</text></view>
             <text wx:if="{{item.discountVisible}}" class="product-media__saving">{{item.savingsText}}</text>
-            <text class="product-media__detail-hint">查看详情</text>
           </view>
-          <view class="product-main" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail"><text class="product-kind">{{item.productKind === 'bundle' ? (item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配') : item.categoryName}}</text><text class="product-name">{{item.name}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
+          <view class="product-main" data-id="{{item.productId}}" role="button" aria-label="查看{{item.name}}大图和详情" hover-class="product-row--pressed" bindtap="openProductDetail"><text class="product-name">{{item.name}}</text><text wx:if="{{item.productKind === 'bundle'}}" class="product-kind">{{item.bundleSelectionText ? '套餐组合 · 需选款' : '套餐组合 · 固定搭配'}}</text><view wx:if="{{item.tasteLabels.length}}" class="product-tastes"><text wx:for="{{item.tasteLabels}}" wx:for-item="taste" wx:key="*this">{{taste}}</text></view><text class="product-copy">{{(item.productKind === 'bundle' ? (item.includedText || item.description) : item.description) || '查看详情了解内容'}}</text><text wx:if="{{item.discountVisible}}" class="product-saving">单点合计 {{item.separatePriceText}}</text></view>
           <view class="product-action"><view class="product-action__meta"><text class="product-price">{{item.priceText}}</text><text class="product-availability {{item.available ? 'is-available' : 'is-unavailable'}}">{{item.scheduledDisplay ? '可销售时间' : item.availabilityText}}</text><text wx:if="{{item.scheduledDisplay}}" class="product-availability-copy">{{item.salesTimeText}}</text></view><button wx:if="{{item.available}}" class="{{item.bundleChoiceGroups.length ? 'product-choice-action' : ''}}" aria-label="{{item.selectionActionText}}：{{item.name}}" data-id="{{item.productId}}" catchtap="addProduct" disabled="{{!orderReady}}">{{item.bundleChoiceGroups.length ? '选规格' : '＋'}}</button><button wx:elif="{{!item.scheduledDisplay}}" class="product-unavailable" disabled="{{true}}">{{item.availabilityDetail}}</button></view>
         </view>
-        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" data="{{ticket: item}}" /></block>
+        <block wx:for="{{visibleTickets}}" wx:key="id"><template is="menuTicketCard" wx:if="{{!leadTicket || item.id !== leadTicket.id}}" data="{{ticket: item}}" /></block>
       </view>
-      <state-panel wx:else type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
+      <state-panel wx:elif="{{selectedCategory === ticketCategoryCode && !ticketDays.length && !ticketReadError && !ticketReading}}" type="empty" title="暂无可售场次" />
+      <state-panel wx:elif="{{selectedCategory !== ticketCategoryCode || (!ticketReadError && !ticketReading)}}" type="empty" title="没有找到符合条件的商品" message="可清空搜索或切换分类" />
     </view>
     <view wx:if="{{!cart.length}}" class="shared-cart-empty">
       <text>本桌共享购物车</text><text>还没有商品；同桌每位顾客加入的商品都会在这里同步显示。</text>
@@ -303,13 +298,19 @@
 <launch-popup />
 
 <template name="menuTicketCard">
-  <navigator class="product-row" hover-class="product-row--pressed" url="/pages/table-tickets/index?id={{ticket.id}}" aria-label="{{ticket.name}}，{{ticket.price}}一桌，查看详情">
+  <navigator class="product-row ticket-row" hover-class="product-row--pressed" url="/pages/table-tickets/index?id={{ticket.id}}" aria-label="{{ticket.name}}，{{ticket.price}}一桌，查看详情">
     <view class="product-media {{ticket.cover ? '' : 'ticket-cover-default'}}">
       <image wx:if="{{ticket.cover}}" src="{{ticket.cover}}" mode="aspectFill" lazy-load data-id="{{ticket.id}}" data-cover="{{ticket.cover}}" binderror="ticketCoverFailed" />
-      <image wx:else class="ticket-cover-mark" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
-      <text class="product-media__detail-hint">查看详情</text>
+      <text wx:if="{{!ticket.cover}}" class="ticket-area">演出门票</text>
     </view>
-    <view class="product-main"><text class="product-kind">整桌门票</text><text class="product-name">{{ticket.name}}</text><text class="product-copy">{{ticket.time}} 开演</text></view>
-    <view class="product-action"><view class="product-action__meta"><text class="product-price">{{ticket.price}}／桌</text><text wx:if="{{ticket.giftPoints}}" class="product-availability">赠 {{ticket.giftPoints}} 积分</text><text wx:if="{{ticket.saleText}}" class="product-availability">{{ticket.saleText}}</text></view></view>
+    <view class="product-main ticket-info">
+      <text class="product-name">{{ticket.name}}</text>
+      <text class="ticket-time">{{ticket.time}} 开演<text wx:if="{{ticket.showArea}}"> · {{ticket.areaName}}</text></text>
+      <text wx:if="{{ticket.saleText}}" class="ticket-status">{{ticket.saleText}}</text>
+    </view>
+    <view class="product-action ticket-terms">
+      <text class="product-price">{{ticket.price}}<text class="ticket-unit">／桌</text></text>
+      <text wx:if="{{ticket.giftPoints}}" class="ticket-gift">赠 {{ticket.giftPoints}} 积分</text>
+    </view>
   </navigator>
 </template>

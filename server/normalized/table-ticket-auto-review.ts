@@ -1,3 +1,4 @@
+import {requirePersonalTicketRefund} from './table-ticket-admission-policy.js'
 import {isDeepStrictEqual} from 'node:util'
 import {CustomerExperienceRequestError} from './customer-experience-repository.js'
 import {StaffAccessDeniedError,StaffAccessRepository,StaffNotFoundError} from './staff-access-repository.js'
@@ -16,6 +17,7 @@ export async function planTicketCashRefund(tx:ScopedTransaction,caseId:string,em
       AND c.superseded_at IS NULL AND c.consented_at IS NOT NULL) AS confirmed
     FROM mbox.table_ticket_refund_requests f
     WHERE(f.tenant_id,f.store_id,f.id)=($1,$2,$3) AND f.status='review' AND f.close_intent IS NULL FOR UPDATE OF f`,scope)).rows[0]
+  if(row)await requirePersonalTicketRefund(tx,caseId,'case')
   const preview=row && (await ticketRefundPreview(tx,row.ticket_id))[0] as {refundLimit:number}|undefined
   if(!row || !preview || !Number.isSafeInteger(amount) || amount<=0 || amount>preview.refundLimit)
     throw new CustomerExperienceRequestError('请按原票条款核定有效退款金额','TICKET_REFUND_AMOUNT',409)

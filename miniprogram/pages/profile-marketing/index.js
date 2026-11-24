@@ -6,7 +6,7 @@ function localTime(value) { return beijingDateTime(value, '待核对') }
 function view(data) {
   const channels = ['wechat', 'sms', 'phone'].map(channel => {
     const grants = data.decisions.filter(item => item.channel === channel && item.decision === 'granted')
-    return { channel, name: names[channel], granted: grants.length > 0, stateText: grants.length ? '已记录联系许可' : '未同意营销联系', capabilityText: (data.channels.find(item => item.channel === channel) || {}).ready ? '渠道能力以实际发送时核验为准' : '渠道尚未开通，不代表已能发送' }
+    return { channel, name: names[channel], granted: grants.length > 0, stateText: grants.length ? '已记录联系许可' : '未同意营销联系', capabilityText: (data.channels.find(item => item.channel === channel) || {}).ready ? '' : '该联系渠道暂未开放' }
   })
   return { revision: data.revision, notices: data.notices, channels }
 }

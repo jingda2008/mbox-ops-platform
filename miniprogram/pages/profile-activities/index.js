@@ -21,7 +21,9 @@ function detail(row, payment) {
   return { ...summary(row), end: beijingDateTime(row.endsAt, ''), registered: beijingDateTime(row.registeredAt, ''),
     location: row.location, description: row.activityDescription, refund: row.refundSummary, party: row.serviceVersion === 4 ? null : row.partySize,
     paid: row.paidAmountMinor == null ? '' : money(row.paidAmountMinor), total: row.totalFeeAmountMinor == null ? '' : money(row.totalFeeAmountMinor),
-    payment: refunds[payment?.refundStatus] || resolutions[payment?.resolutionState] || payments[row.paymentStatus] || '状态待确认',
+    payment: payments[row.paymentStatus] || '付款状态待确认',
+    progress: refunds[payment?.refundStatus] || resolutions[payment?.resolutionState] || '',
+    progressUnavailable: !payment,
     items: row.purchasedItems || [], note: row.note, ticket: row.serviceVersion === 4,
     liveUrl: row.liveDetailAvailable ? '/pages/community-detail/index?id=' + encodeURIComponent(row.activityPublicId)
       + '&registrationId=' + encodeURIComponent(row.publicId) : '' }

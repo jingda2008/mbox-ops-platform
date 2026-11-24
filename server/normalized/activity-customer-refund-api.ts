@@ -16,13 +16,14 @@ export async function registerActivityCustomerRefundRoutes(app:FastifyInstance,o
   const ticketId=body.ticketId
   if(ticketId!==undefined && (typeof ticketId!=='string'||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(ticketId))) throw new CustomerExperienceRequestError('票号格式不正确')
   const owned=async(tx:ScopedTransaction)=>{
-   const row=(await tx.query<{id:string;payment_id:string|null;service_version:number;contact:string|null}>(`SELECT r.id,r.payment_id,r.service_version,(SELECT et.service_contact FROM mbox.table_ticket_purchases p JOIN mbox.table_ticket_offers o ON(o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
+   const row=(await tx.query<{id:string;payment_id:string|null;service_version:number;staff_handles_order:boolean;contact:string|null}>(`SELECT r.id,r.payment_id,r.service_version,(r.service_version=3 OR r.purchase_kind IS NOT NULL OR r.fee_amount_minor>0) AS staff_handles_order,(SELECT et.service_contact FROM mbox.table_ticket_purchases p JOIN mbox.table_ticket_offers o ON(o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
      JOIN mbox.table_ticket_event_terms et ON(et.tenant_id,et.store_id,et.id)=(o.tenant_id,o.store_id,o.event_terms_id)
      WHERE(p.tenant_id,p.store_id,p.registration_id)=(r.tenant_id,r.store_id,r.id)) AS contact FROM mbox.community_activity_registrations r
      WHERE r.tenant_id=$1 AND r.store_id=$2 AND r.public_id=$3
        AND mbox.canonical_customer_id(r.tenant_id,r.store_id,r.customer_id)=mbox.canonical_customer_id($1,$2,$4)`,[context.scope.tenantId,context.scope.storeId,registrationPublicId,context.customerId])).rows[0]
    if(!row)throw new CustomerExperienceRequestError('未找到本人的报名记录','ACTIVITY_REGISTRATION_NOT_FOUND',404)
    if(row.service_version===4)throw new CustomerExperienceRequestError('请联系门店办理退票。'+(row.contact || '联系方式见小程序「我的 → 联系我们」。'),'TICKET_CONTACT_STORE',409)
+   if(row.staff_handles_order)throw new CustomerExperienceRequestError('如需退订商品或门票，请联系工作人员。','ORDER_CONTACT_STORE',409)
    return row
   }
   try {

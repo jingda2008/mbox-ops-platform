@@ -128,18 +128,19 @@ export class ActivityOperationsService {
     })
   }
 
-  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,previewVersion?:string,refundAmountMinor?:number) {
+  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,previewVersion?:string,refundAmountMinor?:number,merchant=false) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'refund.request').execute({
-      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId,previewVersion,refundAmountMinor}),
+      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId,previewVersion,refundAmountMinor,...(merchant && {merchant})}),
       retainReceipt:true,resultCodec:objectCodec<{caseId:string;status:string}>(),
     },async tx=>{
       const identity=(await tx.query<{registration_id:string;customer_id:string}>(`SELECT k.registration_id,r.customer_id FROM mbox.table_tickets k
         JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(k.tenant_id,k.store_id,k.registration_id)
         WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3`,[context.scope.tenantId,context.scope.storeId,id])).rows[0]
       if(!identity)throw new ActivityOperationsError('原票不存在','TICKET_NOT_FOUND',404)
-      const result=await requestTicketRefund(tx,identity.registration_id,id,identity.customer_id,reason,previewVersion)
+      if(merchant)await new StaffAccessRepository(tx).assertPermission(context.employeeId,'community.activity.manage')
+      const result=await requestTicketRefund(tx,identity.registration_id,id,identity.customer_id,reason,previewVersion,merchant)
       if(refundAmountMinor!==undefined && result.status==='review')await planTicketCashRefund(tx,result.caseId,context.employeeId,refundAmountMinor)
-      return {result,auditEvents:[audit(context,{action:'table_ticket.refund.opened',objectType:'table_ticket',objectId:id,afterData:{reason,caseId:result.caseId,...(refundAmountMinor!==undefined && {refundAmountMinor})}})],outboxMessages:[]}
+      return {result,auditEvents:[audit(context,{action:'table_ticket.refund.opened',objectType:'table_ticket',objectId:id,afterData:{reason,...(merchant && {cause:'merchant'}),caseId:result.caseId,...(refundAmountMinor!==undefined && {refundAmountMinor})}})],outboxMessages:[]}
     })
   }
 

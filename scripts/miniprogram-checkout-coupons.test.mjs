@@ -146,7 +146,6 @@ async function issuedEntryFixture(platform, storage = new Map()) {
   page.currentTableRequest = () => ({ scope: identity })
   page.isCurrentTableRequest = request => request.scope === identity
   page.ensureTableRequestGuard = () => ({ beginWrite: scope => ({ scope }), isCurrentWrite: write => write.scope === identity, finishWrite: write => write.scope === identity })
-  page.maybeShowMembershipInvite = () => {}
   page.recoverSharedCart = async () => {}
   return { page, api, coupon, storage, changeTable: value => { identity = value }, changeMember: value => { principal = value } }
 }

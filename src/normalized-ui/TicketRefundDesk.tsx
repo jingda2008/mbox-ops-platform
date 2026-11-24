@@ -4,7 +4,7 @@ import type {NormalizedApiClient,StaffAuthView} from '../normalized-api'
 interface RefundTicket {
   id:string;previewVersion:string;ordinal:number;quantity:number;orderNo:string;name:string;memberNo:string;maskedPhone:string;tableName:string|null
   priceMinor:number;giftPoints:number;recoverable:number;consumedMinor:string;refundSchedule:string|null;refundLimit:number
-  plannedRefundMinor:number|null;autoReviewError:string|null;caseId:string|null;caseStatus:string|null;refundId:string|null;cashStatus:string|null;unresolved:boolean
+  personalRefundClosed:boolean;plannedRefundMinor:number|null;autoReviewError:string|null;caseId:string|null;caseStatus:string|null;refundId:string|null;cashStatus:string|null;unresolved:boolean
 }
 interface TicketStatement {
   originalDishes:{orderNo:string;name:string;priceMinor:number;usedMinor:number}[]
@@ -67,7 +67,9 @@ export function TicketRefundDesk({api,auth,reference}:{api:NormalizedApiClient;a
     const timer=window.setInterval(()=>void refresh(),5000)
     return ()=>{active=false;window.clearInterval(timer)}
   },[api,busy,pendingAutoReview,reference,selected,revision])
-  const needsPlan=used>0 && cause==='customer' && !planned
+  const personalBlocked=ticket?.personalRefundClosed && cause==='customer'
+  const canMerchant=canRequest && auth.permissions.includes('community.activity.manage')
+  const needsPlan=!personalBlocked && used>0 && cause==='customer' && !planned
   const amountField=ticket && <label>按原条款核定退票款（元）<input type="number" min={ticket.caseId?".01":"0"} max={yuan(ticket.refundLimit)} step=".01" disabled={busy} value={cash} onChange={e=>setCash(e.target.value)}/></label>
   return <section className="cashier-refund-form" aria-label="整桌门票退票办理">
     <strong>整桌门票退票办理</strong>
@@ -84,18 +86,21 @@ export function TicketRefundDesk({api,auth,reference}:{api:NormalizedApiClient;a
       {ticket.caseId && <p>原案 {ticket.caseId} · {ticket.cashStatus==='succeeded'?'已退款':ticket.cashStatus==='requested'?'已提交，等待独立复核':ticket.refundId?'已进入原渠道退款流程':ticket.caseStatus==='review'?'待核算':'已登记'}</p>}
       {ticket.autoReviewError && <p role="alert">{ticket.autoReviewError}</p>}
       {planned && ticket.caseStatus==='review' && <p>拟退票款 ¥{yuan(ticket.plannedRefundMinor!)}，顾客确认且补款收齐后自动提交复核。</p>}
-      {ticket.unresolved?<p>积分归属或消费状态待核对，请由主管核对原票后继续。</p>:!ticket.refundId && (!ticket.caseId || ticket.caseStatus==='review') && <>
+      {ticket.personalRefundClosed && !canMerchant?<p>本票已验票入场，仅可由门店负责人按门店原因办理。</p>:ticket.unresolved?<p>积分归属或消费状态待核对，请由主管核对原票后继续。</p>:!ticket.refundId && (!ticket.caseId || ticket.caseStatus==='review') && <>
+        <label>退票原因<select value={cause} disabled={busy} onChange={e=>setCause(e.target.value)}><option value="customer">顾客原因</option>{canMerchant && <option value="merchant">门店原因</option>}</select></label>
+        {personalBlocked?<p>本票已验票入场，无法办理个人原因退票。</p>:<>
         <label>办理依据<input value={reason} maxLength={500} disabled={busy} onChange={e=>setReason(e.target.value)}/></label>
         {canRequest && (needsPlan || (ticket.caseId && (used===0 || cause==='merchant'))) && amountField}
-        {!ticket.caseId?canRequest && <button disabled={busy||reason.trim().length<2||(needsPlan&&!validAmount&&!zeroCash)} onClick={()=>void command('table-tickets/'+ticket.id+'/refund-request',{reason:reason.trim(),previewVersion:ticket.previewVersion,...(needsPlan&&validAmount?{refundAmountMinor:amount}:{})})}>受理本票退票</button>:<>
+        {!ticket.caseId?canRequest && <button disabled={busy||reason.trim().length<2||(needsPlan&&!validAmount&&!zeroCash)} onClick={()=>void command('table-tickets/'+ticket.id+'/refund-request',{reason:reason.trim(),previewVersion:ticket.previewVersion,...(cause==='merchant'?{cause:'merchant'}:{}),...(needsPlan&&validAmount?{refundAmountMinor:amount}:{})})}>受理本票退票</button>:<>
           {needsPlan && canRequest && <button disabled={busy||!validAmount||reason.trim().length<2} onClick={()=>void command('table-tickets/'+ticket.id+'/refund-request',{reason:reason.trim(),refundAmountMinor:amount})}>核定原票款，收齐后自动送审</button>}
           {needsPlan && !canRequest && <p>请有退款申请权限的同事在原案核定票款。</p>}
-          <label>退票原因<select value={cause} disabled={busy} onChange={e=>setCause(e.target.value)}><option value="customer">顾客原因</option>{canReview && auth.permissions.includes('community.activity.manage') && <option value="merchant">门店原因</option>}</select></label>
+
           {used>0 && cause==='customer' && canReview && <div><label>核定顾客应补（元）<input type="number" min="0" max={yuan(used)} step=".01" value={share} onChange={e=>setShare(e.target.value)}/></label>
             {share!=='' && customer>=0 && customer<=used && <p>门店承担 ¥{yuan(used-customer)}</p>}
             <button disabled={busy||(needsPlan&&!validAmount)||!share||!Number.isSafeInteger(customer)||customer<0||customer>used||reason.trim().length<2} onClick={()=>void command('table-ticket-refunds/'+ticket.caseId+'/dining',{customerMinor:customer,merchantMinor:used-customer,reason:reason.trim(),...(needsPlan?{refundAmountMinor:amount}:{})})}>确认分摊并发给顾客</button></div>}
           {canRequest && (used===0 || cause==='merchant') && <>
           <button disabled={busy||reason.trim().length<2||!Number.isSafeInteger(amount)||amount<=0||amount>ticket.refundLimit} onClick={()=>void command('table-ticket-refunds/'+ticket.caseId+'/submit',{amountMinor:amount,...(cause==='merchant'?{merchantReason:reason.trim()}:{})})}>提交原路退款复核</button></>}
+        </>}
         </>}
       </>}
     </>}

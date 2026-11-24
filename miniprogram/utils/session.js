@@ -179,7 +179,24 @@ function restoreRejectedTableScan() {
   return true
 }
 
+function parseScanValue(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return {}
+  const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw
+  if (!query.includes('=')) return { token: raw }
+  return query.split('&').reduce((result, pair) => {
+    const position = pair.indexOf('=')
+    if (position < 1) return result
+    const key = decodeURIComponent(pair.slice(0, position))
+    const item = decodeURIComponent(pair.slice(position + 1))
+    if (key === 'scene') return Object.assign(result, parseScanValue(item))
+    result[key] = item
+    return result
+  }, {})
+}
+
 module.exports = {
+  parseScanValue,
   restoreRejectedTableScan,
   applyLaunchSession,
   getTableSession,

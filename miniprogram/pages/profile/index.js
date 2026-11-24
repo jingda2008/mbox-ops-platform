@@ -463,7 +463,8 @@ Page({
   },
 
   closeLoginSheet() {
-    if (typeof consumeMembershipLoginDestination === 'function') consumeMembershipLoginDestination()
+    const destination = typeof consumeMembershipLoginDestination === 'function' && consumeMembershipLoginDestination()
+    if (destination === '/pages/table-tickets/index?view=mine') wx.navigateTo({url: destination})
     this.pendingMembershipAction = ''
     this.setData({ loginSheetVisible: false, recoveryMessage: '' })
   },
@@ -478,7 +479,7 @@ Page({
       'member-center': ['/pages/member-center/index', 'navigateTo'],
       reservations: ['/pages/reservations/index', 'switchTab'],
       points: ['/pages/points/index', 'navigateTo'],
-      orders: ['/pages/account/index', 'navigateTo'],
+      orders: ['/pages/account/index?mode=history', 'navigateTo'],
       bottles: ['/pages/profile-bottles/index', 'navigateTo'],
       preferences: ['/pages/profile-preferences/index', 'navigateTo'],
       contact: ['/pages/profile-contact/index', 'navigateTo'],
@@ -520,14 +521,10 @@ Page({
     wx.openCustomerServiceChat({
       extInfo: { url },
       corpId,
-      fail(error) {
-        const raw = String((error && (error.errMsg || error.message)) || '')
-        const unbound = /not\s*bind|未绑定|no permission|没有权限/i.test(raw)
+      fail() {
         wx.showModal({
-          title: unbound ? '小程序尚未绑定微信客服' : '暂时无法打开客服',
-          content: unbound
-            ? '微信客服尚未完成平台绑定。请稍后重试，或使用门店公布的联系方式。'
-            : '微信客服暂时无法打开，请稍后重试，或使用门店公布的联系方式。',
+          title: '暂时无法打开微信客服',
+          content: '请稍后再试，或使用门店公布的联系方式。',
           showCancel: false,
           confirmText: '知道了',
         })
@@ -1014,7 +1011,7 @@ Page({
   },
   openOrders() {
     if (!this.requireMembership('orders')) return
-    wx.navigateTo({ url: '/pages/account/index' })
+    this.openOrderHistory()
   },
   openPreferenceSettings() {
     if (!this.requireMembership('preferences')) return

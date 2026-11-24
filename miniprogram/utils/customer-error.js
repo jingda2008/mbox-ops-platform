@@ -1,12 +1,12 @@
 // Customer pages must never render a backend/WeChat error string directly.
 // Error codes are stable contracts; the fallback remains local Chinese copy.
 const CODE_MESSAGES = Object.freeze({
-  COMMAND_RECOVERY_PENDING: '上次操作结果尚未确认，请先恢复原请求或联系门店核对，再修改内容',
-  COMMAND_RECOVERY_RECORD_INVALID: '本机原请求记录无法核对，请联系门店确认，避免重复操作',
-  COMMAND_RECOVERY_REVIEW_REQUIRED: '旧版请求结果待核对，请查看当前状态或联系门店，暂不重复提交',
-  COMMAND_RECOVERY_EXPIRED: '原请求已超过安全重试时间，请查看当前状态或联系门店，本次不会重新执行',
-  COMMAND_RECOVERY_SCOPE_CHANGED: '身份或桌台已变化，原请求已保留，请重新核对当前状态',
-  COMMAND_RECOVERY_UNCONFIRMED: '操作回执暂时无法确认，请核对原请求，不要重复提交',
+  COMMAND_RECOVERY_PENDING: '上次提交的结果还未确认，请先查看办理进度，或联系门店核对',
+  COMMAND_RECOVERY_RECORD_INVALID: '暂时查不到上次提交的结果，请联系门店核对，避免重复提交',
+  COMMAND_RECOVERY_REVIEW_REQUIRED: '上次提交的结果还未确认，请先查看办理进度，避免重复提交',
+  COMMAND_RECOVERY_EXPIRED: '距离上次提交已有一段时间，请联系门店核对结果，避免重复提交',
+  COMMAND_RECOVERY_SCOPE_CHANGED: '会员或桌号已变化，请核对当前会员和桌号，再查看上次提交的结果',
+  COMMAND_RECOVERY_UNCONFIRMED: '暂时查不到办理结果，请稍后查看，避免重复提交',
 
   CUSTOMER_AUTHENTICATION_REQUIRED: '请先返回会员中心登录，再查看我的存酒',
   CUSTODY_NOT_FOUND: '这张存酒单不存在或不属于当前会员，请返回存酒列表核对',
@@ -19,13 +19,13 @@ const CODE_MESSAGES = Object.freeze({
   GUEST_ORDER_ACCESS_FORBIDDEN: '这笔订单不属于当前桌位，请重新扫描当前桌面的二维码',
   TABLE_SESSION_ENDED: '本桌服务已结束，请重新扫描当前桌面的二维码',
   CUSTOMER_AT_OTHER_TABLE: '当前设备已连接到另一桌，请先联系服务人员处理',
-  GUEST_SERVICE_RATE_LIMITED: '请求较多，这次尚未受理；请稍后重试，仍会恢复原请求',
+  GUEST_SERVICE_RATE_LIMITED: '这次呼叫还未受理，请稍后再试',
   GUEST_AUTH_RATE_LIMITED: '操作有点快，请稍后再试',
   GUEST_SCAN_RATE_LIMITED: '操作有点快，请稍后再试',
   STORE_ACCESS_FORBIDDEN: '当前门店访问入口无效，请从小程序重新进入',
   TABLE_QR_INVALID: '新桌码无效，请扫描本店当前有效桌码',
-  INVENTORY_RECIPE_MISSING: '所选商品供应配置尚未完成，请更换商品或联系服务人员',
-  INVENTORY_BALANCE_MISSING: '所选商品库存资料待核对，请更换商品或联系服务人员',
+  INVENTORY_RECIPE_MISSING: '所选商品暂时无法供应，请更换商品或联系服务人员',
+  INVENTORY_BALANCE_MISSING: '所选商品暂时无法确认库存，请更换商品或联系服务人员',
   ORDER_NOT_PAYABLE: '所选订单当前无需付款或已结束，请刷新桌账核对',
   PRODUCT_UNAVAILABLE: '有商品暂时无法供应，请返回购物车调整后再试',
   PRODUCT_NOT_AVAILABLE: '有商品刚刚下架或售罄，请返回购物车调整后再试',
@@ -55,20 +55,20 @@ const CODE_MESSAGES = Object.freeze({
   DAILY_SNACK_UNAVAILABLE: '当前没有可申请的每日点心，请以门店已发布规则和会员等级为准',
   DAILY_SNACK_RULE_AMBIGUOUS: '每日点心规则待门店确认，请联系服务人员',
   DAILY_SNACK_TABLE_LIMIT_REACHED: '本桌今日每日点心名额已满',
-  DAILY_SNACK_MEMBER_LIMIT_INVALID: '每日点心次数规则尚未配置完整，本次未新增申请，请联系服务人员',
-  DAILY_SNACK_PRICE_INVALID: '每日点心商品价格未配置完整，本次未新增申请，请联系服务人员',
+  DAILY_SNACK_MEMBER_LIMIT_INVALID: '暂时无法确认领取次数，本次未提交点心申请，请联系服务人员',
+  DAILY_SNACK_PRICE_INVALID: '暂时无法确认点心价格，本次未提交申请，请联系服务人员',
   DAILY_SNACK_ALREADY_CLAIMED: '今日每日点心已经申请过，不能再次申请',
-  ACTIVITY_CONTACT_PROTECTION_FAILED: '报名服务配置异常，请稍后再试',
-  ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE: '报名服务配置异常，请稍后再试',
+  ACTIVITY_CONTACT_PROTECTION_FAILED: '暂时无法办理报名，请稍后再试',
+  ACTIVITY_CONTACT_PROTECTION_UNAVAILABLE: '暂时无法办理报名，请稍后再试',
   ACTIVITY_REGISTRATION_RESULT_UNCONFIRMED: '报名结果确认中，请稍后在“我的活动”查看',
   ACTIVITY_PAYMENT_WECHAT_IDENTITY_REJECTED: '微信付款身份需要刷新，本次没有扣款，请刷新后重新报名',
   ACTIVITY_PAYMENT_NETWORK_REJECTED: '当前网络未通过支付安全验证，本次没有扣款，请切换网络后重新报名',
-  ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE: '活动付款服务配置异常，本次没有扣款，请联系门店处理',
-  ACTIVITY_PAYMENT_PROVIDER_REJECTED: '支付通道未能受理本次付款，本次没有扣款，请稍后重新报名或联系门店',
+  ACTIVITY_PAYMENT_CONFIGURATION_UNAVAILABLE: '暂时无法发起活动付款，本次没有扣款，请联系门店处理',
+  ACTIVITY_PAYMENT_PROVIDER_REJECTED: '本次付款未受理，本次没有扣款，请稍后重新报名或联系门店',
   ACTIVITY_PAYMENT_RESULT_UNKNOWN: '付款结果确认中，请先查询付款状态，不要重复报名或重复付款',
   AUTH_REQUIRED: '登录状态已失效，请重新进入后重试',
   AUTHENTICATION_REQUIRED: '登录状态已失效，请重新进入后重试',
-  PUBLIC_RESERVATION_REQUEST_INVALID: '请求格式有误，请刷新页面后重试',
+  PUBLIC_RESERVATION_REQUEST_INVALID: '请刷新预约页面，核对填写的信息后再试',
   PUBLIC_RESERVATION_RATE_LIMITED: '操作有点快，请稍后再试',
   RESERVATION_NOT_FOUND: '找不到这条预约，请刷新后重试',
   RESERVATION_CANCEL_REQUIRES_STAFF: '该预约需要联系门店协助取消',
@@ -77,10 +77,10 @@ const CODE_MESSAGES = Object.freeze({
   HTTP_ERROR: '服务暂时未能确认，请稍后重试',
   WECHAT_PHONE_AUTHORIZATION_INVALID: '微信手机号授权无效或已过期，请重新点击授权',
   WECHAT_PHONE_PROVIDER_UNAVAILABLE: '微信手机号服务暂时不可用，请稍后重试',
-  WECHAT_PHONE_PROVIDER_CONFIGURATION: '微信手机号服务配置异常，请联系门店',
+  WECHAT_PHONE_PROVIDER_CONFIGURATION: '暂时无法通过微信验证手机号，请联系门店',
   MEMBERSHIP_ENROLLMENT_PHONE_NOT_CONFIGURED: '手机号入会尚未接通，请稍后重试或联系门店',
   MEMBERSHIP_ENROLLMENT_CLIENT_UPGRADE_REQUIRED: '请更新小程序后重新授权手机号加入会员',
-  MEMBERSHIP_ENROLLMENT_CONFLICT: '本次入会请求与之前不一致，请关闭后重新授权手机号',
+  MEMBERSHIP_ENROLLMENT_CONFLICT: '本次入会信息与上次不同，请关闭后重新授权手机号',
   MEMBERSHIP_ENROLLMENT_IN_PROGRESS: '入会正在确认中，请稍候再试',
   MEMBERSHIP_ENROLLMENT_RESULT_UNCONFIRMED: '入会结果确认中，请稍后在「我的」查看',
   MEMBERSHIP_IDENTITY_CONFLICT: '会员身份正在同步，请重新授权手机号完成登录',
@@ -89,7 +89,7 @@ const CODE_MESSAGES = Object.freeze({
   PHONE_AUTHORIZATION_REPLAY_REJECTED: '这次手机号授权已经使用过。请重新点一次授权；如果这是原来的会员，请使用「找回原会员」',
   MEMBERSHIP_PHONE_AUTHORIZATION_CONFLICT: '这个手机号已经绑定了其他会员。请使用「找回原会员」完成登录，本次没有重复开卡',
   CUSTOMER_EXPERIENCE_FAILED: '会员服务暂时没有接上，请稍后重试',
-  ROUTE_NOT_FOUND: '会员服务接口暂时不可用，请稍后重试或联系门店',
+  ROUTE_NOT_FOUND: '会员服务暂时不可用，请稍后重试或联系门店',
 })
 
 function customerErrorCode(error) {
@@ -101,10 +101,9 @@ function customerErrorMessage(error, fallback) {
   const code = customerErrorCode(error)
   if (code && CODE_MESSAGES[code]) return CODE_MESSAGES[code]
   const serverMessage = String((error && error.message) || '').trim()
-  // 后端已返回稳定中文时直接展示，避免未登记错误码被统一盖成“服务暂时繁忙”。
-  if (serverMessage && /^[\u4e00-\u9fffA-Za-z0-9]/.test(serverMessage)
-    && !/Error:|at |stack|ECONN|ETIMEDOUT|undefined|is not defined/i.test(serverMessage)
-    && serverMessage.length <= 96) {
+  // Preserve short Chinese business notices, but keep platform and service diagnostics out of the UI.
+  const diagnostic = /接口|配置|后台|服务端|客户端|原请求|回执|幂等|安全重试|规则快照|数据库|字段|堆栈|异常码|请求格式|凭证域|模拟支付|系统异常|系统错误|技术错误|(?:error|fail|stack|exception|undefined|null|ECONN|ETIMEDOUT|HTTP|SQL|API|TypeError)|[A-Z][A-Z0-9]+_[A-Z0-9_]+|https?:\/\/|[\r\n]/i
+  if (/^[\u4e00-\u9fff]/.test(serverMessage) && serverMessage.length <= 96 && !diagnostic.test(serverMessage)) {
     return serverMessage
   }
   return String(fallback || '服务暂时繁忙，请稍后重试').trim()

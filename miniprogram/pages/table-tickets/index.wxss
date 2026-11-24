@@ -1,9 +1,8 @@
 .page { padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom)); color: #282c26; font-size: 27rpx; line-height: 1.55; word-break: break-word; }
 .pass, .sheet { margin-bottom: 18rpx; border-radius: 24rpx; overflow: hidden; }
 .pass { background: linear-gradient(115deg, #142c23, #28513d); color: #fffdf5; }
-.pass-main { position: relative; padding: 30rpx 196rpx 28rpx 30rpx; min-height: 184rpx; }
-.pass-kind { color: #dfc99f; font-size: 23rpx; letter-spacing: 2rpx; }
-.pass-title { margin-top: 12rpx; font-size: 42rpx; line-height: 1.25; font-weight: 700; }
+.pass-main { position: relative; padding: 30rpx 196rpx 28rpx 30rpx; min-height: 128rpx; box-sizing: content-box; }
+.pass-title { font-size: 42rpx; line-height: 1.25; font-weight: 700; }
 .pass-sub { margin-top: 8rpx; color: #e2e9dd; font-size: 25rpx; }
 .pass-image, .pass-mark { position: absolute; top: 30rpx; right: 30rpx; width: 128rpx; height: 128rpx; border-radius: 15rpx; }
 .pass-mark { top: 36rpx; right: 40rpx; width: 108rpx; height: 108rpx; border-radius: 50%; }
@@ -17,10 +16,14 @@
 .sheet-title { font-size: 32rpx; font-weight: 650; }
 .fact { display: flex; gap: 24rpx; margin-bottom: 10rpx; }
 .key { flex: 0 0 auto; color: #716e63; }
-.note, .summary, .auth-note, .empty-note { color: #62675c; font-size: 24rpx; }
-.note { padding-top: 14rpx; border-top: 1rpx solid #e9e5da; margin-top: 18rpx; }
-.rules-copy { margin-top: 14rpx; }
-.inline-label, .rule-title { font-weight: 600; }
+.summary, .auth-note, .empty-note { color: #62675c; font-size: 24rpx; }
+.rule-group { margin-top: 18rpx; color: #555b50; white-space: pre-line; }
+.rule-group .rule-title { color: #30392f; }
+.rule-group view + view { margin-top: 4rpx; }
+.rule-title { font-weight: 600; }
+.ticket-area { overflow-wrap: anywhere; }
+.ticket-refund-terms { white-space: pre-line; overflow-wrap: anywhere; }
+.ticket-contact { display: inline-block; padding: 10rpx 0; color: #315940; }
 .rule-title { display: block; margin-bottom: 4rpx; }
 .disclosure, .offer-row, .refresh { box-sizing: border-box; margin: 0; background: transparent; color: #315940; font-size: 26rpx; line-height: 1.5; text-align: left; }
 .disclosure::after, .offer-row::after, .refresh::after, .stepper button::after { border: 0; }
@@ -42,7 +45,7 @@
 .agreement checkbox, .reservation radio { flex: none; margin-right: 8rpx; }
 .reservation { display: block; margin-bottom: 20rpx; }
 .auth-note { margin-bottom: 12rpx; }
-.auth-note navigator { display: inline; color: #315940; }
+.auth-note navigator { display: inline-block; color: #315940; }
 .sale-state { padding: 18rpx; border-radius: 16rpx; text-align: center; background: #f1eee7; color: #5c594f; }
 .switch-offers { padding: 0; margin: 0; border: 0; min-height: 66rpx; }
 .offer-row { color: #474e43; padding-bottom: 10rpx; } .offer-price { flex-shrink: 0; color: #39583f; }
@@ -51,3 +54,11 @@
 .ticket view, .ticket text { display: block; margin-top: 8rpx; }
 .history button { margin-top: 12rpx; }
 .refresh { margin: 0 auto; padding: 18rpx; text-align: center; }
+
+.browse-link { display: block; margin-top: 24rpx; padding: 20rpx 24rpx; background: #fff; color: #315940; }
+.proposal-retry { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.proposal-retry button { flex: none; margin: 0; }
+
+.ticket-unavailable .secondary-button, .ticket-unavailable .browse-link, .purchase-recovery button { margin: 16rpx 0 0; }
+.purchase-recovery text { display: block; color: #634d35; }
+.original-receipt text { display: block; overflow-wrap: anywhere; }

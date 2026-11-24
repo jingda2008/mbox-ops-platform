@@ -176,12 +176,12 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   page.data.registeredPartySizeDraft='4';await page.saveRegisteredPartySize();page.data.registeredPartySizeDraft='3';await page.saveRegisteredPartySize();assert.equal(writes.length,1)
   page.data.registeredPartySizeDraft='4';fail=false;await page.saveRegisteredPartySize();assert.equal(writes.length,2);assert.equal(writes[0][2],writes[1][2]);assert.equal(page.data.registration.partySize,4)
  })
- test(platform+': successful refund submission is requested rather than paid out, and removes the shown QR',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': successful refund submission is requested rather than paid out, and removes the shown QR',async()=>{
   const writes=[];let state=refundState();const {page}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);state=refundState('requested','refund-one');return {refundPublicId:'refund-one',status:'requested',amountMinor:5000}}})
   await page.loadServiceCode();await page.requestRegistrationRefund()
   assert.equal(writes.length,1);assert.equal(writes[0][0],'old');assert.equal(page.data.registration.refundStatus,'requested');assert.equal(page.data.registration.canAddPurchase,false);assert.equal(page.data.serviceCode,null);assert.match(page.data.success,/尚未退款到账/)
  })
- test(platform+': lost refund receipt reuses the same request key and a cancelled confirmation does not submit',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': lost refund receipt reuses the same request key and a cancelled confirmation does not submit',async()=>{
   let fail=true,state=refundState();const writes=[];const {page,runtime}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);if(fail)throw Error('网络断开');state=refundState('requested','refund-one');return {refundPublicId:'refund-one',status:'requested'}}})
   runtime.showModal=o=>o.success({confirm:false});await page.requestRegistrationRefund();assert.equal(writes.length,0)
   runtime.showModal=o=>o.success({confirm:true});await page.requestRegistrationRefund();fail=false;await page.requestRegistrationRefund()
@@ -255,26 +255,26 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   const disabled=button.match(/disabled="{{([^}]+)}}"/)[1]
   assert.equal(vm.runInNewContext(disabled,{busy:false,item:page.data.addonProducts[0]}),true)
  })
- for(const terminal of ['rejected','cancelled'])test(platform+': an acknowledged '+terminal+' refund starts a new request only after fresh matching server status',async()=>{
+ if(platform==='alipay-miniprogram') for(const terminal of ['rejected','cancelled'])test(platform+': an acknowledged '+terminal+' refund starts a new request only after fresh matching server status',async()=>{
   let state=refundState(terminal,'refund-old');const writes=[]
   const {page,storage}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);state=refundState('requested','refund-new');return {refundPublicId:'refund-new',status:'requested'}}})
   storage.set(refundsKey,{old:{idempotencyKey:'old-refund-key',refundPublicId:'refund-old',reason:'原申请'}})
   await page.requestRegistrationRefund();assert.equal(writes.length,1);assert.notEqual(writes[0][2],'old-refund-key');assert.equal(storage.get(refundsKey).old.refundPublicId,'refund-new');assert.equal(page.data.registration.refundStatus,'requested')
  })
- test(platform+': an old rejected refund cannot replace the unknown newer refund key',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': an old rejected refund cannot replace the unknown newer refund key',async()=>{
   let state=refundState('rejected','older-refund');const writes=[]
   const {page,storage}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);state=refundState('requested','current-refund');return {refundPublicId:'current-refund',status:'requested'}}})
   storage.set(refundsKey,{old:{idempotencyKey:'unknown-current-key',reason:'原申请'}})
   await page.requestRegistrationRefund();assert.equal(writes[0][2],'unknown-current-key');assert.equal(storage.get(refundsKey).old.refundPublicId,'current-refund')
  })
- test(platform+': replaying a lost refund receipt shows its current rejection before a subsequent explicit request',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': replaying a lost refund receipt shows its current rejection before a subsequent explicit request',async()=>{
   let state=refundState('rejected','refund-lost');const writes=[]
   const {page,storage}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);if(args[2]==='lost-key')return {refundPublicId:'refund-lost',status:'requested'};state=refundState('requested','refund-new');return {refundPublicId:'refund-new',status:'requested'}}})
   storage.set(refundsKey,{old:{idempotencyKey:'lost-key',reason:'原申请'}})
   await page.requestRegistrationRefund();assert.equal(writes[0][2],'lost-key');assert.equal(page.data.registration.refundStatus,'rejected');assert.match(page.data.success,/原申请已被拒绝/)
   await page.requestRegistrationRefund();assert.notEqual(writes[1][2],'lost-key');assert.equal(page.data.registration.refundStatus,'requested')
  })
- test(platform+': stale local rejection cannot replace an authoritative pending refund and a failed read cannot rotate the key',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': stale local rejection cannot replace an authoritative pending refund and a failed read cannot rotate the key',async()=>{
   let fail=false;const writes=[];const {page,storage,helpers:h}=await fixture(platform,{getActivityRegistrationPayment:async()=>{if(fail)throw Error('读取失败');return refundState('approved','refund-old')},requestActivityRegistrationRefund:async(...args)=>{writes.push(args)}})
   storage.set(refundsKey,{old:{idempotencyKey:'original-refund-key',refundPublicId:'refund-old',reason:'原申请'}})
   page.data.registration=h.viewRegistration({...confirmed,...refundState('rejected','refund-old')});await page.requestRegistrationRefund();assert.equal(writes.length,0);assert.equal(page.data.registration.refundStatus,'approved')
@@ -298,7 +298,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   deferred=true;const pending=page.loadAddonProducts('dish');page.onUnload();release([{id:'dish',name:'晚到菜',priceAmountMinor:1200}]);await pending
   assert.equal(page.data.selectedAddonProduct,null);assert.equal(page.addonMenuTimer,null);assert.equal(timers.size,0)
  })
- test(platform+': switching away during a refund confirmation cannot submit later',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': switching away during a refund confirmation cannot submit later',async()=>{
   let confirm,writes=0;const {page,runtime}=await fixture(platform,{requestActivityRegistrationRefund:async()=>{writes++},registerActivity:async()=>{writes++}})
   runtime.showModal=o=>{confirm=o};const pending=page.requestRegistrationRefund();page.onHide();confirm.success({confirm:true});await pending;assert.equal(writes,0)
  })
@@ -361,7 +361,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
    assert.equal(again.refundRejectionReason,'本份有已确认的同行加餐');assert.equal(again.canRequestFullRefund,eligible);assert.equal(again.showFullRefundRequest,eligible)
   }
  })
- test(platform+': fresh ineligible authority prevents a new refund but cannot replace an unknown original request',async()=>{
+ if(platform==='alipay-miniprogram') test(platform+': fresh ineligible authority prevents a new refund but cannot replace an unknown original request',async()=>{
   const writes=[];let state={...refundState(),canRequestFullRefund:false,refundRequestBlockReason:'active_addons'}
   const {page,storage,helpers:h}=await fixture(platform,{getActivityRegistrationPayment:async()=>state,requestActivityRegistrationRefund:async(...args)=>{writes.push(args);return {refundPublicId:'original-receipt',status:'requested'}}})
   await page.requestRegistrationRefund();assert.equal(writes.length,0);assert.equal(storage.get(refundsKey),undefined);assert.equal(page.data.registration.showFullRefundRequest,false)
@@ -435,7 +435,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
   const template=await readFile(new URL('../'+platform+'/pages/community-detail/index.'+(platform==='miniprogram'?'wxml':'axml'),import.meta.url),'utf8')
   const button=template.match(/<button\b[^>]*(?:bindtap|onTap)="queryOriginalPurchase"[^>]*>/)[0]
   assert.equal(vm.runInNewContext(button.match(/disabled="{{([^}]+)}}"/)[1],page.data),false)
-  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,/暂未查到原提交结果/);assert.equal(writes,0)
+  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,platform === 'miniprogram' ? /暂时查不到这笔订单/ : /暂未查到原提交结果/);assert.equal(writes,0)
   records=[{...confirmed,publicId:'original-result',purchaseKind:'single_dish',registrationRequestIdempotencyKey:original.idempotencyKey}]
   await page.queryOriginalPurchase();assert.equal(page.data.registration.publicId,'original-result');assert.equal(page.data.pendingPurchaseRecovery,false);assert.equal(storage.get(attemptsKey).activity,undefined);assert.equal(writes,0);assert.equal(outcomes,0)
  })
@@ -444,7 +444,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']) {
   const {page,storage}=await fixture(platform,{getActivityRegistrations:async()=>{if(fail)throw Error('offline');return new Promise(resolve=>{release=resolve})}})
   const original={idempotencyKey:'original-unknown-key',payload:{purchaseKind:'single_dish',productId:'dish',quantity:2,parentRegistrationPublicId:'old',partySize:1}}
   storage.set(attemptsKey,{activity:original});page.data.pendingPurchaseRecovery=true
-  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,/原请求已保留/)
+  await page.queryOriginalPurchase();assert.equal(storage.get(attemptsKey).activity,original);assert.match(page.data.error,platform === 'miniprogram' ? /避免重复购买/ : /原请求已保留/)
   fail=false;const pending=page.queryOriginalPurchase();page.onHide();release([{...confirmed,publicId:'old-late',registrationRequestIdempotencyKey:original.idempotencyKey}]);await pending
   assert.equal(storage.get(attemptsKey).activity,original);assert.notEqual(page.data.registration?.publicId,'old-late');assert.equal(page.data.busy,false)
  })
@@ -470,4 +470,32 @@ test('wechat unknown activity followed by denied recovery keeps exact journal',a
  await page.beginPurchase(event({kind:'admission_package'}));page.data.contact='13800000000';page.data.ruleAcknowledged=true;page.choosePayment=async()=>({choice:'full',method:'jsapi'})
  await page.register();const original=storage.get(attemptsKey).activity;assert.ok(original)
  await page.register();assert.equal(count,2);assert.equal(storage.get(attemptsKey).activity.idempotencyKey,original.idempotencyKey)
+})
+
+for (const available of [true, false]) test('WeChat history action stays on requested registration when exact read ' + (available ? 'matches' : 'does not match'), async () => {
+  const recent = {...confirmed, publicId:'recent', registrationRequestIdempotencyKey:'another-attempt'}
+  const {page, storage} = await fixture('miniprogram', {
+    getActivityRegistrations: async id => id ? [{...confirmed, activityPublicId: available ? 'activity' : 'another-activity'}] : [recent],
+  })
+  storage.set(attemptsKey, {activity:{idempotencyKey:'another-attempt', payload:{parentRegistrationPublicId:'recent'}}})
+  page.onLoad({id:'activity',registrationId:'old'})
+  await page.load()
+  assert.equal(page.data.registration?.publicId ?? null, available ? 'old' : null)
+  assert.equal(page.data.originalReadFailed, !available)
+  assert.equal(page.data.pendingPurchaseRecovery, false)
+  assert.equal(storage.get(attemptsKey).activity.idempotencyKey, 'another-attempt')
+})
+
+for (const refundStatus of [null,'requested','processing','rejected']) test('WeChat product order contacts staff instead of cancelling or filing a refund, status ' + refundStatus, async () => {
+  const writes = [], destinations = []
+  const {page, helpers, runtime} = await fixture('miniprogram', {
+    cancelActivityRegistration: async () => writes.push('cancel'),
+    requestActivityRegistrationRefund: async () => writes.push('refund'),
+  })
+  runtime.navigateTo = ({url}) => destinations.push(url)
+  page.data.registration = helpers.viewRegistration({...confirmed,refundStatus,allowedActions:['cancel_registration']})
+  await page.cancelRegistration()
+  await page.requestRegistrationRefund()
+  assert.deepEqual(writes, [])
+  assert.deepEqual(destinations, ['/pages/profile-contact/index','/pages/profile-contact/index'])
 })

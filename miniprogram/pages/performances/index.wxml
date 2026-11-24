@@ -23,8 +23,8 @@
   </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取演出安排" />
   <block wx:else>
-    <view wx:if="{{error}}" class="error-banner">{{error}}</view>
-    <view wx:if="{{schedules.length}}" class="schedule-list">
+    <view wx:if="{{error}}" class="error-banner calendar-error"><text>{{error}}</text><button class="calendar-retry" size="mini" bindtap="load">重新加载当天安排</button></view>
+    <view wx:elif="{{schedules.length}}" class="schedule-list">
       <view wx:for="{{schedules}}" wx:key="id" class="schedule-card">
         <image wx:if="{{item.imageUrl}}" class="schedule-card__image" src="{{item.imageUrl}}" mode="aspectFill" />
         <view class="schedule-avatar" wx:else>现场</view>

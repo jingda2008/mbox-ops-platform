@@ -121,7 +121,7 @@ Page({
       })
       this.setData({ tableCode: getTableSession().tableCode, success: task.message || '收到，我们马上来照顾您。', note: '' })
     } catch (error) {
-      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '请求结果尚未确认，可重试核对原请求') })
+      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '呼叫是否送达还未确认，请稍后查看服务进度') })
     } finally { if (guard.finishWrite(request)) this.setData({ submittingId: '' }) }
   },
 

@@ -32,6 +32,7 @@ async function destination(tx:ScopedTransaction,offer:string,area:string,table:s
     JOIN mbox.tables tab ON tab.area_id=o.area_id AND tab.tenant_id=o.tenant_id AND tab.store_id=o.store_id
     JOIN mbox.areas ar ON ar.id=tab.area_id
     WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.id=$3 AND o.area_id=$4 AND tab.id=$5
+      AND coalesce(tab.id=ANY(mbox.ticket_assignable_desk_ids(o.tenant_id,o.store_id,o.id)),true)
       AND tab.status='available' AND ar.status='active' AND o.status='published' AND a.status='published'
       AND a.starts_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_offers newer
         WHERE newer.activity_id=o.activity_id AND newer.area_id=o.area_id AND newer.version>o.version AND newer.status<>'draft')

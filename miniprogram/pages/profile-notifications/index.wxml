@@ -4,28 +4,24 @@
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取提醒设置</button></view>
     <view class="notice-card">
-      <text class="notice-title">公众号积分变动提醒</text>
-      <text class="notice-copy">积分到账、占用抵扣、退款返还、人工调整和到期变动均记录。开启后通过已绑定的公众号发送，不影响会员权益。</text>
-      <block wx:if="{{official}}">
-        <text>{{official.accountName || '门店尚未配置公众号积分通知'}}</text>
-        <text wx:if="{{!official.available}}">公众号通知权限尚未就绪，积分明细仍可在小程序查看。</text>
-        <text wx:elif="{{!official.linked}}">请先关注门店公众号并完成本人会员绑定。</text>
-        <switch checked="{{official.enabled}}" disabled="{{saving || (!official.enabled && (!official.available || !official.linked))}}" bindchange="changeOfficial" aria-label="接收公众号积分变动提醒" />
-      </block>
+      <view class="notice-setting">
+        <text class="notice-title">公众号积分变动提醒</text>
+        <switch wx:if="{{official}}" checked="{{official.enabled}}" disabled="{{saving || (!official.enabled && (!official.available || !official.linked))}}" bindchange="changeOfficial" aria-label="接收公众号积分变动提醒" color="#315d46" />
+      </view>
+      <text wx:if="{{official.accountName}}" class="notice-copy">{{official.accountName}}</text>
+      <text wx:if="{{official && !official.available}}" class="notice-copy">公众号提醒暂时不可用。积分明细可在「我的」查看。</text>
+      <text wx:elif="{{official && !official.linked}}" class="notice-copy">请先关注门店公众号，并绑定本人的会员账号。</text>
+      <text wx:else class="notice-copy">通过门店公众号接收积分到账、抵扣、返还、调整和到期提醒。</text>
     </view>
-    <view class="notice-card">
-      <text class="notice-title">微信会在需要时发起确认</text>
-      <text class="notice-copy">报名、付款或查看优惠券时，微信会展示相应模板。你当场选择即可；不影响报名、点单或会员权益。</text>
-    </view>
-
-    <view wx:if="{{options.length}}" class="option-list">
-      <view wx:for="{{options}}" wx:key="policyKey" class="option-row">
-        <view>
-          <text>{{item.title}}</text>
-          <text>{{item.statusText}}</text>
+    <view wx:if="{{options.length}}" class="notice-card">
+      <text class="notice-title">微信订阅提醒</text>
+      <text class="notice-copy">报名、付款或查看优惠券时，微信会询问是否接收相应提醒。</text>
+      <view class="option-list">
+        <view wx:for="{{options}}" wx:key="policyKey" class="option-row">
+          <text>{{item.title}}</text><text wx:if="{{item.statusText}}" class="option-status">{{item.statusText}}</text>
         </view>
       </view>
     </view>
-    <state-panel wx:elif="{{!error}}" type="empty" title="暂未配置消息模板" message="门店发布模板后，会在相关操作中由微信自动发起确认。" />
+    <state-panel wx:elif="{{!error}}" type="empty" title="暂无可订阅的提醒" message="有新的提醒可订阅时，微信会询问你是否接收。" />
   </block>
 </view>

@@ -213,15 +213,15 @@ integration('loyalty accrual PostgreSQL integration', () => {
     }
   })
 
-  it('new fixed rule rounds each order independently and ignores historical tier multipliers', async () => {
+  it.each([1000, 2000])('rounds per order at %i minor units, including after refunds', async (denominator) => {
     const customer=randomUUID(),membership=randomUUID(),policy=randomUUID(),suffix=customer.replaceAll('-','').slice(0,10)
     await pool.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status) VALUES($1,$2,$3,$4,'active')",[customer,id.tenant,id.store,`fixed-${suffix}`])
     await pool.query("INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no,level,status) VALUES($1,$2,$3,$4,$5,'member','active')",[membership,id.tenant,id.store,customer,`MBXFIXED${suffix.toUpperCase()}`])
     await pool.query('INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,membership_id,customer_id) VALUES($1,$2,$3,$4)',[id.tenant,id.store,membership,customer])
     await pool.query(`INSERT INTO mbox.loyalty_policy_versions(id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason,points_rounding_scope)
-      VALUES($1,$2,$3,$4,1,'published',1,1000,1,100,'floor',18,'2026-01-01',$5,$6,'2026-01-01',$7,'2026-01-01','separated','每笔十元一分零头不计','order')`,[policy,id.tenant,id.store,`FIXED${suffix.toUpperCase()}`,id.drafter,id.approver,id.publisher])
+      VALUES($1,$2,$3,$4,1,'published',1,$8,1,100,'floor',18,'2026-01-01',$5,$6,'2026-01-01',$7,'2026-01-01','separated','逐单取整','order')`,[policy,id.tenant,id.store,`FIXED${suffix.toUpperCase()}`,id.drafter,id.approver,id.publisher,denominator])
     await expect(pool.query("UPDATE mbox.loyalty_policy_versions SET points_rounding_scope='cumulative' WHERE id=$1",[policy])).rejects.toThrow('immutable')
-    for(const [amount,points] of [[900,0],[900,0],[10900,10],[999,0],[1000,1]]){
+    for(const [amount,points] of [[900,0],[900,0],[10900,denominator === 1000 ? 10 : 5],[denominator-1,0],[denominator,1]]){
       const orderId=randomUUID(),itemId=randomUUID(),paymentId=randomUUID()
       await seedTinyPaidOrder(pool,{orderId,itemId,paymentId,policyId:policy,customerId:customer,suffix:`fixed-${orderId}`,amount})
       await pool.query('UPDATE mbox.orders SET loyalty_points_multiplier_numerator=5,loyalty_points_multiplier_denominator=1 WHERE id=$1',[orderId])
@@ -229,7 +229,7 @@ integration('loyalty accrual PostgreSQL integration', () => {
       expect(result.pointsDelta).toBe(points)
       expect((await runner.run({tenantId:id.tenant,storeId:id.store},tx=>new LoyaltyAccrualRepository(tx).recordPaidOrder({orderId,paymentId,occurredAt:'2026-08-17T00:00:00Z'}))).applied).toBe(false)
       if(amount===10900){
-        for(const [refundAmount,expected] of [[900,0],[100,-1],[9900,-9]]){
+        for(const [refundAmount,expected] of [[900,0],[100,-1],[9900,denominator === 1000 ? -9 : -4]]){
           const refundId=randomUUID()
           await pool.query(`INSERT INTO mbox.refunds(id,tenant_id,store_id,payment_id,public_id,provider_refund_id,amount_minor,currency,status,reason,requested_by_employee_id,approved_by_employee_id,decision_reason,completed_at) VALUES($1,$2,$3,$4,$5,$5,$6,'CNY','succeeded','逐次退款阈值检查',$7,$8,'收银复核通过','2026-08-17T01:00:00Z')`,[refundId,id.tenant,id.store,paymentId,`fixed-refund-${refundId}`,refundAmount,id.drafter,id.approver])
           await pool.query("INSERT INTO mbox.refund_items(tenant_id,store_id,refund_id,order_item_id,amount_minor,currency) VALUES($1,$2,$3,$4,$5,'CNY')",[id.tenant,id.store,refundId,itemId,refundAmount])
@@ -240,6 +240,26 @@ integration('loyalty accrual PostgreSQL integration', () => {
     }
     expect((await pool.query("SELECT count(*)::int AS n FROM mbox.loyalty_reward_carry_balances WHERE membership_id=$1 AND reward_kind='points'",[membership])).rows[0].n).toBe(0)
     expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[membership])).rows[0].available_points).toBe(1)
+
+    const service = new CustomerExperienceService(runner, new NormalizedCommandExecutor(runner), {
+      updateProfile: async () => { throw new Error('unused') },
+    })
+    const orderId = randomUUID()
+    const orderPublicId = 'manual-' + orderId
+    await seedTinyPaidOrder(pool, { orderId, itemId: randomUUID(), paymentId: randomUUID(), policyId: policy,
+      customerId: customer, suffix: orderPublicId, amount: 50000 })
+    await pool.query('UPDATE mbox.orders SET loyalty_points_multiplier_numerator=5 WHERE id=$1', [orderId])
+    const expected = denominator === 2000 ? 25 : 50
+    const report = await service.loyaltyReconciliation(staff(id.approver))
+    expect(report.find(row => row.orderPublicId === orderPublicId)).toMatchObject({expectedPoints: expected, status: 'missing'})
+    const request = await service.requestLoyaltySupplement(staff(id.drafter), {
+      orderPublicId, reason: '按原单核对漏记积分', idempotencyKey: randomUUID(),
+    })
+    expect(request.value.requestedPoints).toBe(expected)
+    const approved = await service.decideLoyaltySupplement(staff(id.approver), {
+      publicId: request.value.publicId, decision: 'approve', reason: '核对实付金额', idempotencyKey: randomUUID(),
+    })
+    expect(approved.value).toMatchObject({pointsDelta: expected, growthDelta: 500})
   })
 
   it('separates policy approval from publication and keeps the current version active until cut-over', async () => {
@@ -255,8 +275,10 @@ integration('loyalty accrual PostgreSQL integration', () => {
     )
     const draft = await service.draftLoyaltyPolicy(staff(id.drafter), {
       policyCode: 'BASE',
-      pointsNumerator: 2,
-      pointsDenominatorMinor: 100,
+      pointsRoundingScope: 'order',
+      cashRedemptionEnabled: true,
+      pointsNumerator: 1,
+      pointsDenominatorMinor: 2000,
       growthNumerator: 1,
       growthDenominatorMinor: 100,
       roundingMode: 'floor',

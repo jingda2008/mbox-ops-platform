@@ -446,7 +446,9 @@ function compute(content: MembershipConfigurationContent, snapshot: MembershipIm
   }
   if (content.domain === 'base_points') {
     if(content.pointsRoundingScope==='order'&&!snapshot.eligibleOrderAmountsMinor)throw configurationError('MEMBERSHIP_CONFIGURATION_IMPACT_SOURCE_INVALID','逐单积分预览需要逐单成交金额，不能用汇总金额取整')
-    const points = content.pointsRoundingScope==='order'?snapshot.eligibleOrderAmountsMinor!.reduce((total,amount)=>total+Math.floor(amount/1000),0):ratio(snapshot.eligiblePaidAmountMinor, content.pointsNumerator,content.pointsDenominatorMinor, content.roundingMode)
+    const points = content.pointsRoundingScope === 'order'
+      ? snapshot.eligibleOrderAmountsMinor!.reduce((total, amount) => total + Math.floor(amount / content.pointsDenominatorMinor), 0)
+      : ratio(snapshot.eligiblePaidAmountMinor, content.pointsNumerator, content.pointsDenominatorMinor, content.roundingMode)
     const pointCost = content.cashRedemptionEnabled?points*100:pointsCost(points, snapshot.pointCostMicrosPerPoint)
     return result({ ...empty, estimatedPointsIssued: points, estimatedPointsCostAmountMinor: pointCost,
       warnings: pointCost > 0 ? ['points_cost_review'] : [] }, [
@@ -653,7 +655,7 @@ function eligibleTierCount(counts: Readonly<Record<MembershipTier, number>>, tie
 }
 export function assertContent(content: MembershipConfigurationContent) {
   if (content.domain === 'base_points') {
-    if ((content.cashRedemptionEnabled && content.pointsRoundingScope !== 'order') || (content.pointsRoundingScope === 'order' && (content.pointsNumerator !== 1 || content.pointsDenominatorMinor !== 1000 || content.roundingMode !== 'floor'))) throw configurationError('MEMBERSHIP_CONFIGURATION_INVALID', '逐单积分固定每10元1分、向下取整；现金抵扣须采用该规则')
+    if ((content.cashRedemptionEnabled && content.pointsRoundingScope !== 'order') || (content.pointsRoundingScope === 'order' && (content.pointsNumerator !== 1 || ![1000, 2000].includes(content.pointsDenominatorMinor) || content.roundingMode !== 'floor'))) throw configurationError('MEMBERSHIP_CONFIGURATION_INVALID', '逐单积分须按每10元或20元积1分，向下取整。启用积分抵扣时请选择逐单取整。')
     positive(content.pointsDenominatorMinor); positive(content.growthDenominatorMinor)
     nonnegative(content.pointsNumerator); nonnegative(content.growthNumerator)
     if (content.pointsValidityMonths < 1 || content.pointsValidityMonths > 120) throw configurationError(

@@ -1,5 +1,4 @@
 <view class="page reservations-page" style="padding-bottom: calc(98rpx + {{customTabBarHeight || 50}}px)">
-  <view class="reservation-head"><view class="brand-row"><view><text class="eyebrow">M-BOX · 到店预约</text><text class="reservation-title">预约到店</text></view></view><text class="reservation-copy">分三步完成，只在最后确认联系信息与费用规则。</text></view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取本人预约" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}</view><view wx:if="{{success}}" class="success-banner">{{success}}</view>
@@ -46,36 +45,34 @@
       <view class="step-head"><view class="step-progress"><view class="{{step >= 1 ? 'is-active' : ''}}"><text>1</text><text>时间人数</text></view><view class="step-line {{step >= 2 ? 'is-active' : ''}}"></view><view class="{{step >= 2 ? 'is-active' : ''}}"><text>2</text><text>演出位置</text></view><view class="step-line {{step >= 3 ? 'is-active' : ''}}"></view><view class="{{step >= 3 ? 'is-active' : ''}}"><text>3</text><text>确认提交</text></view></view></view>
 
       <view wx:if="{{step === 1}}" class="flow-panel">
-        <text class="flow-kicker">第一步</text><text class="flow-title">什么时候来，几位？</text>
+        <text class="flow-title">哪天来？几位？</text>
         <view class="field-row"><label class="field"><text class="field__label">日期</text><picker mode="date" value="{{reservationDate}}" start="{{minimumDate}}" bindchange="onDateChange"><view class="picker-field">{{reservationDate}}</view></picker></label><label class="field"><text class="field__label">时间</text><picker mode="time" value="{{reservationTime}}" bindchange="onTimeChange"><view class="picker-field">{{reservationTime}}</view></picker></label></view>
         <label class="field"><text class="field__label">到店人数</text><input class="field__input" type="number" value="{{partySize}}" bindinput="onPartySizeInput" bindblur="onPartySizeConfirm" /></label>
-        <view class="availability {{availability && availability.acceptingReservations ? 'is-available' : ''}}"><text>{{checking ? '正在确认容量…' : availabilityText}}</text><text wx:if="{{depositText}}">{{depositText}}</text></view>
+        <view class="availability {{availability && availability.acceptingReservations ? 'is-available' : ''}}"><text>{{checking ? '正在查询余位…' : availabilityText}}</text><text wx:if="{{depositText}}">{{depositText}}</text></view>
       </view>
 
       <view wx:elif="{{step === 2}}" class="flow-panel flow-panel--experience">
-        <text class="flow-kicker">第二步</text><text class="flow-title">演出与位置偏好</text>
+        <text class="flow-title">演出与位置偏好</text>
         <view class="show-selection show-selection--mini">
-          <view class="field-title"><text>今晚演出提醒</text><text>可选 · 点选即可</text></view>
+          <view class="field-title"><text>当日演出</text><text>选填</text></view>
           <state-panel wx:if="{{loadingShows}}" type="loading" title="读取演出" />
-          <scroll-view wx:elif="{{performances.length}}" scroll-x enhanced show-scrollbar="{{false}}">
-            <view class="show-row show-row--mini">
+          <view wx:elif="{{performances.length}}" class="show-row show-row--mini">
               <button wx:for="{{performances}}" wx:key="id" class="show-chip {{selectedPerformanceId === item.id ? 'is-selected' : ''}}" data-id="{{item.id}}" bindtap="selectPerformance">
-                <text>{{item.name}}</text><text>{{item.timeText}}</text>
+                <text>{{item.name}}</text><text>{{item.shortTimeText}}</text>
               </button>
-            </view>
-          </scroll-view>
+          </view>
           <text wx:else class="empty-inline">这天暂未发布演出，可直接选位置。</text>
         </view>
         <label class="field choice-picker">
-          <text class="field__label">更想坐在哪里？ <text>下拉选择</text></text>
+          <text class="field__label">更想坐在哪里？</text>
           <picker mode="selector" range="{{seatOptions}}" range-key="name" value="{{seatIndex}}" bindchange="onSeatChange">
-            <view class="picker-field picker-field--select">{{seatOptions[seatIndex].name}} · 点击展开</view>
+            <view class="picker-field picker-field--select">{{seatOptions[seatIndex].name}}<text aria-hidden="true">⌄</text></view>
           </picker>
         </label>
         <label class="field choice-picker">
-          <text class="field__label">这次想怎样相聚？ <text>下拉选择</text></text>
+          <text class="field__label">这次想怎样相聚？</text>
           <picker mode="selector" range="{{occasionOptions}}" range-key="name" value="{{occasionIndex}}" bindchange="onOccasionChange">
-            <view class="picker-field picker-field--select">{{occasionOptions[occasionIndex].name}} · 点击展开</view>
+            <view class="picker-field picker-field--select">{{occasionOptions[occasionIndex].name}}<text aria-hidden="true">⌄</text></view>
           </picker>
         </label>
         <label class="field reservation-note reservation-note--compact">
@@ -85,14 +82,14 @@
       </view>
 
       <view wx:else class="flow-panel">
-        <text class="flow-kicker">第三步</text><text class="flow-title">最后核对</text>
+        <text class="flow-title">最后核对</text>
         <view class="booking-summary"><view><text>到店</text><text>{{reservationDate}} {{reservationTime}} · {{partySize}}人</text></view><view><text>位置</text><text>{{seatOptions[seatIndex].name}}</text></view><view><text>场景</text><text>{{occasionOptions[occasionIndex].name}}</text></view><view wx:if="{{selectedPerformance}}"><text>演出</text><text>{{selectedPerformance.name}} · {{selectedPerformance.timeText}}</text></view></view>
         <label class="field"><text class="field__label">预约称呼</text><input class="field__input" maxlength="100" value="{{customerName}}" placeholder="如：林女士" bindinput="onNameInput" /></label>
         <label class="field"><text class="field__label">手机号或微信</text><input class="field__input" maxlength="100" value="{{contact}}" placeholder="仅用于本次预约联系" bindinput="onContactInput" /></label>
         <view class="rule-confirm"><text>预约与费用规则</text><text>{{depositText}}</text><text>具体桌位由门店结合人数、位置倾向和现场情况确认；提交不代表锁定某张桌。</text></view>
       </view>
 
-      <view class="flow-actions"><button wx:if="{{step > 1}}" class="secondary-button" bindtap="previousStep">上一步</button><button wx:if="{{step < 3}}" class="primary-button" disabled="{{checking}}" bindtap="nextStep">下一步</button><button wx:else class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">确认提交</button></view>
+      <view class="flow-actions"><button wx:if="{{step > 1}}" class="secondary-button" bindtap="previousStep">上一步</button><button wx:if="{{step < 3}}" class="primary-button" disabled="{{checking}}" bindtap="nextStep">{{step === 1 && availabilityReadFailed ? '重查这个时段' : '下一步'}}</button><button wx:else class="primary-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submitReservation">确认提交</button></view>
       <button wx:if="{{reservations.length}}" class="close-flow" bindtap="closeForm">暂不新建预约</button>
     </view>
   </block>

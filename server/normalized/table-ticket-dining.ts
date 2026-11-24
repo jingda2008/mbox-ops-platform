@@ -1,3 +1,4 @@
+import {requirePersonalTicketRefund} from './table-ticket-admission-policy.js'
 import {CustomerExperienceRequestError} from './customer-experience-repository.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
 import {readRefundApprovalLimits} from './refund-approval-limits.js'
@@ -52,6 +53,7 @@ export async function proposeTicketDining(tx:ScopedTransaction,caseId:string,emp
       AND EXISTS(SELECT 1 FROM mbox.loyalty_point_lots l WHERE(l.tenant_id,l.store_id,l.id,l.membership_id)=(k.tenant_id,k.store_id,k.point_lot_id,p.membership_id))
       FOR UPDATE OF f`,[...scope,caseId])).rows[0]
   if(!row)throw unavailable('核算须从待复核的原票进入')
+  await requirePersonalTicketRefund(tx,caseId,'case')
   const lines=(await ticketDiningLines(tx,caseId)).filter(l=>l.usedMinor>0)
   const sum=lines.reduce((total,l)=>total+l.usedMinor,0)
   if(row.unresolved || !sum||sum!==Number(row.consumed_minor)||lines.some(l=>l.review))

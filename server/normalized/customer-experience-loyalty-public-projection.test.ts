@@ -93,6 +93,9 @@ describe('public loyalty projection', () => {
             expiring_points_30_days: null, next_expiry_at: null,
           }])
         }
+        if (sql.includes('points_denominator_minor AS "pointsDenominatorMinor"')) {
+          return result<Row>([{ pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true }])
+        }
         if (sql.includes('FROM mbox.loyalty_point_ledger ledger')) {
           return result<Row>([{
             id: '89000000-0000-4000-8000-000000000005', entry_type: 'earn',
@@ -134,6 +137,7 @@ describe('public loyalty projection', () => {
 
     const loyalty = await new CustomerExperienceRepository(transaction).publicLoyalty(customerId)
 
+    expect(loyalty.earningPolicy?.pointsDenominatorMinor).toBe(2000)
     expect(loyalty.points[0]).toMatchObject({
       sourceKind: 'order', sourceReference: 'ORDER-PUBLIC-20260816-001', policyVersion: 3,
       description: '已按付款订单和锁定规则入账',

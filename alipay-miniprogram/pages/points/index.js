@@ -50,7 +50,7 @@ Page({
   data: {
     loading: true,
     error: '',
-    membership: null,
+    earningPolicy: null, membership: null,
     tab: 'points',
     points: [],
     growth: [],
@@ -60,12 +60,13 @@ Page({
   onShow() { this.load() },
 
   async load() {
-    this.setData({ loading: true, error: '' })
+    this.setData({ loading: true, error: '', earningPolicy: null })
     try {
       const [bootstrap, ledger] = await Promise.all([getMiniBootstrap(), getMiniLoyaltyLedger()])
       const membership = bootstrap.membership || null
       this.setData({
         loading: false,
+        earningPolicy: ledger.earningPolicy || null,
         membership: membership && {
           pointsBalance: membership.pointsBalance,
           growthValue: membership.growthValue,

@@ -883,9 +883,9 @@ export class CustomerExperienceService {
       idempotencyKey: string
     }>,
   ) {
-    if ((input.pointsRoundingScope === 'order' && (input.pointsNumerator !== 1 || input.pointsDenominatorMinor !== 1000 || input.roundingMode !== 'floor'))
+    if ((input.pointsRoundingScope === 'order' && (input.pointsNumerator !== 1 || ![1000, 2000].includes(input.pointsDenominatorMinor) || input.roundingMode !== 'floor'))
       || (input.cashRedemptionEnabled && (input.pointsRoundingScope !== 'order' || input.policyCode !== 'BASE'))) {
-      throw new CustomerExperienceRequestError('积分抵扣须使用基础规则：每笔实付满10元积1分，零头不累计', 'LOYALTY_POLICY_RULE_INVALID', 400)
+      throw new CustomerExperienceRequestError('逐单积分须按每10元或20元积1分，向下取整。启用抵扣时请选择逐单取整的基础积分规则。', 'LOYALTY_POLICY_RULE_INVALID', 400)
     }
     return staffAuthorizedCommands(this.commands, context.employeeId, 'loyalty.policy.manage').execute({
       scope: context.scope,
@@ -1720,7 +1720,7 @@ export class CustomerExperienceService {
             eligible.eligible_amount_minor,
             paid.loyalty_points_multiplier_numerator,
             paid.loyalty_points_multiplier_denominator,
-            policy.rounding_mode,
+            policy.rounding_mode, policy.points_rounding_scope,
             CASE policy.rounding_mode WHEN 'nearest'
               THEN ((eligible.eligible_amount_minor * policy.points_numerator
                 + policy.points_denominator_minor / 2) / policy.points_denominator_minor)::bigint
@@ -1738,7 +1738,8 @@ export class CustomerExperienceService {
             ON policy.tenant_id=$1::uuid AND policy.store_id=$2::uuid
            AND policy.id=paid.loyalty_policy_version_id
         ), expected AS (
-          SELECT base.*, CASE base.rounding_mode WHEN 'nearest'
+          SELECT base.*, CASE WHEN base.points_rounding_scope='order' THEN base.base_points::integer
+            WHEN base.rounding_mode='nearest'
             THEN ((base.base_points * base.loyalty_points_multiplier_numerator
               + base.loyalty_points_multiplier_denominator / 2)
               / base.loyalty_points_multiplier_denominator)::integer
@@ -1914,7 +1915,7 @@ export class CustomerExperienceService {
         ), calculated AS (
           SELECT target.order_id, target.customer_id, target.policy_version_id,
             target.multiplier_numerator, target.multiplier_denominator,
-            membership.id AS membership_id, policy.rounding_mode,
+            membership.id AS membership_id, policy.rounding_mode, policy.points_rounding_scope,
             CASE policy.rounding_mode WHEN 'nearest'
               THEN ((eligible.amount_minor * policy.points_numerator + policy.points_denominator_minor / 2)
                 / policy.points_denominator_minor)::bigint
@@ -1934,7 +1935,8 @@ export class CustomerExperienceService {
            AND membership.customer_id IN (SELECT id FROM family) AND membership.status='active'
           ORDER BY membership.joined_at, membership.id LIMIT 1
         ), expected AS (
-          SELECT calculated.*, CASE calculated.rounding_mode WHEN 'nearest'
+          SELECT calculated.*, CASE WHEN calculated.points_rounding_scope='order' THEN calculated.base_points::integer
+            WHEN calculated.rounding_mode='nearest'
             THEN ((calculated.base_points * calculated.multiplier_numerator
               + calculated.multiplier_denominator / 2) / calculated.multiplier_denominator)::integer
             ELSE ((calculated.base_points * calculated.multiplier_numerator)

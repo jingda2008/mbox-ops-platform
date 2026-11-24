@@ -34,7 +34,6 @@ import { PaymentProviderActionRepository, WechatPaymentIdentityRequiredError } f
 import { PostarPaymentRejectedError } from '../postar-adapter.js'
 import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
-import { readTableSessionClosureState } from './table-session-closure-blockers.js'
 import { lockBoundGuestTablePosition, lockBoundGuestCheckoutPosition } from './guest-table-authority.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
@@ -1260,7 +1259,7 @@ integration('guest service and mood API with PostgreSQL', () => {
     }
   }, 15000)
 
-  it('cancels an abandoned guest self-checkout without leaving service work or a later checkout blocker', async () => {
+  it('keeps submitted goods and their fulfillment state when a legacy guest tries to cancel', async () => {
     const abandonedOrderId = randomUUID()
     const abandonedItemId = randomUUID()
     const publicId = `guest-abandon-${abandonedOrderId.slice(0, 12)}`
@@ -1289,15 +1288,11 @@ integration('guest service and mood API with PostgreSQL', () => {
       url: `/api/guest/orders/${publicId}/abandon-checkout`,
       headers: { 'idempotency-key': `guest-abandon-checkout-${abandonedOrderId.slice(0, 12)}` },
     })
-    const first = await abandon()
-    expect(first.statusCode, first.body).toBe(200)
-    expect(first.json()).toMatchObject({
-      data: { orderPublicId: publicId, operationalState: 'cancelled', paymentState: 'not_required' },
-      meta: { replayed: false },
-    })
-    const replay = await abandon()
-    expect(replay.statusCode).toBe(200)
-    expect(replay.json()).toMatchObject({ meta: { replayed: true } })
+    for (let attempt=0; attempt<2; attempt++) {
+      const response = await abandon()
+      expect(response.statusCode).toBe(409)
+      expect(response.json().error.code).toBe('ORDER_CONTACT_STORE')
+    }
 
     const state = await pool.query<{
       order_status: string
@@ -1319,7 +1314,7 @@ integration('guest service and mood API with PostgreSQL', () => {
       WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$3::uuid
     `, [integrationTenantId, integrationStoreId, abandonedOrderId])
     expect(state.rows).toEqual([{
-      order_status: 'cancelled', fulfillment_state: 'cancelled', item_status: 'cancelled',
+      order_status: 'submitted', fulfillment_state: expect.not.stringMatching(/^cancelled$/), item_status: 'submitted',
       active_kds_count: '0', reserved_inventory_count: '0',
     }])
   })
@@ -1371,86 +1366,37 @@ integration('guest service and mood API with PostgreSQL', () => {
       url: `/api/guest/orders/${orderPublicId}/abandon-checkout`,
       headers: { 'idempotency-key': `guest-jsapi-abandon-${abandonedOrderId.slice(0, 16)}` },
     })
-    if (observationId) {
-      expect(response.statusCode, response.body).toBe(409)
-      expect(response.json().error.code).toBe('GUEST_CHECKOUT_ALREADY_PAID')
-      const release = await transactions.run(integrationContext.scope, tx =>
-        new PaymentFulfillmentRepository(tx).releaseAfterDefinitiveFailure(abandonedOrderId, 'another attempt closed'))
-      expect(release.released).toBe(false)
-      const payments = new PaymentCommandService(new NormalizedCommandExecutor(transactions),
-        new NormalizedPaymentCapabilityAuthorization(), new NormalizedProviderObservationAuthority())
-      const callback = { ...paymentEvidence, verifiedObservationId: observationId,
-        actor: { type: 'integration' as const, ref: paymentEvidence.integrationRef },
-        idempotencyKey: randomUUID(), requestFingerprint: paymentPublicId, businessDate: integrationContext.businessDate }
-      const accrual = vi.spyOn(LoyaltyAccrualRepository.prototype, 'recordPaidOrder')
-        .mockRejectedValueOnce(Object.assign(new Error('deadlock during accrual'), { code: '40P01' }))
-      try {
-        expect((await payments.recordSucceededCallback(callback)).replayed).toBe(false)
-        expect((await payments.recordSucceededCallback(callback)).replayed).toBe(true)
-        expect(accrual).toHaveBeenCalledTimes(2)
-      } finally { accrual.mockRestore() }
-      const result = await pool.query(`
-        SELECT o.status,o.payment_status,o.fulfillment_state,
-          (SELECT count(*)::int FROM mbox.kds_tasks WHERE order_item_id=$2) AS tasks,
-          (SELECT count(*)::int FROM mbox.print_source_jobs WHERE aggregate_id=o.id AND ticket_kind='production') AS tickets,
-          (SELECT count(*)::int FROM mbox.outbox_messages WHERE aggregate_id=o.id
-            AND message_type='order.fulfillment_activated_after_payment.v1') AS activations,
-          (SELECT count(*)::int FROM mbox.guest_immediate_checkout_abandonment_events WHERE order_id=o.id) AS exits,
-          (SELECT count(*)::int FROM mbox.guest_immediate_checkout_late_capture_refund_followups WHERE order_id=o.id) AS followups
-        FROM mbox.orders o WHERE o.id=$1`, [abandonedOrderId, abandonedItemId])
-      expect(result.rows).toEqual([{ status:'submitted', payment_status:'paid', fulfillment_state:'active',
-        tasks:1, tickets:1, activations:1, exits:0, followups:0 }])
-      return
-    }
-    expect(response.statusCode, response.body).toBe(200)
-    expect(response.json()).toMatchObject({
-      data: {
-        orderPublicId,
-        operationalState: 'cancelled',
-        paymentState: 'reconciliation_pending',
-      },
+    const capturedId = observationId ?? await new VerifiedProviderObservationService(transactions).recordPayment({
+      ...paymentEvidence, providerEventId: randomUUID(), verificationKind: 'callback_signature', status: 'succeeded',
     })
-    const released = await transactions.run(integrationContext.scope, (transaction) => (
-      readTableSessionClosureState(transaction, integrationSessionId)
-    ), { readOnly: true })
-    expect(released.blockers.filter((item) => [
-      'ORDER_UNSETTLED', 'ORDER_ITEM_UNRESOLVED', 'KDS_ACTIVE', 'PAYMENT_PENDING', 'INVENTORY_RESERVED',
-    ].includes(item.code))).toEqual([])
-
-    await pool.query(`
-      UPDATE mbox.payments
-      SET status='succeeded',provider_transaction_id=$4,succeeded_at=clock_timestamp(),updated_at=clock_timestamp()
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
-    `, [
-      integrationTenantId, integrationStoreId, abandonedPaymentId,
-      `late-capture-${abandonedPaymentId.slice(0, 12)}`,
-    ])
-    const safety = await pool.query<{
-      abandonment_events: string
-      refund_followups: string
-      order_status: string
-      fulfillment_state: string
-      refund_eligible: string | null
-    }>(`
-      SELECT
-        (SELECT count(*)::text FROM mbox.guest_immediate_checkout_abandonment_events event
-          WHERE event.tenant_id=$1::uuid AND event.store_id=$2::uuid AND event.payment_id=$3::uuid) AS abandonment_events,
-        (SELECT count(*)::text FROM mbox.guest_immediate_checkout_late_capture_refund_followups followup
-          WHERE followup.tenant_id=$1::uuid AND followup.store_id=$2::uuid AND followup.payment_id=$3::uuid) AS refund_followups,
-        ordering.status AS order_status,ordering.fulfillment_state,
-        payment.provider_snapshot ->> 'guestCheckoutAbandoned' AS refund_eligible
-      FROM mbox.orders ordering
-      JOIN mbox.payments payment ON payment.tenant_id=ordering.tenant_id AND payment.store_id=ordering.store_id
-        AND payment.id=$3::uuid
-      WHERE ordering.tenant_id=$1::uuid AND ordering.store_id=$2::uuid AND ordering.id=$4::uuid
-    `, [integrationTenantId, integrationStoreId, abandonedPaymentId, abandonedOrderId])
-    expect(safety.rows).toEqual([{
-      abandonment_events: '1', refund_followups: '1', order_status: 'cancelled', fulfillment_state: 'cancelled',
-      refund_eligible: 'true',
-    }])
-    const tables = await transactions.run(integrationContext.scope, tx => readTables(tx, randomUUID(), true))
-    expect(tables.find(table => table.activeSession?.id === integrationSessionId)?.activeSession)
-      .toMatchObject({ financialState: 'payment_exception', refundAttentionCount: 0, refundActionCount: 0 })
+    expect(response.statusCode, response.body).toBe(409)
+    expect(response.json().error.code).toBe('ORDER_CONTACT_STORE')
+    const release = await transactions.run(integrationContext.scope, tx =>
+      new PaymentFulfillmentRepository(tx).releaseAfterDefinitiveFailure(abandonedOrderId, 'another attempt closed'))
+    expect(release.released).toBe(false)
+    const payments = new PaymentCommandService(new NormalizedCommandExecutor(transactions),
+      new NormalizedPaymentCapabilityAuthorization(), new NormalizedProviderObservationAuthority())
+    const callback = { ...paymentEvidence, verifiedObservationId: capturedId,
+      actor: { type: 'integration' as const, ref: paymentEvidence.integrationRef },
+      idempotencyKey: randomUUID(), requestFingerprint: paymentPublicId, businessDate: integrationContext.businessDate }
+    const accrual = vi.spyOn(LoyaltyAccrualRepository.prototype, 'recordPaidOrder')
+      .mockRejectedValueOnce(Object.assign(new Error('deadlock during accrual'), { code: '40P01' }))
+    try {
+      expect((await payments.recordSucceededCallback(callback)).replayed).toBe(false)
+      expect((await payments.recordSucceededCallback(callback)).replayed).toBe(true)
+      expect(accrual).toHaveBeenCalledTimes(2)
+    } finally { accrual.mockRestore() }
+    const result = await pool.query(`
+      SELECT o.status,o.payment_status,o.fulfillment_state,
+        (SELECT count(*)::int FROM mbox.kds_tasks WHERE order_item_id=$2) AS tasks,
+        (SELECT count(*)::int FROM mbox.print_source_jobs WHERE aggregate_id=o.id AND ticket_kind='production') AS tickets,
+        (SELECT count(*)::int FROM mbox.outbox_messages WHERE aggregate_id=o.id
+          AND message_type='order.fulfillment_activated_after_payment.v1') AS activations,
+        (SELECT count(*)::int FROM mbox.guest_immediate_checkout_abandonment_events WHERE order_id=o.id) AS exits,
+        (SELECT count(*)::int FROM mbox.guest_immediate_checkout_late_capture_refund_followups WHERE order_id=o.id) AS followups
+      FROM mbox.orders o WHERE o.id=$1`, [abandonedOrderId, abandonedItemId])
+    expect(result.rows).toEqual([{ status:'submitted', payment_status:'paid', fulfillment_state:'active',
+      tasks:1, tickets:1, activations:1, exits:0, followups:0 }])
   })
 
   it('lists all active bundles with disabled components without enabling ordering or exposing stopped bundles', async () => {

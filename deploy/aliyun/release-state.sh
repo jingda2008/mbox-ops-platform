@@ -113,7 +113,8 @@ release_contract_boundary_between() {
   [[ "${to_schema}" =~ ^[0-9]+$ ]] || return 2
   # 314 removes customer-authenticated partner access and adds website-only private projections.
   # 321 requires the payment-aware print worker and bridge for existing tickets.
-  for boundary in 96 275 300 301 302 303 304 305 313 314 320 321; do
+  # 372 permits order-scoped points rates that older recollection workers misapply.
+  for boundary in 96 275 300 301 302 303 304 305 313 314 320 321 372; do
     if [ "${from_schema}" -lt "${boundary}" ] && [ "${to_schema}" -ge "${boundary}" ]; then
       result=${boundary}
     fi

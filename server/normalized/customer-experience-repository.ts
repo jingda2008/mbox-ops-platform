@@ -141,7 +141,15 @@ export interface PublicLoyaltyProcessingItem {
   active: boolean
 }
 
+type PublicEarningPolicy = {
+  pointsNumerator: number
+  pointsDenominatorMinor: number
+  pointsRoundingScope: 'order' | 'cumulative'
+  cashRedemptionEnabled: boolean
+}
+
 export interface PublicLoyaltySnapshot {
+  earningPolicy: PublicEarningPolicy | null
   membership: PublicMembership | null
   points: PublicPointEntry[]
   growth: PublicGrowthEntry[]
@@ -1188,11 +1196,21 @@ export class CustomerExperienceRepository {
 
   async publicLoyalty(customerId: string): Promise<PublicLoyaltySnapshot> {
     const membership = await this.findMembership(customerId)
-    if (membership === null) return { membership: null, points: [], growth: [], processing: [] }
+    const { tenantId, storeId } = this.transaction.scope
+    const policy = await this.transaction.query<PublicEarningPolicy>(`
+      SELECT points_numerator AS "pointsNumerator", points_denominator_minor AS "pointsDenominatorMinor",
+        points_rounding_scope AS "pointsRoundingScope", cash_redemption_enabled AS "cashRedemptionEnabled"
+      FROM mbox.loyalty_policy_versions
+      WHERE tenant_id=$1 AND store_id=$2 AND policy_code='BASE' AND status='published'
+        AND effective_from<=statement_timestamp() AND (effective_until IS NULL OR effective_until>statement_timestamp())
+      ORDER BY version DESC,id DESC LIMIT 1
+    `, [tenantId, storeId])
+    const earningPolicy = policy.rows[0] ?? null
+    if (membership === null) return { earningPolicy, membership: null, points: [], growth: [], processing: [] }
     const points = await this.listPointLedger(membership.id)
     const growth = await this.listGrowthLedger(membership.id)
     const processing = await this.listLoyaltyProcessing(customerId, membership.id)
-    return { membership: membershipView(membership), points, growth, processing }
+    return { earningPolicy, membership: membershipView(membership), points, growth, processing }
   }
 
   async publicActivities(customerId: string | null): Promise<PublicActivity[]> {

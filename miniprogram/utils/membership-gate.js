@@ -3,7 +3,8 @@ const { getMiniBootstrap } = require('./api')
 const LOGIN_REDIRECT_KEY = 'mbox.membership.login.redirect.v1'
 const LOGIN_DESTINATION_KEY = 'mbox.membership.login.destination.v1'
 function isLoginDestination(destination) {
-  return typeof destination === 'string' && (/^\/pages\/profile-cards\/index(?:\?projectId=[0-9a-f-]{36})?$/i.test(destination)
+  return typeof destination === 'string' && (destination === '/pages/table-tickets/index?view=mine'
+    || /^\/pages\/profile-cards\/index(?:\?projectId=[0-9a-f-]{36})?$/i.test(destination)
     || /^\/pages\/channel-coupons\/index(?:\?code=(?:[A-Z2-9]{8,16}|[A-Za-z0-9_-]{43}))?$/.test(destination))
 }
 

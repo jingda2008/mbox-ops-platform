@@ -351,6 +351,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         points: loyalty.points,
         growth: loyalty.growth,
         processing: loyalty.processing,
+        earningPolicy: loyalty.earningPolicy,
       },
     })
   }))
@@ -644,6 +645,8 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolvePublicContext(request)
     const body=objectBody(request.body)
+    if (['tableId','tableIds','draftTableIds','areaId'].some(field=>Object.hasOwn(body,field)))
+      throw new CustomerExperienceRequestError('请选择门票档位，具体桌号由门店安排','TICKET_DESK_STAFF_ONLY',400)
     if (Object.keys(body).some(key=>!['offerId','proposalId','reservationLockId','quantity','safetyVersion','refundVersion','termsAcknowledged'].includes(key)))
       throw new CustomerExperienceRequestError('整桌门票须按票档原价付款','TICKET_TENDER_INVALID',400)
     if (body.termsAcknowledged!==true) throw new CustomerExperienceRequestError('请先核对本场条款与赠分说明')
@@ -705,10 +708,11 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     return reply.send({ data: { items, nextCursor: rows.length > 20 ? rows[19]!.publicId : null } })
   }))
 
-  app.get('/public/mini/activity-registrations', async (request, reply) => handle(reply, async () => {
+  app.get<{ Querystring: { id?: string } }>('/public/mini/activity-registrations', async (request, reply) => handle(reply, async () => {
     reply.header('Cache-Control', 'private, no-store, max-age=0').header('Pragma', 'no-cache')
     const context = await options.resolvePublicContext(request)
-    return reply.send({ data: await options.service.activityRegistrations(context) })
+    const id = request.query.id
+    return reply.send({ data: await options.service.activityRegistrations(context, id === undefined ? undefined : {id: publicId(id)}) })
   }))
 
   app.get<{ Params: { registrationPublicId: string } }>(
@@ -947,7 +951,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       amountDueMinor: registration.amountDueMinor,
       currency: registration.currency,
       expiresAt: registration.seatHoldExpiresAt,
-      allowedActions: ['start_payment', 'cancel_registration'] as const,
+      allowedActions: ['start_payment'] as const,
     }
     return reply.code(result.replayed ? 200 : 201).send({
       data: { ...registration, payment },
@@ -959,6 +963,11 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     const context = await options.resolvePublicContext(request)
     const body = objectBody(request.body)
     const registrationPublicId = publicId(request.params.registrationPublicId)
+    const [original] = await options.service.activityRegistrations(context, {id: registrationPublicId})
+    if (!original || original.publicId !== registrationPublicId) throw new CustomerExperienceRequestError('未找到本人的报名记录', 'ACTIVITY_REGISTRATION_NOT_FOUND', 404)
+    if (original.serviceVersion === 3 || original.serviceVersion === 4 || original.purchaseKind || original.totalFeeAmountMinor > 0) {
+      throw new CustomerExperienceRequestError('如需取消商品或门票订单，请联系工作人员。', 'ORDER_CONTACT_STORE', 409)
+    }
     const cancellationIdempotencyKey = idempotencyKey(request)
     await options.activityPayments?.prepareCancellation(context, {
       registrationPublicId,

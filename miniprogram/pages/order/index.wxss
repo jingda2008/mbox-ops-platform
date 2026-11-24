@@ -175,29 +175,7 @@
   text-align: left;
 }
 .browse-menu {
-  margin-top: 38rpx;
-}
-.browse-menu__heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-}
-.browse-menu__heading view text {
-  display: block;
-}
-.browse-menu__heading view text:first-child {
-  font-family: "Songti SC", "STSong", serif;
-  font-size: 38rpx;
-  font-weight: 600;
-}
-.browse-menu__heading view text:last-child {
-  margin-top: 7rpx;
-  color: #837b72;
-  font-size: 20rpx;
-}
-.browse-menu__heading > text {
-  color: #927049;
-  font-size: 21rpx;
+  margin-top: 12rpx;
 }
 .menu-tools--browse {
   position: static;
@@ -449,8 +427,9 @@
   justify-content: space-between;
 }
 .recommend-price {
-  font-size: 27rpx;
-  font-weight: 750;
+  font-size: 29rpx;
+  line-height: 1.25;
+  font-weight: 700;
 }
 .recommend-actions { display: flex; align-items: center; gap: 8rpx; }
 .recommend-foot button { display: flex; width: auto; min-width: 112rpx; min-height: 88rpx; margin: 0; padding: 0 14rpx; align-items: center; justify-content: center; border-radius: 44rpx; font-size: 20rpx; line-height: 1; }
@@ -465,25 +444,44 @@
   border-bottom: 1rpx solid #e0dbd4;
   background: rgba(247, 245, 241, 0.96);
 }
-.menu-tools .search-box { margin-top: 14rpx; }
 .search-box {
   display: flex;
-  height: 88rpx;
-  padding: 0 22rpx;
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 12px;
   align-items: center;
   border: 1rpx solid #d6d0c7;
   border-radius: 44rpx;
   background: #fff;
   gap: 12rpx;
 }
-.search-box > text {
-  color: #8d7d68;
-  font-size: 30rpx;
+.menu-search-icon {
+  position: relative;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  margin: 0 4px 3px 0;
+  border: 1.5px solid #63766a;
+  border-radius: 50%;
+}
+.menu-search-icon::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 1.5px;
+  right: -5px;
+  bottom: -2px;
+  background: #63766a;
+  transform: rotate(45deg);
 }
 .search-box input {
   min-width: 0;
   flex: 1;
-  font-size: 24rpx;
+  height: 44px;
+  font-size: 14px;
 }
 .category-scroll {
   width: 100%;
@@ -541,10 +539,10 @@
 .product-row {
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: 274rpx auto minmax(110rpx, auto);
+  grid-template-rows: 274rpx 1fr auto;
   height: auto;
   min-width: 0;
-  min-height: 520rpx;
+  min-height: 0;
   overflow: hidden;
   padding: 0;
   align-items: stretch;
@@ -579,8 +577,30 @@
   width: 100%;
   height: 100%;
 }
-.product-media.ticket-cover-default { background: #080808; }
-.product-media .ticket-cover-mark { width: 132rpx; height: 132rpx; }
+.category-word { display: inline-block; }
+.ticket-info .ticket-time { margin-top: 5rpx; color: #69675e; font-size: 22rpx; line-height: 1.4; }
+.ticket-info .ticket-time text { display: inline; }
+.product-action.ticket-terms { flex-wrap: wrap; justify-content: flex-start; align-items: baseline; align-content: flex-end; gap: 2rpx 12rpx; }
+.ticket-unit { font-size: 21rpx; font-weight: 400; color: #66675e; }
+.ticket-gift, .ticket-status { font-size: 21rpx; font-weight: 500; }
+.ticket-gift { color: #315940; white-space: nowrap; }
+.ticket-status { margin-top: 6rpx; color: #725a38; }
+.product-media.ticket-cover-default {
+  height: 100%;
+  min-height: 84rpx;
+  justify-content: center;
+  padding: 12rpx 18rpx;
+  box-sizing: border-box;
+  background: #e6eee7;
+}
+.ticket-cover-default .ticket-area {
+  position: static;
+  padding: 0;
+  background: transparent;
+  color: #244c3a;
+  font-weight: 650;
+  font-size: 27rpx;
+}
 .product-media__placeholder {
   display: flex;
   width: 100%;
@@ -590,18 +610,6 @@
   color: #d7bd93;
   font-family: "Songti SC", serif;
   font-size: 42rpx;
-}
-.product-media__detail-hint {
-  position: absolute;
-  right: 10rpx;
-  bottom: 10rpx;
-  padding: 5rpx 10rpx;
-  border: 1rpx solid rgba(255, 255, 255, .46);
-  border-radius: 999rpx;
-  background: rgba(14, 20, 17, .66);
-  color: #fff;
-  font-size: 16rpx;
-  line-height: 1.25;
 }
 .product-media__saving {
   position: absolute;
@@ -632,10 +640,10 @@
   font-weight: 700;
 }
 .product-name {
-  margin-top: 4rpx;
   overflow: hidden;
-  font-family: "Songti SC", "STSong", serif;
-  font-size: 27rpx;
+  font-family: inherit;
+  line-height: 1.4;
+  font-size: 28rpx;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -665,8 +673,8 @@
   box-sizing: border-box;
   display: flex;
   height: auto;
-  min-height: 110rpx;
-  padding: 0 14rpx 12rpx;
+  min-height: 0;
+  padding: 12rpx 14rpx 16rpx;
   align-items: flex-end;
   justify-content: space-between;
   text-align: left;
@@ -675,8 +683,9 @@
 .product-action__meta { min-width: 0; flex: 1; }
 .product-price {
   display: block;
-  font-size: 27rpx;
-  font-weight: 750;
+  font-size: 29rpx;
+  line-height: 1.25;
+  font-weight: 700;
 }
 .product-availability,
 .product-availability-copy {
@@ -1302,14 +1311,6 @@
 .recommend-foot button { min-width: 104rpx; min-height: 76rpx; border-radius: 38rpx; }
 .recommend-foot .recommend-select { min-width: 122rpx; }
 @media (max-width: 390px) { .recommend-card { width: 500rpx; } }
-.menu-phone-entry { margin: 12rpx 0 20rpx; padding: 20rpx 24rpx; border-radius: 20rpx; background: #f1f4ed; }
-.menu-phone-entry__copy { display: block; color: #365743; font-size: 24rpx; line-height: 1.5; }
-.menu-phone-entry__actions { display: flex; gap: 16rpx; margin-top: 14rpx; }
-.menu-phone-entry__actions button { flex: 1; min-width: 0; min-height: 44px; margin: 0; padding: 0 16rpx; border-radius: 24px; background: #214f3e; color: #fff; font-size: 26rpx; line-height: 44px; }
-.menu-phone-entry__actions button:last-child { background: transparent; color: #365743; }
-.menu-phone-entry__error { display: block; margin-top: 12rpx; color: #a13324; font-size: 24rpx; }
-.menu-phone-entry__privacy { width: auto; min-height: 44px; margin: 0; padding: 0; border: 0; background: transparent; color: #6f675f; font-size: 22rpx; line-height: 44px; text-align: left; }
-.menu-phone-entry__privacy::after { border: 0; }
 
 /* Checkout outcome is explicit: WeChat acceptance is not labelled as store
    settlement until the table ledger confirms it. */
@@ -1730,20 +1731,19 @@
 .page.page .category-grid { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8rpx; }
 .page.page .category-chip { display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;min-width:0;min-height:44px;height:auto;margin:0;padding:8rpx 6rpx;border:1rpx solid #e2ded5;border-radius:12rpx;background:#fff;color:#555b50;font-size:22rpx;font-weight:500;line-height:1.35;white-space:normal;word-break:break-all; }
 .page.page .category-chip.is-active { background:#214f3e;color:#fff;border-color:#214f3e; }
-.page.page .category-more { background:#eeeee6;color:#315d46; }
 .page.page .category-options { height:220rpx;max-height:30vh;margin-top:10rpx; }
 .page.page .menu-filter-line { display:flex;align-items:center;justify-content:flex-start;gap:12rpx;min-width:0;margin-top:10rpx; }
 .page.page .subcategory-trigger,.page.page .menu-search-trigger,.page.page .menu-search-clear { display:flex;align-items:center;justify-content:center;width:auto;min-width:0;min-height:44px;height:auto;margin:0;padding:6rpx 8rpx;background:transparent;color:#315d46;font-size:22rpx;font-weight:500;line-height:1.4;white-space:normal; }
 .page.page .subcategory-trigger,.page.page .menu-search-trigger { box-sizing:border-box;padding:0;border:0;border-radius:0;background:transparent;color:#214f3e;font-size:14px;font-weight:500;line-height:1.4; }
 .page.page .menu-filter-surface { box-sizing:border-box;min-height:30px;max-width:100%;padding:4px 8px;border:1rpx solid #c5d3c9;border-radius:6px;background:#edf3ee; }
-.page.page .subcategory-trigger { flex:0 1 auto;max-width:72%;justify-content:center; }
+.page.page .subcategory-trigger { flex:0 1 auto;max-width:38%;justify-content:center; }
 .page.page .menu-search-trigger { flex:0 0 auto;min-width:44px;max-width:46%;background:transparent; }
 .page.page .menu-search-trigger .menu-filter-surface { background:#fff; }
 .page.page .is-active .menu-filter-surface { border-color:#315d46;background:#dcebe1; }
 .page.page .menu-filter-pressed .menu-filter-surface { background:#d0e2d6;color:#153c2c; }
 @media (max-width:375px) { .page.page .subcategory-trigger,.page.page .menu-search-trigger { font-size:14px; } }
-.page.page .menu-result-count { font-size:21rpx;color:#7a7c72; }
-.page.page .menu-tools .search-box { height:44px;margin-top:4rpx; }
+.page.page .menu-result-count { flex:none;font-size:12px;color:#676c62; }
+.page.page .menu-search-clear { flex:none;min-width:44px;font-size:13px; }
 .page.page .menu-tools button::after { border:0; }
 /* Order action hierarchy: quiet choices, clear commitment, stable touch geometry. */
 .page.page .category-chip {
@@ -1753,7 +1753,6 @@
 .page.page .category-chip.is-active {
   border-color:#a8c4b3;background:#deebe1;color:#214f3e;font-weight:600;
 }
-.page.page .category-more { background:transparent;color:#466650; }
 .page.page .menu-filter-surface {
   border-color:#d4ded4;border-radius:15px;background:#eef2ec;
 }
@@ -1860,3 +1859,14 @@
 /* Selling-window copy occupies its own row; never overlap price or taste tags. */
 .product-row.is-scheduled .product-availability-copy { max-width: 100%; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
 .product-row.is-scheduled .product-availability { color: #315d46; font-weight: 500; }
+
+.ticket-menu-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 18rpx 20rpx;
+  background: #fffdf9;
+  border-radius: 16rpx;
+}
+.ticket-menu-status .ticket-menu-retry { flex-shrink: 0; margin: 0; color: #27513c; }

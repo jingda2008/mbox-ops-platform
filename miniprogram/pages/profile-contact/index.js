@@ -17,7 +17,7 @@ Page({
         loading: false,
         contact: {
           phone: (remote && remote.phone) || STORE_PHONE,
-          phoneLabel: (remote && remote.phoneLabel) || '门店预约电话',
+          phoneLabel: (remote && remote.phoneLabel) || '门店电话',
           wecomQrImageUrl: remote && remote.wecomQrImageUrl || '',
           wecomName: remote && remote.wecomName || '企业微信',
         },
@@ -27,7 +27,7 @@ Page({
         loading: false,
         contact: {
           phone: STORE_PHONE,
-          phoneLabel: '门店预约电话',
+          phoneLabel: '门店电话',
           wecomQrImageUrl: '',
           wecomName: '企业微信',
         },
@@ -55,7 +55,7 @@ Page({
     if (!url || !corpId) {
       wx.showModal({
         title: '客服暂未开通',
-        content: '客服暂时无法连接。你可以稍后再试，或先拨打预约电话。',
+        content: '客服暂时无法连接。你可以稍后再试，或先拨打门店电话。',
         showCancel: false,
       })
       return
@@ -72,8 +72,8 @@ Page({
         wx.showModal({
           title: '暂时无法打开客服',
           content: /not\s*bind|未绑定/i.test(raw)
-          ? '微信客服暂时无法连接。也可先拨打预约电话。'
-            : '微信客服暂时无法打开，请稍后重试或拨打预约电话。',
+          ? '微信客服暂时无法连接。也可先拨打门店电话。'
+            : '微信客服暂时无法打开，请稍后重试或拨打门店电话。',
           showCancel: false,
         })
       },

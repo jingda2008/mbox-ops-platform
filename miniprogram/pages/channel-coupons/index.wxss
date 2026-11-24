@@ -1,2 +1,13 @@
 .channel-page{padding:28rpx;color:#29281f}.intro,.card{display:flex;flex-direction:column;gap:20rpx;margin-bottom:24rpx;padding:28rpx;background:#fffdfa;border-radius:20rpx}.title{font-size:36rpx;font-weight:600}.card input{min-height:88rpx;border-bottom:1rpx solid #ccc}.card button{width:100%;font-size:30rpx}.error{color:#a13725;padding:16rpx 0}.channel-page>text{display:block;font-size:25rpx;line-height:1.6}
 .featured{border:2rpx solid #315d46}.offer{font-size:44rpx;color:#315d46;font-weight:600}.notice{padding:24rpx;color:#315d46;line-height:1.6}
+
+.page.page .coupon-entry .primary-button { margin: 0; min-height: 44px; background: #28513d; color: #fff; border-radius: 14rpx; }
+.wallet-heading, .code-entry { display: flex; align-items: center; gap: 12rpx; }
+.wallet-heading { justify-content: space-between; margin: 28rpx 0 10rpx; }
+.wallet-heading .title { font-size: 30rpx; }
+.page.page .coupon-link, .page.page .coupon-rules-toggle { width: auto; min-height: 44px; margin: 0; padding: 0 12rpx; border: none; background: transparent; color: #315d46; font-size: 25rpx; line-height: 44px; }
+.coupon-link::after, .coupon-rules-toggle::after { border: none; }
+.code-entry input { flex: 1; min-width: 0; }
+.page.page .code-entry button { width: auto; min-height: 44px; margin: 0; font-size: 26rpx; }
+.wallet-empty { padding: 16rpx 0 22rpx; color: #666f63; }
+.coupon-rule-copy text { display: block; margin-bottom: 10rpx; font-size: 24rpx; line-height: 1.6; color: #545e54; }

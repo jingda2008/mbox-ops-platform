@@ -6,7 +6,6 @@
     <text>暂时无法确认会员身份，请稍后再试。</text>
   </view>
   <block wx:else>
-    <navigator wx:if="{{membership}}" url="/pages/table-tickets/index">我的演出门票</navigator>
     <member-identities id="member-identities" wx:if="{{membership}}" />
     <view wx:if="{{membership}}" class="profile-member-card profile-member-card--{{membership.level}}">
       <view class="profile-member-card__glow"></view>
@@ -36,7 +35,7 @@
       <button class="identity-action" bindtap="focusJoinInvitation">邀请加入</button>
     </view>
 
-    <button class="panel order-history-entry" bindtap="openOrderHistory"><view><text>我的已付订单</text><text>查看菜品与收款明细</text></view><text>›</text></button>
+    <button wx:if="{{!membership}}" class="panel order-history-entry" bindtap="openOrderHistory"><view><text>我的已付订单</text><text>查看菜品与收款明细</text></view><text>›</text></button>
     <view class="metric-card">
       <button class="metric-item" bindtap="openPoints" hover-class="metric-item--hover">
         <text class="metric-icon">积</text>
@@ -81,8 +80,11 @@
       <text class="module-title">我的服务</text>
       <view class="service-grid">
         <view class="service-chip" bindtap="openOrders" hover-class="service-chip--hover" role="button">
-          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/order-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的订单</text><text>订单与桌账</text></view><text class="service-chip__arrow">›</text></view>
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/order-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的订单</text><text>查看本人点单记录</text></view><text class="service-chip__arrow">›</text></view>
         </view>
+        <navigator wx:if="{{membership}}" class="service-chip" url="/pages/table-tickets/index?view=mine" hover-class="service-chip--hover">
+          <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/community-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的门票</text><text>入场码与桌位安排</text></view><text class="service-chip__arrow">›</text></view>
+        </navigator>
         <view class="service-chip" bindtap="openReservations" hover-class="service-chip--hover" role="button">
           <view class="service-chip__face"><image class="service-chip__icon" src="/assets/tabbar/reservations-active.png" mode="aspectFit" /><view class="service-chip__copy"><text>我的预约</text><text>到店安排</text></view><text class="service-chip__arrow">›</text></view>
         </view>

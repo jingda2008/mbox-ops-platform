@@ -999,9 +999,12 @@ integration('channel distribution real PostgreSQL authority', () => {
       resolveSelfContext:async()=>({scope,customerId:cid,tableSessionId:null,businessDate:'2026-11-12',actorRef:`customer:${cid}`}),
       resolveGuestContext:async()=>({scope,customerId:cid,tableSessionId:session,businessDate:'2026-11-12',actorRef}),
       resolveStaffContext:async()=>({scope,employeeId:employee,businessDate:'2026-11-12'})})
+    const { rows: [activeTable] } = await admin.query<{code: string}>(`
+      SELECT t.code FROM mbox.table_sessions s JOIN mbox.tables t ON t.id=s.table_id WHERE s.id=$1
+    `, [session])
     let activationResponses=0
     const transport=async(call:any)=>{
-      if(call.path.startsWith('/api/guest/session'))return{data:{data:{status:'active'}}}
+      if(call.path.startsWith('/api/guest/session'))return{data:{data:{status:'active',table:activeTable}}}
       const reply=await guest.inject({method:call.method,url:call.path+call.query,headers:call.headers,...(call.method==='GET'?{}:{payload:call.data})})
       if(call.path==='/api/guest/channel/activate'&&++activationResponses===1&&reply.statusCode===200)
         return fault==='response-lost'?{networkError:true}:{data:{data:{}}}
@@ -1024,6 +1027,9 @@ integration('channel distribution real PostgreSQL authority', () => {
       const staff={method:'POST' as const,url:'/staff/channel/activate',payload:{code:b.code,claimId,customerId:cid,tableSessionId:session}}
       const first=await Promise.all([page.useCoupon({currentTarget:{dataset:{id:claimId}}}),app.inject({...staff,headers:{'idempotency-key':'channel-'+randomUUID()}}),app.inject({...staff,headers:{'idempotency-key':'channel-'+randomUUID()}})])
       for(const response of first.slice(1))expect(response.statusCode,response.body).toBe(200)
+      expect(client.modals).toHaveLength(1)
+      expect(client.modals[0].content).toContain(activeTable!.code)
+      expect(activationResponses).toBe(1)
       expect(page.data.error).toBeTruthy();expect(page.data.notice).toBe('')
       expect([...client.storage.keys()].filter((k:any)=>k.startsWith('mbox.command.v2:'))).toHaveLength(1)
       const firstCalls=client.calls.slice(),savedStorage=client.storage

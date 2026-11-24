@@ -1,5 +1,7 @@
 # 支付宝小程序与微信小程序一致性基线
 
+2026-11-24 门店确认顾客端只使用微信小程序。以下是支付宝客户端的历史基线，专项检查入口为 `npm run check:alipay-miniprogram`。门店后台及微信发布范围见[部署准备记录](wechat-rc314-ui1-deployment-prep-20261124.md)。
+
 基线：`origin/main@204ea8cd7c2fc0859a22972cd9ebcd3af186e992`。微信小程序目录树基线：`f3045fd708d14a323dc6e9a72e46c0f177bcf887`。
 
 ## 已实现

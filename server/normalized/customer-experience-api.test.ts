@@ -165,6 +165,7 @@ describe('customer experience activity contact API', () => {
   it('returns the safe loyalty ledger contract with customer-facing processing progress', async () => {
     const loyalty = vi.fn(async () => ({
       membership: null,
+      earningPolicy: { pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true },
       points: [{
         id: 'point-public-test', entryType: 'earn', pointsDelta: 10, balanceAfter: 10,
         sourceKind: 'order', sourceReference: 'ORDER-PUBLIC-001',
@@ -185,6 +186,7 @@ describe('customer experience activity contact API', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toEqual({ data: {
+      earningPolicy: { pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true },
       points: expect.arrayContaining([expect.objectContaining({
         sourceKind: 'order', sourceReference: 'ORDER-PUBLIC-001',
         description: '已按付款订单和锁定规则入账',
@@ -383,6 +385,24 @@ describe('customer experience activity contact API', () => {
     expect(response.headers.pragma).toBe('no-cache')
     expect(response.body).toContain('138****8000')
     expect(response.body).not.toMatch(/contactHash|encryptedContact|encryptionKeyId|customerId/)
+  })
+
+  it('looks up the full original registration using the signed-in customer context and exact ID', async () => {
+    const id = 'activity-registration-1234567890abcdef12345678'
+    const activityRegistrations = vi.fn(async () => [{publicId: id, purchaseKind: 'single_dish'}])
+    const app = activityRegistrationsFixture(activityRegistrations)
+    const response = await app.inject({method: 'GET', url: '/public/mini/activity-registrations?id=' + id})
+    expect(response.statusCode).toBe(200)
+    expect(activityRegistrations).toHaveBeenCalledWith(expect.objectContaining({customerId: expect.any(String)}), {id})
+    expect(response.json().data).toEqual([{publicId: id, purchaseKind: 'single_dish'}])
+  })
+
+  it('directs a sold activity order to staff before touching a payment or registration', async () => {
+    const id = 'activity-registration-0123456789abcdef'
+    const app = activityRegistrationsFixture(vi.fn(async () => [{publicId:id, serviceVersion:3}]))
+    const result = await app.inject({method:'POST',url:'/public/mini/activity-registrations/'+id+'/cancel',payload:{reason:'顾客取消'},headers:{'idempotency-key':'legacy-cancel-0001'}})
+    expect(result.statusCode).toBe(409)
+    expect(result.json().error.code).toBe('ORDER_CONTACT_STORE')
   })
 
   it('exposes the fixed activity payment read, action and query contracts', async () => {

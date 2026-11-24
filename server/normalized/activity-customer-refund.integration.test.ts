@@ -44,6 +44,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
  const post=(id:string,key=randomUUID(),headers={})=>app.inject({method:'POST',url:`/public/mini/activity-registrations/${id}/refund-request`,headers:{'idempotency-key':key,...headers},payload:{reason:'行程变动申请整份退订'}})
  const paymentView=(id:string,owner=customer)=>new ActivityPaymentService(runner,undefined as never,undefined as never)
   .get({scope,customerId:owner,businessDate:'2026-10-22',actorRef:'self-test'},id)
+ const staffRefund=(paymentId:string)=>runner.run(scope,tx=>new RefundRepository(tx).requestActivity({paymentId,publicId:randomUUID(),reason:'顾客联系门店办理整单退订',requestedByEmployeeId:employee}))
  const compensation=(paymentId:string)=>runner.run(scope,tx=>new RefundRepository(tx).requestActivity({paymentId,publicId:randomUUID(),reason:'已与顾客核对保留履约',requestedByEmployeeId:employee,amountMinor:200,disposition:'retain_fulfillment',customerConfirmed:true}))
  async function completeRefund(paymentId:string,refund:{id:string;amountMinor:number}) {
   await runner.run(scope,tx=>new RefundRepository(tx).approve(refund.id,reviewer,'核对原付款与售后方案'))
@@ -65,32 +66,28 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   expect((await post(f.id,randomUUID(),{'x-other':'yes'})).statusCode).toBe(404)
   expect((await admin.query('SELECT id FROM mbox.refunds WHERE payment_id=$1',[f.payment])).rowCount).toBe(0)
  })
- it('keeps the real requester, replays the original receipt, and appears in the existing cashier queue',async()=>{
-  const f=await fixture(),key=randomUUID();const first=await post(f.id,key);expect(first.statusCode,first.body).toBe(200);expect(first.json().data).toMatchObject({status:'requested',amountMinor:1000})
-  const replay=await post(f.id,key);expect(replay.json().meta.replayed).toBe(true)
-  const stored=(await admin.query('SELECT id,requested_by_employee_id,requested_by_customer_id,status FROM mbox.refunds WHERE payment_id=$1',[f.payment])).rows
-  expect(stored).toHaveLength(1);expect(stored[0]).toMatchObject({requested_by_employee_id:null,requested_by_customer_id:customer,status:'requested'})
-  const view=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:employee,businessDate:'2026-10-22',capabilities:['refund.approve','refund.execute','community.activity.cashier','community.activity.view'],limit:100})
-  expect(JSON.stringify(view)).toContain('顾客本人');expect(JSON.stringify(view)).toContain(first.json().data.refundPublicId)
-  const again=await post(f.id);expect(again.json().error.code).toBe('ACTIVITY_REFUND_PENDING')
-  const approved=await runner.run(scope,tx=>new RefundRepository(tx).approve(stored[0].id,employee,'核对未使用权益，批准退款'));expect(approved.status).toBe('approved');expect(approved.requestedByCustomerId).toBe(customer)
+ it('denies both legacy and repeated self-service while staff can submit and a different employee reviews',async()=>{
+  const f=await fixture(),key=randomUUID()
+  for(const attempt of [key,key,randomUUID()])expect((await post(f.id,attempt)).json().error.code).toBe('ORDER_CONTACT_STORE')
+  expect((await admin.query('SELECT id FROM mbox.refunds WHERE payment_id=$1',[f.payment])).rowCount).toBe(0)
+  const refund=await staffRefund(f.payment)
+  expect(await paymentView(f.id)).toMatchObject({refundPublicId:refund.publicId,refundStatus:'requested',canRequestFullRefund:false})
+  const view=await new PostgresCashierWorkbenchQuery(runner).get({scope,employeeId:reviewer,businessDate:'2026-10-22',capabilities:['refund.approve','refund.execute','community.activity.cashier','community.activity.view'],limit:100})
+  expect(JSON.stringify(view)).toContain(refund.publicId)
+  expect((await runner.run(scope,tx=>new RefundRepository(tx).approve(refund.id,reviewer,'已核实原订单'))).status).toBe('approved')
  })
- it('returns the current exact refund ID and terminal status while an old command still replays its original receipt',async()=>{
-  const f=await fixture(),key=randomUUID(),service=new ActivityPaymentService(runner,undefined as never,undefined as never),context={scope,customerId:customer,businessDate:'2026-10-22',actorRef:'self-test'}
-  expect(await service.get(context,f.id)).toMatchObject({refundPublicId:null,refundStatus:null,refundRejectionReason:null,canRequestFullRefund:true,refundRequestBlockReason:null})
-  const first=await post(f.id,key),firstId=first.json().data.refundPublicId
-  expect(await service.get(context,f.id)).toMatchObject({refundPublicId:firstId,refundStatus:'requested',refundRejectionReason:null,canRequestFullRefund:false,refundRequestBlockReason:'refund_in_progress'})
-  const refund=(await admin.query('SELECT id FROM mbox.refunds WHERE public_id=$1',[firstId])).rows[0]
-  await runner.run(scope,tx=>new RefundRepository(tx).reject(refund.id,employee,'顾客确认原行程仍可继续'))
-  expect(await service.get(context,f.id)).toMatchObject({refundPublicId:firstId,refundStatus:'rejected',resolutionState:'confirmed',refundRejectionReason:'顾客确认原行程仍可继续',canRequestFullRefund:true,refundRequestBlockReason:null})
-  const replay=await post(f.id,key);expect(replay.json().meta.replayed).toBe(true);expect(replay.json().data).toMatchObject({refundPublicId:firstId,status:'requested'})
-  const second=await post(f.id);expect(second.statusCode,second.body).toBe(200);expect(second.json().data.refundPublicId).not.toBe(firstId)
-  expect(await service.get(context,f.id)).toMatchObject({refundPublicId:second.json().data.refundPublicId,refundStatus:'requested',refundRejectionReason:null,canRequestFullRefund:false})
+ it('customer can track the original and replacement staff case after rejection',async()=>{
+  const f=await fixture(),first=await staffRefund(f.payment)
+  await runner.run(scope,tx=>new RefundRepository(tx).reject(first.id,reviewer,'门店重新核定'))
+  expect(await paymentView(f.id)).toMatchObject({refundPublicId:first.publicId,refundStatus:'rejected',refundRejectionReason:'门店重新核定',canRequestFullRefund:false})
+  const second=await staffRefund(f.payment)
+  expect(second.publicId).not.toBe(first.publicId)
+  expect(await paymentView(f.id)).toMatchObject({refundPublicId:second.publicId,refundStatus:'requested'})
  })
  it('rejects another customer and refuses used entitlements or a valid dependent add-on',async()=>{
   const plain=await fixture();expect((await post(plain.id,randomUUID(),{'x-other':'yes'})).statusCode).toBe(404)
-  const used=await fixture(undefined,true);expect((await post(used.id)).json().error.code).toBe('ACTIVITY_USED_REFUND_REVIEW')
-  const parent=await fixture();await fixture(parent);expect((await post(parent.id)).json().error.code).toBe('ACTIVITY_DEPENDENT_REFUND_REVIEW')
+  const used=await fixture(undefined,true);expect((await post(used.id)).json().error.code).toBe('ORDER_CONTACT_STORE')
+  const parent=await fixture();await fixture(parent);expect((await post(parent.id)).json().error.code).toBe('ORDER_CONTACT_STORE')
   await expect(paymentView(plain.id,other)).rejects.toMatchObject({statusCode:404})
   expect(await paymentView(used.id)).toMatchObject({canRequestFullRefund:false,refundRequestBlockReason:'rights_used'})
   expect(await paymentView(parent.id)).toMatchObject({canRequestFullRefund:false,refundRequestBlockReason:'active_addons'})
@@ -99,7 +96,7 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
   const f=await fixture()
   await admin.query("INSERT INTO mbox.activity_meals(tenant_id,store_id,registration_id,business_date,number,redeemed_by_employee_id) VALUES($1,$2,$3,'2026-10-22',1,$4)",[scope.tenantId,scope.storeId,f.id,employee])
   expect(await paymentView(f.id)).toMatchObject({canRequestFullRefund:false,refundRequestBlockReason:'rights_used'})
-  expect((await post(f.id)).json().error.code).toBe('ACTIVITY_USED_REFUND_REVIEW')
+  expect((await post(f.id)).json().error.code).toBe('ORDER_CONTACT_STORE')
  })
  it('does not advertise self-refund for a legacy or unpaid registration',async()=>{
   const legacy=await fixture(undefined,false,{legacy:true}),pending=await fixture(undefined,false,{pending:true})
@@ -118,23 +115,23 @@ const database=process.env.TEST_NORMALIZED_DATABASE_URL
    await runner.run(scope,tx=>new RefundRepository(tx).completeProviderExecution({refundPublicId:reference,provider:'postar',succeeded:false,providerRefundId:`RF${reference}`,originalProviderTransactionId:f.payment,reportedAmountMinor:refund.amountMinor,reportedCurrency:'CNY',providerSnapshot:{localTest:true}}))
   }
   expect(await paymentView(f.id)).toMatchObject({refundStatus:state,canRequestFullRefund:false,refundRequestBlockReason:'compensation_review_required'})
-  expect((await post(f.id)).json().error.code).toBe('ACTIVITY_COMPENSATION_DISPOSITION_REQUIRED')
+  expect((await post(f.id)).json().error.code).toBe('ORDER_CONTACT_STORE')
  })
- it('re-enables an unused full request after compensation rejection but keeps completed compensation blocked',async()=>{
+ it('keeps cancellation with staff after compensation rejection but keeps completed compensation blocked',async()=>{
   const f=await fixture(),rejected=await compensation(f.payment)
   await runner.run(scope,tx=>new RefundRepository(tx).reject(rejected.id,reviewer,'未发生补偿，按未使用整份退订处理'))
-  expect(await paymentView(f.id)).toMatchObject({refundStatus:'rejected',refundRejectionReason:'未发生补偿，按未使用整份退订处理',canRequestFullRefund:true})
+  expect(await paymentView(f.id)).toMatchObject({refundStatus:'rejected',refundRejectionReason:'未发生补偿，按未使用整份退订处理',canRequestFullRefund:false})
   const succeeded=await compensation(f.payment);await completeRefund(f.payment,succeeded)
   expect(await paymentView(f.id)).toMatchObject({registrationStatus:'confirmed',refundStatus:'succeeded',refundRejectionReason:null,serviceRefundDisposition:'retain_fulfillment',canRequestFullRefund:false,refundRequestBlockReason:'compensation_review_required'})
   expect((await post(f.id)).statusCode).toBe(409)
  })
  it('projects a whole refund success as terminal and never exposes another full request',async()=>{
-  const f=await fixture(),response=await post(f.id),refund=(await admin.query('SELECT id,amount_minor FROM mbox.refunds WHERE public_id=$1',[response.json().data.refundPublicId])).rows[0]
-  await completeRefund(f.payment,{id:refund.id,amountMinor:Number(refund.amount_minor)})
+  const f=await fixture(),refund=await staffRefund(f.payment)
+  await completeRefund(f.payment,refund)
   expect(await paymentView(f.id)).toMatchObject({registrationStatus:'refunded',refundStatus:'succeeded',resolutionState:'refunded',serviceRefundDisposition:null,canRequestFullRefund:false,refundRequestBlockReason:'payment_not_refundable'})
  })
  it('retains one reservation for concurrent different requests and prevents use while review is pending',async()=>{
-  const f=await fixture();const results=await Promise.all([post(f.id),post(f.id)]);expect(results.map(r=>r.statusCode).sort()).toEqual([200,409])
+  const f=await fixture();const results=await Promise.allSettled([staffRefund(f.payment),staffRefund(f.payment)]);expect(results.map(r=>r.status).sort()).toEqual(['fulfilled','rejected'])
   expect(Number((await admin.query('SELECT count(*) FROM mbox.refunds WHERE payment_id=$1',[f.payment])).rows[0].count)).toBe(1)
   const token=(await admin.query('SELECT credential_token::text FROM mbox.community_activity_registrations WHERE id=$1',[f.id])).rows[0].credential_token
   await expect(runner.run(scope,tx=>new ActivityServiceRepository(tx).door(f.id,{action:'admit',arrivedCount:1,credential:activityCredential(f.id,token)},randomUUID(),employee,'2026-10-22'))).rejects.toThrow()

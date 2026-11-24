@@ -22,10 +22,10 @@ export class CheckoutPointsRepository {
     const control=await new LoyaltyOperationalControlRepository(this.tx).state('points_redemption',true)
     if(control.state==='paused')throw new CheckoutCartPricingError('门店已暂停新增积分抵扣，原订单仍可查询和处理')
     const account=await this.account(customerId)
-    const policy=(await this.tx.query<{id:string}>(`SELECT id FROM mbox.loyalty_policy_versions WHERE tenant_id=$1 AND store_id=$2 AND policy_code='BASE' AND status='published' AND points_rounding_scope='order' AND cash_redemption_enabled AND effective_from<=clock_timestamp() AND (effective_until IS NULL OR effective_until>clock_timestamp()) ORDER BY version DESC LIMIT 1`,this.scope)).rows[0]
+    const policy=(await this.tx.query<{id:string; points_denominator_minor:number}>(`SELECT id, points_denominator_minor FROM mbox.loyalty_policy_versions WHERE tenant_id=$1 AND store_id=$2 AND policy_code='BASE' AND status='published' AND points_rounding_scope='order' AND cash_redemption_enabled AND effective_from<=clock_timestamp() AND (effective_until IS NULL OR effective_until>clock_timestamp()) ORDER BY version DESC LIMIT 1`,this.scope)).rows[0]
     if(!policy)throw new CheckoutCartPricingError('积分抵扣规则尚未发布或已停用')
     const lots=(await this.tx.query<{points:string}>(`SELECT COALESCE(sum(remaining_points),0)::text AS points FROM mbox.loyalty_point_lots WHERE tenant_id=$1 AND store_id=$2 AND membership_id=$3 AND status='available' AND available_at<=clock_timestamp() AND (expires_at IS NULL OR expires_at>clock_timestamp())`,[...this.scope,account.membership_id])).rows[0]!
-    return {availablePoints:Math.min(account.available_points,Number(lots.points)),policyId:policy.id,minorPerPoint:100,minimumPayableMinor:0,allowCoupons:false,earnMinorPerPoint:1000}
+    return {availablePoints:Math.min(account.available_points,Number(lots.points)),policyId:policy.id,minorPerPoint:100,minimumPayableMinor:0,allowCoupons:false,earnMinorPerPoint:policy.points_denominator_minor}
   }
   async reserve(quoteId:string,customerId:string){
     const account=await this.account(customerId,true)

@@ -6,18 +6,38 @@ import {useConfirmationDialog} from './ConfirmationDialog'
 const ruleFields=[
   ['organizer','organizer','举办主体'],['seller','seller','售票主体'],['approvalReference','approval_reference','批准文件号或适用依据'],
   ['performers','performers','主要演员或团体'],['durationMinutes','duration_minutes','最低演出时长（分钟）'],['programNote','program_note','最低曲目数及适用说明'],
-  ['serviceContact','service_contact','门店客服'],['refundSchedule','refund_schedule','各退票时段、费率或金额、计算基数和售后入口'],
+  ['serviceContact','service_contact','门店客服'],['refundSchedule','refund_schedule','退票约定（何时可退、退多少、门店变更或取消时怎么办）'],
 ] as const
 interface Offer {
   terms:(Record<string,string|number|boolean>&{version:number})|null
   draftAuthor:string|null;creatorId:string; activityStatus:string
-  recommendInCommunity:boolean; isOnSale:boolean; tableCodes:string[]; remaining:number; categoryVisible:boolean
+  recommendInCommunity:boolean; isOnSale:boolean; ticketTables?:{id:string;code:string}[]; draftTableIds?:string[]|null; rosterConfigured?:boolean; remaining:number; categoryVisible:boolean
   id:string|null
   categoryCode:string|null;categories:{code:string;name:string}[]
   areaId:string; areaName:string; version:number|null; name:string|null
   saleFrom:string|null;saleUntil:string|null;priceMinor:number|null; giftPoints:number|null; visibleFrom:string|null; visibleUntil:string|null
   status:'draft'|'published'|'withdrawn'|null
 }
+function TicketDeskSelection({area,busy}:{area:Offer;busy:boolean}){
+  const [selectedIds,setSelectedIds]=useState(area.draftTableIds??[])
+  const codes=(area.ticketTables??[]).filter(table=>selectedIds.includes(table.id)).map(table=>table.code)
+  return (
+    <fieldset><legend>本票档可排桌号</legend>
+        {!area.rosterConfigured && <p>还没有经核对的当期桌号名单，不列出历史桌号。</p>}
+        {area.rosterConfigured && !(area.ticketTables??[]).length && <p>本区尚无已核对的可选桌台。</p>}
+        {(area.ticketTables??[]).map(table=><label key={table.id}>
+          <input type="checkbox" name="draftTables" value={table.id} disabled={busy}
+            checked={selectedIds.includes(table.id)}
+            onChange={e=>setSelectedIds(e.target.checked?[...selectedIds,table.id]:selectedIds.filter(id=>id!==table.id))}/>{table.code}
+        </label>)}
+        {area.draftTableIds?.some(id=>!(area.ticketTables??[]).some(table=>table.id===id)) &&
+          <p role="alert">原草稿有桌台已移出当期名单，请重新选择并保存。</p>}
+        {codes.length>0 && <p aria-live="polite">购票须知 · 适用区域：{area.areaName} · {codes.join('、')}</p>}
+        {(area.rosterConfigured || area.draftTableIds) && <p>具体桌号由门店安排。当前支持保存草稿。</p>}
+      </fieldset>
+  )
+}
+
 function localTime(value:string|null) {
   if (!value) return ''
   const date=new Date(value)
@@ -72,6 +92,15 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
     const fields=new FormData(form)
     const value=(name:string)=>String(fields.get(name)??'').trim()
     const name=value('name'), yuan=value('price'), points=value('points')
+    const draftTableIds=fields.getAll('draftTables').map(String)
+    if(status==='draft' && (area.rosterConfigured || area.draftTableIds) && !draftTableIds.length){
+      setNotice('请从本区已核对的桌台中至少选择一桌。')
+      return
+    }
+    if(status==='published' && (area.rosterConfigured || area.draftTableIds)){
+      setNotice('指定桌台的票档暂只可保存草稿。')
+      return
+    }
     const invalidField=!name?'name':(!/^\d+(\.\d{1,2})?$/.test(yuan) || Number(yuan)<=0)?'price':
       ((points!=='' && !/^\d+$/.test(points)) || (status==='published' && points===''))?'points':null
     if (invalidField) {
@@ -89,7 +118,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
     }
     if (reviewActivity && !await confirmAction({title:'复核场次并发布票档',description:`${reviewSummary}。确认后发布“${name}”，${yuan} 元／桌，每张赠 ${points} 分。`,confirmLabel:'确认复核并发布'})) return
     const instant=(field:string)=>value(field)?new Date(value(field)+':00+08:00').toISOString():null
-    const payload={recommendInCommunity:fields.has('recommend'),...(reviewActivity?{reviewActivity,activityUpdatedAt}:{}),
+    const payload={...(status==='draft' && draftTableIds.length?{draftTableIds}:{}),recommendInCommunity:fields.has('recommend'),...(reviewActivity?{reviewActivity,activityUpdatedAt}:{}),
       ...(status==='published' && area.terms?{expectedTermsVersion:area.terms.version}:{}),areaId:area.areaId,expectedVersion:area.version??0,name,priceMinor:Math.round(Number(yuan)*100),
       saleFrom:instant('saleFrom'),saleUntil:instant('saleUntil'),categoryCode:value('category')||null,giftPoints:points===''?null:Number(points),visibleFrom:instant('from'),visibleUntil:instant('until'),status}
     const body=JSON.stringify(payload)
@@ -104,7 +133,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
     finally {setSaving(false)}
   }
   const [skipDraftIds,setSkipDraftIds]=useState<string[]>([])
-  const reviewable=areas.filter(row=>row.status==='draft' && row.draftAuthor!==employeeId && row.id)
+  const reviewable=areas.filter(row=>row.status==='draft' && row.draftAuthor!==employeeId && row.id && !row.rosterConfigured && !row.draftTableIds)
   const checked=reviewable.filter(row=>!skipDraftIds.includes(row.id!))
   async function publishBatch(){
     if(busy || ownDraft || !area?.terms || !checked.length)return
@@ -169,6 +198,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       <button type="button" disabled={busy} onClick={()=>void loadReferences()}>从往期公示带入</button>
       {references.length>0 && <label>选择参考场次<select value={referenceId} onChange={e=>applyReference(e.target.value)}><option value="">选择场次</option>{references.map(r=><option value={r.id} key={r.id}>{r.title} · {localTime(r.starts_at).replace('T',' ')}</option>)}</select></label>}
       <form ref={ruleForm} key={area.terms?.version??0} onSubmit={e=>{e.preventDefault();void saveRules(e.currentTarget)}}>
+        <p>本票首次验票入场后不支持个人原因退票。请填写入场前适用的退票时段和费用。</p>
         {ruleFields.map(([field,column,label])=><label key={field}>{label}<input disabled={busy} name={field} required type={field==='durationMinutes'?'number':'text'} defaultValue={String(area.terms?.[column]??'')}/></label>)}
         <label><input disabled={busy} type="checkbox" name="named" value="yes" defaultChecked={area.terms?.requires_named_attendees===true}/>本场要求逐人实名</label>
         <button disabled={busy}>确认资料并保存本场版本</button></form></details>}{canPublish && !ownDraft && reviewable.length>0 && <fieldset><legend>本场待复核票档</legend>
@@ -177,7 +207,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       <button type="button" disabled={busy || !area?.terms || !checked.length} onClick={()=>void publishBatch()}>复核并上架所选票档（{checked.length}）</button>
     </fieldset>}<label>演出桌区<select value={selected} disabled={busy} onChange={e=>setSelected(e.target.value)}>
       {areas.map(row=><option key={row.areaId} value={row.areaId}>{row.areaName}</option>)}
-    </select></label>{area && <p>本场该桌区当前可售 {area.remaining} 桌{area.categoryVisible===false?' · 当前分类未对客展示':''}</p>}{!!area?.tableCodes?.length && <details><summary>查看本桌区包含的桌号（{area.tableCodes.length} 桌）</summary><p>{area.tableCodes.join('、')}</p></details>}{area && (canManage || canPublish) && <form key={area.areaId+':'+area.version} onInput={e=>{
+    </select></label>{area && !area.rosterConfigured && !area.draftTableIds && <p>原整区流程估算可售 {area.remaining} 桌，与下方草稿指定桌台无关{area.categoryVisible===false?' · 当前分类未对客展示':''}</p>}{area && (canManage || canPublish) && <form key={area.areaId+':'+area.version} onInput={e=>{
       if(invalidInput && (e.target as HTMLInputElement).name===invalidInput){setInvalidInput('');setNotice('')}
     }} onSubmit={e=>{
       e.preventDefault()
@@ -185,6 +215,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       const button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement|null
       void save(e.currentTarget,button?.value==='published'?'published':button?.value==='withdrawn'?'withdrawn':'draft')
     }}>
+      <TicketDeskSelection area={area} busy={busy}/>
       <label>产品名称<textarea aria-label="产品名称" rows={2} disabled={busy} name="name" required maxLength={120} defaultValue={area.name??area.areaName+'整桌票'}/></label>
       <label>每桌售价（元）<input disabled={busy} required type="number" name="price" min=".01" step=".01" defaultValue={area.priceMinor===null?'':(area.priceMinor/100).toFixed(2)}/></label>
       <label>每张赠送积分<input disabled={busy} type="number" name="points" min="0" step="1" defaultValue={area.giftPoints??''}/></label>
@@ -194,7 +225,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       <label>开售<input disabled={busy} type="datetime-local" name="saleFrom" defaultValue={localTime(area.saleFrom)}/></label><label>停售<input disabled={busy} type="datetime-local" name="saleUntil" defaultValue={localTime(area.saleUntil)}/></label></details>
       {ownDraft && <p>场次由你创建，保存票档草稿后由另一位发布人员复核上架。</p>}
       <div className="ticket-offer-actions">{canManage && <button disabled={busy} value="draft">{canPublish?'保存草稿':'保存并提交复核'}</button>}
-      {canPublish && !ownDraft && !ownsTicketDraft && <button disabled={busy} value="published">{needsReview?'复核场次并发布票档':'保存并发布票档'}</button>}
+      {canPublish && !ownDraft && !ownsTicketDraft && !area.rosterConfigured && !area.draftTableIds && <button disabled={busy} value="published">{needsReview?'复核场次并发布票档':'保存并发布票档'}</button>}
       {canPublish && area.isOnSale && <button disabled={busy} value="withdrawn">下架</button>}</div>
     </form>}{canAssist && area?.status==='published' && <form onSubmit={e=>{e.preventDefault();void assist(e.currentTarget)}}>
       <label>本人手机号<input disabled={busy} name="phone" required pattern="1[3-9][0-9]{9}" inputMode="tel"/></label><label>代选桌数<input disabled={busy} type="number" name="quantity" required min={1} defaultValue={1}/></label>

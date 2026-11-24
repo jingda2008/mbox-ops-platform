@@ -119,7 +119,7 @@ Page({
       })
       await this.loadData()
     } catch (error) {
-      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '反馈结果尚未确认，可重试核对原请求') })
+      if (guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '反馈是否送达还未确认，请稍后查看处理进度') })
     } finally { if (guard.finishWrite(request)) this.setData({ feedbackTaskId: '' }) }
   },
 

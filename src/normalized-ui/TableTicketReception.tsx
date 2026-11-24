@@ -5,7 +5,7 @@ import type {NormalizedApiClient} from '../normalized-api'
 export interface TicketContact { orderId:string;maskedPhone:string;registrationStatus:string;contactVersionPublicId:string|null }
 interface Ticket extends TicketContact {
   id:string;orderId:string;ordinal:number;name:string;areaId:string;tableName:string|null;maskedPhone:string
-  originalReservation:string|null;originalTable:string|null;contactStatus:string;contactOwner:string|null;arrived:number
+  assignableDeskIds?:string[]|null;originalReservation:string|null;originalTable:string|null;contactStatus:string;contactOwner:string|null;arrived:number
   deskClosed:boolean;showEnded:boolean;awaitingDuringShow:boolean;startsAt:string;endsAt:string;refundedAt:string|null;effectiveTitle:string|null;moveStatus:string|null;giftPoints:number;issuedPoints:number|null;remainingPoints:number|null;correctionId:string|null;correctionReason:string|null;correctionUsed:number|null;resolution:string|null;wrongGift:boolean
   plannedRefundMinor:number|null;autoReviewError:string|null;refundCase:string|null;refundStatus:string|null;cashZero:boolean;needsReview:boolean;consumedMinor:string|null;priceMinor:number
 }
@@ -156,8 +156,8 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
       {!ticket.showEnded && ticket.tableName && !ticket.refundCase && <form onSubmit={e=>void frontDesk(e,ticket,true)}><label>客人出示的入场码<input name="code" required maxLength={12} minLength={12}/></label>
         <label>本批到场人数<input name="quantity" type="number" min={1} step={1} required/></label><button disabled={working}>登记到场</button> 已到 {ticket.arrived} 人</form>}
       {!ticket.deskClosed && !ticket.showEnded && !ticket.tableName && !ticket.refundCase && <form onSubmit={e=>void handle(e,ticket,'assign')}>
-        <label>桌号<select name="tableId" required defaultValue={ticket.originalTable??''}><option value="" disabled>选择所购区域的桌号</option>
-          {queue.tables.filter(t=>t.areaId===ticket.areaId).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+        <label>桌号<select name="tableId" required defaultValue={ticket.originalTable??''}><option value="" disabled>选择本票档可排桌号</option>
+          {queue.tables.filter(t=>t.areaId===ticket.areaId && (!ticket.assignableDeskIds || ticket.assignableDeskIds.includes(t.id))).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
         <label>沿用原预约（如有）<input name="reservation" defaultValue={ticket.originalReservation??''}/></label><button disabled={working}>确认桌号</button>
       </form>}
       {ticket.effectiveTitle && <p>现安排 · {ticket.effectiveTitle} · {ticket.startsAt} 至 {ticket.endsAt}</p>}

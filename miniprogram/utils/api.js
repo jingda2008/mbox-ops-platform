@@ -281,8 +281,9 @@ async function getActivityRegistrationHistory({id, before} = {}) {
   const query = id ? '?id=' + encodeURIComponent(id) : before ? '?before=' + encodeURIComponent(before) : ''
   return (await publicRequest('/api/public/mini/activity-registration-history' + query)).data
 }
-async function getActivityRegistrations() {
-  return (await publicRequest('/api/public/mini/activity-registrations')).data
+async function getActivityRegistrations(id) {
+  const query = id ? '?id=' + encodeURIComponent(id) : ''
+  return (await publicRequest('/api/public/mini/activity-registrations' + query)).data
 }
 async function updateActivityRegistrationContact(registrationPublicId, contactValue) {
   return recoverableMemberWrite('activity-contact:' + registrationPublicId, `/api/public/mini/activity-registrations/${encodeURIComponent(registrationPublicId)}/contact`, 'PUT',
@@ -785,13 +786,6 @@ async function retryOrderPayment(orderPublicId, idempotencyKey) {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey || randomId(`guest-payment-${orderPublicId}`) }, data: {},
   })).data
 }
-async function abandonGuestCheckout(orderPublicId, idempotencyKey) {
-  return (await request(`/api/guest/orders/${encodeURIComponent(orderPublicId)}/abandon-checkout`, {
-    method: 'POST',
-    headers: { 'idempotency-key': idempotencyKey || randomId(`guest-checkout-abandon-${orderPublicId}`) },
-    data: {},
-  })).data
-}
 async function createServiceTask(input) {
   return recoverableGuestCommand('service', input, (idempotencyKey) => request('/api/guest/service-requests', {
     method: 'POST', headers: { 'idempotency-key': idempotencyKey },
@@ -845,8 +839,9 @@ function validateChannelReceipt(response, expectedClaimId) {
 async function claimChannelCoupon(code, recoveryOnly = false) {
   return recoverableMemberWrite('channel.claim', '/api/public/mini/channel/claim', 'POST', { code }, [], { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true, recoveryOnly })
 }
-async function activateChannelCoupon(claimId, recoveryOnly = false) {
-  await getGuestSession()
+async function activateChannelCoupon(claimId, recoveryOnly = false, confirmVisit) {
+  const session = await getGuestSession()
+  if (confirmVisit && (!confirmVisit() || !['active', 'already_active'].includes(session.data?.status))) throw Error('桌号或会员已变化，请重新核对这张券')
   return (await recoverableGuestCommand('channel.activate', { claimId }, (key, context) => request('/api/guest/channel/activate', {
     method: 'POST', headers: { 'idempotency-key': key, ...(context.recovery ? { 'x-channel-recovery': '1' } : {}) }, data: { claimId },
   }).then(response => validateChannelReceipt(response, claimId)), { initialKey: randomId('channel'), clearOnNotCommitted: true, channelRecovery: true, recoveryOnly })).data
@@ -964,7 +959,7 @@ module.exports = {
   getReservationPerformanceNotificationAuthorizations,
   recordReservationPerformanceNotificationAuthorization,
   getMenu, getPublicMenu, recommendExperience, getRecommendationConfiguration, recordRecommendationEvent, prepareCheckoutUpgrade, recordCheckoutUpgradeEvent,
-  revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, quoteSharedCartChannel, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment, abandonGuestCheckout,
+  revokeTablePrepayment, prepayTable, queryPrepayment, checkout, getSharedCart, addIssuedCouponProduct, adjustSharedCart, replaceSharedCartBundleSelection, removeSharedCartLine, clearSharedCart, checkoutSharedCart, getCheckoutPoints, quoteSharedCartPoints, quoteSharedCartCoupons, quoteSharedCartChannel, prepareSharedCartUpgrade, decideSharedCartUpgrade, getTableOrders, payTableOrders, retryOrderPayment,
   createServiceTask, getServiceRequests, actOnServiceTask,
   getCustomerBenefits, getCustomerBenefitWallet, getCustomerProfile, reserveCustomerBenefit, claimAnnualDailySnack, submitSongRequest, getTodayPerformances,
   getChannelWallet, getChannelWalletPage, getChannelOffer, claimChannelCoupon, activateChannelCoupon, recoverChannelClaim, recoverChannelCoupon,

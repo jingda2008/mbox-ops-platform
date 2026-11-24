@@ -1,3 +1,4 @@
+import {personalRefundClosedSql} from './table-ticket-admission-policy.js'
 import {refundApprovalLimitsSql} from './refund-approval-limits.js'
 import {createHash} from 'node:crypto'
 import type {ScopedTransaction} from './transaction-runner.js'
@@ -9,7 +10,7 @@ export async function ticketRefundPreview(tx:ScopedTransaction,reference:string)
     /^[A-F0-9]{12}$/.test(reference)?'k.door_code=$3':'r.public_id=$3'
   const result=await tx.query(`SELECT r.public_id AS "orderNo",k.id,k.ordinal,p.quantity,o.name,m.member_no AS "memberNo",
     c.masked_value AS "maskedPhone",tab.display_name AS "tableName",o.price_minor AS "priceMinor",o.gift_points AS "giftPoints",
-    r.refund_policy_snapshot->>'schedule' AS "refundSchedule",pay.public_id AS receipt,
+    r.refund_policy_snapshot->>'schedule' AS "refundSchedule",${personalRefundClosedSql} AS "personalRefundClosed",pay.public_id AS receipt,
     CASE WHEN pay.status IN('succeeded','partially_refunded') THEN greatest(0,least(o.price_minor,pay.amount_minor-reserved.amount)) ELSE 0 END::int AS "refundLimit",
     CASE WHEN lot.membership_id=p.membership_id AND lot.status IN('available','ticket_hold') AND lot.expires_at>statement_timestamp()
       THEN lot.remaining_points ELSE 0 END AS recoverable,
@@ -33,7 +34,7 @@ export async function ticketRefundPreview(tx:ScopedTransaction,reference:string)
     WHERE p.tenant_id=$1 AND p.store_id=$2 AND ${lookup}
     ORDER BY k.ordinal`,[tx.scope.tenantId,tx.scope.storeId,reference])
   return result.rows.map(row=>({...row,previewVersion:createHash('sha256').update(JSON.stringify([
-    row.id,row.memberNo,row.priceMinor,row.giftPoints,row.recoverable,row.consumedMinor,row.unresolved,row.refundLimit,row.caseId,row.caseStatus,row.cashStatus,
+    row.id,row.memberNo,row.priceMinor,row.giftPoints,row.recoverable,row.consumedMinor,row.unresolved,row.personalRefundClosed,row.refundLimit,row.caseId,row.caseStatus,row.cashStatus,
   ])).digest('hex')}))
 }
 

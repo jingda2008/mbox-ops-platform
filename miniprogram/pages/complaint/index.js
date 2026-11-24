@@ -51,7 +51,7 @@ Page({
       const result = response.data || response
       this.setData({ success: result.message || '已收到，值班经理会尽快到桌了解情况。', details: '' })
     } catch (error) {
-      if (this.guard === guard && guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '请求结果尚未确认，可重试核对原请求') })
+      if (this.guard === guard && guard.isCurrentWrite(request)) this.setData({ error: customerErrorMessage(error, '反馈是否送达还未确认，请稍后查看处理进度') })
     } finally {
       if (guard.finishWrite(request) && this.guard === guard) this.setData({ submitting: false })
     }

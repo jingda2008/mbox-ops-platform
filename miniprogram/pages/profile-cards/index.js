@@ -75,7 +75,7 @@ Page({
   async applySimple(project) {
     if (this.data.busy) return
     if (!this.data.activeMember) { redirectToMembershipLogin('/pages/profile-cards/index?projectId=' + encodeURIComponent(project.id)); return }
-    return this.execute('apply', project.id, { projectId: project.id, acceptedProjectVersion: project.version }, '申请已提交，等待后台审核。')
+    return this.execute('apply', project.id, { projectId: project.id, acceptedProjectVersion: project.version }, '申请已提交，等待门店审核。')
   },
   closeProject() { if (!this.data.busy) this.setData({ selectedProject: null, acknowledged: false }) },
   acknowledge(event) { this.setData({ acknowledged: Array.isArray(event.detail.value) && event.detail.value.includes('agree') }) },

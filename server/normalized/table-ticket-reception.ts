@@ -13,6 +13,7 @@ export async function ticketReception(tx:ScopedTransaction,activityPublicId:stri
        WHERE(v.tenant_id,v.store_id,v.registration_id,v.registration_cycle)=(r.tenant_id,r.store_id,r.id,r.registration_cycle)
          AND v.status='active' ORDER BY v.version DESC LIMIT 1) AS "contactVersionPublicId",k.id,k.ordinal,o.name,pre.public_id AS "originalReservation",prelock.table_id AS "originalTable",task.status AS "contactStatus",owner.display_name AS "contactOwner",
       (SELECT coalesce(sum(b.quantity),0)::int FROM mbox.ticket_admission_batches b WHERE(b.tenant_id,b.store_id,b.ticket_id)=(k.tenant_id,k.store_id,k.id)) AS arrived,c.masked_value AS "maskedPhone",p.quantity,
+      mbox.ticket_assignable_desk_ids(k.tenant_id,k.store_id,coalesce(move.offer_id,p.offer_id)) AS "assignableDeskIds",
       coalesce(move.ends_at,p.ends_at)<=statement_timestamp() AS "showEnded",
       EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id) WHERE NOT active) AS "deskClosed",
       coalesce(move.starts_at,p.starts_at)<=statement_timestamp() AND coalesce(move.ends_at,p.ends_at)>statement_timestamp() AND NOT mbox.ticket_lock_active(k.tenant_id,k.store_id,k.reservation_lock_id) AND NOT EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id)) AS "awaitingDuringShow",
@@ -47,8 +48,9 @@ export async function ticketReception(tx:ScopedTransaction,activityPublicId:stri
 export async function assignTicketTable(tx:ScopedTransaction,id:string,tableId:string,employee:string,reservationPublicId:string|null) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   await lockReservationPolicy(tx)
-  const k=(await tx.query<{customer_id:string;starts_at:string;ends_at:string;area_id:string;lock_id:string|null;old_lock_id:string|null;reservation_guests:number;previous_table:string|null;original_lock_id:string|null;closed:boolean}>(`
-    SELECT CASE WHEN k.ordinal=1 AND k.reschedule_id IS NULL AND mbox.ticket_lock_active(k.tenant_id,k.store_id,p.original_lock_id) THEN p.original_lock_id END AS original_lock_id,r.customer_id,coalesce(move.starts_at,p.starts_at)::text AS starts_at,coalesce(move.ends_at,p.ends_at)::text AS ends_at,o.area_id,CASE WHEN k.reschedule_id IS NULL THEN 1 ELSE r.reserved_seats/p.quantity END reservation_guests,k.reservation_lock_id AS old_lock_id,CASE WHEN mbox.ticket_lock_active(k.tenant_id,k.store_id,k.reservation_lock_id) THEN k.reservation_lock_id END AS lock_id,mbox.ticket_current_table(l.tenant_id,l.store_id,l.id) previous_table,
+  const k=(await tx.query<{assignable_desks:string[]|null;customer_id:string;starts_at:string;ends_at:string;area_id:string;lock_id:string|null;old_lock_id:string|null;reservation_guests:number;previous_table:string|null;original_lock_id:string|null;closed:boolean}>(`
+    SELECT mbox.ticket_assignable_desk_ids(k.tenant_id,k.store_id,coalesce(move.offer_id,p.offer_id)) AS assignable_desks,
+      CASE WHEN k.ordinal=1 AND k.reschedule_id IS NULL AND mbox.ticket_lock_active(k.tenant_id,k.store_id,p.original_lock_id) THEN p.original_lock_id END AS original_lock_id,r.customer_id,coalesce(move.starts_at,p.starts_at)::text AS starts_at,coalesce(move.ends_at,p.ends_at)::text AS ends_at,o.area_id,CASE WHEN k.reschedule_id IS NULL THEN 1 ELSE r.reserved_seats/p.quantity END reservation_guests,k.reservation_lock_id AS old_lock_id,CASE WHEN mbox.ticket_lock_active(k.tenant_id,k.store_id,k.reservation_lock_id) THEN k.reservation_lock_id END AS lock_id,mbox.ticket_current_table(l.tenant_id,l.store_id,l.id) previous_table,
       (k.refunded_at IS NOT NULL OR EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id) WHERE NOT active) OR r.status NOT IN('confirmed','checked_in') OR coalesce(move.ends_at,p.ends_at)<=clock_timestamp()
         OR EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('rejected','cancelled'))) closed
     FROM mbox.table_tickets k JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
@@ -60,6 +62,8 @@ export async function assignTicketTable(tx:ScopedTransaction,id:string,tableId:s
   if(!k||k.closed) throw new ActivityOperationsError('当前票不能排桌','TICKET_NOT_ASSIGNABLE',409)
   if(k.lock_id && k.previous_table===tableId)return {id,tableId}
   if(k.lock_id)throw new ActivityOperationsError('原票已经分配桌号，请核对原安排','TICKET_ALREADY_ASSIGNED',409)
+  if(k.assignable_desks && !k.assignable_desks.includes(tableId.toLowerCase()))
+    throw new ActivityOperationsError('请选择本票档可排的桌号','TICKET_TABLE_OUTSIDE_OFFER',409)
   const physical=(await tx.query(`SELECT id FROM mbox.tables t WHERE tenant_id=$1 AND store_id=$2 AND id=$3 AND area_id=$4
     AND status='available' AND NOT EXISTS(SELECT 1 FROM mbox.table_sessions s
       WHERE (s.tenant_id,s.store_id,s.table_id)=(t.tenant_id,t.store_id,t.id) AND s.status IN('open','closing')
@@ -118,6 +122,10 @@ export async function admitTicketBatch(tx:ScopedTransaction,ticketId:string,code
       AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('cancelled','rejected'))
     FOR UPDATE OF a,k`,[...args,code])).rows[0]
   if(!k)throw new ActivityOperationsError('请核对客人出示的本场票码、已排桌号及售后状态','TICKET_DOOR_INVALID',409)
+  // Re-read after taking the ticket lock if a refund transaction was ahead of us.
+  const refund=await tx.query(`SELECT 1 FROM mbox.table_ticket_refund_requests
+    WHERE tenant_id=$1 AND store_id=$2 AND ticket_id=$3 AND status NOT IN('cancelled','rejected')`,args)
+  if(refund.rowCount)throw new ActivityOperationsError('该票正在办理售后，请核对原案','TICKET_DOOR_INVALID',409)
   const previous=(await tx.query<{quantity:number}>('SELECT quantity FROM mbox.ticket_admission_batches WHERE tenant_id=$1 AND store_id=$2 AND ticket_id=$3 AND request_key=$4',[...args,key])).rows[0]
   if(previous)return {id:ticketId,quantity:previous.quantity}
   const counts=(await tx.query<{total:number}>(`SELECT (

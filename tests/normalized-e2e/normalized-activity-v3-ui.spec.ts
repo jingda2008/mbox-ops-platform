@@ -117,7 +117,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await workspace.getByText('整桌门票',{exact:true}).click()
     await workspace.getByText('首次上架，先核实本场公示资料').click()
     const rules=[['举办主体','验收举办方'],['售票主体','验收售票方'],['批准文件号或适用依据','模拟场次批文'],['主要演员或团体','测试乐队'],
-      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['各退票时段、费率或金额、计算基数和售后入口','开演前可在原单全额退票']]
+      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['退票约定（何时可退、退多少、门店变更或取消时怎么办）','开演前可在原单全额退票']]
     for(const [field,value] of rules)await workspace.getByLabel(field!,{exact:true}).fill(value!)
     await workspace.getByRole('button',{name:'确认资料并保存本场版本'}).click()
     await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()
@@ -259,7 +259,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
 test('收银在原案核定票款，收齐后的独立复核状态自动显示',async({page})=>{
   const ticket='7ea70994-95da-47d6-bcdb-57894a6dbeef'
   const row={id:ticket,ordinal:1,quantity:1,orderNo:'TT500',name:'A 区整桌票',memberNo:'M001',maskedPhone:'****0001',priceMinor:50000,
-    giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
+    personalRefundClosed:true,giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
     caseId:null as string|null,caseStatus:null as string|null,plannedRefundMinor:null as number|null,refundId:null as string|null,cashStatus:null as string|null}
   let manualSubmissions=0
   await page.route('**/api/staff/activity-operations/ticket-refund-preview?*',route=>route.fulfill({json:{data:[row]}}))
@@ -274,6 +274,11 @@ test('收银在原案核定票款，收齐后的独立复核状态自动显示',
   await page.getByLabel('查找收银订单').fill(ticket)
   await page.getByRole('button',{name:'查找',exact:true}).click()
   const desk=page.getByRole('region',{name:'整桌门票退票办理'})
+  await expect(desk.getByText(/本票已验票入场/)).toBeVisible()
+  await expect(desk.getByRole('button',{name:'受理本票退票'})).toHaveCount(0)
+  row.personalRefundClosed=false
+  await desk.getByRole('button',{name:'刷新原案'}).click()
+  await desk.getByLabel('退票原因').selectOption('customer')
   await desk.getByLabel('办理依据').fill('依据原单条款全额退票')
   await desk.getByLabel('按原条款核定退票款（元）').fill('500')
   await desk.getByRole('button',{name:'受理本票退票'}).click()

@@ -1654,13 +1654,30 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await tx.query('SAVEPOINT scoped_hold_test')
       await tx.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'HOLD','隔离桌台','indoor')",[...args,zone])
       const desks=(await tx.query<{id:string}>(`INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity)
-        VALUES ($1,$2,$3,'HOLD1','隔离一号',2),($1,$2,$3,'HOLD2','隔离二号',2) RETURNING id`,[...args,zone])).rows
+        VALUES ($1,$2,$3,'HOLD1','隔离一号',2),($1,$2,$3,'HOLD2','隔离二号',2),($1,$2,$3,'HOLD3','隔离三号',2) RETURNING id`,[...args,zone])).rows
       const offer=await saveTicketOffer(tx,activity,employee,{...offerInput,areaId:zone})
       const shown=(await publicTableTickets(tx)).find(row=>row.id===offer.id)!
       const bought=await buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,safetyVersion:shown.safetyVersion,refundVersion:shown.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection)
       await tx.query('RESET ROLE')
-      await tx.query('INSERT INTO mbox.ticket_table_roster(tenant_id,store_id,table_id) VALUES($1,$2,$3),($1,$2,$4)',[...args,desks[0]!.id,desks[1]!.id])
+      await tx.query('INSERT INTO mbox.ticket_table_roster(tenant_id,store_id,table_id) VALUES($1,$2,$3),($1,$2,$4),($1,$2,$5)',[...args,...desks.map(d=>d.id)])
+      const freeze=(ids:string[])=>tx.query('INSERT INTO mbox.scoped_ticket_offer_membership(tenant_id,store_id,offer_id,area_id,table_ids) VALUES($1,$2,$3,$4,$5)',[...args,offer.id,zone,ids])
+      await tx.query('SAVEPOINT repeated_desk')
+      await expect(freeze([desks[0]!.id,desks[0]!.id])).rejects.toMatchObject({code:'23514'})
+      await tx.query('ROLLBACK TO SAVEPOINT repeated_desk')
+      await tx.query('SAVEPOINT unknown_desk')
+      await expect(freeze([desks[0]!.id,randomUUID()])).rejects.toMatchObject({code:'23514'})
+      await tx.query('ROLLBACK TO SAVEPOINT unknown_desk')
+      await freeze([desks[0]!.id,desks[1]!.id])
+      await tx.query('SAVEPOINT re_freeze')
+      await expect(freeze([desks[2]!.id])).rejects.toMatchObject({code:'23505'})
+      await tx.query('ROLLBACK TO SAVEPOINT re_freeze')
+      await tx.query('SAVEPOINT mutate_frozen')
+      await expect(tx.query('UPDATE mbox.scoped_ticket_offer_membership SET table_ids=$4 WHERE (tenant_id,store_id,offer_id)=($1,$2,$3)',[...args,offer.id,[desks[2]!.id]])).rejects.toThrow()
+      await tx.query('ROLLBACK TO SAVEPOINT mutate_frozen')
       await tx.query('SET LOCAL ROLE mbox_runtime')
+      await tx.query('SAVEPOINT runtime_cannot_freeze')
+      await expect(freeze([desks[2]!.id])).rejects.toMatchObject({code:'42501'})
+      await tx.query('ROLLBACK TO SAVEPOINT runtime_cannot_freeze')
       const hold=async(desk:string,marker:boolean)=>{
         const row=(await tx.query<{id:string}>(`INSERT INTO mbox.reservations(tenant_id,store_id,public_id,customer_id,customer_name,contact_token,guest_count,
           arrival_at,expected_end_at,source,reservation_snapshot)
@@ -1672,6 +1689,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
           WHERE(tenant_id,store_id,id)=($1,$2,$3) RETURNING id`,[...args,bought.id,row.id,desk,shown.startsAt,shown.endsAt])).rows[0]!.id
       }
       const repo=new ScopedTicketHoldRepository(tx)
+      const outside=await hold(desks[2]!.id,true)
+      await tx.query('SAVEPOINT outside_scope')
+      await expect(repo.bind(bought.id,1,outside)).rejects.toThrow('outside frozen offer membership')
+      await tx.query('ROLLBACK TO SAVEPOINT outside_scope')
       const unrelated=await hold(desks[1]!.id,false)
       await tx.query('SAVEPOINT wrong_origin')
       await expect(repo.bind(bought.id,1,unrelated)).rejects.toMatchObject({code:'23514'})

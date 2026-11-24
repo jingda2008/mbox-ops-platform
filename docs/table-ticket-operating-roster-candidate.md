@@ -36,3 +36,7 @@
 2. 在隔离数据库用三个不同身份的桌台验证：现行新号、同区保留旧号、异区现行号。只有经过确认且同区在用的稳定 ID 出现在草稿选项。把原草稿中的一桌从隔离白名单移除，刷新需重新选桌，不能静默改成全区。
 3. 导入前后只对比票务白名单；营业桌台表及行、区域映射、历史桌次、历史票档、已购票、现有预订和扫码关系应逐项一致。验证有权复核的账户和旧客户端、单笔与批量都不能发布指定桌台的候选。不要执行数据库首次迁移或演练于营业库。
 4. 尚未实现限定桌位库存、门店预订和开桌互斥、原票排桌及改期，不以名单核对或草稿显示作为开售验收。
+
+### 只读视图的分类候选（不能导入）
+
+`scripts/build-ticket-table-roster-candidate.mjs` 可以把同一快照中的「配置并实际读回」「有日期的营业操作」「门店确认在用」「仅历史保留」分组做全覆盖、无重复核对，输出按桌区的独立候选。它不生成稳定 ID 或可导入清单。实际门店证据与候选应受控保管，不提交仓库。命令的两个参数为版本化配置和已分类的只读视图 JSON；视图输入须给出 `profileVersion`、`sources`（`liveView`、`ownerConfirmation`、`historicRetention`）、`liveRows`（`[{code,areaLabel}]`）、`datedOperations`、`ownerConfirmed`、`historicRetained`。单测：`node --test scripts/build-ticket-table-roster-candidate.test.mjs`。如果区域编码仅从同名配置映射，仍要用实际授权的同范围快照回查。

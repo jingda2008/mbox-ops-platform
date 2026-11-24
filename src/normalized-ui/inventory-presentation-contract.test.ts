@@ -32,7 +32,7 @@ describe('inventory and public-reference presentation contract', () => {
     const miniActivity = read('../../miniprogram/pages/community-detail/index.wxml')
     expect(guest).toContain('订单 {shortPublicReference(result.order.publicId)}')
     expect(reservation).toContain('{shortPublicReference(record.publicId)}')
-    expect(miniActivity).toContain('报名编号 {{registration.referenceText}}')
+    expect(miniActivity).toContain('报名编号 {{originalRegistrationAnchor ? registration.publicId : registration.referenceText}}')
     expect(guest).not.toContain('订单 {result.order.publicId}')
     expect(reservation).not.toContain('>{record.publicId}</dd>')
     expect(miniActivity).not.toContain('报名编号 {{registration.publicId}}')

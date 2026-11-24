@@ -10,12 +10,12 @@ function harness(name: string) {
   const pending = new Set<string>()
   const table: { tableToken?: string; scanNonce?: string; cartScope?: string } = {}
   const timers = new Map<number, () => void>(); let timerId = 0
-  const api = { recoverChannelClaim:vi.fn(async (_code:string)=>({claimId:'claim-a'})), recoverChannelCoupon:vi.fn(async (_id:string)=>({activationId:'active-a'})), getChannelStatement:vi.fn(async (_id:string)=>({statement:{id:_id},lines:[]})), respondChannelStatement:vi.fn(async (_id:string,_dispute:boolean,_reason:string)=>({})), getChannelWalletPage:vi.fn(async (_options?:unknown)=>({items:[] as any[],nextCursor:null as string|null})), getChannelHistory:vi.fn(async (_kind:string,_cursor?:string)=>({items:[] as any[],nextCursor:null as string|null})), getChannelOffer: vi.fn(async (_code: string) => ({ title: '餐后小聚', offer: {kind: 'credit', amountMinor: 1000}, minimumMinor:10000, useFrom:'2026-11-12T00:00:00Z', useUntil:'2026-11-13T00:00:00Z', claimedCount:0, unavailable:null })), getChannelWallet: vi.fn(async () => []), claimChannelCoupon: vi.fn(async (_code: string) => ({ claimId: 'claim-a' })),
+  const api = { getGuestSession:vi.fn(async () => ({data:{status:"active",table:{code:"A01"}}})), recoverChannelClaim:vi.fn(async (_code:string)=>({claimId:'claim-a'})), recoverChannelCoupon:vi.fn(async (_id:string)=>({activationId:'active-a'})), getChannelStatement:vi.fn(async (_id:string)=>({statement:{id:_id},lines:[]})), respondChannelStatement:vi.fn(async (_id:string,_dispute:boolean,_reason:string)=>({})), getChannelWalletPage:vi.fn(async (_options?:unknown)=>({items:[] as any[],nextCursor:null as string|null})), getChannelHistory:vi.fn(async (_kind:string,_cursor?:string)=>({items:[] as any[],nextCursor:null as string|null})), getChannelOffer: vi.fn(async (_code: string) => ({ title: '餐后小聚', offer: {kind: 'credit', amountMinor: 1000}, minimumMinor:10000, useFrom:'2026-11-12T00:00:00Z', useUntil:'2026-11-13T00:00:00Z', claimedCount:0, unavailable:null })), getChannelWallet: vi.fn(async () => []), claimChannelCoupon: vi.fn(async (_code: string) => ({ claimId: 'claim-a' })),
     activateChannelCoupon: vi.fn(async (_id: string) => ({ activationId: 'active-a' })), getChannelPartner: vi.fn(async () => ({ promoter: { name: '店长' }, batches: [], visits: [] })),
     acceptChannelInvitation: vi.fn(async (_token: string) => ({})), getChannelPoster: vi.fn(async (_id: string) => ({ filename: 'poster.png', base64: 'PNG' })) }
   api.getChannelWalletPage.mockImplementation(async()=>({items:await api.getChannelWallet(),nextCursor:null}))
   const fs = { writeFile: vi.fn((o: any) => o.success()), unlink: vi.fn() }
-  const wx = { showModal:vi.fn((_options:any)=>{}), scanCode: vi.fn(), env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => fs, saveImageToPhotosAlbum: vi.fn((o: any) => o.success()) }
+  const wx = { showModal:vi.fn((options:any)=>options.success?.({confirm:true})), scanCode: vi.fn(), env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => fs, saveImageToPhotosAlbum: vi.fn((o: any) => o.success()) }
   const auth = { ensureCustomerSession: vi.fn(async () => true), isMembershipLoggedOut: () => loggedOut }
   const gate = { redirectToMembershipLogin: vi.fn() }
   const app = {globalData: {channelOfferLaunch: null as any}}
@@ -32,7 +32,12 @@ function harness(name: string) {
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId }, clearTimeout: (id: number) => timers.delete(id),
   })
   const page = { ...definition, data: structuredClone(definition.data), setData(value: object) { Object.assign(this.data, value) } }
-  return { page, api, wx, fs, table, pending, auth, gate, app, timers, logout: () => {loggedOut=true}, changeOwner: () => { owner = 'customer-b' } }
+  async function openCoupon(id: string) {
+    api.getChannelWallet.mockResolvedValueOnce([{id, status: 'available', offer: {kind: 'credit', amountMinor: 100}}] as never)
+    await page.onShow()
+    api.getChannelWalletPage.mockClear()
+  }
+  return { page, api, openCoupon, wx, fs, table, pending, auth, gate, app, timers, logout: () => {loggedOut=true}, changeOwner: () => { owner = 'customer-b' } }
 }
 
 describe('channel mini program identity and action boundaries', () => {
@@ -59,7 +64,8 @@ describe('channel mini program identity and action boundaries', () => {
     expect(page.data.notice).toBe('')
   })
   it('refreshes a stale expired coupon after the server rejects activation without silently retrying', async () => {
-    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a'
+    const {page,api,table,openCoupon}=harness('channel-coupons');table.tableToken='table-a'
+    table.cartScope='visit-a'; await openCoupon('expired')
     api.getChannelWallet.mockResolvedValue([{id:'expired',status:'expired',offer:{kind:'credit',amountMinor:1000}}] as never)
     api.activateChannelCoupon.mockRejectedValue(new Error('优惠已过期'))
     await page.useCoupon({currentTarget:{dataset:{id:'expired'}}})
@@ -68,10 +74,11 @@ describe('channel mini program identity and action boundaries', () => {
     expect(api.activateChannelCoupon).toHaveBeenCalledTimes(1)
   })
   it('never presents an old-table activation as success on the newly scanned table', async () => {
-    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a'
+    const {page,api,table,openCoupon}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a';await openCoupon('coupon')
     let finish!:()=>void
     api.activateChannelCoupon.mockImplementation(()=>new Promise(resolve=>{finish=()=>resolve({activationId:'old'})}))
     const write=page.useCoupon({currentTarget:{dataset:{id:'coupon'}}})
+    await vi.waitFor(()=>expect(finish).toBeTypeOf('function'))
     table.tableToken='table-b';table.cartScope='visit-b';finish();await write
     expect(page.data.notice).toBe('')
     expect(api.getChannelWalletPage).toHaveBeenCalledTimes(1)
@@ -111,7 +118,7 @@ describe('channel mini program identity and action boundaries', () => {
     expect(page.data.coupons.map((c:any)=>c.status)).toEqual(['active','fulfilled'])
   })
   it('clears old-table success if the table changes during the post-write wallet refresh',async()=>{
-    const {page,api,table}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a'
+    const {page,api,table,openCoupon}=harness('channel-coupons');table.tableToken='table-a';table.cartScope='visit-a';await openCoupon('coupon')
     let finish!:(value:never[])=>void
     api.getChannelWallet.mockImplementation(()=>new Promise(resolve=>{finish=resolve}))
     const write=page.useCoupon({currentTarget:{dataset:{id:'coupon'}}})
@@ -129,7 +136,7 @@ describe('channel mini program identity and action boundaries', () => {
     await page.recoverClaim();await page.recoverCoupon({currentTarget:{dataset:{id:'claim-a'}}})
     expect(api.recoverChannelClaim).toHaveBeenCalledOnce();expect(api.recoverChannelCoupon).toHaveBeenCalledOnce()
     expect(api.claimChannelCoupon).not.toHaveBeenCalled();expect(api.activateChannelCoupon).not.toHaveBeenCalled()
-    expect(page.data.coupons[0].status).toBe(status);expect(page.data.notice).toContain('最新券状态')
+    expect(page.data.coupons[0].status).toBe(status);expect(page.data.notice).toContain('优惠券状态')
   })
   it('opens a WeChat poster scene directly and claims with one tap without invoking in-app scanning',async()=>{
     const {page,api,wx,auth}=harness('channel-coupons')
@@ -143,7 +150,7 @@ describe('channel mini program identity and action boundaries', () => {
 
 
 
-  it.each([{allowStacking:false,visitDiscountCapMinor:null,text:'不允许叠加'}, {allowStacking:true,visitDiscountCapMinor:1234,text:'客组总优惠最高 ¥12.34'}, {allowStacking:true,visitDiscountCapMinor:null,text:'未设置客组总上限'}])('shows stacking policy consistently in landing and wallet: %j',async config=>{
+  it.each([{allowStacking:false,visitDiscountCapMinor:null,text:'不允许叠加'}, {allowStacking:true,visitDiscountCapMinor:1234,text:'本组顾客本次到店最多优惠 ¥12.34'}, {allowStacking:true,visitDiscountCapMinor:null,text:'本次到店无总额上限'}])('shows stacking policy consistently in landing and wallet: %j',async config=>{
     const {page,api}=harness('channel-coupons'),offer={kind:'credit',amountMinor:1000}
     api.getChannelOffer.mockResolvedValue({...config,title:'配置券',offer,unavailable:null} as never)
     api.getChannelWallet.mockResolvedValue([{...config,id:'policy-coupon',offer,status:'available'}] as never)
@@ -201,15 +208,17 @@ describe('channel mini program identity and action boundaries', () => {
     expect(api.claimChannelCoupon).not.toHaveBeenCalled()
   })
   it('rejects using a personal coupon without a current table scan', async () => {
-    const { page, api } = harness('channel-coupons')
+    const { page, api, wx, openCoupon } = harness('channel-coupons')
+    await openCoupon('claim')
+    wx.scanCode.mockImplementationOnce(options=>options.success({path:'pages/channel-coupons/index'}))
     await page.useCoupon({ currentTarget: { dataset: { id: 'claim' } } })
     expect(api.activateChannelCoupon).not.toHaveBeenCalled()
     expect(page.data.error).toContain('桌码')
   })
   it('submits only the personal coupon ID for activation, never a client-selected source or amount', async () => {
-    const { page, api, table } = harness('channel-coupons'); table.tableToken = 'verified-in-server'
+    const { page, api, table, openCoupon } = harness('channel-coupons'); table.tableToken = 'verified-in-server'; table.cartScope='visit-a'; await openCoupon('claim')
     await page.useCoupon({ currentTarget: { dataset: { id: 'claim' } } })
-    expect(api.activateChannelCoupon).toHaveBeenCalledExactlyOnceWith('claim')
+    expect(api.activateChannelCoupon).toHaveBeenCalledExactlyOnceWith('claim', false, expect.any(Function))
   })
   it('ignores a previous account wallet response', async () => {
     const { page, api, changeOwner } = harness('channel-coupons')
@@ -295,12 +304,12 @@ describe('channel mini program identity and action boundaries', () => {
     expect(page.data.error).toContain('格式不正确')
   })
   it('keeps an older targeted coupon directly usable even when absent from the first wallet page',async()=>{
-    const {page,api,table}=harness('channel-coupons');table.tableToken='verified'
+    const {page,api,table}=harness('channel-coupons');table.tableToken='verified';table.cartScope='visit-a'
     api.getChannelOffer.mockResolvedValue({title:'旧券',offer:{kind:'credit',amountMinor:1000},existingClaimId:'old',unavailable:'已领取',existingCoupon:{id:'old',status:'available',offer:{kind:'gift',productName:'替换赠品',quantity:1},eligibleProducts:[],minimumMinor:0}} as never)
     page.onLoad({scene:'CH_ABCDEFGH2345'});await page.load()
     expect(page.data.coupons).toEqual([]);expect(page.data.offer.existingCoupon.offerText).toContain('替换赠品')
     await page.useCoupon({currentTarget:{dataset:{id:page.data.offer.existingCoupon.id}}})
-    expect(api.activateChannelCoupon).toHaveBeenCalledExactlyOnceWith('old');expect(api.claimChannelCoupon).not.toHaveBeenCalled()
+    expect(api.activateChannelCoupon).toHaveBeenCalledExactlyOnceWith('old', false, expect.any(Function));expect(api.claimChannelCoupon).not.toHaveBeenCalled()
   })
   it('appends wallet pages without duplicates and keeps the cursor when a read fails',async()=>{
     const {page,api}=harness('channel-coupons'), item=(id:string)=>({id,offer:{kind:'credit',amountMinor:100}})

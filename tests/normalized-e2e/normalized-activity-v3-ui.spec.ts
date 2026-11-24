@@ -7,11 +7,13 @@ import type {ActivityDoorCommand,ActivityServiceView} from '../../src/shared/act
 
 const credential='MBOX_ACTIVITY_V3:browser-registration-v3:12345678-1234-4234-8234-123456789abc'
 const initial:ActivityServiceView={registrationPublicId:'browser-registration-v3',activityPublicId:'browser-activity-v3',activityTitle:'活动核销界面测试',packageName:'五人固定套餐',hasMeal:true,partySize:2,maxParticipants:5,reservedSeats:5,admittedCount:0,remainingAdmission:5,includesAdmission:true,paymentStatus:'paid',meal:null}
-async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string){
+async function login(page:Page,fixturePath='artifacts/normalized-browser/fixture.json',origin?:string,roleName?:string){
   const fixture=JSON.parse(await readFile(fixturePath,'utf8'))
   await page.goto(origin?new URL(fixture.staffUrl,origin).href:fixture.staffUrl)
   await page.getByLabel('门店口令').fill(fixture.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
-  await page.getByLabel('员工账号').fill(fixture.adminEmployeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
+  const employeeCode=roleName?fixture.employees.find((e:{roleNames:string[]})=>e.roleNames.includes(roleName))?.code:fixture.adminEmployeeCode
+  if(!employeeCode)throw Error('验收岗位缺少测试员工')
+  await page.getByLabel('员工账号').fill(employeeCode);await page.getByLabel('四位 PIN').fill(fixture.adminEmployeePin)
   await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible()
 }
 async function query(page:Page,code=credential){await page.getByLabel('会员号或套餐码',{exact:true}).fill(code);await page.getByRole('button',{name:'查询',exact:true}).click()}
@@ -280,4 +282,25 @@ test('收银在原案核定票款，收齐后的独立复核状态自动显示',
   Object.assign(row,{refundId:'original-refund',cashStatus:'requested',caseStatus:'requested'})
   await expect(desk.getByText(/已提交，等待独立复核/)).toBeVisible({timeout:15000})
   expect(manualSubmissions).toBe(0)
+})
+
+test('同单逐票送达复核人，可直接审核指定一张',async({page})=>{
+  const rows=[1,2].map(ordinal=>({ordinal,quantity:2,ticketId:'ticket-'+ordinal,refundId:'refund-'+ordinal,name:'A 区整桌票',
+    requestedByEmployeeId:'another-employee',amountMinor:50000,currency:'CNY',reason:'按原票条款核定',automatic:true}))
+  const approved:string[]=[]
+  await page.route('**/api/staff/activity-operations/ticket-refund-reviews',route=>route.fulfill({json:{data:rows.filter(r=>!approved.includes(r.refundId))}}))
+  await page.route('**/api/refunds/*/approve',route=>{
+    expect(route.request().postDataJSON()).toEqual({reason:'已核对第二张原票及收款'})
+    approved.push(new URL(route.request().url()).pathname.split('/').at(-2)!)
+    return route.fulfill({json:{data:{status:'approved'}}})
+  })
+  await login(page,undefined,undefined,'收银员')
+  await page.goto('/staff/payments')
+  const queue=page.getByRole('region',{name:'门票退款待复核'})
+  await queue.getByRole('button',{name:/第 2／2 张/}).click()
+  await queue.getByLabel('复核意见').fill('已核对第二张原票及收款')
+  await queue.getByRole('button',{name:'复核通过'}).click()
+  await expect(queue.getByRole('button',{name:/第 2／2 张/})).toHaveCount(0)
+  await expect(queue.getByRole('button',{name:/第 1／2 张/})).toBeVisible()
+  expect(approved).toEqual(['refund-2'])
 })

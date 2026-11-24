@@ -1,3 +1,4 @@
+import {TicketRefundReviewQueue} from './TicketRefundReviewQueue'
 import {TicketRefundDesk} from './TicketRefundDesk'
 import {SessionMoneySummary} from './SessionMoneySummary'
 import {refundReviewBlockReason} from '../shared/refund-review-availability'
@@ -371,6 +372,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
     {collectionScope==='workbench' && mayReadHandoffs && (handoffError?<p role="status">门票补款待办读取失败，正在重试。</p>:handoffs.map(row=>row.step==='collect'||row.step==='check_receipt'?
       <button key={row.caseId+row.orderNo} onClick={()=>{setDebtPage(0);setQuery(row.orderNo!);setCollectionScope('history');setFromDate('');setToDate('');setPaymentState('all')}}>{row.step==='collect'?'收补菜款':'核对原补款回执'} ¥{(Number(row.amount)/100).toFixed(2)} · 原餐单 {row.orderNo}</button>:
       auth.permissions.some(p=>p==='refund.request'||p==='refund.approve') && <button key={row.caseId} onClick={()=>setTicketLookup(row.ticket)}>{row.step==='issue'?'自动送审待核对':'补款已收齐，核定原案票款'} · 原票 {row.ticket}</button>))}
+    {collectionScope==='workbench' && auth.permissions.includes('refund.approve') && view && <TicketRefundReviewQueue key={'ticket-review-'+auth.employee.id} api={api} employeeId={auth.employee.id} actions={view.actions} busy={busyKey!==null} onOpenTicket={setTicketLookup} onMutation={mutate}/>}
     {ticketLookup && auth.permissions.some(p=>p==='refund.request'||p==='refund.approve') && <div><button onClick={()=>setTicketLookup('')}>关闭原票办理单</button><TicketRefundDesk key={ticketLookup} api={api} auth={auth} reference={ticketLookup}/></div>}
     {collectionScope!=='workbench'&&<div className="cashier-action-row"><label className="cashier-field"><span>起始营业日（留空不限）</span><input type="date" value={fromDate} onChange={event=>{setFromDate(event.target.value);setDebtPage(0)}}/></label><label className="cashier-field"><span>结束营业日（留空不限）</span><input type="date" value={toDate} onChange={event=>{setToDate(event.target.value);setDebtPage(0)}}/></label><p>按原营业日和原账单查询；已关闭桌次的欠款不会转给新客。</p></div>}
 

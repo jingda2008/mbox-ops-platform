@@ -1,5 +1,5 @@
 import {planTicketCashRefund,processTicketRefundReviews} from './table-ticket-auto-review.js'
-import {ticketDiningHandoffs,ticketRefundPreview} from './table-ticket-refund-preview.js'
+import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {orderCollectionBalancesCtesSql} from './order-collection-balances-sql.js'
 import {TableSessionRepository} from './table-session-repository.js'
 import {WaitlistRepository} from './waitlist-repository.js'
@@ -1094,6 +1094,15 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         FROM mbox.refunds r JOIN mbox.table_ticket_refund_requests f ON f.refund_id=r.id WHERE f.id=$1`,[personal.caseId])
       expect(pending.rows).toMatchObject([{status:'requested',amount_minor:'50000',requested_by_employee_id:employee,approved_by_employee_id:null,provider_snapshot:{submittedAfterDiningCollection:true}}])
       const personalCash=pending.rows[0]!
+      await tx.query('SAVEPOINT two_tickets_in_review')
+      const otherCase=await requestTicketRefund(tx,sale.id,tickets[1].id,buyer,'同单第二张票申请退票')
+      const otherCash=await submitTicketCashRefund(tx,otherCase.caseId,employee,50000,null)
+      const myQueue=async(id:string)=>(await ticketRefundReviewQueue(tx,id)).filter(row=>[originalTicket,tickets[1].id].includes(row.ticketId))
+      expect(await myQueue(employee)).toEqual([])
+      expect((await myQueue(approver)).map(row=>row.refundId).sort()).toEqual([personalCash.refundId,otherCash.refundId].sort())
+      await confirmedRefund(otherCash.refundId)
+      expect(await myQueue(approver)).toMatchObject([{refundId:personalCash.refundId,automatic:true,amountMinor:50000}])
+      await tx.query('ROLLBACK TO SAVEPOINT two_tickets_in_review')
       await confirmedRefund(personalCash.refundId)
       expect((await submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).refundId).toBe(personalCash.refundId)
       const account=await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[member])

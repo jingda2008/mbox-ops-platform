@@ -1,4 +1,4 @@
-import {ticketDiningHandoffs,ticketRefundPreview} from './table-ticket-refund-preview.js'
+import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {proposeMove} from './table-ticket-reschedule.js'
 import {ticketStatement,ticketFinanceDay} from './table-ticket-reception.js'
 import {NativeCommandNotCommittedError} from './command-executor.js'
@@ -57,6 +57,10 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])
     const id=uuid(request.params.id,'票号')
     return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketStatement(tx,id),{readOnly:true})})
+  }))
+  app.get('/staff/activity-operations/ticket-refund-reviews',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['refund.approve'])
+    return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketRefundReviewQueue(tx,ctx.employeeId),{readOnly:true})})
   }))
   app.get('/staff/activity-operations/ticket-dining-handoffs',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorizedAny(options,request,['refund.request','refund.approve','community.activity.cashier'])

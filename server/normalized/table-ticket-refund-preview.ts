@@ -1,3 +1,4 @@
+import {refundApprovalLimitsSql} from './refund-approval-limits.js'
 import {createHash} from 'node:crypto'
 import type {ScopedTransaction} from './transaction-runner.js'
 
@@ -61,4 +62,20 @@ export async function ticketDiningHandoffs(tx:ScopedTransaction){
   CROSS JOIN LATERAL mbox.ticket_refund_basis($1,$2,c.ticket) b
   WHERE c.issue OR (c.ready AND c.manual AND NOT b.unresolved AND b.consumed_minor=c.compared)
   ORDER BY "caseId","orderNo"`,[tx.scope.tenantId,tx.scope.storeId])).rows
+}
+
+// One row per original ticket. Multiple tickets can share a payment.
+export async function ticketRefundReviewQueue(tx:ScopedTransaction,employeeId:string){
+  return (await tx.query(`SELECT f.ticket_id AS "ticketId",r.id AS "refundId",r.amount_minor::int AS "amountMinor",r.currency,
+      r.requested_by_employee_id AS "requestedByEmployeeId",k.ordinal,p.quantity,o.name,r.reason,
+      (r.provider_snapshot->>'submittedAfterDiningCollection')='true' AS automatic
+    FROM mbox.table_ticket_refund_requests f
+    JOIN mbox.refunds r ON (r.tenant_id,r.store_id,r.id)=(f.tenant_id,f.store_id,f.refund_id)
+    JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.id)=(f.tenant_id,f.store_id,f.ticket_id)
+    JOIN mbox.table_ticket_purchases p ON (p.tenant_id,p.store_id,p.registration_id)=(k.tenant_id,k.store_id,k.registration_id)
+    JOIN mbox.table_ticket_offers o ON (o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
+    LEFT JOIN (${refundApprovalLimitsSql('$3::uuid')}) limit_by_currency ON limit_by_currency.currency=r.currency
+    WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.status='requested' AND f.refund_id IS NOT NULL AND r.status='requested'
+      AND r.requested_by_employee_id IS DISTINCT FROM $3::uuid
+    ORDER BY (r.amount_minor<=coalesce(limit_by_currency.amount_minor::bigint,0)) DESC,f.created_at,f.id LIMIT 50`,[tx.scope.tenantId,tx.scope.storeId,employeeId])).rows
 }

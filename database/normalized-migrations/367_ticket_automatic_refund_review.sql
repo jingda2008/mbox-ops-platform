@@ -9,6 +9,8 @@ ALTER TABLE mbox.table_ticket_refund_requests
 GRANT UPDATE(planned_refund_minor,planned_refund_employee,auto_review_error) ON mbox.table_ticket_refund_requests TO mbox_runtime;
 CREATE INDEX ticket_ready_for_auto_review ON mbox.table_ticket_refund_requests(tenant_id,store_id,created_at,id)
   WHERE planned_refund_minor IS NOT NULL AND auto_review_error IS NULL AND status='review' AND close_intent IS NULL AND refund_id IS NULL;
+CREATE INDEX ticket_cash_reviews_pending ON mbox.table_ticket_refund_requests(tenant_id,store_id,created_at,id)
+  WHERE status='requested' AND refund_id IS NOT NULL;
 CREATE FUNCTION mbox.ticket_dining_cleared(t uuid,s uuid,f uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
  SELECT coalesce(bool_and(c.consented_at IS NOT NULL AND (c.amount_minor=0 OR coalesce(
    p.status='succeeded' AND p.order_id=c.order_id AND p.amount_minor=c.amount_minor,false))

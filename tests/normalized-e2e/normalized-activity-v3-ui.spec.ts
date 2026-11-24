@@ -117,7 +117,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await workspace.getByText('整桌门票',{exact:true}).click()
     await workspace.getByText('首次上架，先核实本场公示资料').click()
     const rules=[['举办主体','验收举办方'],['售票主体','验收售票方'],['批准文件号或适用依据','模拟场次批文'],['主要演员或团体','测试乐队'],
-      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['各退票时段、费率或金额、计算基数和售后入口','开演前可在原单全额退票']]
+      ['最低演出时长（分钟）','90'],['最低曲目数及适用说明','十首'],['门店客服','门店接待'],['退票约定（何时可退、退多少、门店变更或取消时怎么办）','开演前可在原单全额退票']]
     for(const [field,value] of rules)await workspace.getByLabel(field!,{exact:true}).fill(value!)
     await workspace.getByRole('button',{name:'确认资料并保存本场版本'}).click()
     await expect(workspace.getByText('本场公示资料 · 版本 1',{exact:true})).toBeVisible()

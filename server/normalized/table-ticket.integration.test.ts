@@ -145,6 +145,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await expect(run(tx=>saveTicketOffer(tx,activity,employee,offerInput))).rejects.toMatchObject({code:'TICKET_EVENT_TERMS_REQUIRED'})
     await run(tx=>approveEventTicketTerms(tx,activity,employee,{organizer:'测试举办方',seller:'测试售票方',approvalReference:'隔离测试场次资料',performers:'测试乐队',
       durationMinutes:90,programNote:'至少十首',serviceContact:'测试客服',refundSchedule:'开演前可在订单内申请全额退票；演出取消原路退回。',requiresNamedAttendees:false},0))
+    for(const dateOnly of ['2026.11.24-2026.11.26日','11月24日 19:00 至 11月26日 00:30']){
+      await expect(run(tx=>approveEventTicketTerms(tx,activity,employee,{organizer:'举办方',seller:'门店',approvalReference:'场次核实',performers:'乐队',
+        durationMinutes:90,programNote:'现场演出',serviceContact:'门店客服',refundSchedule:dateOnly,requiresNamedAttendees:false},1))).rejects.toMatchObject({code:'TICKET_REFUND_TERMS_INVALID'})
+    }
     const editor=randomUUID(),service=new ActivityOperationsService(runner,new NormalizedCommandExecutor(runner),protection)
     await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'DRAFT','票档录入')",[editor,scope.tenantId,scope.storeId])
     await grantFixtureStaffPermissions(admin,scope,[editor],['community.activity.manage'])
@@ -244,6 +248,33 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     expect(lots.map(l=>l.original_points)).toEqual([550,550])
     expect(lots[0]?.membership_id).toBe(lots[1]?.membership_id)
     expect((await admin.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0]?.available_points).toBe(1100)
+  })
+  it('lets reception assign only a desk selected by staff for the purchased offer',async()=>{
+    await run(async tx=>{
+      await tx.query('SAVEPOINT staff_assignment')
+      const args=[scope.tenantId,scope.storeId]
+      const {ticket,offer}=(await tx.query(`SELECT k.id ticket,p.offer_id offer FROM mbox.table_tickets k
+        JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
+        WHERE (k.tenant_id,k.store_id)=($1,$2) ORDER BY k.ordinal LIMIT 1`,args)).rows[0]
+      const desks=(await tx.query('SELECT id FROM mbox.tables WHERE area_id=$1 ORDER BY code LIMIT 2',[area])).rows
+      const [allowed,other]=desks.map(d=>d.id)
+      await tx.query('RESET ROLE')
+      await tx.query('INSERT INTO mbox.ticket_table_roster(tenant_id,store_id,table_id) VALUES($1,$2,$3),($1,$2,$4)',[...args,allowed,other])
+      await tx.query('INSERT INTO mbox.scoped_ticket_offer_membership(tenant_id,store_id,offer_id,area_id,table_ids) VALUES($1,$2,$3,$4,$5)',[...args,offer,area,[allowed]])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      const row=async()=>(await ticketReception(tx,activity)).orders.find(r=>r.id===ticket)
+      expect(await row()).toMatchObject({assignableDeskIds:[allowed],tableName:null})
+      await expect(assignTicketTable(tx,ticket,other,employee,null)).rejects.toMatchObject({code:'TICKET_TABLE_OUTSIDE_OFFER'})
+      await tx.query('SAVEPOINT remove_last_desk')
+      await tx.query('RESET ROLE')
+      await tx.query('DELETE FROM mbox.ticket_table_roster WHERE (tenant_id,store_id,table_id)=($1,$2,$3)',[...args,allowed])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      expect(await row()).toMatchObject({assignableDeskIds:[]})
+      await expect(assignTicketTable(tx,ticket,allowed,employee,null)).rejects.toMatchObject({code:'TICKET_TABLE_OUTSIDE_OFFER'})
+      await tx.query('ROLLBACK TO SAVEPOINT remove_last_desk')
+      expect(await assignTicketTable(tx,ticket,allowed,employee,null)).toEqual({id:ticket,tableId:allowed})
+      await tx.query('ROLLBACK TO SAVEPOINT staff_assignment')
+    })
   })
   it('finishes an open or transfer already claiming a desk when ticket reception requests the same desk',async()=>{
     const ticket=(await admin.query('SELECT id FROM mbox.table_tickets WHERE tenant_id=$1 ORDER BY ordinal LIMIT 1',[scope.tenantId])).rows[0]!.id
@@ -487,7 +518,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await grantFixtureStaffPermissions(admin,scope,[employee],['order.create','payment.collect.all_tables','payment.manual.cash.record','refund.approve','table.view_all'])
     await admin.query("INSERT INTO mbox.role_approval_limits(tenant_id,store_id,role_id,approval_code,amount_minor,currency) SELECT tenant_id,store_id,role_id,'refund.approve',100000,'CNY' FROM mbox.employee_roles WHERE employee_id=$1",[employee])
     await admin.query(`INSERT INTO mbox.loyalty_policy_versions(tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason,points_rounding_scope,cash_redemption_enabled)
-      VALUES($1,$2,'BASE',1,'published',1,1000,1,100,'floor',12,'2020-01-01',$3,$4,'2020-01-01',$5,'2020-01-02','separated','餐饮收款测试规则','order',true)`,[...args,employee,checker,publisher])
+      VALUES($1,$2,'BASE',1,'published',1,2000,1,100,'floor',12,'2020-01-01',$3,$4,'2020-01-01',$5,'2020-01-02','separated','餐饮收款测试规则','order',true)`,[...args,employee,checker,publisher])
     await admin.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($3,$1,$2,$4,'DIN','餐桌',6)",[...args,table,area])
     await run(tx=>tx.query(`INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id,primary_service_employee_id,minimum_spend_minor,minimum_spend_mode)
       VALUES($3::uuid,$1,$2,$4,$3::text,current_date,1,6,'open',$5,$5,50000,'prepaid')`,[...args,session,table,employee]))
@@ -496,6 +527,9 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     const ref=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:customer})
     await admin.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,guest_visible,status,cost_amount_minor) VALUES($3,$1,$2,'DISH','菜品','food','none',true,'active',1000)",[...args,product])
     await admin.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,amount_minor,valid_from) VALUES($1,$2,$3,26000,'2020-01-01')",[...args,product])
+    const publicLedger = await run(tx => new CustomerExperienceRepository(tx).publicLoyalty(customer))
+    expect(publicLedger.earningPolicy).toEqual({pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true})
+    expect(await run(tx => new CheckoutPointsRepository(tx).available(customer))).toMatchObject({earnMinorPerPoint: 2000, minorPerPoint: 100})
     const quote=await run(tx=>staffPointsProposal(tx,employee,session,'MBX-SERVICE-TEST',[{productId:product,quantity:1}],null))
     expect(quote.maximumPoints).toBe(260)
     const proposal=await run(tx=>staffPointsProposal(tx,employee,session,'MBX-SERVICE-TEST',[{productId:product,quantity:1}],200))
@@ -600,7 +634,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect((await refunds.completeProviderExecution(returnInput)).applied).toBe(false)
       const net=(await tx.query(`SELECT (awarded_points-reversed_points+restored_points)::int points,
         (awarded_growth-reversed_growth+restored_growth)::int growth FROM mbox.loyalty_order_awards WHERE order_id=$1`,[order.id])).rows[0]
-      expect(net).toEqual({points:6,growth:60})
+      expect(net).toEqual({points:3,growth:60})
       expect((await tx.query('SELECT remaining_points,status FROM mbox.loyalty_point_lots WHERE id=$1',[k.point_lot_id])).rows[0]).toEqual({remaining_points:0,status:'reversed'})
       await tx.query('ROLLBACK TO SAVEPOINT pending_supplement_refund')
     })
@@ -640,10 +674,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await repo.completeManualExecution({refundId:diningReturn[0]!.id,succeeded:true,receiptReference:'VENUE-'+bill})
       await new LoyaltyAccrualRepository(tx).reverseSucceededRefund({orderId:order.id,paymentId:supplement.id,refundId:diningReturn[0]!.id,occurredAt:new Date().toISOString()})
       expect((await tx.query("SELECT count(*)::int n FROM mbox.refunds WHERE payment_id=$1",[supplement.id])).rows[0].n).toBe(1)
-      expect((await tx.query('SELECT reversed_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0].reversed_points).toBe(20)
+      expect((await tx.query('SELECT reversed_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0].reversed_points).toBe(10)
       await tx.query('ROLLBACK TO SAVEPOINT venue_assumes_paid_dining')
     })
-    expect((await admin.query('SELECT eligible_amount_minor,awarded_points,awarded_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0]).toEqual({eligible_amount_minor:'26000',awarded_points:26,awarded_growth:260})
+    expect((await admin.query('SELECT eligible_amount_minor,awarded_points,awarded_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0]).toEqual({eligible_amount_minor:'26000',awarded_points:13,awarded_growth:260})
     expect((await run(tx=>new LoyaltyAccrualRepository(tx).recordPaidOrder({orderId:order.id,paymentId:supplement.id,occurredAt:new Date().toISOString()}))).applied).toBe(false)
     await expect(collect()).rejects.toThrow()
     await run(async tx=>{
@@ -667,7 +701,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     })
     expect((await admin.query('SELECT status FROM mbox.table_ticket_refund_requests WHERE id=$1',[f.caseId])).rows[0].status).toBe('rejected')
     expect((await admin.query('SELECT status,remaining_points FROM mbox.loyalty_point_lots WHERE id=$1',[k.point_lot_id])).rows[0]).toEqual({status:'available',remaining_points:350})
-    expect((await admin.query('SELECT reversed_points,reversed_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0]).toEqual({reversed_points:20,reversed_growth:200})
+    expect((await admin.query('SELECT reversed_points,reversed_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[order.id])).rows[0]).toEqual({reversed_points:10,reversed_growth:200})
     expect((await admin.query('SELECT count(*)::int n FROM mbox.order_items WHERE order_id=$1',[order.id])).rows[0].n).toBe(1)
   })
   it('arbitrates concurrent purchases for the last desks',async()=>{
@@ -771,7 +805,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         }
         expect((await tx.query('SELECT status FROM mbox.table_ticket_refund_requests WHERE id=$1',[disputed.caseId])).rows[0].status).toBe('refunded')
         expect((await tx.query('SELECT count(*)::int n FROM mbox.ticket_dining_collections WHERE case_id=$1',[disputed.caseId])).rows[0].n).toBe(0)
-        expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[wrong])).rows[0].available_points).toBe(6)
+        expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[wrong])).rows[0].available_points).toBe(3)
         expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0].available_points).toBe(prior)
         await tx.query('ROLLBACK TO SAVEPOINT wrong_refund_first')
       }
@@ -814,7 +848,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await correctTicketGift(tx,ticket,reviewer,'复核原消费及门店承担记录','approve',decision.id)
       expect((await tx.query('SELECT consumed_points,consumption_resolution FROM mbox.table_ticket_corrections WHERE id=$1',[decision.id])).rows[0]).toEqual({consumed_points:200,consumption_resolution:'merchant_assumes'})
       expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0].available_points).toBe(prior+550)
-      expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[wrong])).rows[0].available_points).toBe(6)
+      expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[wrong])).rows[0].available_points).toBe(3)
       expect((await requestTicketRefund(tx,k.id,ticket,customer,'实际消费由门店承担后退原购票人的票')).consumedMinor).toBe(0)
       await tx.query('ROLLBACK TO SAVEPOINT wrong_member_dined')
     })
@@ -1068,7 +1102,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         merchantDining:String(Number(dayBefore.amounts.merchantDining??0)+55000),
         diningCash:String(Number(dayBefore.amounts.diningCash??0)+50000),
         diningRefund:String(Number(dayBefore.amounts.diningRefund??0)+50000),
-        diningRewardReverse:String(Number(dayBefore.amounts.diningRewardReverse??0)-50),
+        diningRewardReverse:String(Number(dayBefore.amounts.diningRewardReverse??0)-25),
       })
       await tx.query('ROLLBACK TO SAVEPOINT merchant_assumes_collected_supplement')
       await tx.query('SAVEPOINT missing_request_permission')
@@ -1090,7 +1124,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect((await cashier.recordManual(cashCommand)).replayed).toBe(true)
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
       const rewardBeforeRefund=await tx.query('SELECT eligible_amount_minor,awarded_points,awarded_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[meal.id])
-      expect(rewardBeforeRefund.rows).toEqual([{eligible_amount_minor:'50000',awarded_points:50,awarded_growth:500}])
+      expect(rewardBeforeRefund.rows).toEqual([{eligible_amount_minor:'50000',awarded_points:25,awarded_growth:500}])
       const pending=await tx.query(`SELECT r.id AS "refundId",r.status,r.amount_minor,r.requested_by_employee_id,r.approved_by_employee_id,r.provider_snapshot
         FROM mbox.refunds r JOIN mbox.table_ticket_refund_requests f ON f.refund_id=r.id WHERE f.id=$1`,[personal.caseId])
       expect(pending.rows).toMatchObject([{status:'requested',amount_minor:'50000',requested_by_employee_id:employee,approved_by_employee_id:null,provider_snapshot:{submittedAfterDiningCollection:true}}])
@@ -1107,7 +1141,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await confirmedRefund(personalCash.refundId)
       expect((await submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).refundId).toBe(personalCash.refundId)
       const account=await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[member])
-      expect(account.rows).toEqual([{available_points:600}])
+      expect(account.rows).toEqual([{available_points:575}])
       expect((await lots()).rows).toEqual([{remaining_points:0,status:'reversed'},{remaining_points:550,status:'available'}])
       const statementAfter=await ticketStatement(tx,originalTicket)
       expect(statementAfter.dining).toMatchObject([{amountMinor:'50000',merchantMinor:'5000',reason:basis,paymentStatus:'succeeded'}])
@@ -1117,7 +1151,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(afterDay).toEqual({...dayBefore.amounts,
         ticketRefund:String(Number(dayBefore.amounts.ticketRefund??0)+50000),
         diningCash:String(Number(dayBefore.amounts.diningCash??0)+50000),
-        diningRewardEarn:String(Number(dayBefore.amounts.diningRewardEarn??0)+50),
+        diningRewardEarn:String(Number(dayBefore.amounts.diningRewardEarn??0)+25),
         merchantDining:String(Number(dayBefore.amounts.merchantDining??0)+5000)})
       const caps=(await tx.query("SELECT provider_snapshot->'ticketDiningItemCaps' AS caps FROM mbox.payments WHERE id=$1",[supplement.id])).rows[0].caps
       const item=meal.items[0]!.id
@@ -1130,10 +1164,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await foodRefunds.completeManualExecution({refundId:returned.id,succeeded:true,receiptReference:'BACK-'+returned.id})
       await new LoyaltyAccrualRepository(tx).reverseSucceededRefund({orderId:meal.id,paymentId:supplement.id,refundId:returned.id,occurredAt:new Date().toISOString()})
       expect((await tx.query('SELECT reversed_points,reversed_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[meal.id])).rows)
-        .toEqual([{reversed_points:50,reversed_growth:500}])
+        .toEqual([{reversed_points:25,reversed_growth:500}])
       const returnedDay=(await ticketFinanceDay(tx,dayBefore.day)).amounts
       expect(returnedDay).toMatchObject({diningRefund:String(Number(afterDay.diningRefund??0)+50000),
-        diningRewardReverse:String(Number(afterDay.diningRewardReverse??0)-50)})
+        diningRewardReverse:String(Number(afterDay.diningRewardReverse??0)-25)})
 
       await tx.query('ROLLBACK TO SAVEPOINT personal_full_ticket')
 
@@ -1220,7 +1254,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(await kitchen()).toEqual(tasks)
       const partialReturn=await requestTicketRefund(tx,sale.id,tickets[0].id,buyer,'原账部分实收后用分')
       expect((await ticketDiningLines(tx,partialReturn.caseId)).map(l=>[l.priceMinor,l.usedMinor])).toEqual([[26000,20000]])
-      expect((await tx.query('SELECT awarded_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[original.id])).rows[0]?.awarded_points).toBe(6)
+      expect((await tx.query('SELECT awarded_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[original.id])).rows[0]?.awarded_points).toBe(3)
       await tx.query('ROLLBACK TO SAVEPOINT historical_partial')
       await tx.query('SAVEPOINT old_prepaid')
       // Seed a pre-existing prepaid table before re-entering the actual staff/customer runtime role.
@@ -1260,7 +1294,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await confirmTabPoints(tx,offer.id!,buyer)
       expect((await collectDining(original.id,tx)).amountMinor).toBe(6000)
       expect(await kitchen()).toEqual(tasks)
-      expect((await tx.query('SELECT awarded_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[original.id])).rows[0]?.awarded_points).toBe(6)
+      expect((await tx.query('SELECT awarded_points FROM mbox.loyalty_order_awards WHERE order_id=$1',[original.id])).rows[0]?.awarded_points).toBe(3)
       const item=(await tx.query('SELECT id FROM mbox.order_items WHERE order_id=$1',[original.id])).rows
       expect(item).toHaveLength(1)
       await tx.query('SAVEPOINT old_tab_food_return')
@@ -1353,7 +1387,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(await remaining(tx)).toEqual([0,550])
       const summary=await ticketStatement(tx,tickets[0].id)
       expect(summary.dining[0].returns).toMatchObject([{status:'succeeded',amountMinor:8000},{status:'succeeded',amountMinor:12000}])
-      expect((await tx.query('SELECT reversed_points,reversed_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[dish.id])).rows[0]).toEqual({reversed_points:26,reversed_growth:260})
+      expect((await tx.query('SELECT reversed_points,reversed_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[dish.id])).rows[0]).toEqual({reversed_points:13,reversed_growth:260})
       expect((await tx.query("SELECT sum(amount_minor)::int net FROM mbox.order_refund_facts WHERE order_id=$1 AND status='succeeded'",[dish.id])).rows[0].net).toBe(26000)
     })
     // Independent staff orders and independent member confirmations compete for the same remaining 550 points.
@@ -1713,6 +1747,70 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(await repo.list(bought.id)).toEqual([])
     })
   })
+  it.each(['ticket','reservation'] as const)('serializes %s first against a competing booking for the same scoped desks',async(first)=>{
+    const args=[scope.tenantId,scope.storeId],zone=randomUUID()
+    const {desks,order,offer}=await run(async tx=>{
+      await tx.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,$4,'演出区','indoor')",[...args,zone,'race-'+first])
+      const desks=(await tx.query<{id:string}>(`INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity)
+        SELECT $1,$2,$3,$4::text||n,'测试桌'||n,2 FROM generate_series(1,3) n RETURNING id`,[...args,zone,'race-'+first])).rows.map(d=>d.id)
+      const saved=await saveTicketOffer(tx,activity,employee,{...offerInput,areaId:zone})
+      const offer=(await publicTableTickets(tx)).find(o=>o.id===saved.id)!
+      const order=await buyTableTickets(tx,customer,{offerId:offer.id,quantity:2,safetyVersion:offer.safetyVersion,refundVersion:offer.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection)
+      await tx.query('RESET ROLE')
+      await tx.query('INSERT INTO mbox.ticket_table_roster(tenant_id,store_id,table_id) SELECT $1,$2,id FROM unnest($3::uuid[]) id',[...args,desks])
+      await tx.query('INSERT INTO mbox.scoped_ticket_offer_membership(tenant_id,store_id,offer_id,area_id,table_ids) VALUES($1,$2,$3,$4,$5)',[...args,offer.id,zone,desks.slice(0,2)])
+      return {desks,order,offer}
+    })
+    try {
+      const acquire=(tx:ScopedTransaction)=>new ScopedTicketHoldRepository(tx).acquirePending(order.id)
+      const reserve=(tx:ScopedTransaction)=>new ReservationRepository(tx).create({publicId:randomUUID(),source:'phone',guestCount:1,
+        customerName:'来电订桌',contactToken:'test',tableIds:[desks[0]!],arrivalAt:offer.startsAt,expectedEndAt:offer.endsAt,
+        initialStatus:'confirmed',reservationPolicyVersion:1,arrivalGraceEndsAt:offer.endsAt})
+      // The second connection has reached PostgreSQL while the winner still holds the store lock.
+      let signal!:()=>void
+      const started=new Promise<void>(resolve=>{signal=resolve})
+      let competing!:Promise<unknown>
+      await run(async tx=>{
+        if(first==='ticket')await acquire(tx)
+        else await reserve(tx)
+        competing=run(async other=>{
+          const probe=await other.query("SELECT pg_try_advisory_xact_lock(hashtextextended('reservation-policy:'||$1::text||':'||$2::text,0)) AS free",args)
+          signal()
+          expect(probe.rows[0].free).toBe(false)
+          if(first==='ticket')return reserve(other)
+          return acquire(other)
+        })
+        await Promise.race([started,competing])
+      })
+      if(first==='ticket')await expect(competing).rejects.toThrow()
+      else await expect(competing).rejects.toThrow('Scoped pending physical capacity unavailable')
+      await run(async tx=>{
+        expect((await publicTableTickets(tx)).some(o=>o.id===offer.id)).toBe(false)
+        const locks=(await tx.query(`SELECT l.table_id,l.status,b.request_hold_expires_at=least(b.arrival_at,c.seat_hold_expires_at)
+          AND l.hold_expires_at=c.seat_hold_expires_at AS matches_deadline
+          FROM mbox.reservation_table_locks l JOIN mbox.reservations b ON b.id=l.reservation_id
+          JOIN mbox.community_activity_registrations c ON c.id=$2 WHERE l.table_id=ANY($1::uuid[])`,[desks,order.id])).rows
+        const remaining=(await tx.query('SELECT mbox.table_ticket_area_remaining($1,$2,$3,$4,$5) n',[...args,zone,offer.startsAt,offer.endsAt])).rows[0].n
+        if(first==='ticket'){
+          expect(locks.map(l=>l.table_id).sort()).toEqual(desks.slice(0,2).sort())
+          expect(locks.every(l=>l.status==='held' && l.matches_deadline)).toBe(true)
+          expect(remaining).toBe(1)
+          const repo=new ScopedTicketHoldRepository(tx)
+          expect(await acquire(tx)).toEqual(await repo.list(order.id))
+        }else{
+          expect(locks).toMatchObject([{table_id:desks[0],status:'confirmed'}])
+          expect(await new ScopedTicketHoldRepository(tx).list(order.id)).toEqual([])
+          expect(remaining).toBe(0)
+        }
+      })
+    } finally {
+      await run(async tx=>{
+        await tx.query("UPDATE mbox.reservation_table_locks SET status='released' WHERE table_id=ANY($1::uuid[])",[desks])
+        await tx.query('RESET ROLE')
+        await tx.query('DELETE FROM mbox.ticket_table_roster WHERE tenant_id=$1 AND store_id=$2 AND table_id=ANY($3::uuid[])',[...args,desks])
+      })
+    }
+  })
   it('offers only current roster tables and never turns scoped drafts into published stock',async()=>{
     const args=[scope.tenantId,scope.storeId]
     const desks=(await admin.query<{id:string;code:string}>('SELECT id,code FROM mbox.tables WHERE (tenant_id,store_id,area_id)=($1,$2,$3) ORDER BY code LIMIT 2',[...args,area])).rows
@@ -1982,6 +2080,12 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       for(const payload of [{points:500},{points:200,payMinor:30000}]){
         const invalid=await app.inject({method:'POST',url:path,payload})
         expect(invalid.json().error.code).toBe('TICKET_TENDER_INVALID')
+      }
+      for(const field of ['tableId','tableIds','draftTableIds','areaId']){
+        const response=await app.inject({method:'POST',url:path,headers:{'idempotency-key':randomUUID()},
+          payload:{offerId:randomUUID(),quantity:1,safetyVersion:'v1',refundVersion:'v01',termsAcknowledged:true,[field]:randomUUID()}})
+        expect(response.statusCode).toBe(400)
+        expect(response.json().error.code).toBe('TICKET_DESK_STAFF_ONLY')
       }
       const mobile=createMembershipRecoveryPhoneProtector(protection)
       await run(tx=>replaceVerifiedPhoneInTransaction(tx,{customerId:customer,protectedPhone:mobile.protect('+8613800000019'),providerReferenceHash:createHash('sha256').update(randomUUID()).digest('hex'),verifiedAt:new Date().toISOString(),idempotencyKey:randomUUID()}))

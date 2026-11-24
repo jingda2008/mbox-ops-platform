@@ -29,6 +29,8 @@ interface AwardContextRow extends Record<string, unknown> {
 }
 
 interface AwardRow extends Record<string, unknown> {
+  points_numerator: number
+  points_denominator_minor: number
   id: string
   membership_id: string
   customer_id: string
@@ -447,13 +449,16 @@ export class LoyaltyAccrualRepository {
           AND item.loyalty_eligible_at_submission
       )
       SELECT award.id, award.membership_id, award.customer_id, award.order_id, award.payment_id,
-        award.policy_version_id, award.eligible_amount_minor, award.awarded_points,
+        award.policy_version_id, policy.points_numerator, policy.points_denominator_minor,
+        award.eligible_amount_minor, award.awarded_points,
         award.awarded_growth, award.reversed_amount_minor, award.reversed_points,
         award.reversed_growth, award.restored_amount_minor, award.restored_points, award.restored_growth,
         award.currency, award.calculation_model, COALESCE(to_jsonb(award)->>'points_rounding_scope','cumulative') AS points_rounding_scope, account.available_points,
         account.pending_recovery_points, account.growth_value,
         eligible_refund.amount_minor AS refund_amount_minor
       FROM mbox.loyalty_order_awards award
+      JOIN mbox.loyalty_policy_versions policy
+        ON (policy.tenant_id,policy.store_id,policy.id)=(award.tenant_id,award.store_id,award.policy_version_id)
       JOIN mbox.loyalty_accounts account
         ON account.tenant_id=award.tenant_id AND account.store_id=award.store_id
        AND account.membership_id=award.membership_id
@@ -528,7 +533,7 @@ export class LoyaltyAccrualRepository {
       ])
     } else {
       targetPoints = row.points_rounding_scope === 'order'
-        ? row.restored_points + row.awarded_points - orderPointsDelta(0, eligible-netTargetAmount)
+        ? row.restored_points + row.awarded_points - orderPointsDelta(0, eligible-netTargetAmount, BigInt(row.points_numerator), BigInt(row.points_denominator_minor))
         : row.restored_points + (eligible === 0 ? 0 : proportional(row.awarded_points, netTargetAmount, eligible))
       targetGrowth = row.restored_growth + (eligible === 0 ? 0 : proportional(row.awarded_growth, netTargetAmount, eligible))
       pointsToReverse = Math.max(0, targetPoints - row.reversed_points)
@@ -980,7 +985,7 @@ export class LoyaltyAccrualRepository {
     const award = existingAward.rows[0]
     if (award && payments.rows.some((payment) => payment.id === award.payment_id)) paymentId = award.payment_id
     const eligibleAmountMinor = money(row.eligible_amount_minor)
-    const expectedPoints = row.points_rounding_scope === 'order' ? orderPointsDelta(0,eligibleAmountMinor) : applyMultiplier(calculateReward(
+    const expectedPoints = row.points_rounding_scope === 'order' ? orderPointsDelta(0, eligibleAmountMinor, BigInt(row.points_numerator), BigInt(row.points_denominator_minor)) : applyMultiplier(calculateReward(
       eligibleAmountMinor, row.points_numerator, row.points_denominator_minor, row.rounding_mode,
     ), row.points_multiplier_numerator, row.points_multiplier_denominator, row.rounding_mode)
     const expectedGrowth = calculateReward(

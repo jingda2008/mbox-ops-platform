@@ -165,6 +165,7 @@ describe('customer experience activity contact API', () => {
   it('returns the safe loyalty ledger contract with customer-facing processing progress', async () => {
     const loyalty = vi.fn(async () => ({
       membership: null,
+      earningPolicy: { pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true },
       points: [{
         id: 'point-public-test', entryType: 'earn', pointsDelta: 10, balanceAfter: 10,
         sourceKind: 'order', sourceReference: 'ORDER-PUBLIC-001',
@@ -185,6 +186,7 @@ describe('customer experience activity contact API', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toEqual({ data: {
+      earningPolicy: { pointsNumerator: 1, pointsDenominatorMinor: 2000, pointsRoundingScope: 'order', cashRedemptionEnabled: true },
       points: expect.arrayContaining([expect.objectContaining({
         sourceKind: 'order', sourceReference: 'ORDER-PUBLIC-001',
         description: '已按付款订单和锁定规则入账',

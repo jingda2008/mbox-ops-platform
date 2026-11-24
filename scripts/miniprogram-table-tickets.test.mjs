@@ -24,6 +24,49 @@ function fixture(showModal,requestPayment=()=>{throw Error('Unexpected payment s
   return {page,calls,api}
 }
 
+test('购票须知展示本票档桌号，旧单只读购票时保存的适用区域',async()=>{
+  const {page,api}=fixture()
+  const [offer]=await api.getTableTicketOffers()
+  let codes=['A01','A03']
+  api.getTableTicketOffers=async()=>[{...offer,areaName:'中间 A 区',deskCodes:codes}]
+  api.getMiniBootstrap=async()=>({membership:{memberNo:'M001'}})
+  api.getMyTableTickets=async()=>[
+    {purchaseTerms:{area:'原 A 区',deskCodes:['A02','A05']},tickets:[]},
+    {purchaseTerms:{area:'窗边区'},tickets:[]},
+    {tickets:[]},
+  ]
+  await page.refresh()
+  assert.equal(page.data.selected.areaText,'中间 A 区 · A01、A03')
+  assert.equal(page.data.mine[0].purchasedAreaText,'原 A 区 · A02、A05')
+  assert.equal(page.data.mine[1].purchasedAreaText,'窗边区')
+  assert.equal(page.data.mine[2].purchasedAreaText,'')
+  page.agree({detail:{value:['yes']}})
+  codes=['A03']
+  await page.refresh()
+  assert.equal(page.data.agreed,false)
+  assert.equal(page.data.selected.areaText,'中间 A 区 · A03')
+  codes=null
+  await page.refresh()
+  assert.equal(page.data.selected.areaText,'中间 A 区')
+})
+
+test('确认后刷新票档，余量变化保留确认，赠分、退款或有效期变化须重读',async()=>{
+  const {page,api}=fixture()
+  const [offer]=await api.getTableTicketOffers()
+  api.getTableTicketOffers=async()=>[offer]
+  await page.refresh()
+  page.agree({detail:{value:['yes']}})
+  offer.remaining=2
+  await page.refresh()
+  assert.equal(page.data.agreed,true)
+  for(const change of [{refundSchedule:'开演前可全额退票'},{giftPoints:0},{validThroughIfPaidToday:'2027-11-25'}]){
+    page.agree({detail:{value:['yes']}})
+    Object.assign(offer,change)
+    await page.refresh()
+    assert.equal(page.data.agreed,false)
+  }
+})
+
 test('分享带入桌数，拒绝手机号授权仍可看票，授权后沿用原选择',async()=>{
   const {page,calls}=fixture()
   await page.refresh()

@@ -40,15 +40,15 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
  },30000)
  afterAll(async()=>{await runtime?.end();await pool?.end()})
  const meta=(employeeId=cashier)=>({scope,actor:{type:'employee' as const,employeeId},businessDate:date,idempotencyKey:randomUUID(),requestFingerprint:randomUUID()})
- async function fixture(captured=4000,denominator=100,mixed=false){
+ async function fixture(captured=4000,denominator=100,mixed=false,roundingScope: 'order' | 'cumulative' = 'cumulative'){
   const table=randomUUID(),session=randomUUID(),order=randomUUID(),item=randomUUID(),customer=randomUUID(),membership=randomUUID(),account=randomUUID(),policy=randomUUID()
   await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,$5,2)",[table,scope.tenantId,scope.storeId,area,'T'+table.slice(0,8)])
   await pool.query('INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count) VALUES($1::uuid,$2,$3,$4,$1::text,$5,1)',[session,scope.tenantId,scope.storeId,table,date])
   await pool.query("INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status) VALUES($1::uuid,$2,$3,$1::text,'active')",[customer,scope.tenantId,scope.storeId])
   await pool.query("INSERT INTO mbox.customer_memberships(id,tenant_id,store_id,customer_id,member_no,level,status) VALUES($1,$2,$3,$4,$5,'member','active')",[membership,scope.tenantId,scope.storeId,customer,'MBX'+membership.replaceAll('-','').slice(0,16).toUpperCase()])
   await pool.query('INSERT INTO mbox.loyalty_accounts(id,tenant_id,store_id,membership_id,customer_id) VALUES($1,$2,$3,$4,$5)',[account,scope.tenantId,scope.storeId,membership,customer])
-  await pool.query(`INSERT INTO mbox.loyalty_policy_versions(id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason)
-   VALUES($1,$2,$3,$4,1,'published',1,$8,1,$8,'floor',18,'2026-08-01',$5,$6,'2026-08-01',$7,'2026-08-01','separated','原冻结积分成长规则')`,[policy,scope.tenantId,scope.storeId,'P'+policy.replaceAll('-','').toUpperCase(),requester,cashier,publisher,denominator])
+  await pool.query(`INSERT INTO mbox.loyalty_policy_versions(id,tenant_id,store_id,policy_code,version,status,points_numerator,points_denominator_minor,growth_numerator,growth_denominator_minor,rounding_mode,points_validity_months,effective_from,drafted_by_employee_id,approved_by_employee_id,approved_at,published_by_employee_id,published_at,publication_mode,reason,points_rounding_scope)
+   VALUES($1,$2,$3,$4,1,'published',1,$8,1,$8,'floor',18,'2026-08-01',$5,$6,'2026-08-01',$7,'2026-08-01','separated','原冻结积分成长规则',$9)`,[policy,scope.tenantId,scope.storeId,'P'+policy.replaceAll('-','').toUpperCase(),requester,cashier,publisher,denominator,roundingScope])
   await pool.query("INSERT INTO mbox.orders(id,tenant_id,store_id,table_session_id,public_id,channel,status,submitted_at,subtotal_amount_minor,total_amount_minor,created_by_customer_id,loyalty_policy_version_id,loyalty_points_multiplier_numerator,loyalty_points_multiplier_denominator) VALUES($1::uuid,$2,$3,$4,$1::text,'staff_assisted','submitted',clock_timestamp(),4000,4000,$5,$6,1,1)",[order,scope.tenantId,scope.storeId,session,customer,policy])
   await pool.query(`INSERT INTO mbox.order_items(id,tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,fulfillment_station,product_snapshot,loyalty_eligible_at_submission,loyalty_eligibility_source) VALUES($1,$2,$3,$4,$5,1,$6,$6,'none','{"name":"商品","inventoryControlMode":"not_managed"}',true,'catalog_product')`,[item,scope.tenantId,scope.storeId,order,product,mixed?3000:4000])
   const excludedItem=randomUUID()
@@ -155,6 +155,15 @@ const url=process.env.TEST_NORMALIZED_DATABASE_URL,runtimeUrl=process.env.TEST_N
   const otherScope={tenantId:randomUUID(),storeId:randomUUID()}
   expect((await runner.run(otherScope,tx=>new LoyaltyRecollectionRepository(tx).previewOrderRecovery({orderId:f.order}))).status).toBe('not_required')
   expect((await runner.run(scope,tx=>new RecommendationFinancialAttributionRepository(tx).previewRecollectedForOrder({orderId:f.order}))).items.every(i=>i.restored)).toBe(true)
+ })
+ it.each([[1000, 4], [2000, 2]])('restores the locked per-order rate of %i after a refund', async (denominator, originalPoints) => {
+  const f = await fixture(4000, denominator, false, 'order')
+  expect(await state(f)).toMatchObject({available_points: originalPoints})
+  await refund(f, f.payment.id, 2000)
+  expect(await state(f)).toMatchObject({available_points: originalPoints / 2})
+  await authorize(f)
+  await cash(f)
+  expect(await state(f)).toMatchObject({available_points: originalPoints, restored: 1, awards: 1})
  })
  it.each([300,10000])('restores the original exact fraction including zero integer delta: denominator %s',async denominator=>{
   const f=await fixture(4000,denominator),before=await state(f)

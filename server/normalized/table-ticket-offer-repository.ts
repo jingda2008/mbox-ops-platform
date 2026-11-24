@@ -6,6 +6,9 @@ export interface EventTicketTerms {
 }
 function validateRefundDisclosure(schedule:string,contact:string){
   const text=schedule.normalize('NFKC').trim()
+  // A calendar range alone gives customers no refund conditions or amount.
+  if (/^[\d\s年月日号时点分秒至到从起止—–~～:./-]+$/u.test(text) && /[年月日号]|\d[./-]\d/u.test(text))
+    throw new ActivityOperationsError('退票约定不能只填日期，请写明什么情况下可退、可退多少，以及门店变更或取消演出时怎么办。','TICKET_REFUND_TERMS_INVALID',400)
   if(text===contact.normalize('NFKC').trim() || /^[+()\d\s.－—-]+$/.test(text))
     throw new ActivityOperationsError('退票规则不能只填客服电话。请填写适用时段、费用或金额及计算依据。','TICKET_REFUND_TERMS_INVALID',400)
 }

@@ -15,6 +15,9 @@ const currentOffers = `
   SELECT o.id,o.activity_id AS "activityId", a.public_id AS "activityPublicId",o.area_id AS "areaId",
     o.sale_from::text AS "saleFrom",o.sale_until::text AS "saleUntil",
     CASE WHEN o.sale_from>clock_timestamp() THEN 'upcoming' WHEN o.sale_until<=clock_timestamp() THEN 'ended' ELSE 'open' END AS "saleState",
+    (SELECT array_agg(d.code ORDER BY d.code) FROM mbox.scoped_ticket_offer_membership frozen
+      JOIN mbox.tables d ON (d.tenant_id,d.store_id)=(frozen.tenant_id,frozen.store_id) AND d.id=ANY(frozen.table_ids)
+      WHERE (frozen.tenant_id,frozen.store_id,frozen.offer_id)=(o.tenant_id,o.store_id,o.id)) AS "deskCodes",
     o.name, ar.name AS "areaName", a.title, a.cover_url AS "coverUrl", a.activity_details AS "activityDetails",
     c.code AS "categoryCode", c.display_name AS "categoryName", c.sort_order AS "categorySortOrder",
     p.code AS "categoryParentCode", p.display_name AS "categoryParentName", coalesce(p.sort_order,c.sort_order) AS "topCategorySortOrder", a.starts_at::text AS "startsAt",a.ends_at::text AS "endsAt",
@@ -31,7 +34,10 @@ const currentOffers = `
   JOIN mbox.areas ar ON (ar.tenant_id,ar.store_id,ar.id)=(o.tenant_id,o.store_id,o.area_id)
   LEFT JOIN mbox.menu_categories c ON (c.tenant_id,c.store_id,c.code)=(o.tenant_id,o.store_id,o.category_code)
   LEFT JOIN mbox.menu_categories p ON (p.tenant_id,p.store_id,p.code)=(c.tenant_id,c.store_id,c.parent_code)
-  WHERE o.status='published' AND NOT (SELECT latest.requires_named_attendees FROM mbox.table_ticket_event_terms latest
+  WHERE o.status='published'
+    AND NOT EXISTS (SELECT 1 FROM mbox.scoped_ticket_offer_membership frozen
+      WHERE (frozen.tenant_id,frozen.store_id,frozen.offer_id)=(o.tenant_id,o.store_id,o.id))
+    AND NOT (SELECT latest.requires_named_attendees FROM mbox.table_ticket_event_terms latest
     WHERE(latest.tenant_id,latest.store_id,latest.activity_id)=(o.tenant_id,o.store_id,o.activity_id) ORDER BY latest.version DESC LIMIT 1)
     AND ar.status='active' AND a.visibility='public' AND a.status='published'
     AND mbox.menu_category_visible_at(o.tenant_id,o.store_id,o.category_code,statement_timestamp())
@@ -39,7 +45,7 @@ const currentOffers = `
     AND (o.visible_from IS NULL OR o.visible_from<=clock_timestamp()) AND (o.visible_until IS NULL OR o.visible_until>clock_timestamp())
 `
 interface Offer extends Record<string,unknown> {
-  id:string;activityId:string;activityPublicId:string;areaId:string;name:string;areaName:string;startsAt:string;endsAt:string
+  id:string;activityId:string;activityPublicId:string;areaId:string;name:string;areaName:string;deskCodes:string[]|null;startsAt:string;endsAt:string
   title:string;priceMinor:number;giftPoints:number;capacity:number;paymentMinutes:number;remaining:number
   seatsPerTable:number|null;refundSummary:string;refundVersion:string;safetyVersion:string;safetySummary:string;serviceContact:string;eventTermsVersion:number
 }
@@ -116,7 +122,7 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
       least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),
       $11::jsonb,$12,$13,clock_timestamp(),'mini_program','full','jsapi',$7,4,$14,true) RETURNING id`,
     [...scope,registrationPublicId,offer.activityId,buyer.customer_id,buyer.membership_id,total,key,offer.paymentMinutes,offer.endsAt,
-      JSON.stringify({policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
+      JSON.stringify({policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,...(offer.deskCodes?.length?{deskCodes:offer.deskCodes}:{}),startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
   await tx.query(`INSERT INTO mbox.table_ticket_purchases(tenant_id,store_id,registration_id,offer_id,quantity,membership_id,contact_id,starts_at,ends_at,original_lock_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[...scope,registered.id,offer.id,input.quantity,buyer.membership_id,buyer.contact_id,offer.startsAt,offer.endsAt,original?.id??null])
   if (!protection.revealPhone) throw new CustomerExperienceRequestError('会员联系方式服务暂不可用','TICKET_CONTACT_UNAVAILABLE',503)

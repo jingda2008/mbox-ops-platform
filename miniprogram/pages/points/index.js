@@ -44,7 +44,7 @@ Page({
   data: {
     loading: true,
     error: '',
-    membership: null,
+    earningPolicy: null, membership: null,
     tab: 'points',
     points: [],
     growth: [],
@@ -56,18 +56,19 @@ Page({
   onUnload() { this.clearMemberRead() },
   clearMemberRead() {
     this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ membership: null, points: [], growth: [], processing: [], loading: false, error: '' })
+    this.setData({ earningPolicy: null, membership: null, points: [], growth: [], processing: [], loading: false, error: '' })
   },
 
   async load() {
     const generation = this.readGeneration = (this.readGeneration || 0) + 1
-    this.setData({ loading: true, error: '', membership: null, points: [], growth: [], processing: [] })
+    this.setData({ loading: true, error: '', earningPolicy: null, membership: null, points: [], growth: [], processing: [] })
     try {
       const [bootstrap, ledger] = await Promise.all([getMiniBootstrap(), getMiniLoyaltyLedger()])
       if (generation !== this.readGeneration) return
       const membership = bootstrap.membership || null
       this.setData({
         loading: false,
+        earningPolicy: ledger.earningPolicy || null,
         membership: membership && {
           pointsBalance: membership.pointsBalance,
           growthValue: membership.growthValue,

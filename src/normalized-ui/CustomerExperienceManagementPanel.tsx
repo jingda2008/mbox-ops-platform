@@ -984,7 +984,7 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
   const [loaded, setLoaded] = useState(false)
   const revision = useRef(0)
   const [form, setForm] = useState({
-    cashRedemptionEnabled: false, pointsRoundingScope: 'order', pointsNumerator: '1', pointsDenominatorMinor: '1000',
+    cashRedemptionEnabled: false, pointsRoundingScope: 'order', pointsNumerator: '1', pointsDenominatorMinor: '2000',
     growthNumerator: '1', growthDenominatorMinor: '100',
     roundingMode: 'floor', pointsValidityMonths: '18', reason: '',
   })
@@ -1016,6 +1016,12 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
 
   useEffect(() => { void load(); return()=>{revision.current++} }, [load])
   if (!canView && !canManage && !canApprove && !canPublish && !canViewExceptions) return null
+
+  const orderRounding = {
+    pointsNumerator: '1',
+    pointsDenominatorMinor: form.pointsDenominatorMinor === '1000' ? '1000' : '2000',
+    roundingMode: 'floor',
+  }
 
   async function draft(event: FormEvent) {
     event.preventDefault()
@@ -1119,8 +1125,8 @@ function LoyaltyPolicyPanel({ api, auth, viewMode='all' }: { api: NormalizedApiC
       {canManage && <form className="staff-module-form" onSubmit={(event) => void draft(event)}>
         <BusinessRatioFields content={{pointsNumerator:Number(form.pointsNumerator),pointsDenominatorMinor:Number(form.pointsDenominatorMinor),growthNumerator:Number(form.growthNumerator),growthDenominatorMinor:Number(form.growthDenominatorMinor)}} onChange={next=>setForm(current=>({...current,pointsNumerator:String(next.pointsNumerator),pointsDenominatorMinor:String(next.pointsDenominatorMinor),growthNumerator:String(next.growthNumerator),growthDenominatorMinor:String(next.growthDenominatorMinor)}))}/>
 
-        <label><input type="checkbox" checked={form.cashRedemptionEnabled} onChange={event=>setForm({...form,cashRedemptionEnabled:event.target.checked,pointsRoundingScope:'order',pointsNumerator:'1',pointsDenominatorMinor:'1000',roundingMode:'floor'})}/>发布后启用每积分抵1元，可抵至0元，不叠加优惠券；本单新积分下次使用</label>
-        <label>积分零头处理<select value={form.pointsRoundingScope} onChange={event=>setForm({...form,pointsRoundingScope:event.target.value,...(event.target.value==='order'?{pointsNumerator:'1',pointsDenominatorMinor:'1000',roundingMode:'floor'}:{})})}><option value="order">每笔满10元积1分，零头不累计，不加等级倍数</option><option value="cumulative">历史规则：跨订单累计零头</option></select></label><label>取整方式<select value={form.roundingMode} onChange={(event) => setForm({ ...form, roundingMode: event.target.value })}><option value="floor">向下取整</option><option value="nearest">四舍五入</option></select></label>
+        <label><input type="checkbox" checked={form.cashRedemptionEnabled} onChange={event=>setForm({...form,cashRedemptionEnabled:event.target.checked,pointsRoundingScope:'order',...orderRounding})}/>发布后启用每积分抵1元，可抵至0元，不叠加优惠券；本单新积分下次使用</label>
+        <label>积分零头处理<select value={form.pointsRoundingScope} onChange={event=>setForm({...form,pointsRoundingScope:event.target.value,...(event.target.value==='order'?orderRounding:{})})}><option value="order">每笔单独计算，零头不累计，不加等级倍数</option><option value="cumulative">历史规则：跨订单累计零头</option></select></label><label>取整方式<select value={form.roundingMode} onChange={(event) => setForm({ ...form, roundingMode: event.target.value })}><option value="floor">向下取整</option><option value="nearest">四舍五入</option></select></label>
         <label>积分有效期（月）<input type="number" min="1" max="120" value={form.pointsValidityMonths} onChange={(event) => setForm({ ...form, pointsValidityMonths: event.target.value })} /></label>
         <label>配置原因<input required minLength={2} maxLength={500} value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></label>
         <button type="submit" disabled={busy === 'draft'}>{busy === 'draft' ? '正在保存' : '保存新版本草稿'}</button>

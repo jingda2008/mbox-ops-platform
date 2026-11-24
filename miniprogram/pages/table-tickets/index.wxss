@@ -19,6 +19,9 @@
 .key { flex: 0 0 auto; color: #716e63; }
 .note, .summary, .auth-note, .empty-note { color: #62675c; font-size: 24rpx; }
 .note { padding-top: 14rpx; border-top: 1rpx solid #e9e5da; margin-top: 18rpx; }
+.ticket-area { overflow-wrap: anywhere; }
+.ticket-refund-terms { white-space: pre-line; overflow-wrap: anywhere; }
+.ticket-contact { display: inline-block; padding: 10rpx 0; color: #315940; }
 .rules-copy { margin-top: 14rpx; }
 .inline-label, .rule-title { font-weight: 600; }
 .rule-title { display: block; margin-bottom: 4rpx; }

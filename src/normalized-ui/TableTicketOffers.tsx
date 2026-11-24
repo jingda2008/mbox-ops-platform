@@ -6,7 +6,7 @@ import {useConfirmationDialog} from './ConfirmationDialog'
 const ruleFields=[
   ['organizer','organizer','举办主体'],['seller','seller','售票主体'],['approvalReference','approval_reference','批准文件号或适用依据'],
   ['performers','performers','主要演员或团体'],['durationMinutes','duration_minutes','最低演出时长（分钟）'],['programNote','program_note','最低曲目数及适用说明'],
-  ['serviceContact','service_contact','门店客服'],['refundSchedule','refund_schedule','各退票时段、费率或金额、计算基数和售后入口'],
+  ['serviceContact','service_contact','门店客服'],['refundSchedule','refund_schedule','退票约定（何时可退、退多少、门店变更或取消时怎么办）'],
 ] as const
 interface Offer {
   terms:(Record<string,string|number|boolean>&{version:number})|null
@@ -18,6 +18,26 @@ interface Offer {
   saleFrom:string|null;saleUntil:string|null;priceMinor:number|null; giftPoints:number|null; visibleFrom:string|null; visibleUntil:string|null
   status:'draft'|'published'|'withdrawn'|null
 }
+function TicketDeskSelection({area,busy}:{area:Offer;busy:boolean}){
+  const [selectedIds,setSelectedIds]=useState(area.draftTableIds??[])
+  const codes=(area.ticketTables??[]).filter(table=>selectedIds.includes(table.id)).map(table=>table.code)
+  return (
+    <fieldset><legend>本票档可排桌号</legend>
+        {!area.rosterConfigured && <p>还没有经核对的当期桌号名单，不列出历史桌号。</p>}
+        {area.rosterConfigured && !(area.ticketTables??[]).length && <p>本区尚无已核对的可选桌台。</p>}
+        {(area.ticketTables??[]).map(table=><label key={table.id}>
+          <input type="checkbox" name="draftTables" value={table.id} disabled={busy}
+            checked={selectedIds.includes(table.id)}
+            onChange={e=>setSelectedIds(e.target.checked?[...selectedIds,table.id]:selectedIds.filter(id=>id!==table.id))}/>{table.code}
+        </label>)}
+        {area.draftTableIds?.some(id=>!(area.ticketTables??[]).some(table=>table.id===id)) &&
+          <p role="alert">原草稿有桌台已移出当期名单，请重新选择并保存。</p>}
+        {codes.length>0 && <p aria-live="polite">购票须知 · 适用区域：{area.areaName} · {codes.join('、')}</p>}
+        {(area.rosterConfigured || area.draftTableIds) && <p>具体桌号由门店安排。当前支持保存草稿。</p>}
+      </fieldset>
+  )
+}
+
 function localTime(value:string|null) {
   if (!value) return ''
   const date=new Date(value)
@@ -194,17 +214,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       const button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement|null
       void save(e.currentTarget,button?.value==='published'?'published':button?.value==='withdrawn'?'withdrawn':'draft')
     }}>
-      <fieldset><legend>本票档指定桌台（仅草稿）</legend>
-        {!area.rosterConfigured && <p>还没有经核对的当期桌号名单，不列出历史桌号。</p>}
-        {area.rosterConfigured && !(area.ticketTables??[]).length && <p>本区尚无已核对的可选桌台。</p>}
-        {(area.ticketTables??[]).map(table=><label key={table.id}>
-          <input type="checkbox" name="draftTables" value={table.id} disabled={busy}
-            defaultChecked={area.draftTableIds?.includes(table.id)??false}/>{table.code}
-        </label>)}
-        {area.draftTableIds?.some(id=>!(area.ticketTables??[]).some(table=>table.id===id)) &&
-          <p role="alert">原草稿有桌台已移出当期名单，请重新选择并保存。</p>}
-        {(area.rosterConfigured || area.draftTableIds) && <p>桌台范围保存到草稿；在库存、排桌和改期均支持前，不能按此范围上架售卖。</p>}
-      </fieldset>
+      <TicketDeskSelection area={area} busy={busy}/>
       <label>产品名称<textarea aria-label="产品名称" rows={2} disabled={busy} name="name" required maxLength={120} defaultValue={area.name??area.areaName+'整桌票'}/></label>
       <label>每桌售价（元）<input disabled={busy} required type="number" name="price" min=".01" step=".01" defaultValue={area.priceMinor===null?'':(area.priceMinor/100).toFixed(2)}/></label>
       <label>每张赠送积分<input disabled={busy} type="number" name="points" min="0" step="1" defaultValue={area.giftPoints??''}/></label>

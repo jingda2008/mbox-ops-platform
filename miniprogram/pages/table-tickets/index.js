@@ -11,6 +11,18 @@ function clearMemberDisplay(){
     reservationLockId:null,originalOrder:null,agreed:false}
 }
 
+function ticketAreaText(area, deskCodes){
+  const desks=Array.isArray(deskCodes)?deskCodes.join('、'):''
+  return [area,desks].filter(Boolean).join(' · ')
+}
+
+function sameTicketNotice(current,previous){
+  if(!current || !previous)return false
+  const fields=['id','areaText','startsAt','endsAt','priceMinor','giftPoints','validThroughIfPaidToday',
+    'eventTermsVersion','safetyVersion','safetySummary','refundVersion','refundSchedule','refundSummary','serviceContact']
+  return fields.every(field=>current[field]===previous[field])
+}
+
 function priceSummary(offer,quantity){
   const count=Number(quantity)
   if (!offer || !Number.isSafeInteger(count) || count<1 || !Number.isSafeInteger(count*offer.priceMinor))return ''
@@ -44,10 +56,10 @@ Page({
     if(this.visible===false)return
     const generation=this.readGeneration=(this.readGeneration||0)+1
     try {
-      const offers=(await api.getTableTicketOffers()).map(o=>({...o,cover:o.coverUrl?publicImageUrl(o.coverUrl):'',saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':'',price:money(o.priceMinor),time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt)}))
+      const offers=(await api.getTableTicketOffers()).map(o=>({...o,areaText:ticketAreaText(o.areaName,o.deskCodes),cover:o.coverUrl?publicImageUrl(o.coverUrl):'',saleText:o.saleState==='upcoming'?dateTime(o.saleFrom)+' 开售':o.saleState==='ended'?'已停售':'',price:money(o.priceMinor),time:dateTime(o.startsAt)+' — '+dateTime(o.endsAt)}))
       if(generation!==this.readGeneration)return
       const selected=offers.find(o=>o.id===this.offerId)||null
-      this.setData({offers,selected,summary:priceSummary(selected,this.data.quantity),agreed:Boolean(selected && selected.id===this.data.selected?.id && selected.safetyVersion===this.data.selected.safetyVersion && selected.refundVersion===this.data.selected.refundVersion && this.data.agreed)})
+      this.setData({offers,selected,summary:priceSummary(selected,this.data.quantity),agreed:Boolean(this.data.agreed && sameTicketNotice(selected,this.data.selected))})
       const [bootstrap,orders,proposals,reservations]=await Promise.all([api.getMiniBootstrap(),api.getMyTableTickets(),api.getTicketProposals(),api.getTicketReservations()])
       const phones=bootstrap.membership?await api.getVerifiedPhones():[]
       if(generation!==this.readGeneration)return
@@ -70,7 +82,7 @@ Page({
       if(this.originalReceipt && this.originalReceipt.memberNo!==memberNo)this.originalReceipt=null
       this.setData({proposals,reservations,eligibleReservations:eligible,reservationLockId:switched||lostLock?null:lockId,
         proposalId:switched?null:this.data.proposalId,agreed:switched||lostLock?false:this.data.agreed,originalOrder:this.originalReceipt?.id||null,member:bootstrap.membership||null,terms:bootstrap.membershipTerms||null,phone:phones[0]||null,
-        mine:(memberNo?ticketOrders:[]).map(o=>({...o,tickets:o.tickets.map(t=>({...t,moveTime:t.move?dateTime(t.move.startsAt)+' — '+dateTime(t.move.endsAt):'',effectiveTime:t.currentShow?dateTime(t.currentShow.startsAt)+' — '+dateTime(t.currentShow.endsAt):'',validThrough:beijingDate(parseInstant(t.expiresAt)-1000)})),total:money(Number(o.totalMinor)),time:dateTime(o.startsAt)}))})
+        mine:(memberNo?ticketOrders:[]).map(o=>({...o,purchasedAreaText:ticketAreaText(o.purchaseTerms?.area,o.purchaseTerms?.deskCodes),tickets:o.tickets.map(t=>({...t,moveTime:t.move?dateTime(t.move.startsAt)+' — '+dateTime(t.move.endsAt):'',effectiveTime:t.currentShow?dateTime(t.currentShow.startsAt)+' — '+dateTime(t.currentShow.endsAt):'',validThrough:beijingDate(parseInstant(t.expiresAt)-1000)})),total:money(Number(o.totalMinor)),time:dateTime(o.startsAt)}))})
     } catch(e){if(generation===this.readGeneration)this.setData({...clearMemberDisplay(),error:e.message||'读取失败，请刷新'})}
   },
   forOffer(offer,rows){

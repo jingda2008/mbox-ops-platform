@@ -68,6 +68,10 @@ test('desktop and mobile explicitly select and persist only confirmed tables; st
         await page.getByRole('status').filter({hasText:'至少选择一桌'}).waitFor()
         assert.equal(await page.locator('output').textContent(),'[]')
         await page.getByRole('checkbox',{name:'A01',exact:true}).check()
+        await page.getByRole('checkbox',{name:'A02',exact:true}).check()
+        await page.getByText('购票须知 · 适用区域：室内 · A01、A02',{exact:true}).waitFor()
+        await page.getByRole('checkbox',{name:'A02',exact:true}).uncheck()
+        await page.getByText('购票须知 · 适用区域：室内 · A01',{exact:true}).waitFor()
         await save.click()
         await page.getByRole('status').filter({hasText:'票档草稿已保存'}).waitFor()
         assert.deepEqual(JSON.parse(await page.locator('output').textContent()).at(-1).draftTableIds,

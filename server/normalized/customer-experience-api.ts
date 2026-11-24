@@ -351,6 +351,7 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
         points: loyalty.points,
         growth: loyalty.growth,
         processing: loyalty.processing,
+        earningPolicy: loyalty.earningPolicy,
       },
     })
   }))
@@ -644,6 +645,8 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.post('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
     const context=await options.resolvePublicContext(request)
     const body=objectBody(request.body)
+    if (['tableId','tableIds','draftTableIds','areaId'].some(field=>Object.hasOwn(body,field)))
+      throw new CustomerExperienceRequestError('请选择门票档位，具体桌号由门店安排','TICKET_DESK_STAFF_ONLY',400)
     if (Object.keys(body).some(key=>!['offerId','proposalId','reservationLockId','quantity','safetyVersion','refundVersion','termsAcknowledged'].includes(key)))
       throw new CustomerExperienceRequestError('整桌门票须按票档原价付款','TICKET_TENDER_INVALID',400)
     if (body.termsAcknowledged!==true) throw new CustomerExperienceRequestError('请先核对本场条款与赠分说明')

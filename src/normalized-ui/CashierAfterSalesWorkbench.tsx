@@ -354,6 +354,7 @@ export function CashierAfterSalesWorkbench({ api, auth, onLoginRequired, onNavig
       running=true
       try{
         const r=await api.getEndpoint<{data:typeof handoffs}>('/api/staff/activity-operations/ticket-dining-handoffs')
+        if(!Array.isArray(r.data))throw new Error('门票补款待办格式异常')
         if(active){setHandoffs(r.data);setHandoffError(false)}
       }catch{if(active){setHandoffs([]);setHandoffError(true)}}finally{running=false}
     }

@@ -14,6 +14,12 @@ const browser=await chromium.launch({headless:true}),results=[]
 async function run(name,fn){const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));try{await fn(page);assert.deepEqual(errors,[]);results.push({name,status:'passed'});console.log('PASS',name)}catch(e){results.push({name,status:'failed',message:String(e)});await page.screenshot({path:join(output,`failure-${results.length}.png`),fullPage:true});console.error('FAIL',name,e)}finally{await context.close()}}
 async function fill(page){await page.goto(url);await page.getByRole('combobox',{name:'活动退款处理',exact:true}).selectOption('compensation');await page.getByLabel('本次补偿金额（元）',{exact:true}).fill('12');await page.getByLabel('退款原因',{exact:true}).fill('少送菜品补偿');await page.getByLabel('已与顾客确认退款金额及剩余内容安排',{exact:true}).check()}
 try{
+ await run('unexpected ticket handoff response leaves ordinary activity refunds available',async page=>{
+  await page.goto(url+'&badHandoffs=1')
+  await page.getByText('门票补款待办读取失败，正在重试。',{exact:true}).waitFor()
+  await page.getByRole('combobox',{name:'活动退款处理',exact:true}).selectOption('compensation')
+  assert.equal(await page.getByLabel('本次补偿金额（元）',{exact:true}).isVisible(),true)
+ })
  await run('unknown compensation survives full reload with original amount body and key',async page=>{
   await fill(page);await page.getByRole('button',{name:'提交补偿退款申请',exact:true}).click();await page.getByRole('button',{name:'恢复原活动退款申请',exact:true}).waitFor()
   assert.equal(await page.getByLabel('本次补偿金额（元）',{exact:true}).count(),0)

@@ -1,3 +1,4 @@
+import {ScopedTicketHoldRepository} from './scoped-ticket-hold-repository.js'
 import {planTicketCashRefund,processTicketRefundReviews} from './table-ticket-auto-review.js'
 import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {orderCollectionBalancesCtesSql} from './order-collection-balances-sql.js'
@@ -1645,6 +1646,50 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(await visible('2026-12-01T18:00Z')).toBe(false)
       await tx.query("UPDATE mbox.menu_categories SET visible_until='2026-12-01T17:00Z' WHERE tenant_id=$1 AND store_id=$2 AND code='TICKET-MENU'",args)
       expect(await visible('2026-12-01T17:00Z')).toBe(false)
+    })
+  })
+  it('binds an exact physical hold to one ticket unit and rejects unrelated holds or competing locks',async()=>{
+    await run(async tx=>{
+      const args=[scope.tenantId,scope.storeId], zone=randomUUID()
+      await tx.query('SAVEPOINT scoped_hold_test')
+      await tx.query("INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type) VALUES($3,$1,$2,'HOLD','隔离桌台','indoor')",[...args,zone])
+      const desks=(await tx.query<{id:string}>(`INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity)
+        VALUES ($1,$2,$3,'HOLD1','隔离一号',2),($1,$2,$3,'HOLD2','隔离二号',2) RETURNING id`,[...args,zone])).rows
+      const offer=await saveTicketOffer(tx,activity,employee,{...offerInput,areaId:zone})
+      const shown=(await publicTableTickets(tx)).find(row=>row.id===offer.id)!
+      const bought=await buyTableTickets(tx,customer,{offerId:offer.id,quantity:1,safetyVersion:shown.safetyVersion,refundVersion:shown.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection)
+      await tx.query('RESET ROLE')
+      await tx.query('INSERT INTO mbox.ticket_table_roster(tenant_id,store_id,table_id) VALUES($1,$2,$3),($1,$2,$4)',[...args,desks[0]!.id,desks[1]!.id])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      const hold=async(desk:string,marker:boolean)=>{
+        const row=(await tx.query<{id:string}>(`INSERT INTO mbox.reservations(tenant_id,store_id,public_id,customer_id,customer_name,contact_token,guest_count,
+          arrival_at,expected_end_at,source,reservation_snapshot)
+          SELECT $1,$2,$4,customer_id,'隔离测试','test',2,$5,$6,'integration',$7::jsonb
+          FROM mbox.community_activity_registrations WHERE (tenant_id,store_id,id)=($1,$2,$3) RETURNING id`,
+          [...args,bought.id,randomUUID(),shown.startsAt,shown.endsAt,JSON.stringify(marker?{scopedTicketHold:{registrationId:bought.id,ordinal:1}}:{})])).rows[0]!
+        return (await tx.query<{id:string}>(`INSERT INTO mbox.reservation_table_locks(tenant_id,store_id,reservation_id,table_id,reserved_during,hold_expires_at)
+          SELECT $1,$2,$4,$5,tstzrange($6,$7,'[)'),seat_hold_expires_at FROM mbox.community_activity_registrations
+          WHERE(tenant_id,store_id,id)=($1,$2,$3) RETURNING id`,[...args,bought.id,row.id,desk,shown.startsAt,shown.endsAt])).rows[0]!.id
+      }
+      const repo=new ScopedTicketHoldRepository(tx)
+      const unrelated=await hold(desks[1]!.id,false)
+      await tx.query('SAVEPOINT wrong_origin')
+      await expect(repo.bind(bought.id,1,unrelated)).rejects.toMatchObject({code:'23514'})
+      await tx.query('ROLLBACK TO SAVEPOINT wrong_origin')
+      const tentative=await hold(desks[0]!.id,true)
+      await repo.bind(bought.id,1,tentative)
+      await repo.bind(bought.id,1,tentative)
+      expect(await repo.list(bought.id)).toEqual([{ordinal:1,reservationLockId:tentative}])
+      await tx.query('SAVEPOINT competing')
+      await expect(hold(desks[0]!.id,false)).rejects.toMatchObject({code:'23P01'})
+      await tx.query('ROLLBACK TO SAVEPOINT competing')
+      await expect(repo.bind(bought.id,1,unrelated)).rejects.toThrow('already owns')
+      await tx.query('SAVEPOINT unrelated')
+      await expect(repo.bind(bought.id,2,unrelated)).rejects.toMatchObject({code:'23514'})
+      await tx.query('ROLLBACK TO SAVEPOINT unrelated')
+      expect(await repo.list(bought.id)).toEqual([{ordinal:1,reservationLockId:tentative}])
+      await tx.query('ROLLBACK TO SAVEPOINT scoped_hold_test')
+      expect(await repo.list(bought.id)).toEqual([])
     })
   })
   it('offers only current roster tables and never turns scoped drafts into published stock',async()=>{

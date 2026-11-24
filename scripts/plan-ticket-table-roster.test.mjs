@@ -7,7 +7,7 @@ function fixture(){
   const row=(code,areaCode,n,status='available',areaStatus='active')=>({code,areaCode,id:id(n),status,areaStatus})
   return {
     manifest:{...scope,complete:true,source:'synthetic signed-off layout',confirmedAt:'2026-11-24T15:20:00+08:00',tables:[{code:'A1',areaCode:'inside'},{code:'V1',areaCode:'vip'}]},
-    snapshot:{...scope,tables:[row('A1','inside',11),row('A01','inside',12),row('OLD1','inside',13),row('V1','vip',14),row('V2','vip',15,'paused')],existingTicketTableIds:[id(13),id(14)]},
+    snapshot:{...scope,capturedAt:'2026-11-24T15:21:00+08:00',tables:[row('A1','inside',11),row('A01','inside',12),row('OLD1','inside',13),row('V1','vip',14),row('V2','vip',15,'paused')],existingTicketTableIds:[id(13),id(14)]},
   }
 }
 test('matches signed-off current desks by exact scope, area and code; preserves stable IDs',()=>{
@@ -45,4 +45,24 @@ test('rejects ambiguous, partial, wrong-store and unreviewed input',()=>{
     [x=>{x.snapshot.existingTicketTableIds.push(id(999))},/不一致/],
   ]
   for(const [change,error] of cases){const input=fixture();change(input);assert.throws(()=>planTicketTableRoster(input),error)}
+})
+
+test('fingerprint is order independent but binds exact table IDs, scope and state',()=>{
+  const input=fixture()
+  const {snapshotFingerprint}=planTicketTableRoster(input)
+  assert.match(snapshotFingerprint,/^[a-f0-9]{64}$/)
+  input.snapshot.tables.reverse()
+  input.snapshot.existingTicketTableIds.reverse()
+  assert.equal(planTicketTableRoster(input).snapshotFingerprint,snapshotFingerprint)
+  input.snapshot.tables.find(x=>x.code==='A1').status='paused'
+  assert.notEqual(planTicketTableRoster(input).snapshotFingerprint,snapshotFingerprint)
+})
+test('does not infer identity when an existing code now points to a different ID',()=>{
+  const input=fixture()
+  input.manifest.tables[0].expectedTableId=id(999)
+  const plan=planTicketTableRoster(input)
+  assert.equal(plan.ticketWhitelist,null)
+  assert.equal(plan.blocked[0].reason,'stable_id_changed')
+  input.manifest.tables[0].expectedTableId=id(11)
+  assert.equal(planTicketTableRoster(input).blocked.length,0)
 })

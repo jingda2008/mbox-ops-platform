@@ -1,9 +1,13 @@
+import {createHash} from 'node:crypto'
 import {readFile} from 'node:fs/promises'
 import {pathToFileURL} from 'node:url'
 
 const tableCode=/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
 const uuid=/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i
 const scopeFields=['tenantId','storeId']
+const timestamp=/^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/
+const isTimestamp=value=>typeof value==='string' && timestamp.test(value) && Number.isFinite(Date.parse(value))
+
 const order=(a,b)=>a<b?-1:a>b?1:0
 function checkScope(row) {
   return row && scopeFields.every(field=>typeof row[field]==='string' && uuid.test(row[field]))
@@ -26,14 +30,16 @@ export function planTicketTableRoster({manifest,snapshot}){
   if(!checkScope(manifest)||!checkScope(snapshot)||scopeFields.some(k=>manifest[k]!==snapshot[k]))
     fail('名单与桌台快照必须来自同一门店作用域')
   if(manifest.complete!==true || typeof manifest.source!=='string' || !manifest.source.trim()
-    || !/^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(manifest.confirmedAt??'')
-    || !Number.isFinite(Date.parse(manifest.confirmedAt)))
+    || !isTimestamp(manifest.confirmedAt))
     fail('必须使用已确认的完整营业桌台名单并注明来源和时间')
+  if(!isTimestamp(snapshot.capturedAt))fail('桌台档案快照必须注明准确采集时间')
+
   if(!Array.isArray(manifest.tables)||!manifest.tables.length||manifest.tables.length>2000
     || !Array.isArray(snapshot.tables)||!Array.isArray(snapshot.existingTicketTableIds))
     fail('营业桌台名单、现行档案或已有票务名单无效')
   for(const row of manifest.tables){
-    if(typeof row?.code!=='string'||!tableCode.test(row.code)||typeof row.areaCode!=='string'||!row.areaCode.trim())
+    if(typeof row?.code!=='string'||!tableCode.test(row.code)||typeof row.areaCode!=='string'||!row.areaCode.trim()
+      || (row.expectedTableId!==undefined && (typeof row.expectedTableId!=='string'||!uuid.test(row.expectedTableId))))
       fail('每桌须有准确的桌号和区域编码')
   }
   for(const row of snapshot.tables){
@@ -53,6 +59,8 @@ export function planTicketTableRoster({manifest,snapshot}){
     const table=byCode.get(row.code)
     if(!table)blocked.push({code:row.code,areaCode:row.areaCode,reason:'not_in_store_master'})
     else if(table.areaCode!==row.areaCode)blocked.push({code:row.code,areaCode:row.areaCode,reason:'area_mismatch'})
+    else if(row.expectedTableId!==undefined && row.expectedTableId.toLowerCase()!==table.id.toLowerCase())
+      blocked.push({code:row.code,areaCode:row.areaCode,reason:'stable_id_changed'})
     else if(table.status!=='available'||table.areaStatus!=='active')
       blocked.push({code:row.code,areaCode:row.areaCode,reason:'not_operational_in_master'})
     else matched.push({tableId:table.id,code:table.code,areaCode:table.areaCode})
@@ -67,8 +75,14 @@ export function planTicketTableRoster({manifest,snapshot}){
       return {tableId:id,code,areaCode}
     }).sort((a,b)=>order(a.areaCode,b.areaCode)||order(a.code,b.code)),
   }
+  const snapshotFingerprint=createHash('sha256').update(JSON.stringify({
+    scope:[snapshot.tenantId,snapshot.storeId],
+    tables:snapshot.tables.map(t=>[t.id,t.code,t.areaCode,t.status,t.areaStatus]).sort((a,b)=>order(a[0],b[0])),
+    existingTicketTableIds:[...existingIds].sort(order),
+  })).digest('hex')
   return {
     mode:'review_only',source:manifest.source.trim(),confirmedAt:manifest.confirmedAt,
+    capturedAt:snapshot.capturedAt,snapshotFingerprint,
     scope:{tenantId:manifest.tenantId,storeId:manifest.storeId},
     blocked,ticketWhitelist:blocked.length?null:matched,membershipDiff,
     // No judgment is made about whether any unlisted available table is

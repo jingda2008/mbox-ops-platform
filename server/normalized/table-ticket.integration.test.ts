@@ -1647,6 +1647,32 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect(await visible('2026-12-01T17:00Z')).toBe(false)
     })
   })
+  it('offers only current roster tables and never turns scoped drafts into published stock',async()=>{
+    const args=[scope.tenantId,scope.storeId]
+    const desks=(await admin.query<{id:string;code:string}>('SELECT id,code FROM mbox.tables WHERE (tenant_id,store_id,area_id)=($1,$2,$3) ORDER BY code LIMIT 2',[...args,area])).rows
+    const [current,legacy]=desks
+    if(!current || !legacy)throw new Error('missing roster test fixtures')
+    await admin.query('INSERT INTO mbox.ticket_table_roster (tenant_id,store_id,table_id) VALUES ($1,$2,$3)',[...args,current.id])
+    try {
+      const before=await run(publicTableTickets)
+      await run(async tx=>{
+        await tx.query('SAVEPOINT roster_draft')
+        const latest=(await ticketOfferCatalog(tx,activity)).find(row=>row.areaId===area)!
+        expect(latest).toMatchObject({rosterConfigured:true,ticketTables:[current]})
+        const draftInput={...offerInput,status:'draft' as const,expectedVersion:latest.version??0}
+        await expect(saveTicketOffer(tx,activity,employee,{...draftInput,draftTableIds:[legacy.id]})).rejects.toMatchObject({code:'TICKET_TABLE_SCOPE_STALE'})
+        const saved=await saveTicketOffer(tx,activity,employee,{...draftInput,draftTableIds:[current.id]})
+        expect((await ticketOfferCatalog(tx,activity)).find(row=>row.areaId===area)).toMatchObject({draftTableIds:[current.id]})
+        const reviewer=randomUUID()
+        await expect(saveTicketOffer(tx,activity,reviewer,{...offerInput,expectedVersion:saved.version})).rejects.toMatchObject({code:'TICKET_TABLE_SCOPE_DRAFT_ONLY'})
+        await expect(publishTicketDrafts(tx,activity,reviewer,[{areaId:area,version:saved.version}],1)).rejects.toMatchObject({code:'TICKET_TABLE_SCOPE_DRAFT_ONLY'})
+        expect((await publicTableTickets(tx)).map(row=>row.id)).toEqual(before.map(row=>row.id))
+        await tx.query('ROLLBACK TO SAVEPOINT roster_draft')
+      })
+    } finally {
+      await admin.query('DELETE FROM mbox.ticket_table_roster WHERE (tenant_id,store_id,table_id)=($1,$2,$3)',[...args,current.id])
+    }
+  })
   it('keeps issued promises while changing price and points, and stops all new table sales for a named event',async()=>{
     const previous=(await run(tx=>ticketOfferCatalog(tx,activity))).find(o=>o.areaId===area)!
     await run(async tx=>{

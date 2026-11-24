@@ -222,7 +222,15 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const saleUntil=body.saleUntil===undefined?undefined:body.saleUntil?timestamp(body.saleUntil,'停售时间'):null
     if(saleFrom && saleUntil && saleUntil<=saleFrom)throw invalid('停售时间须晚于开售时间')
     if(body.recommendInCommunity!==undefined && typeof body.recommendInCommunity!=='boolean')throw invalid('请选择是否在超嗨推荐')
+    let draftTableIds:string[]|undefined
+    if(body.draftTableIds!==undefined){
+      if(!Array.isArray(body.draftTableIds) || body.draftTableIds.length<1 || body.draftTableIds.length>200)
+        throw invalid('请选择 1 至 200 个本区桌台')
+      draftTableIds=body.draftTableIds.map(id=>uuid(id,'桌台'))
+      if(new Set(draftTableIds.map(id=>id.toLowerCase())).size!==draftTableIds.length)throw invalid('桌台不能重复选择')
+    }
     const offer = {
+      ...(draftTableIds===undefined?{}:{draftTableIds}),
       ...(body.expectedTermsVersion===undefined?{}:{expectedTermsVersion:integer(body.expectedTermsVersion,'公示版本',1,2147483647)}),
       ...(body.recommendInCommunity===undefined?{}:{recommendInCommunity:body.recommendInCommunity}),
       ...(saleFrom!==undefined?{saleFrom}:{}),...(saleUntil!==undefined?{saleUntil}:{}),

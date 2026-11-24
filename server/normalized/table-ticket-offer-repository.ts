@@ -25,6 +25,7 @@ export async function approveEventTicketTerms(tx:ScopedTransaction,activity:stri
 export interface TableTicketOfferInput {
   recommendInCommunity?: boolean
   expectedTermsVersion?: number
+  draftTableIds?: string[]
   categoryCode?:string|null
   areaId: string
   expectedVersion: number
@@ -43,15 +44,19 @@ export async function ticketOfferCatalog(tx: ScopedTransaction, activityPublicId
   const result = await tx.query<Record<string,unknown> & {
     areaId:string;status:string|null;version:number|null;name:string|null;priceMinor:number|null;giftPoints:number|null;
     categoryCode:string|null;visibleFrom:string|null;visibleUntil:string|null;saleFrom:string|null;saleUntil:string|null;
-    recommendInCommunity:boolean|null;draftAuthor:string|null
+    recommendInCommunity:boolean|null;draftAuthor:string|null;draftTableIds:string[]|null
   }>(`
     SELECT area.id AS "areaId", area.name AS "areaName",event_rules.terms, activity.status AS "activityStatus",
       activity.created_by_employee_id AS "creatorId",
       mbox.table_ticket_area_remaining(area.tenant_id,area.store_id,area.id,activity.starts_at,activity.ends_at) AS remaining,
       mbox.menu_category_visible_at(area.tenant_id,area.store_id,offer.category_code,statement_timestamp()) AS "categoryVisible",
       live.status='published' AS "isOnSale",offer.recommend_in_community AS "recommendInCommunity",
-      ARRAY(SELECT t.code FROM mbox.tables t WHERE (t.tenant_id,t.store_id,t.area_id)=(area.tenant_id,area.store_id,area.id)
-        AND t.status='available' ORDER BY t.code) AS "tableCodes", offer.category_code AS "categoryCode",
+      coalesce((SELECT jsonb_agg(jsonb_build_object('id',t.id,'code',t.code) ORDER BY t.code)
+        FROM mbox.ticket_table_roster r JOIN mbox.tables t USING (tenant_id,store_id)
+        WHERE t.id=r.table_id AND (t.tenant_id,t.store_id,t.area_id)=(area.tenant_id,area.store_id,area.id)
+          AND t.status='available' AND area.status='active'),'[]'::jsonb) AS "ticketTables",
+      EXISTS(SELECT 1 FROM mbox.ticket_table_roster r WHERE (r.tenant_id,r.store_id)=(area.tenant_id,area.store_id)) AS "rosterConfigured",
+      offer.draft_table_ids AS "draftTableIds",offer.category_code AS "categoryCode",
       (SELECT coalesce(jsonb_agg(jsonb_build_object('code',c.code,'name',c.display_name) ORDER BY c.sort_order,c.code),'[]') FROM mbox.menu_categories c WHERE c.tenant_id=area.tenant_id AND c.store_id=area.store_id) AS categories, offer.id, offer.version,
       offer.created_by AS "draftAuthor",offer.name, offer.price_minor AS "priceMinor", offer.gift_points AS "giftPoints",
       offer.status,offer.sale_from::text AS "saleFrom",offer.sale_until::text AS "saleUntil", offer.visible_from::text AS "visibleFrom", offer.visible_until::text AS "visibleUntil"
@@ -102,18 +107,37 @@ export async function saveTicketOffer(tx: ScopedTransaction, activityPublicId: s
       WHERE (t.tenant_id,t.store_id,t.area_id)=(a.tenant_id,a.store_id,a.id) AND t.status='available'))) FOR SHARE`,
     [...scope, input.areaId, input.status])).rows[0]
   if (!area) throw new ActivityOperationsError('所选桌区没有可用的实体桌','TICKET_AREA_UNAVAILABLE',409)
-  const last = (await tx.query<{status:string;created_by:string;version:number;sale_from:string|null;sale_until:string|null;recommend_in_community:boolean}>(`SELECT status,created_by,version,recommend_in_community,sale_from::text,sale_until::text FROM mbox.table_ticket_offers
+  const last = (await tx.query<{status:string;created_by:string;version:number;sale_from:string|null;sale_until:string|null;recommend_in_community:boolean;draft_table_ids:string[]|null}>(`SELECT status,created_by,version,recommend_in_community,sale_from::text,sale_until::text,draft_table_ids FROM mbox.table_ticket_offers
     WHERE tenant_id=$1 AND store_id=$2 AND activity_id=$3 AND area_id=$4 ORDER BY version DESC LIMIT 1`,
     [...scope, activity.id, input.areaId])).rows[0]
   if ((last?.version ?? 0) !== input.expectedVersion) throw new ActivityOperationsError('票档已更新，请刷新后核对','TICKET_VERSION_CHANGED',409)
   if(input.status==='published' && last?.status==='draft' && last.created_by===actor)throw new ActivityOperationsError('请由另一位发布人员复核该票档','TICKET_SELF_REVIEW',409)
+  // Scope must be enforced here, not only by disabled UI controls. The historic
+  // area-wide sales flow remains available in stores not enrolled in this candidate.
+  const rosterConfigured=(await tx.query<{configured:boolean}>(`SELECT EXISTS(
+    SELECT 1 FROM mbox.ticket_table_roster WHERE (tenant_id,store_id)=($1,$2)) AS configured`,scope)).rows[0]?.configured ?? false
+  const draftTableIds=input.draftTableIds ?? last?.draft_table_ids ?? null
+  if (input.status==='published' && (rosterConfigured || draftTableIds!==null))
+    throw new ActivityOperationsError('指定桌台的票档目前只可保存草稿，暂不能开放售票','TICKET_TABLE_SCOPE_DRAFT_ONLY',409)
+  if (input.status==='withdrawn' && input.draftTableIds!==undefined)
+    throw new ActivityOperationsError('下架操作不能同时修改草稿桌台','TICKET_TABLE_SCOPE_INVALID',400)
+  if (input.status==='draft' && (rosterConfigured || draftTableIds!==null)) {
+    if (!draftTableIds?.length || draftTableIds.length>200 || new Set(draftTableIds).size!==draftTableIds.length)
+      throw new ActivityOperationsError('请从本区已核对的桌台中选择至少一桌','TICKET_TABLE_SCOPE_INVALID',400)
+    const eligible=await tx.query(`SELECT t.id FROM mbox.ticket_table_roster r
+      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.id)=(r.tenant_id,r.store_id,r.table_id)
+      WHERE (t.tenant_id,t.store_id,t.area_id)=($1,$2,$3) AND t.status='available'
+        AND t.id=ANY($4::uuid[]) FOR SHARE OF t`,[...scope,input.areaId,draftTableIds])
+    if(eligible.rows.length!==draftTableIds.length)
+      throw new ActivityOperationsError('选中的桌台已不在本区现行名单中，请刷新后重新选择','TICKET_TABLE_SCOPE_STALE',409)
+  }
   const saved = await tx.query<{id:string;version:number;status:string}>(`
     INSERT INTO mbox.table_ticket_offers (tenant_id,store_id,activity_id,area_id,version,name,price_minor,
-      gift_points,status,visible_from,visible_until,created_by,category_code,event_terms_id,sale_from,sale_until,recommend_in_community)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id,version,status`,
+      gift_points,status,visible_from,visible_until,created_by,category_code,event_terms_id,sale_from,sale_until,recommend_in_community,draft_table_ids)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id,version,status`,
     [...scope, activity.id, input.areaId, input.expectedVersion + 1, input.name, input.priceMinor,
       input.giftPoints, input.status, input.visibleFrom, input.visibleUntil, actor,input.categoryCode??null,terms?.id??null,
-      input.saleFrom===undefined?last?.sale_from??null:input.saleFrom,input.saleUntil===undefined?last?.sale_until??null:input.saleUntil, input.recommendInCommunity ?? last?.recommend_in_community ?? false])
+      input.saleFrom===undefined?last?.sale_from??null:input.saleFrom,input.saleUntil===undefined?last?.sale_until??null:input.saleUntil, input.recommendInCommunity ?? last?.recommend_in_community ?? false, input.status==='draft'?draftTableIds:null])
   return saved.rows[0]!
 }
 

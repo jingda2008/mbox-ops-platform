@@ -10,6 +10,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
   it.each(['payment','batch'] as const)('contains independent failures and exposes general payment %s failure', async (failure) => {
     const errors: string[] = []
     const coordinator = new NormalizedBackgroundWorkerCoordinator(scope, {
+      ticketRefundReview: {runBatch:vi.fn(async()=>({submitted:1,exceptions:0}))},
       serviceSla: { runBatch: vi.fn(async () => ({ workerId: 'sla', claimed: 0, processed: [] })) },
       reservationExpiry: {
         runBatch: vi.fn(async () => { throw new Error('reservation worker unavailable') }),
@@ -49,6 +50,7 @@ describe('NormalizedBackgroundWorkerCoordinator', () => {
     const result = await coordinator.runOnce()
 
     expect(result.failures).toEqual(['reservation-expiry','stale-guest-immediate-payment-reconciliation'])
+    expect(result.workers.ticketRefundReview).toEqual({submitted:1,exceptions:0})
     expect(result.workers.serviceSla).not.toBeNull()
     expect(result.workers.reservationExpiry).toBeNull()
     expect(result.workers.staffLoginRateLimitCleanup).toBe(2)

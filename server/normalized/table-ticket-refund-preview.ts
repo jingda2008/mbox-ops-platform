@@ -13,7 +13,7 @@ export async function ticketRefundPreview(tx:ScopedTransaction,reference:string)
     CASE WHEN lot.membership_id=p.membership_id AND lot.status IN('available','ticket_hold') AND lot.expires_at>statement_timestamp()
       THEN lot.remaining_points ELSE 0 END AS recoverable,
     basis.consumed_minor::text AS "consumedMinor",basis.unresolved,
-    f.id AS "caseId",f.status AS "caseStatus",f.refund_id AS "refundId",cash.status AS "cashStatus"
+    f.planned_refund_minor AS "plannedRefundMinor",f.auto_review_error AS "autoReviewError",f.id AS "caseId",f.status AS "caseStatus",f.refund_id AS "refundId",cash.status AS "cashStatus"
     FROM mbox.table_ticket_purchases p JOIN mbox.community_activity_registrations r ON(r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
     JOIN mbox.table_ticket_offers o ON(o.tenant_id,o.store_id,o.id)=(p.tenant_id,p.store_id,p.offer_id)
     JOIN mbox.table_tickets k ON(k.tenant_id,k.store_id,k.registration_id)=(p.tenant_id,p.store_id,p.registration_id)
@@ -38,7 +38,7 @@ export async function ticketRefundPreview(tx:ScopedTransaction,reference:string)
 
 export async function ticketDiningHandoffs(tx:ScopedTransaction){
   return (await tx.query(`WITH pending AS (
-    SELECT f.id AS case_id,c.order_id,o.public_id AS order_no,k.id AS ticket,c.amount_minor AS due,c.merchant_minor,
+    SELECT f.id AS case_id,c.order_id,o.public_id AS order_no,k.id AS ticket,c.amount_minor AS due,c.merchant_minor,f.planned_refund_minor,f.auto_review_error,
       c.consented_at IS NOT NULL AS confirmed,
       pay.id IS NULL OR pay.status IN('failed','closed') AS collectable,
       c.amount_minor=0 OR (coalesce(pay.status='succeeded' AND pay.order_id=c.order_id AND pay.amount_minor=c.amount_minor,false)
@@ -50,15 +50,15 @@ export async function ticketDiningHandoffs(tx:ScopedTransaction){
     LEFT JOIN mbox.payments pay ON(pay.tenant_id,pay.store_id,pay.id)=(c.tenant_id,c.store_id,c.payment_id)
     WHERE f.tenant_id=$1 AND f.store_id=$2 AND f.status='review' AND f.close_intent IS NULL AND c.superseded_at IS NULL
   ), per_case AS (
-    SELECT case_id,ticket,bool_and(confirmed AND paid) AS ready,sum(due+coalesce(merchant_minor,0)) AS compared
+    SELECT case_id,ticket,bool_and(confirmed AND paid) AS ready,bool_or(planned_refund_minor IS NULL) AS manual,bool_or(auto_review_error IS NOT NULL) AS issue,sum(due+coalesce(merchant_minor,0)) AS compared
     FROM pending GROUP BY case_id,ticket
   )
   SELECT p.ticket,p.case_id AS "caseId",CASE WHEN p.collectable THEN 'collect' ELSE 'check_receipt' END AS step,
     p.order_no AS "orderNo",p.due::text AS amount
   FROM pending p WHERE p.confirmed AND p.due>0 AND NOT p.paid
   UNION ALL
-  SELECT c.ticket,c.case_id,'review',NULL,NULL FROM per_case c
+  SELECT c.ticket,c.case_id,CASE WHEN c.issue THEN 'issue' ELSE 'review' END,NULL,NULL FROM per_case c
   CROSS JOIN LATERAL mbox.ticket_refund_basis($1,$2,c.ticket) b
-  WHERE c.ready AND NOT b.unresolved AND b.consumed_minor=c.compared
+  WHERE c.issue OR (c.ready AND c.manual AND NOT b.unresolved AND b.consumed_minor=c.compared)
   ORDER BY "caseId","orderNo"`,[tx.scope.tenantId,tx.scope.storeId])).rows
 }

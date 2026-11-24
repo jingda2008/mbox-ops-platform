@@ -1,3 +1,4 @@
+import {planTicketCashRefund,processTicketRefundReviews} from './table-ticket-auto-review.js'
 import {ticketDiningHandoffs,ticketRefundPreview} from './table-ticket-refund-preview.js'
 import {orderCollectionBalancesCtesSql} from './order-collection-balances-sql.js'
 import {TableSessionRepository} from './table-session-repository.js'
@@ -897,6 +898,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
   it('binds a staff-selected offer to the verified phone and refunds a late payment without issuing tickets',async()=>{
     const offer=(await run(publicTableTickets)).find(o=>o.remaining>0)!
     const colleague=(await admin.query("SELECT id FROM mbox.employees WHERE tenant_id=$1 AND employee_code='AUD'",[scope.tenantId])).rows[0].id
+    await grantFixtureStaffPermissions(admin,scope,[employee],['refund.request'])
     await grantFixtureStaffPermissions(admin,scope,[employee,colleague],['community.activity.verify'])
     const assistance=new ActivityOperationsService(runner,new NormalizedCommandExecutor(runner),protection)
     const send=(actor:string,phone:string,key:string)=>assistance.offerTicketToMember({scope,employeeId:actor,businessDate:'2026-11-23'},offer.id,1,phone,key)
@@ -976,7 +978,17 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const originalTicket = tickets[0].id
       const dayBefore = await ticketFinanceDay(tx,null)
       await tx.query('SAVEPOINT personal_full_ticket')
+      // Bind the normal commands to this fixture transaction so each responsibility scenario can start from the same sale.
+      const transactions:Pick<ScopedPostgresTransactionRunner,'run'>={run:(_scope,handler)=>handler(tx)}
+      const commands=new NormalizedCommandExecutor(transactions)
+      const staff=new ActivityOperationsService(transactions,commands,protection)
+      const context={scope,employeeId:employee,businessDate:dayBefore.day}
+      const [preview]=await ticketRefundPreview(tx,originalTicket)
+      const openKey=randomUUID()
+      const opened=await staff.openStaffTicketRefund(context,originalTicket,'本人原因，按购票条款退500元',openKey,preview!.previewVersion,50000)
+      expect((await staff.openStaffTicketRefund(context,originalTicket,'本人原因，按购票条款退500元',openKey,preview!.previewVersion,50000)).replayed).toBe(true)
       const personal = await requestTicketRefund(tx,sale.id,originalTicket,buyer,'本人原因，依据原菜款申请核定')
+      expect(opened.value.caseId).toBe(personal.caseId)
       expect(personal.consumedMinor).toBe(55000)
       expect((await ticketStatement(tx,originalTicket)).originalDishes).toMatchObject([{orderNo:meal.publicId,name:'550元原价菜',priceMinor:55000,usedMinor:55000}])
       expect(await ticketDiningLines(tx,personal.caseId)).toMatchObject([{priceMinor:55000,usedMinor:55000,review:false}])
@@ -1004,19 +1016,17 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await propose(0,55000,'个人退票，经核定全额由门店承担')
       const zeroBill=await activeBill()
       await tx.query('SAVEPOINT zero_personal_due')
+      await planTicketCashRefund(tx,personal.caseId,employee,50000)
+      expect(await processTicketRefundReviews(tx)).toMatchObject({submitted:0})
       await consentTicketDining(tx,zeroBill,buyer)
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
-      const zeroRefund=await submitTicketCashRefund(tx,personal.caseId,employee,50000,null)
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:1,exceptions:0})
+      const zeroRefund=(await tx.query('SELECT refund_id AS "refundId" FROM mbox.table_ticket_refund_requests WHERE id=$1',[personal.caseId])).rows[0]!
       await confirmedRefund(zeroRefund.refundId)
       expect((await mealPayments()).rows).toEqual([])
       await tx.query('ROLLBACK TO SAVEPOINT zero_personal_due')
 
       const basis='按本场售出条款及原菜品凭证核定，顾客补500元，门店承担50元'
-      // Bind the normal commands to this fixture transaction so each responsibility scenario can start from the same sale.
-      const transactions:Pick<ScopedPostgresTransactionRunner,'run'>={run:(_scope,handler)=>handler(tx)}
-      const commands=new NormalizedCommandExecutor(transactions)
-      const staff=new ActivityOperationsService(transactions,commands,protection)
-      const context={scope,employeeId:employee,businessDate:dayBefore.day}
       const splitKey=randomUUID(), split={customerMinor:50000,merchantMinor:5000}
       expect((await staff.proposeTicketDining(context,personal.caseId,basis,splitKey,split)).value.amountMinor).toBe(50000)
       expect((await staff.proposeTicketDining(context,personal.caseId,basis,splitKey,split)).replayed).toBe(true)
@@ -1025,6 +1035,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       await expect(consentTicketDining(tx,zeroBill,buyer)).rejects.toThrow()
       await expect(consentTicketDining(tx,bill,randomUUID())).rejects.toThrow()
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
+      expect(await processTicketRefundReviews(tx)).toMatchObject({submitted:0})
       expect((await ticketDiningHandoffs(tx)).some(r=>r.caseId===personal.caseId)).toBe(false)
       expect((await consentTicketDining(tx,bill,buyer)).amountMinor).toBe(50000)
       expect((await ticketDiningHandoffs(tx)).filter(r=>r.caseId===personal.caseId)).toMatchObject([{step:'collect',amount:'50000'}])
@@ -1037,15 +1048,52 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const cashCommand={scope,actor:{type:'employee' as const,employeeId:employee},businessDate:dayBefore.day,idempotencyKey:randomUUID(),
         requestFingerprint:randomUUID(),publicId:randomUUID(),orderId:meal.id,provider:'cash' as const,method:'cash' as const,
         evidence:{receiptReference:randomUUID(),collectedByEmployeeId:employee}}
+      expect(await processTicketRefundReviews(tx)).toMatchObject({submitted:0})
       const supplement=(await cashier.recordManual(cashCommand)).value
-      expect((await ticketDiningHandoffs(tx)).filter(r=>r.caseId===personal.caseId)).toMatchObject([{step:'review'}])
+      await expect(submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).rejects.toMatchObject({code:'TICKET_AUTO_REVIEW_PLANNED'})
+      await tx.query('SAVEPOINT merchant_assumes_collected_supplement')
+      const venueCash=await staff.submitTicketRefund(context,personal.caseId,50000,'门店取消，退原票并承担全部550元菜款',randomUUID())
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:0,exceptions:0})
+      await confirmedRefund(venueCash.value.refundId)
+      const returns=(await tx.query<{id:string;amount_minor:string}>("SELECT id,amount_minor FROM mbox.refunds WHERE payment_id=$1 AND status='requested'",[supplement.id])).rows
+      expect(returns).toMatchObject([{amount_minor:'50000'}])
+      const diningBack=returns[0]!.id,repo=new RefundRepository(tx)
+      await repo.approve(diningBack,approver,'独立核对原餐单补款')
+      await repo.beginExecution(diningBack)
+      await repo.completeManualExecution({refundId:diningBack,succeeded:true,receiptReference:'DINING-'+diningBack})
+      await new LoyaltyAccrualRepository(tx).reverseSucceededRefund({orderId:meal.id,paymentId:supplement.id,refundId:diningBack,occurredAt:new Date().toISOString()})
+      expect((await ticketFinanceDay(tx,dayBefore.day)).amounts).toMatchObject({
+        ticketRefund:String(Number(dayBefore.amounts.ticketRefund??0)+50000),
+        merchantDining:String(Number(dayBefore.amounts.merchantDining??0)+55000),
+        diningCash:String(Number(dayBefore.amounts.diningCash??0)+50000),
+        diningRefund:String(Number(dayBefore.amounts.diningRefund??0)+50000),
+        diningRewardReverse:String(Number(dayBefore.amounts.diningRewardReverse??0)-50),
+      })
+      await tx.query('ROLLBACK TO SAVEPOINT merchant_assumes_collected_supplement')
+      await tx.query('SAVEPOINT missing_request_permission')
+      await tx.query('RESET ROLE')
+      await tx.query(`DELETE FROM mbox.employee_roles e USING mbox.role_permission_assignments a,mbox.staff_permission_definitions d
+        WHERE (e.tenant_id,e.store_id,e.employee_id)=($1,$2,$3) AND (a.tenant_id,a.store_id,a.role_id)=(e.tenant_id,e.store_id,e.role_id)
+          AND (d.tenant_id,d.store_id,d.id)=(a.tenant_id,a.store_id,a.permission_id) AND d.code='refund.request'`,[scope.tenantId,scope.storeId,employee])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:0,exceptions:1})
+      expect((await ticketDiningHandoffs(tx)).filter(row=>row.caseId===personal.caseId)).toMatchObject([{step:'issue'}])
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:0,exceptions:0})
+      expect((await mealPayments()).rowCount).toBe(1)
+      await tx.query('ROLLBACK TO SAVEPOINT missing_request_permission')
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:1,exceptions:0})
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:0,exceptions:0})
+      expect((await ticketDiningHandoffs(tx)).filter(r=>r.caseId===personal.caseId)).toEqual([])
       expect(supplement.amountMinor).toBe(50000)
       expect(await mealBalance()).toEqual({amount:'0',effective_minor:'50000'})
       expect((await cashier.recordManual(cashCommand)).replayed).toBe(true)
       await expect(collectDining(meal.id,tx)).rejects.toThrow('no outstanding balance')
       const rewardBeforeRefund=await tx.query('SELECT eligible_amount_minor,awarded_points,awarded_growth FROM mbox.loyalty_order_awards WHERE order_id=$1',[meal.id])
       expect(rewardBeforeRefund.rows).toEqual([{eligible_amount_minor:'50000',awarded_points:50,awarded_growth:500}])
-      const personalCash=await submitTicketCashRefund(tx,personal.caseId,employee,50000,null)
+      const pending=await tx.query(`SELECT r.id AS "refundId",r.status,r.amount_minor,r.requested_by_employee_id,r.approved_by_employee_id,r.provider_snapshot
+        FROM mbox.refunds r JOIN mbox.table_ticket_refund_requests f ON f.refund_id=r.id WHERE f.id=$1`,[personal.caseId])
+      expect(pending.rows).toMatchObject([{status:'requested',amount_minor:'50000',requested_by_employee_id:employee,approved_by_employee_id:null,provider_snapshot:{submittedAfterDiningCollection:true}}])
+      const personalCash=pending.rows[0]!
       await confirmedRefund(personalCash.refundId)
       expect((await submitTicketCashRefund(tx,personal.caseId,employee,50000,null)).refundId).toBe(personalCash.refundId)
       const account=await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE membership_id=$1',[member])
@@ -1082,6 +1130,8 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const merchant = await requestTicketRefund(tx,sale.id,originalTicket,buyer,'门店取消本场演出')
       expect(merchant.consumedMinor).toBe(55000)
       const cash = await submitTicketCashRefund(tx,merchant.caseId,employee,50000,'门店承担本次全部已用赠分菜款550元')
+      expect(await processTicketRefundReviews(tx)).toEqual({submitted:0,exceptions:0})
+      expect((await mealPayments()).rowCount).toBe(0)
       await confirmedRefund(cash.refundId)
       expect((await tx.query('SELECT payment_id,amount_minor,status FROM mbox.refunds WHERE payment_id=$1',[pay.id])).rows)
         .toEqual([{payment_id:pay.id,amount_minor:'50000',status:'succeeded'}])

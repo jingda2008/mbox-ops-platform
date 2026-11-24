@@ -188,6 +188,7 @@ export type NormalizedWorkerName =
   | 'marketing-delivery'
   | 'checkout-coupon-recovery'
   | 'channel-reconciliation'
+  | 'ticket-refund-review'
 
 export interface NormalizedWorkerCycleResult {
   startedAt: string
@@ -228,6 +229,7 @@ export interface NormalizedWorkerCycleResult {
     memberGiftDelivery: MemberGiftDeliveryBatch | null
     officialPointsNotifications?: OfficialPointsBatch | null
     marketingDelivery: MarketingDeliveryBatch | null
+    ticketRefundReview?:{submitted:number;exceptions:number}|null
     channelReconciliation?:ChannelReconciliationBatch|null
     checkoutCouponRecovery:CheckoutCouponRecoveryBatch|null
     nativePush?: NativePushBatch|null
@@ -281,6 +283,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       memberGiftDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MemberGiftDeliveryBatch>}
       officialPointsNotifications?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<OfficialPointsBatch>}
       marketingDelivery?: {runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<MarketingDeliveryBatch>}
+      ticketRefundReview?:{runBatch(scope:Readonly<StoreScope>):Promise<{submitted:number;exceptions:number}>}
       channelReconciliation?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<ChannelReconciliationBatch>}
       checkoutCouponRecovery?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<CheckoutCouponRecoveryBatch>}
       nativePush?:{runBatch(scope:Readonly<StoreScope>,workerId:string):Promise<NativePushBatch>}
@@ -362,7 +365,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       'print-source',
       'native-push',
       'official-points-notifications',
-      'channel-reconciliation',
+      'channel-reconciliation','ticket-refund-review',
     ]
     const executions = await Promise.allSettled([
       this.runWhenDue('service-sla', () => this.workers.serviceSla.runBatch(this.scope, `${this.options.workerId}:service-sla`)),
@@ -504,6 +507,7 @@ export class NormalizedBackgroundWorkerCoordinator {
       this.workers.nativePush===undefined?Promise.resolve(null):this.runWhenDue('native-push',()=>this.workers.nativePush!.runBatch(this.scope,`${this.options.workerId}:native-push`)),
       this.workers.officialPointsNotifications===undefined?Promise.resolve(null):this.runWhenDue('official-points-notifications',()=>this.workers.officialPointsNotifications!.runBatch(this.scope,`${this.options.workerId}:official-points`)),
       this.workers.channelReconciliation===undefined?Promise.resolve(null):this.runWhenDue('channel-reconciliation',()=>this.workers.channelReconciliation!.runBatch(this.scope,`${this.options.workerId}:channel`)),
+      this.workers.ticketRefundReview===undefined?Promise.resolve(null):this.runWhenDue('ticket-refund-review',()=>this.workers.ticketRefundReview!.runBatch(this.scope)),
     ] as const)
 
     const failures: NormalizedWorkerName[] = []
@@ -625,6 +629,7 @@ export class NormalizedBackgroundWorkerCoordinator {
         officialPointsNotifications,
         marketingDelivery,
         channelReconciliation,
+        ticketRefundReview:fulfilledValue(executions[36]),
         checkoutCouponRecovery,
         printSource,
         nativePush,
@@ -698,6 +703,7 @@ const DEFAULT_WORKER_CADENCES: Readonly<Record<NormalizedWorkerName, number>> = 
   'marketing-delivery': 30_000,
   'checkout-coupon-recovery': 60_000,
   'channel-reconciliation': 30_000,
+  'ticket-refund-review': 5000,
   'print-source': 1_000,
   'native-push': 2_000,
 })

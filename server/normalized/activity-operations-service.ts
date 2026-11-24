@@ -1,3 +1,4 @@
+import {planTicketCashRefund} from './table-ticket-auto-review.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import {publicTableTickets} from './table-ticket-purchase.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
@@ -91,13 +92,14 @@ export class ActivityOperationsService {
     })
   }
 
-  proposeTicketDining(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,split?:DiningSplit) {
+  proposeTicketDining(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,split?:DiningSplit,refundAmountMinor?:number) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'refund.approve').execute({
-      scope:context.scope,operationScope:'table_ticket.dining.propose',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,...(split&&{split}),employee:context.employeeId}),
+      scope:context.scope,operationScope:'table_ticket.dining.propose',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,...(split&&{split}),refundAmountMinor,employee:context.employeeId}),
       retainReceipt:true,resultCodec:objectCodec<{caseId:string;amountMinor:number}>(),
     },async tx=>{
       const result=await proposeTicketDining(tx,id,context.employeeId,reason,split)
-      return {result,auditEvents:[audit(context,{action:'table_ticket.dining.proposed',objectType:'table_ticket_refund',objectId:id,afterData:{reason,amountMinor:result.amountMinor,...split}})],outboxMessages:[]}
+      if(refundAmountMinor!==undefined)await planTicketCashRefund(tx,id,context.employeeId,refundAmountMinor,true)
+      return {result,auditEvents:[audit(context,{action:'table_ticket.dining.proposed',objectType:'table_ticket_refund',objectId:id,afterData:{reason,amountMinor:result.amountMinor,...split,...(refundAmountMinor!==undefined && {refundAmountMinor})}})],outboxMessages:[]}
     })
   }
 
@@ -126,9 +128,9 @@ export class ActivityOperationsService {
     })
   }
 
-  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,previewVersion?:string) {
+  openStaffTicketRefund(context:ActivityOperationsStaffContext,id:string,reason:string,key:string,previewVersion?:string,refundAmountMinor?:number) {
     return staffAuthorizedCommands(this.commands,context.employeeId,'refund.request').execute({
-      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId,previewVersion}),
+      scope:context.scope,operationScope:'table_ticket.refund.open',idempotencyKey:key,requestFingerprint:fingerprint({id,reason,employee:context.employeeId,previewVersion,refundAmountMinor}),
       retainReceipt:true,resultCodec:objectCodec<{caseId:string;status:string}>(),
     },async tx=>{
       const identity=(await tx.query<{registration_id:string;customer_id:string}>(`SELECT k.registration_id,r.customer_id FROM mbox.table_tickets k
@@ -136,7 +138,8 @@ export class ActivityOperationsService {
         WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3`,[context.scope.tenantId,context.scope.storeId,id])).rows[0]
       if(!identity)throw new ActivityOperationsError('原票不存在','TICKET_NOT_FOUND',404)
       const result=await requestTicketRefund(tx,identity.registration_id,id,identity.customer_id,reason,previewVersion)
-      return {result,auditEvents:[audit(context,{action:'table_ticket.refund.opened',objectType:'table_ticket',objectId:id,afterData:{reason,caseId:result.caseId}})],outboxMessages:[]}
+      if(refundAmountMinor!==undefined && result.status==='review')await planTicketCashRefund(tx,result.caseId,context.employeeId,refundAmountMinor)
+      return {result,auditEvents:[audit(context,{action:'table_ticket.refund.opened',objectType:'table_ticket',objectId:id,afterData:{reason,caseId:result.caseId,...(refundAmountMinor!==undefined && {refundAmountMinor})}})],outboxMessages:[]}
     })
   }
 

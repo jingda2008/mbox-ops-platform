@@ -196,7 +196,7 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     // The partial-liability form sends the same minor units checked by the database integration test.
     await page.route('**/api/staff/activity-operations/*/ticket-reception',route=>route.fulfill({json:{data:{tables:[],orders:[{
       id:'test-ticket',orderId:'test-order',name:'整桌票',ordinal:1,priceMinor:50000,consumedMinor:'55000',
-      refundCase:'test-case',refundStatus:'review',arrived:0,contactStatus:'onsite',showEnded:true,
+      refundCase:'test-case',refundStatus:'review',plannedRefundMinor:50000,arrived:0,contactStatus:'onsite',showEnded:true,
     }]}}}))
     const submitted:unknown[]=[]
     await page.route('**/table-ticket-refunds/test-case/dining',route=>{
@@ -252,4 +252,32 @@ test('运营在原场次上架桌票，公共菜单读回票价、赠分、预�
     await exited
     await rm(directory,{recursive:true,force:true})
   }
+})
+
+test('收银在原案核定票款，收齐后的独立复核状态自动显示',async({page})=>{
+  const ticket='7ea70994-95da-47d6-bcdb-57894a6dbeef'
+  const row={id:ticket,ordinal:1,quantity:1,orderNo:'TT500',name:'A 区整桌票',memberNo:'M001',maskedPhone:'****0001',priceMinor:50000,
+    giftPoints:550,recoverable:0,consumedMinor:'55000',refundSchedule:'开演前全额退票',refundLimit:50000,previewVersion:'a'.repeat(64),
+    caseId:null as string|null,caseStatus:null as string|null,plannedRefundMinor:null as number|null,refundId:null as string|null,cashStatus:null as string|null}
+  let manualSubmissions=0
+  await page.route('**/api/staff/activity-operations/ticket-refund-preview?*',route=>route.fulfill({json:{data:[row]}}))
+  await page.route('**/api/staff/activity-operations/table-tickets/*/refund-request',route=>{
+    expect(route.request().postDataJSON()).toMatchObject({refundAmountMinor:50000})
+    Object.assign(row,{caseId:'original-case',caseStatus:'review',plannedRefundMinor:50000})
+    return route.fulfill({json:{data:{caseId:row.caseId}}})
+  })
+  await page.route('**/api/staff/activity-operations/table-ticket-refunds/*/submit',route=>{manualSubmissions++;return route.fulfill({status:409})})
+  await login(page)
+  await page.goto('/staff/payments')
+  await page.getByLabel('查找收银订单').fill(ticket)
+  await page.getByRole('button',{name:'查找',exact:true}).click()
+  const desk=page.getByRole('region',{name:'整桌门票退票办理'})
+  await desk.getByLabel('办理依据').fill('依据原单条款全额退票')
+  await desk.getByLabel('按原条款核定退票款（元）').fill('500')
+  await desk.getByRole('button',{name:'受理本票退票'}).click()
+  await expect(desk.getByText(/收齐后自动提交复核/)).toBeVisible()
+  await expect(desk.getByRole('button',{name:'提交原路退款复核'})).toHaveCount(0)
+  Object.assign(row,{refundId:'original-refund',cashStatus:'requested',caseStatus:'requested'})
+  await expect(desk.getByText(/已提交，等待独立复核/)).toBeVisible({timeout:15000})
+  expect(manualSubmissions).toBe(0)
 })

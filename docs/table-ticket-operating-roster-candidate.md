@@ -40,3 +40,16 @@
 ### 只读视图的分类候选（不能导入）
 
 `scripts/build-ticket-table-roster-candidate.mjs` 可以把同一快照中的「配置并实际读回」「有日期的营业操作」「门店确认在用」「仅历史保留」分组做全覆盖、无重复核对，输出按桌区的独立候选。它不生成稳定 ID 或可导入清单。实际门店证据与候选应受控保管，不提交仓库。命令的两个参数为版本化配置和已分类的只读视图 JSON；视图输入须给出 `profileVersion`、`sources`（`liveView`、`ownerConfirmation`、`historicRetention`）、`liveRows`（`[{code,areaLabel}]`）、`datedOperations`、`ownerConfirmed`、`historicRetained`。单测：`node --test scripts/build-ticket-table-roster-candidate.test.mjs`。如果区域编码仅从同名配置映射，仍要用实际授权的同范围快照回查。
+
+### 从隔离数据库导出可核对快照
+
+仅在已授权的隔离数据库、安装 migration 368、且账号对指定门店有完整只读权限时运行。配置连接使用本机安全配置，不把密码写进命令、日志或输出。以最小权限账号运行，切勿授予额外读取权限来绕开门店访问控制。导出有且仅有一个名单对照兼容的 JSON，不静默过滤停用或归档桌；数据仅本地受控保存。
+
+```sh
+(umask 077; psql -X -qAt -v tenant_id="$TENANT_ID" -v store_id="$STORE_ID" \
+    -f scripts/export-ticket-table-roster-snapshot.sql > scoped-master-snapshot.tmp &&
+  mv scoped-master-snapshot.tmp scoped-master-snapshot.json)
+node scripts/plan-ticket-table-roster.mjs confirmed-roster.json scoped-master-snapshot.json
+```
+
+验收：A/B 两门店各建相同桌号不同身份，并在 A 店预置一条票务名单；A 的导出只能看到 A 的桌台和票务 ID，B 同样隔离。交叉配对租户和门店须非零退出且无 JSON。A 的停用桌、停用区域分别应让对照失败；同时修改区域与名单只允许在新一轮快照中共同出现。独立验证只读账号不能修改表；命令本身不执行导入、部署或开售。

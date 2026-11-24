@@ -70,3 +70,13 @@ echo '{"migration":{"count":321}}' > "${contract_dir}/release-manifest.json"
 if release_assert_application_rollback_safe "${contract_dir}" 320; then exit 1; fi
 jq -e '.contractBoundary==321 and .targetSchema==320 and .status=="blocked"' \
   "${contract_dir}/application-contract-rollback-guard.json" >/dev/null
+
+# A confirmed recollection on an order earning one point per 20 yuan must
+# never run on a worker that restores one point per 10 yuan.
+test "$(release_contract_boundary_between 367 371)" = 0
+test "$(release_contract_boundary_between 367 372)" = 372
+test "$(release_contract_boundary_between 372 373)" = 0
+echo '{"migration":{"count":372}}' > "${contract_dir}/release-manifest.json"
+if release_assert_application_rollback_safe "${contract_dir}" 367; then exit 1; fi
+jq -e '.contractBoundary==372 and .targetSchema==367 and .writerDrainVerified and .status=="blocked"' \
+  "${contract_dir}/application-contract-rollback-guard.json" >/dev/null

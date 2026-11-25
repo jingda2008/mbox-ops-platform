@@ -1,3 +1,7 @@
+import { DuplicateMembershipReviews } from './duplicate-membership-review.js'
+import { createActivityContactProtectionKeyring } from './personal-contact-protection.js'
+import { CustomerRepository } from './customer-repository.js'
+import { loadGuestCustomerOrderHistory } from './guest-table-orders-query.js'
 import { normalizedOperationsApiPlugin } from './normalized-operations-api.js'
 import { TableSessionRepository, TableSessionCommandService } from './table-session-repository.js'
 import { ServiceTaskRepository } from './service-task-repository.js'
@@ -159,6 +163,90 @@ integration('channel distribution real PostgreSQL authority', () => {
     const ids=(await admin.query('SELECT public_id FROM mbox.table_session_customer_participations WHERE table_session_id=$1 AND customer_id=ANY($2::uuid[]) AND left_at IS NULL',[source,customers])).rows.map(r=>r.public_id)
     return{method:'POST' as const,url:`/table-management/sessions/${source}/${kind==='whole_table_transfer'?'transfer':'participant-movements'}`,headers:{'idempotency-key':randomUUID()},payload:kind==='whole_table_transfer'?{targetTableId:targetTable,expectedSourceTableId:row.table_id,expectedLocationVersion:Number(row.location_version)}:{movementHistoryConfirmed:true,movementGuard,movementKind:kind,targetTableId:targetTable,targetTableSessionId:target,movedGuestCount:count,participantPublicIds:ids,reason:'渠道转桌联动隔离验证'}}
   }
+  it('independently approves an old card into the later card and keeps its WeChat, original gift and order history',async()=>{
+    const source=await customer(), keeper=await customer(false), reviewer=randomUUID()
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($3,$1,$2,'DUP_REVIEW','独立复核')",[...args,reviewer])
+    await grantFixtureStaffPermissions(admin,scope,[employee],['customer.membership.recovery.verify','customer.membership.merge.approve'])
+    await grantFixtureStaffPermissions(admin,scope,[reviewer],['customer.membership.recovery.verify','customer.membership.merge.approve'])
+    const keys=createActivityContactProtectionKeyring(null,'duplicate-membership-test-keyring')
+    const phone=keys.protectPhone('+8613800004321')
+    const numbers=['MBX-DUP-OLD1','MBX-DUP-NEW2']
+    for (const [i,id] of [source,keeper].entries()) {
+      await runner.run(scope,async tx=>{
+        await new CustomerExperienceRepository(tx).enrollMembership(id,numbers[i])
+        await tx.query(`INSERT INTO mbox.customer_verified_contacts(tenant_id,store_id,customer_id,contact_type,
+          contact_hash,encrypted_value,encryption_key_version,contact_encryption_key_id,masked_value,verification_source,
+          provider_reference_sha256,verified_by_customer_id,verified_at)
+          VALUES($1,$2,$3,'phone',$4,$5,2,$6,$7,'wechat_phone_authorization',$8,$3,clock_timestamp())`,
+        [...args,id,phone.contactHash,phone.encryptedValue,phone.encryptionKeyId,phone.maskedValue,createHash('sha256').update(id).digest('hex')])
+      })
+    }
+    const session=await table([source])
+    for(let i=0;i<2;i++)await admin.query(`WITH o AS (INSERT INTO mbox.orders(tenant_id,store_id,table_session_id,public_id,channel,status,
+      created_by_customer_id,business_date,cancelled_at) VALUES($1,$2,$3,$4,'guest_qr','cancelled',$5,'2026-11-12',clock_timestamp()) RETURNING id)
+      INSERT INTO mbox.order_items(tenant_id,store_id,order_id,product_id,quantity,unit_price_minor,total_amount_minor,
+        fulfillment_station,product_snapshot,status) SELECT $1,$2,id,$6,1,0,0,'bar','{"name":"演练菜品"}','cancelled' FROM o`,
+      [...args,session,randomUUID(),source,product])
+    const registrationContact = keys.protect('13800004321')
+    const registrations = [randomUUID(), randomUUID()]
+    for (const [index, registration] of registrations.entries()) {
+      const paid = index === 0
+      await admin.query(`WITH event AS (
+        INSERT INTO mbox.community_activities(tenant_id,store_id,public_id,activity_kind,title,summary,
+          starts_at,ends_at,assembly_location,capacity,created_by_employee_id)
+        VALUES ($1,$2,$3,'member_night','已结束的演出','现场演出',now()-interval '3 days',
+          now()-interval '2 days','演出厅',10,$4) RETURNING id)
+        INSERT INTO mbox.community_activity_registrations(tenant_id,store_id,public_id,activity_id,customer_id,
+          status,payment_choice,payment_status,fee_amount_minor,paid_amount_minor,currency,idempotency_key,
+          requested_payment_choice,requested_amount_due_minor,requested_payment_method,acknowledged_safety_policy_version,
+          acknowledged_refund_policy_version,terms_acknowledged_at,terms_acknowledgement_source,contact_snapshot)
+        SELECT $1,$2,$3,id,$5,$6,$7,$8,$9,$9,'CNY',$3,$7,$9,$10,'safety-v1','refund-v1',now(),'staff_assisted',$11::jsonb FROM event`,
+        [...args, registration, employee, source, paid ? 'confirmed':'cancelled', paid ? 'full':'none',
+          paid ? 'paid':'not_required', paid ? 5000:0, paid ? 'jsapi':null,
+          JSON.stringify({contactType:'phone',contactHash:registrationContact.hash,encryptedContact:registrationContact.encryptedBase64,
+            encryptionKeyId:registrationContact.keyId,maskedContact:registrationContact.masked,source:'mini_program'})])
+    }
+    const gift=await giftProduct(1), b=await batch({minimumMinor:0,offer:{kind:'gift',productId:gift.pid,quantity:1,costMinor:100}})
+    const claim=await issue(b.code,source)
+    const memberIds=(await admin.query('SELECT id FROM mbox.customer_memberships WHERE store_id=$1 AND customer_id=ANY($2::uuid[]) ORDER BY joined_at',[scope.storeId,[source,keeper]])).rows.map(r=>r.id)
+    const service=new DuplicateMembershipReviews(runner,keys,[memberIds[0],memberIds[1]])
+    const maker={scope,employeeId:employee,businessDate:'2026-11-12'}, checker={...maker,employeeId:reviewer}
+    const reason='顾客已确认两个会员号属于本人并指定保留新号', key=randomUUID()
+    const orders=(id:string)=>runner.run(scope,tx=>loadGuestCustomerOrderHistory(tx,id))
+    const originalOrders=(await orders(source)).map(o=>o.publicId).sort()
+    expect(originalOrders).toHaveLength(2)
+    expect(await service.list(maker)).toMatchObject({status:'new',sourceSuffix:'OLD1',keeperSuffix:'NEW2'})
+    const {id}=await service.request(maker,reason,key)
+    expect((await service.request(maker,reason,key)).id).toBe(id)
+    await expect(service.decide(maker,id,true,'自行审批')).rejects.toThrow('另一位')
+    expect((await runner.run(scope,tx=>new ChannelDistributionRepository(tx).wallet(keeper)))).toHaveLength(0)
+    await admin.query('UPDATE mbox.loyalty_accounts SET available_points=10 WHERE customer_id=$1',[source])
+    await expect(service.decide(checker,id,true,'重新核对')).rejects.toThrow('积分')
+    await admin.query('UPDATE mbox.loyalty_accounts SET available_points=0 WHERE customer_id=$1',[source])
+    await admin.query("UPDATE mbox.channel_claims SET use_until_override=now()-interval '1 day' WHERE id=$1",[claim.claimId])
+    await expect(service.decide(checker,id,true,'券到期后重新核对')).rejects.toThrow('已撤销本次修改')
+    expect(await service.list(maker)).toMatchObject({id,status:'pending'})
+    const oldCard = await runner.run(scope,tx=>new CustomerExperienceRepository(tx).findMembership(source))
+    expect(oldCard?.id).toBe(memberIds[0])
+    await admin.query('UPDATE mbox.channel_claims SET use_until_override=NULL WHERE id=$1',[claim.claimId])
+    for(let i=0;i<2;i++)expect(await service.decide(checker,id,true,'已独立核对两户与原券')).toEqual({status:'approved'})
+    const after=await runner.run(scope,async tx=>{
+      const owner=await new CustomerRepository(tx).findByIdentity('wechat',createHash('sha256').update(source).digest('hex'))
+      return {owner:owner?.id,member:(await new CustomerExperienceRepository(tx).findMembership(owner!.id))?.member_no,
+        wallet:await new ChannelDistributionRepository(tx).wallet(owner!.id)}
+    })
+    expect(after).toMatchObject({owner:keeper,member:numbers[1],wallet:[{id:claim.claimId,status:'available'}]})
+    expect((await orders(keeper)).map(o=>o.publicId).sort()).toEqual(originalOrders)
+    const registrationDetails = (publicId:string) => runner.run(scope,tx=>
+      new CustomerExperienceRepository(tx,true).publicActivityRegistrations(keeper,{id:publicId}))
+    expect(await registrationDetails(registrations[0]!)).toMatchObject([
+      {publicId:registrations[0],status:'confirmed',paymentStatus:'paid',paidAmountMinor:5000}])
+    expect(await registrationDetails(registrations[1]!)).toMatchObject([
+      {publicId:registrations[1],status:'cancelled',paymentStatus:'not_required',paidAmountMinor:0}])
+    expect(await activate(claim.claimId, keeper, session)).toMatchObject({claimId:claim.claimId,status:'active'})
+    expect((await admin.query('SELECT customer_id FROM mbox.channel_claims WHERE id=$1',[claim.claimId])).rows[0].customer_id).toBe(source)
+  })
+
   it('shows the original gift coupon in the WeChat wallet after reclaiming a unique historical membership', async () => {
     const owner = await customer(), visitor = await customer()
     const phones = createMembershipRecoveryPhoneProtector('channel-legacy-member-phone-fixture')

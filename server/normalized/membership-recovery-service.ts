@@ -690,7 +690,7 @@ export function membershipPhoneReviewRequired() {
   )
 }
 
-export async function lockMembershipPhone(transaction: ScopedTransaction, phone: ProtectedRecoveryPhone) {
+export async function lockMembershipPhone(transaction: ScopedTransaction, phone: Pick<ProtectedRecoveryPhone, 'matchHashes'>) {
   for (const digest of [...new Set(phone.matchHashes)].sort()) {
     await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
       `${transaction.scope.tenantId}:${transaction.scope.storeId}:membership-phone:${digest}`,
@@ -1501,7 +1501,7 @@ async function canonicalCustomerFamily(
   return { canonicalCustomerId, customerIds: result.rows.map((row) => row.id) }
 }
 
-async function revokeVerifiedContact(
+export async function revokeVerifiedContact(
   transaction: ScopedTransaction,
   contactId: string,
   input: Readonly<{

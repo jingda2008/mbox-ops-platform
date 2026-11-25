@@ -1,3 +1,4 @@
+import { DuplicateMembershipPanel } from './DuplicateMembershipPanel'
 import {ManualPointsPanel} from './ManualPointsPanel'
 import {OrderFinancialRecoveryPanel} from './OrderFinancialRecoveryPanel'
 import {openMembershipConfiguration} from './membership-workflow'
@@ -651,6 +652,7 @@ function MembershipRecoveryPanel({ api, auth }: { api: NormalizedApiClient; auth
 
   return <section className="staff-module-summary membership-recovery-panel">
     <div>
+      <DuplicateMembershipPanel api={api} auth={auth} />
       <strong>历史会员找回与合并</strong>
       <small>顾客手机号仅用于本次核验；多候选必须人工选择，核验人与复核人不能是同一人。</small>
       {notice && <p className="staff-module-notice" role="status">{notice}</p>}

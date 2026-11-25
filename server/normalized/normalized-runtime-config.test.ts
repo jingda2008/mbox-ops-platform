@@ -15,6 +15,15 @@ const base = {
 }
 
 describe('loadNormalizedRuntimeConfig', () => {
+  it('limits duplicate membership review to two distinct privately configured row IDs', () => {
+    const ids = [base.MBOX_TENANT_ID, base.MBOX_STORE_ID]
+    const config = (pair: string) => loadNormalizedRuntimeConfig({...base, MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR:pair})
+    expect(loadNormalizedRuntimeConfig(base).duplicateMembershipReviewPair).toBeUndefined()
+    expect(config(ids.join(',')).duplicateMembershipReviewPair).toEqual(ids)
+    for (const invalid of [ids[0]!, ids.concat(ids[0]!).join(','), [ids[0],ids[0]].join(','), 'old,new']) {
+      expect(() => config(invalid)).toThrow(/MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR/)
+    }
+  })
   it('keeps reception creation off until explicitly enabled and rejects malformed rollout values', () => {
     expect(loadNormalizedRuntimeConfig(base).reservationReceptionCreateEnabled).toBe(false)
     for (const [value, expected] of [['false', false], ['true', true]] as const) {

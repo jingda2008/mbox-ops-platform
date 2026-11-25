@@ -1,3 +1,4 @@
+import type { DuplicateMembershipReviews } from './duplicate-membership-review.js'
 import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
 import {ReservationConflictError} from './reservation-repository.js'
@@ -98,6 +99,7 @@ interface CustomerExperienceApiOptions {
     scope: Readonly<StoreScope>, customerId: string,
   ) => Promise<boolean>
   notificationConsentPolicy?: Readonly<{ serviceTemplateId: string; policyVersion: string }> | null
+  duplicateReviews?: DuplicateMembershipReviews
   membershipRecovery?: MembershipRecoveryService
   recoveryPhoneAuthorization?: MembershipRecoveryPhoneAuthorizationPort
   membershipTerms?: MembershipTermsService
@@ -1717,6 +1719,33 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
     })
     return reply.send({ data: result.value, meta: { replayed: result.replayed } })
   }))
+
+  const duplicates = options.duplicateReviews
+  if (duplicates) {
+    const path = '/staff/membership-recovery/duplicates'
+    app.get(path, async (request,reply) => handle(reply, async () => {
+      const ctx = await staffContextWithAnyPermission(options,request,[
+        'customer.membership.recovery.verify','customer.membership.merge.approve',
+      ])
+      return reply.send({data:await duplicates.list(ctx)})
+    }))
+    app.post(path, async (request,reply) => handle(reply, async () => {
+      const ctx = await staffContextWithPermission(options,request,'customer.membership.recovery.verify')
+      const body = objectBody(request.body)
+      const data = await duplicates.request(ctx,
+        text(body.reason,'本人核验依据',2,500),idempotencyKey(request))
+      return reply.code(201).send({data})
+    }))
+    for (const action of ['approve','reject'] as const) {
+      app.post<{Params:{id:string}}>(path+'/:id/'+action, async(request,reply) => handle(reply,async()=>{
+        const ctx = await staffContextWithPermission(options,request,'customer.membership.merge.approve')
+        if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(request.params.id))
+          throw new CustomerExperienceRequestError('并户申请编号无效')
+        const body = objectBody(request.body)
+        return reply.send({data:await duplicates.decide(ctx,request.params.id,action==='approve',text(body.reason,'复核说明',2,500))})
+      }))
+    }
+  }
 
   app.post('/staff/membership-recovery/verified-contacts', async (request, reply) => handle(reply, async () => {
     const context = await staffContextWithPermission(

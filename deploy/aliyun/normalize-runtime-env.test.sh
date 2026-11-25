@@ -140,6 +140,20 @@ for tier in validation production; do
 done
 done
 
+# The recovery case is private and opt-in. Preserve both row IDs in their original order.
+review_key=MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR
+review_pair=11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222
+for tier in validation production; do
+  cp "${postar_env_file}" "${env_file}"
+  "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+  if grep -q "^${review_key}=" "${env_file}"; then exit 1; fi
+  printf '%s=%s\n' "${review_key}" "${review_pair}" >> "${env_file}"
+  for pass in 1 2; do
+    "${root}/deploy/aliyun/normalize-runtime-env.sh" "${env_file}" "${tier}"
+    test "$(grep -Fxc "${review_key}=${review_pair}" "${env_file}")" = 1
+  done
+done
+
 # Preserve the already deployed service-account subscribe configuration.
 for tier in validation production; do
   cp "${postar_env_file}" "${env_file}"

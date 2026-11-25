@@ -1113,7 +1113,7 @@ integration('channel distribution real PostgreSQL authority', () => {
     const {liveMiniHarness}=createRequire(import.meta.url)('../../scripts/miniprogram-live-contract-harness.mjs')
     const cid=await customer(),session=await table([cid]),b=await batch({minimumMinor:0,observationDays:0,allowStacking:true,visitDiscountCapMinor:3000,offer:{kind:'discount',discountBps:1000,maximumMinor:3000}})
     await admin.query("INSERT INTO mbox.table_session_customers(tenant_id,store_id,table_session_id,customer_id,relationship) VALUES($1,$2,$3,$4,'primary')",[...args,session,cid])
-    const actorRef=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:cid})
+    let actorRef=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:cid})
     const guest=Fastify()
     await guest.register(channelDistributionApiPlugin,{prefix:'/api',transactions:runner,commands:new NormalizedCommandExecutor(runner),
       resolveSelfContext:async()=>({scope,customerId:cid,tableSessionId:null,businessDate:'2026-11-12',actorRef:`customer:${cid}`}),
@@ -1172,17 +1172,38 @@ integration('channel distribution real PostgreSQL authority', () => {
       const reconcile=runner.run(scope,tx=>new ChannelFinanceRepository(tx).reconcile(visit))
       // Prove a real lock wait, rather than relying on request timing or sleep.
       await vi.waitFor(async()=>expect((await admin.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked',[pid])).rows[0].blocked).toBe(true))
-      const movement=app.inject(await moveRequest(session,await emptyMovementTable(),'whole_table_transfer'))
+      const movementRequest = await moveRequest(session,await emptyMovementTable(),'whole_table_transfer')
+      const moveTable = async () => {
+        const response = await app.inject(movementRequest)
+        expect(response.statusCode,response.body).toBe(200)
+      }
+      const recover = () => page.recoverCoupon({currentTarget:{dataset:{id:claimId}}})
       const checkout=Promise.allSettled([consumePrice(session,staleQuote.id),consumePrice(session,staleQuote.id)])
-      const recovery=page.recoverCoupon({currentTarget:{dataset:{id:claimId}}})
+      // Whole-table movement revokes the old scan. Exercise both commit orders deterministically.
+      const moveFirst = fault === 'receipt-truncated'
+      const firstOperation = moveFirst ? moveTable() : recover()
       await refundConnection.query('COMMIT')
       expect(await reconcile).toMatchObject({basis:0,target:0})
-      const moved=await movement;expect(moved.statusCode,moved.body).toBe(200)
+      await firstOperation
       expect((await checkout).map(r=>r.status)).toEqual(['rejected','rejected'])
-      await recovery
+      if (moveFirst) {
+        await recover()
+        expect(page.data.error).toBe('请使用本人优惠券并确认当前桌次')
+        expect([...client.storage.keys()].filter((k:any)=>k.startsWith('mbox.command.v2:'))).toHaveLength(1)
+        actorRef=await seedActiveGuestTableAuthority(admin,{...scope,tableSessionId:session,customerId:cid})
+        const newTable = await admin.query('SELECT t.code FROM mbox.table_sessions s JOIN mbox.tables t ON t.id=s.table_id WHERE s.id=$1',[session])
+        activeTable!.code = newTable.rows[0].code
+        await recover()
+      } else {
+        await moveTable()
+      }
       expect(page.data.error).toBe('');expect(page.data.coupons[0].status).toBe('fulfilled')
       const writes=[...firstCalls,...client.calls].filter((c:any)=>c.path==='/api/guest/channel/activate')
-      expect(writes).toHaveLength(2);expect(writes[1].headers['idempotency-key']).toBe(writes[0].headers['idempotency-key']);expect(writes[1].headers['x-channel-recovery']).toBe('1')
+      expect(writes).toHaveLength(moveFirst ? 3 : 2)
+      for (const replay of writes.slice(1)) {
+        expect(replay.headers['idempotency-key']).toBe(writes[0].headers['idempotency-key'])
+        expect(replay.headers['x-channel-recovery']).toBe('1')
+      }
       expect([...client.storage.keys()].filter((k:any)=>k.startsWith('mbox.command.v2:'))).toHaveLength(0)
       expect((await admin.query('SELECT count(*)::int AS n FROM mbox.orders WHERE table_session_id=$1',[session])).rows[0].n).toBe(1)
       expect((await admin.query('SELECT count(*)::int AS n FROM mbox.channel_claims WHERE batch_id=$1',[b.id])).rows[0].n).toBe(1)

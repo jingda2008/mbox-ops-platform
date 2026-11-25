@@ -48,7 +48,7 @@ describe('loadGuestTableOrders', () => {
       }],
     }])
     expect(capturedValues).toEqual([tenantId, storeId, tableSessionId, customerId, null])
-    expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id = $4::uuid, false)")
+    expect(capturedSql).toContain("COALESCE(ordering.created_by_customer_id IN (SELECT id FROM family), false)")
     expect(capturedSql).toContain("payment.status IN ('succeeded','partially_refunded','refunded')")
     expect(capturedSql).toContain("mbox.order_collection_due_amount_for_mode(ordering.tenant_id,ordering.store_id,ordering.id,true)")
     expect(capturedSql).not.toContain("THEN 'staff_collecting'")

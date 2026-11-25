@@ -77,6 +77,7 @@ export interface NormalizedRuntimeConfig {
   wechatServiceAccountSubscribe?: WechatServiceAccountSubscribeConfig | null
   wechatServiceAccountCallback?: NormalizedWechatServiceAccountCallbackRuntimeConfig | null
   alipayPhone: NormalizedAlipayPhoneRuntimeConfig | null
+  duplicateMembershipReviewPair?: readonly [string,string]
   personalContactProtection?: NormalizedPersonalContactRuntimeConfig | null
   voucher?: GroupVoucherRuntimeConfig
   guestPaymentMode: GuestCheckoutPaymentMode
@@ -151,6 +152,14 @@ export function loadNormalizedRuntimeConfig(
   const wechatServiceAccountCallback = readWechatServiceAccountCallback(environment, errors)
   const alipayPhone = readAlipayPhone(environment, errors)
   const voucher = readVoucher(environment, deploymentTier, errors)
+  // Only a pair explicitly designated in the store's private runtime configuration is actionable.
+  const reviewPair = environment.MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR?.trim()
+  let duplicateMembershipReviewPair: [string,string] | undefined
+  if (reviewPair) {
+    const ids = reviewPair.split(',').map(id => requiredUuid(id.trim(), 'MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR', errors).toLowerCase())
+    if (ids.length !== 2 || ids[0] === ids[1]) errors.push('MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR')
+    else duplicateMembershipReviewPair = [ids[0]!,ids[1]!]
+  }
   const personalContactProtection = readPersonalContactProtection(
     environment,commercialProduction,errors,
   )
@@ -264,6 +273,7 @@ export function loadNormalizedRuntimeConfig(
     wechatServiceAccountSubscribe,
     alipayPhone,
     voucher,
+    ...(duplicateMembershipReviewPair ? { duplicateMembershipReviewPair } : {}),
     personalContactProtection,
     guestPaymentMode,
     inventoryEnforcementMode,

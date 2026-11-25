@@ -201,7 +201,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
     SELECT ordering.public_id, ordering.original_table_code, ordering.business_date::text, ordering.round_number,
       ordering.channel, ordering.status AS order_status,
       CASE WHEN $3::uuid IS NULL THEN 'private' ELSE 'shared' END AS visibility,
-      COALESCE(ordering.created_by_customer_id = $4::uuid, false) AS is_mine,
+      COALESCE(ordering.created_by_customer_id IN (SELECT id FROM family), false) AS is_mine,
       ordering.created_at::text AS order_created_at,
       ordering.paid_at::text,ordering.total_amount_minor::text,
       ordering.subtotal_amount_minor::text,ordering.discount_amount_minor::text,

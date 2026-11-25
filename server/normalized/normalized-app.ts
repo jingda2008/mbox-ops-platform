@@ -1,3 +1,4 @@
+import { DuplicateMembershipReviews } from './duplicate-membership-review.js'
 import {TablePrepaymentRepository} from './table-prepayment-repository.js'
 import { memberReportApiPlugin } from './member-report-api.js'
 import { createGiftOrderPort } from './gift-order-fulfillment.js'
@@ -1140,6 +1141,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
           onlinePayments.isGuestJsapiReady(currentScope, customerId)
         ),
         notificationConsentPolicy: options.config.wechatNotification,
+        duplicateReviews: new DuplicateMembershipReviews(transactions,activityContactProtection,options.config.duplicateMembershipReviewPair ?? []),
         membershipRecovery,
         membershipTerms,
         ...(membershipEnrollment === undefined ? {} : { membershipEnrollment }),

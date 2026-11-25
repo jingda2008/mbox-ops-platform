@@ -87,6 +87,7 @@ const CODE_MESSAGES = Object.freeze({
   MEMBERSHIP_RECOVERY_PHONE_NOT_CONFIGURED: '会员手机号校验暂时不可用，请稍后重试或联系门店',
   MEMBERSHIP_RECOVERY_NOT_CONFIGURED: '历史会员找回尚未启用，请联系门店协助',
   PHONE_AUTHORIZATION_REPLAY_REJECTED: '这次手机号授权已经使用过。请重新点一次授权；如果这是原来的会员，请使用「找回原会员」',
+  MEMBERSHIP_PHONE_REVIEW_REQUIRED: '会员资料需要核对，请联系门店并出示原会员号。券和积分保留在原账户。',
   MEMBERSHIP_PHONE_AUTHORIZATION_CONFLICT: '这个手机号已经绑定了其他会员。请使用「找回原会员」完成登录，本次没有重复开卡',
   CUSTOMER_EXPERIENCE_FAILED: '会员服务暂时没有接上，请稍后重试',
   ROUTE_NOT_FOUND: '会员服务暂时不可用，请稍后重试或联系门店',

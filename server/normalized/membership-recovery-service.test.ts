@@ -1,3 +1,4 @@
+import { seedHistoricalDuplicateContact } from './historical-member-contact.test-helper.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
@@ -158,16 +159,17 @@ integration('membership recovery and preserved merge facts', () => {
   })
 
   it('never auto-selects multiple matches and enforces selector/checker separation', async () => {
+    const phone = '+8613812345679'
     await service.recordStaffVerifiedContact(staff(id.verifier), {
       memberNo: 'MBXHISTORY0002', e164Phone: phone,
-      reason: '第二个同手机号历史账户需要人工区分',
-      idempotencyKey: 'legacy-contact-verify-0002',
+      reason: '原会员的已核实联系方式', idempotencyKey: 'legacy-contact-verify-0002',
     })
-    await service.recordStaffVerifiedContact(staff(id.verifier), {
+    await expect(service.recordStaffVerifiedContact(staff(id.verifier), {
       memberNo: 'MBXHISTORY0003', e164Phone: phone,
-      reason: '第三个同手机号历史账户需要人工区分',
-      idempotencyKey: 'legacy-contact-verify-0003',
-    })
+      reason: '尝试绑定其他会员已经使用的手机号', idempotencyKey: 'legacy-contact-verify-0003',
+    })).rejects.toMatchObject({ code: 'MEMBERSHIP_PHONE_REVIEW_REQUIRED' })
+    await new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool).run(staff(id.verifier).scope,
+      tx => seedHistoricalDuplicateContact(tx, id.secondSource, id.thirdSource))
     const started = await service.start(publicContext(id.otherCurrent), {
       idempotencyKey: 'membership-recovery-start-0002',
     })

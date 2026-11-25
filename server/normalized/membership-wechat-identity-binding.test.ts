@@ -81,12 +81,12 @@ integration('bind verified wechat identity on membership claim', () => {
     expect(await owner(hash)).toBe(id.otherMember)
   })
 
-  it('moves the identity off a legacy MBX-only member onto the 6-digit member and reports the source', async () => {
+  it('preserves the identity of an existing legacy MBX member', async () => {
     const hash = principalHash('legacy')
     await runner.run(scope, (transaction) =>
       new CustomerRepository(transaction).linkIdentity(id.legacyMember, 'wechat', hash))
-    expect(await bind(hash)).toEqual({ outcome: 'moved_from_legacy_member', previousCustomerId: id.legacyMember })
-    expect(await owner(hash)).toBe(id.member)
+    expect(await bind(hash)).toEqual({ outcome: 'conflict_other_member', previousCustomerId: id.legacyMember })
+    expect(await owner(hash)).toBe(id.legacyMember)
   })
 
   it('rejects anything that is not a server-computed principal hash', async () => {

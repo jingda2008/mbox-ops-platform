@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { JsonCodec, JsonObject, NormalizedCommandExecutor } from './command-executor.js'
-import { CustomerMergeConflictError, CustomerRepository } from './customer-repository.js'
+import { CustomerRepository } from './customer-repository.js'
 import {
   CustomerExperienceRepository,
   CustomerExperienceRequestError,
@@ -13,6 +13,10 @@ import {
 } from './membership-terms-service.js'
 import {
   MembershipPhoneOwnedElsewhereError,
+  customerFamilyHasMembership,
+  lockMembershipPhone,
+  membershipPhoneReviewRequired,
+  resolveMembershipPhoneOwner,
   replaceVerifiedPhoneInTransaction,
   type MembershipRecoveryPhoneAuthorizationPort,
   type MembershipRecoveryPhoneProtector,
@@ -72,35 +76,25 @@ export class MembershipEnrollmentService {
       const experience = new CustomerExperienceRepository(transaction)
       const customers = new CustomerRepository(transaction)
 
-      let enrollCustomerId = (await customers.resolveCanonical(context.customerId)).id
-      // 只合并回 6 位新会员号；MBX- 历史脏号不再作为“原会员”拉回。
-      const ownerCustomerId = await findExistingModernMembershipCustomerByPhone(
-        transaction, protectedPhone.matchHashes, context.customerId,
-      )
-      if (ownerCustomerId !== null) {
-        const ownerCanonicalId = (await customers.resolveCanonical(ownerCustomerId)).id
-        if (ownerCanonicalId !== enrollCustomerId) {
-          await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
-          try {
-            await customers.merge(enrollCustomerId, ownerCanonicalId)
-          } catch (error) {
-            if (!isPhoneFamilyMergeGuard(error) && !(error instanceof CustomerMergeConflictError)) {
-              throw error
-            }
-            enrollCustomerId = (await customers.resolveCanonical(context.customerId)).id
-            if (enrollCustomerId !== ownerCanonicalId) {
-              await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
-              await customers.merge(enrollCustomerId, ownerCanonicalId)
-            }
-          }
+      await lockMembershipPhone(transaction, protectedPhone)
+      await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `${context.scope.tenantId}:${context.scope.storeId}:verified-phone:${context.customerId}`,
+      ])
+      const requester = await customers.resolveCanonical(context.customerId)
+      if (requester.status !== 'active') throw membershipPhoneReviewRequired()
+      let enrollCustomerId = requester.id
+      const ownerCustomerId = await resolveMembershipPhoneOwner(transaction, protectedPhone, enrollCustomerId)
+      const claim = async (owner: string) => {
+        if (owner === enrollCustomerId) return
+        const target = await customers.resolveCanonical(owner)
+        if (target.status !== 'active' || target.id !== owner || await customerFamilyHasMembership(transaction, enrollCustomerId, false)) {
+          throw membershipPhoneReviewRequired()
         }
-        enrollCustomerId = ownerCanonicalId
-      } else {
-        // 同手机号若只挂在 MBX- 脏号上，释放后给当前顾客发新 6 位号。
-        await releaseLegacyMbxPhonesForHash(
-          transaction, protectedPhone.matchHashes, enrollCustomerId,
-        )
+        await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
+        await customers.merge(enrollCustomerId, owner)
+        enrollCustomerId = owner
       }
+      if (ownerCustomerId) await claim(ownerCustomerId)
 
       const bindVerifiedPhone = () => replaceVerifiedPhoneInTransaction(transaction, {
         customerId: enrollCustomerId,
@@ -117,22 +111,8 @@ export class MembershipEnrollmentService {
         verifiedPhone = await bindVerifiedPhone()
       } catch (error) {
         if (!(error instanceof MembershipPhoneOwnedElsewhereError)) throw error
-        const ownerCanonicalId = (await customers.resolveCanonical(error.ownerCustomerId)).id
-        if (ownerCanonicalId === enrollCustomerId) throw error
-        await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
-        try {
-          await customers.merge(enrollCustomerId, ownerCanonicalId)
-        } catch (mergeError) {
-          if (!isPhoneFamilyMergeGuard(mergeError) && !(mergeError instanceof CustomerMergeConflictError)) {
-            throw mergeError
-          }
-          enrollCustomerId = (await customers.resolveCanonical(context.customerId)).id
-          if (enrollCustomerId !== ownerCanonicalId) {
-            await releaseSourcePhonesForMerge(transaction, enrollCustomerId)
-            await customers.merge(enrollCustomerId, ownerCanonicalId)
-          }
-        }
-        enrollCustomerId = ownerCanonicalId
+        if (ownerCustomerId || error.ownerCustomerId === enrollCustomerId) throw membershipPhoneReviewRequired()
+        await claim((await customers.resolveCanonical(error.ownerCustomerId)).id)
         verifiedPhone = await bindVerifiedPhone()
       }
       const enrolled = await experience.enrollMembership(enrollCustomerId)
@@ -140,6 +120,7 @@ export class MembershipEnrollmentService {
       const wechatBinding: WechatIdentityBindingResult = input.wechatPrincipalHash
         ? await bindVerifiedWechatIdentityToMember(transaction, enrollCustomerId, input.wechatPrincipalHash)
         : { outcome: 'not_provided' }
+      if (wechatBinding.outcome === 'conflict_other_member') throw membershipPhoneReviewRequired()
       if (enrolled.created) {
         await new MembershipTermsRepository(transaction).acceptCurrentEnrollment({
           customerId: enrollCustomerId,
@@ -204,7 +185,6 @@ export type WechatIdentityBindingOutcome =
   | 'linked'
   | 'already_linked'
   | 'moved_from_guest'
-  | 'moved_from_legacy_member'
   | 'conflict_other_member'
 
 export interface WechatIdentityBindingResult {
@@ -217,9 +197,7 @@ export interface WechatIdentityBindingResult {
  * - 未绑定：直接 link。
  * - 已绑在该会员（含合并族）：幂等，不动。
  * - 绑在没有任何会员的访客顾客上：把这条身份移到会员顾客（访客无会员资产可丢）。
- * - 绑在只有 MBX- 历史脏号的顾客上，且目标是 6 位新会员：与手机号认领同一政策
- *   （MBX- 不再作为原会员），移到当前会员，afterData 记录原顾客。
- * - 绑在另一位 6 位会员上：不抢，记录 conflict，开通/认领本身照常成功。
+ * - 已绑定其他会员的微信身份必须由门店核对。
  */
 export async function bindVerifiedWechatIdentityToMember(
   transaction: ScopedTransaction,
@@ -235,17 +213,8 @@ export async function bindVerifiedWechatIdentityToMember(
     return { outcome: 'linked' }
   }
   if (owner.id === member.id) return { outcome: 'already_linked' }
-  const memberNumbers = async (customerId: string) => (await transaction.query<{ member_no: string }>(`
-    SELECT member_no FROM mbox.customer_memberships
-    WHERE tenant_id = $1::uuid AND store_id = $2::uuid AND customer_id = $3::uuid
-  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId])).rows.map((row) => row.member_no)
-  const ownerNumbers = await memberNumbers(owner.id)
-  const ownerIsLegacyOnly = ownerNumbers.length > 0 && ownerNumbers.every((no) => no.startsWith('MBX-'))
-  if (ownerNumbers.length > 0) {
-    const memberIsModern = (await memberNumbers(member.id)).some((no) => /^[0-9]{6}$/.test(no))
-    if (!ownerIsLegacyOnly || !memberIsModern) {
-      return { outcome: 'conflict_other_member', previousCustomerId: owner.id }
-    }
+  if (await customerFamilyHasMembership(transaction, owner.id, false)) {
+    return { outcome: 'conflict_other_member', previousCustomerId: owner.id }
   }
   await transaction.query(`
     UPDATE mbox.customer_identities
@@ -254,85 +223,13 @@ export async function bindVerifiedWechatIdentityToMember(
       AND identity_kind = 'wechat' AND identity_hash = $3
   `, [transaction.scope.tenantId, transaction.scope.storeId, wechatPrincipalHash, member.id])
   return {
-    outcome: ownerIsLegacyOnly ? 'moved_from_legacy_member' : 'moved_from_guest',
+    outcome: 'moved_from_guest',
     previousCustomerId: owner.id,
   }
 }
 
 function memberNumber(customerId: string): string {
   return `MBX-${sha256(customerId).slice(0, 12).toUpperCase()}`
-}
-
-function isPhoneFamilyMergeGuard(error: unknown): boolean {
-  return error instanceof Error
-    && /multiple active verified phones in one family/i.test(error.message)
-}
-
-function isModernMemberNo(memberNo: string): boolean {
-  return /^[0-9]{6}$/.test(memberNo)
-}
-
-async function findExistingModernMembershipCustomerByPhone(
-  transaction: ScopedTransaction,
-  contactHashes: readonly string[],
-  requesterCustomerId: string,
-): Promise<string | null> {
-  if (contactHashes.length === 0) return null
-  const result = await transaction.query<{ customer_id: string; member_no: string }>(`
-    SELECT membership.customer_id, membership.member_no
-    FROM mbox.customer_verified_contacts contact
-    JOIN mbox.customers customer
-      ON customer.tenant_id=contact.tenant_id AND customer.store_id=contact.store_id
-     AND customer.id=contact.customer_id AND customer.status='active'
-    JOIN mbox.customer_memberships membership
-      ON membership.tenant_id=contact.tenant_id AND membership.store_id=contact.store_id
-     AND membership.customer_id=contact.customer_id AND membership.status='active'
-    WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
-      AND contact.contact_type='phone' AND contact.contact_hash=ANY($3::char(64)[])
-      AND contact.processing_status='active' AND contact.customer_id<>$4::uuid
-      AND membership.member_no ~ '^[0-9]{6}$'
-      AND membership.member_no !~* '^MBX-'
-    ORDER BY membership.joined_at, membership.id
-    LIMIT 1
-    FOR UPDATE OF contact, customer, membership
-  `, [
-    transaction.scope.tenantId, transaction.scope.storeId,
-    contactHashes, requesterCustomerId,
-  ])
-  const row = result.rows[0]
-  if (!row || !isModernMemberNo(row.member_no)) return null
-  return row.customer_id
-}
-
-async function releaseLegacyMbxPhonesForHash(
-  transaction: ScopedTransaction,
-  contactHashes: readonly string[],
-  requesterCustomerId: string,
-): Promise<void> {
-  if (contactHashes.length === 0) return
-  await transaction.query(`
-    UPDATE mbox.customer_verified_contacts contact
-    SET processing_status='revoked',
-        revoked_at=clock_timestamp(),
-        revocation_reason_code='membership_enroll_ignore_legacy_mbx'
-    FROM mbox.customer_memberships membership
-    JOIN mbox.customers customer
-      ON customer.tenant_id=membership.tenant_id AND customer.store_id=membership.store_id
-     AND customer.id=membership.customer_id AND customer.status='active'
-    WHERE contact.tenant_id=$1::uuid AND contact.store_id=$2::uuid
-      AND membership.tenant_id=contact.tenant_id AND membership.store_id=contact.store_id
-      AND membership.customer_id=contact.customer_id AND membership.status='active'
-      AND contact.contact_type='phone' AND contact.contact_hash=ANY($3::char(64)[])
-      AND contact.processing_status='active'
-      AND contact.customer_id<>$4::uuid
-      AND (
-        membership.member_no ~* '^MBX-'
-        OR membership.member_no !~ '^[0-9]{6}$'
-      )
-  `, [
-    transaction.scope.tenantId, transaction.scope.storeId,
-    contactHashes, requesterCustomerId,
-  ])
 }
 
 async function releaseSourcePhonesForMerge(

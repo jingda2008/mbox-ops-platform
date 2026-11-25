@@ -42,6 +42,9 @@ import sharp from 'sharp'
 import { WechatMiniProgramCodeError } from './wechat-mini-program-code.js'
 import { ScopedPostgresTransactionRunner, type PostgresPool, type ScopedTransaction } from './transaction-runner.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
+import { MembershipEnrollmentService } from './membership-enrollment-service.js'
+import { createMembershipRecoveryPhoneProtector, MembershipRecoveryService } from './membership-recovery-service.js'
+import { CustomerExperienceRepository } from './customer-experience-repository.js'
 import { ChannelDistributionRepository } from './channel-distribution-repository.js'
 import { channelDistributionApiPlugin } from './channel-distribution-api.js'
 import { ChannelPartnerRepository } from './channel-partner-repository.js'
@@ -156,6 +159,35 @@ integration('channel distribution real PostgreSQL authority', () => {
     const ids=(await admin.query('SELECT public_id FROM mbox.table_session_customer_participations WHERE table_session_id=$1 AND customer_id=ANY($2::uuid[]) AND left_at IS NULL',[source,customers])).rows.map(r=>r.public_id)
     return{method:'POST' as const,url:`/table-management/sessions/${source}/${kind==='whole_table_transfer'?'transfer':'participant-movements'}`,headers:{'idempotency-key':randomUUID()},payload:kind==='whole_table_transfer'?{targetTableId:targetTable,expectedSourceTableId:row.table_id,expectedLocationVersion:Number(row.location_version)}:{movementHistoryConfirmed:true,movementGuard,movementKind:kind,targetTableId:targetTable,targetTableSessionId:target,movedGuestCount:count,participantPublicIds:ids,reason:'渠道转桌联动隔离验证'}}
   }
+  it('shows the original gift coupon in the WeChat wallet after reclaiming a unique historical membership', async () => {
+    const owner = await customer(), visitor = await customer()
+    const phones = createMembershipRecoveryPhoneProtector('channel-legacy-member-phone-fixture')
+    const context = (customerId: string) => ({
+      scope, customerId, businessDate: '2026-11-12', actorRef: `customer:${customerId}`,
+    })
+    await runner.run(scope, tx => new CustomerExperienceRepository(tx).enrollMembership(owner, 'MBX-WALLETOWNER'))
+    const e164Phone = '+8613800001234'
+    await new MembershipRecoveryService(runner, phones).replaceMyVerifiedPhone(context(owner), {
+      verifiedPhone: { e164Phone, providerReference: randomUUID(), verifiedAt: new Date().toISOString() },
+      idempotencyKey: randomUUID(),
+    })
+    const gift = await giftProduct(1)
+    const offer = await batch({ minimumMinor: 0, offer: { kind:'gift', productId:gift.pid, quantity:1, costMinor:100 } })
+    const claim = await issue(offer.code, owner)
+    const wallet = (cid: string) => runner.run(scope, tx => new ChannelDistributionRepository(tx).wallet(cid))
+    expect(await wallet(visitor)).toHaveLength(0)
+    const membership = new MembershipEnrollmentService(new NormalizedCommandExecutor(runner), {
+      verify: async ({authorizationCode}) => ({ e164Phone, providerReference: authorizationCode, verifiedAt: new Date().toISOString() }),
+    }, phones)
+    const result = await membership.enroll(context(visitor), {
+      termsVersion: 1, acknowledgementSource: 'mini_profile', phoneAuthorizationCode: randomUUID(),
+      wechatPrincipalHash: createHash('sha256').update(visitor).digest('hex'), idempotencyKey: randomUUID(),
+    })
+    expect(result.value).toMatchObject({ created:false, membership:{ memberNo:'MBX-WALLETOWNER' } })
+    expect(await wallet(visitor)).toEqual([expect.objectContaining({id:claim.claimId,status:'available'})])
+    expect(await wallet(owner)).toEqual(await wallet(visitor))
+  })
+
   it('does not let query text select a different authentication context',async()=>{
     const b=await batch();selfCustomer=await customer()
     const response=await app.inject({method:'POST',url:'/public/mini/channel/claim?trace=/guest/channel/',headers:{'idempotency-key':`channel-${randomUUID()}`},payload:{code:b.code}})

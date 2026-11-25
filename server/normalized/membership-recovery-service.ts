@@ -175,6 +175,7 @@ export class MembershipRecoveryService {
     const providerReferenceHash = sha256(input.verifiedPhone.providerReference)
     const verifiedAt = timestamp(input.verifiedPhone.verifiedAt, 'verifiedAt')
     return this.transactions.run(context.scope, async (transaction) => {
+      await lockMembershipPhone(transaction, protectedPhone)
       const challenge = await lockChallenge(
         transaction, input.challengePublicId, context.customerId,
       )
@@ -376,6 +377,7 @@ export class MembershipRecoveryService {
     const protectedPhone = this.phones.protect(input.e164Phone)
     const verifiedAt = this.now().toISOString()
     return this.transactions.run(context.scope, async (transaction) => {
+      await lockMembershipPhone(transaction, protectedPhone)
       const member = await transaction.query<{ customer_id: string; member_no: string }>(`
         SELECT customer_id,member_no FROM mbox.customer_memberships
         WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND member_no=$3 AND status='active'
@@ -399,6 +401,7 @@ export class MembershipRecoveryService {
         maskedPhone: replay.rows[0].masked_value,
         verifiedAt: replay.rows[0].verified_at,
       }
+      await resolveMembershipPhoneOwner(transaction, protectedPhone, row.customer_id)
       await upsertVerifiedContact(transaction, {
         customerId: row.customer_id,
         protectedPhone,
@@ -680,6 +683,50 @@ export function createMembershipRecoveryPhoneProtector(
   }
 }
 
+export function membershipPhoneReviewRequired() {
+  return new CustomerExperienceRequestError(
+    '会员资料需要核对，请联系门店并出示原会员号。券和积分保留在原账户。',
+    'MEMBERSHIP_PHONE_REVIEW_REQUIRED', 409,
+  )
+}
+
+export async function lockMembershipPhone(transaction: ScopedTransaction, phone: ProtectedRecoveryPhone) {
+  for (const digest of [...new Set(phone.matchHashes)].sort()) {
+    await transaction.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+      `${transaction.scope.tenantId}:${transaction.scope.storeId}:membership-phone:${digest}`,
+    ])
+  }
+}
+
+/** Include the requester's existing memberships so a verified phone cannot silently join two members. */
+export async function resolveMembershipPhoneOwner(
+  transaction: ScopedTransaction, phone: ProtectedRecoveryPhone, customerId: string,
+): Promise<string | null> {
+  const result = await transaction.query<{ root: string }>(`
+    WITH RECURSIVE matched AS (
+      SELECT contact.customer_id
+      FROM mbox.customer_verified_contacts contact
+      WHERE contact.tenant_id=$1 AND contact.store_id=$2 AND contact.contact_type='phone'
+        AND contact.processing_status='active' AND contact.revoked_at IS NULL
+        AND contact.contact_hash=ANY($3::char(64)[])
+      ORDER BY contact.id FOR UPDATE OF contact
+    ), roots(root) AS (
+      SELECT mbox.canonical_customer_id($1,$2,matched.customer_id) FROM matched
+      UNION SELECT mbox.canonical_customer_id($1,$2,$4::uuid)
+    ), family(root,id) AS (
+      SELECT root,root FROM roots
+      UNION ALL
+      SELECT family.root,child.id FROM family JOIN mbox.customers child
+        ON child.tenant_id=$1 AND child.store_id=$2 AND child.merged_into_customer_id=family.id
+    )
+    SELECT family.root FROM family JOIN mbox.customer_memberships membership
+      ON membership.tenant_id=$1 AND membership.store_id=$2 AND membership.customer_id=family.id
+    WHERE membership.status='active' LIMIT 2
+  `, [transaction.scope.tenantId, transaction.scope.storeId, phone.matchHashes, customerId])
+  if (result.rows.length > 1) throw membershipPhoneReviewRequired()
+  return result.rows[0]?.root ?? null
+}
+
 export async function replaceVerifiedPhoneInTransaction(
   transaction: ScopedTransaction,
   input: Readonly<{
@@ -691,6 +738,7 @@ export async function replaceVerifiedPhoneInTransaction(
     idempotencyKey: string
   }>,
 ): Promise<PublicVerifiedPhone> {
+  await lockMembershipPhone(transaction, input.protectedPhone)
   const verifiedAt = timestamp(input.verifiedAt, 'verifiedAt')
   const repeatableProof = input.repeatableProofSha256 ?? null
   await transaction.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
@@ -700,6 +748,8 @@ export async function replaceVerifiedPhoneInTransaction(
     `${transaction.scope.tenantId}:${transaction.scope.storeId}:verified-phone:${input.customerId}`,
   ])
   const family = await canonicalCustomerFamily(transaction, input.customerId)
+  const owner = await resolveMembershipPhoneOwner(transaction, input.protectedPhone, family.canonicalCustomerId)
+  if (owner && owner !== family.canonicalCustomerId) throw new MembershipPhoneOwnedElsewhereError(owner)
   const replay = await transaction.query<{
     id: string
     public_id: string
@@ -896,7 +946,7 @@ async function preparePhoneProofForWrite(
   if (input.repeatableProofSha256) {
     const occupied = await lockRepeatableProofContact(transaction, input.repeatableProofSha256)
     if (occupied && !input.familyCustomerIds.includes(occupied.customer_id)) {
-      if (await customerFamilyHasActiveModernMembership(transaction, occupied.customer_id)) {
+      if (await customerFamilyHasMembership(transaction, occupied.customer_id)) {
         const canonical = await transaction.query<{ id: string }>(`
           SELECT mbox.canonical_customer_id($1::uuid,$2::uuid,$3::uuid) AS id
         `, [transaction.scope.tenantId, transaction.scope.storeId, occupied.customer_id])
@@ -951,9 +1001,10 @@ async function lockRepeatableProofContact(
   return result.rows[0] ?? null
 }
 
-async function customerFamilyHasActiveModernMembership(
+export async function customerFamilyHasMembership(
   transaction: ScopedTransaction,
   customerId: string,
+  activeOnly = true,
 ): Promise<boolean> {
   const result = await transaction.query(`
     WITH RECURSIVE family(id) AS (
@@ -965,12 +1016,10 @@ async function customerFamilyHasActiveModernMembership(
     )
     SELECT 1 FROM mbox.customer_memberships membership
     WHERE membership.tenant_id=$1::uuid AND membership.store_id=$2::uuid
-      AND membership.status='active'
+      AND (NOT $4::boolean OR membership.status='active')
       AND membership.customer_id IN (SELECT id FROM family WHERE id IS NOT NULL)
-      AND membership.member_no ~ '^[0-9]{6}$'
-      AND membership.member_no !~* '^MBX-'
     LIMIT 1
-  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId])
+  `, [transaction.scope.tenantId, transaction.scope.storeId, customerId, activeOnly])
   return (result.rowCount ?? 0) > 0
 }
 

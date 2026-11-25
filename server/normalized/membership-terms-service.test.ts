@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { runNormalizedMigrations } from '../migrate-normalized.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
+import { createMembershipRecoveryPhoneProtector } from './membership-recovery-service.js'
 import { MembershipEnrollmentService } from './membership-enrollment-service.js'
 import { PostgresMembershipConfigurationDraftRepository } from './membership-configuration-draft-repository.js'
 import { MembershipConfigurationDraftService } from './membership-configuration-draft-service.js'
@@ -208,6 +209,107 @@ integration('membership terms release and acceptance', () => {
     )
     expect(existing.value.created).toBe(false)
   })
+  const phones = createMembershipRecoveryPhoneProtector('membership-owner-regression-fixture')
+  let runtime: Pool
+  beforeAll(() => {
+    runtime = new Pool({ connectionString: process.env.TEST_NORMALIZED_RUNTIME_DATABASE_URL ?? databaseUrl, max: 4 })
+  })
+  afterAll(async () => runtime?.end())
+
+  async function guest() {
+    const customer = randomUUID()
+    await pool.query(`
+      INSERT INTO mbox.customers(id,tenant_id,store_id,public_id,status)
+      VALUES ($1,$2,$3,$4,'active')
+    `, [customer, id.tenant, id.store, `guest-${customer}`])
+    return customer
+  }
+
+  async function historicalMember(memberNo: string, phone: string) {
+    const customer = await guest()
+    const protectedPhone = phones.protect(phone)
+    await pool.query(`
+      WITH member AS (
+        INSERT INTO mbox.customer_memberships(tenant_id,store_id,customer_id,member_no)
+        VALUES($1,$2,$3,$4) RETURNING id
+      )
+      INSERT INTO mbox.loyalty_accounts(tenant_id,store_id,customer_id,membership_id,available_points)
+      SELECT $1,$2,$3,id,55 FROM member
+    `, [id.tenant, id.store, customer, memberNo])
+    await new ScopedPostgresTransactionRunner(pool as unknown as PostgresPool).run(scope(id.store), tx => tx.query(`
+      INSERT INTO mbox.customer_verified_contacts(tenant_id,store_id,customer_id,contact_type,
+        contact_hash,encrypted_value,encryption_key_version,masked_value,verification_source,
+        provider_reference_sha256,verified_by_customer_id,verified_at)
+      VALUES($1,$2,$3,'phone',$4,$5,1,$6,'wechat_phone_authorization',$7,$3,clock_timestamp())
+    `, [id.tenant,id.store,customer,protectedPhone.contactHash,protectedPhone.encryptedValue,
+      protectedPhone.maskedValue,createHash('sha256').update(customer).digest('hex')]))
+    return customer
+  }
+
+  function authorize(phone: string, ready?: () => Promise<void>) {
+    const runner = new ScopedPostgresTransactionRunner(runtime as unknown as PostgresPool)
+    const service = new MembershipEnrollmentService(new NormalizedCommandExecutor(runner), {
+      async verify({ authorizationCode }) {
+        await ready?.()
+        return { e164Phone: phone, providerReference: authorizationCode, verifiedAt: new Date().toISOString() }
+      },
+    }, phones)
+    return (customer: string) => service.enroll(publicContext(id.store,customer), {
+      termsVersion: 1, acknowledgementSource: 'mini_profile', phoneAuthorizationCode: randomUUID(),
+      idempotencyKey: randomUUID(),
+    })
+  }
+
+  it.each([['MBX-LEGACY-0001','+8613800001111'],['VIP0001234','+8613800001112']])(
+    'recognizes existing %s with its original points under the runtime login', async (number, phone) => {
+      await historicalMember(number,phone)
+      const result = await authorize(phone)(await guest())
+      expect(result.value).toMatchObject({ created: false, membership: { memberNo: number } })
+      expect((await pool.query('SELECT available_points FROM mbox.loyalty_accounts a JOIN mbox.customer_memberships m ON m.id=a.membership_id WHERE m.store_id=$1 AND m.member_no=$2', [id.store,number])).rows)
+        .toEqual([{ available_points: 55 }])
+    },
+  )
+
+  it('requires store review for historical duplicates, including when the requester owns one', async () => {
+    const phone = '+8613800001113'
+    const first = await historicalMember('MBX-LEGACY-0002',phone)
+    const second = await historicalMember('MBX-LEGACY-0003',phone)
+    const visitor = await guest()
+    for (const requester of [visitor, first]) {
+      await expect(authorize(phone)(requester)).rejects.toMatchObject({ code: 'MEMBERSHIP_PHONE_REVIEW_REQUIRED' })
+    }
+    const state = await pool.query(`
+      SELECT c.status, m.member_no, a.available_points, p.processing_status FROM mbox.customers c
+      LEFT JOIN mbox.customer_memberships m ON m.customer_id=c.id
+      LEFT JOIN mbox.loyalty_accounts a ON a.membership_id=m.id
+      LEFT JOIN mbox.customer_verified_contacts p ON p.customer_id=c.id
+      WHERE c.id=ANY($1::uuid[]) ORDER BY m.member_no
+    `, [[first,second,visitor]])
+    expect(state.rows).toEqual([
+      ...['MBX-LEGACY-0002','MBX-LEGACY-0003'].map(member_no => ({
+        status:'active', member_no, available_points:55, processing_status:'active',
+      })),
+      { status:'active', member_no:null, available_points:null, processing_status:null },
+    ])
+  })
+
+  it('issues a single membership when two WeChat sessions first authorize the same phone concurrently', async () => {
+    const customers = await Promise.all([guest(),guest()])
+    let count = 0
+    let release!: () => void
+    const bothVerified = new Promise<void>((resolve) => { release = resolve })
+    const enroll = authorize('+8613800001114', async () => {
+      if (++count === 2) release()
+      await bothVerified
+    })
+    const results = await Promise.all(customers.map(enroll))
+    expect(results.map(r => r.value.created).sort()).toEqual([false,true])
+    expect(new Set(results.map(r => r.value.membership?.memberNo)).size).toBe(1)
+    expect((await pool.query(`
+      SELECT count(*)::integer AS total FROM mbox.customer_memberships WHERE customer_id=ANY($1::uuid[])
+    `, [customers])).rows).toEqual([{total:1}])
+  })
+
 })
 
 async function approveTermsVersion(

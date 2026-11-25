@@ -403,6 +403,12 @@ set_env MBOX_PUBLIC_URL "${public_url}"
 set_env MBOX_EXPECTED_RELEASE_SHA "${release_sha}"
 set_env MBOX_EXPECTED_IMAGE_DIGEST "${expected_digest}"
 "${env_normalizer}" "${release_env}" "${deployment_tier}"
+# Compare privately before starting any candidate or changing the active runtime.
+if ! cmp -s <(awk '/^MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR=/' "${secrets_env}") \
+            <(awk '/^MBOX_DUPLICATE_MEMBERSHIP_REVIEW_PAIR=/' "${release_env}"); then
+  echo "membership review configuration changed during normalization" >&2
+  exit 1
+fi
 
 # BEGIN NATIVE PUSH SECRET GUARD (also executed by the isolated shell contract tests)
 prepare_native_push_mount() {

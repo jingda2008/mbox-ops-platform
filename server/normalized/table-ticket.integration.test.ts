@@ -1,3 +1,4 @@
+import {readDraftRoster,saveDraftRoster} from './ticket-draft-roster.js'
 import {ScopedTicketHoldRepository} from './scoped-ticket-hold-repository.js'
 import {planTicketCashRefund,processTicketRefundReviews} from './table-ticket-auto-review.js'
 import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
@@ -1820,6 +1821,39 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         await tx.query('RESET ROLE')
         await tx.query('DELETE FROM mbox.ticket_table_roster WHERE tenant_id=$1 AND store_id=$2 AND table_id=ANY($3::uuid[])',[...args,desks])
       })
+    }
+  })
+  it('edits a draft roster from an empty area without enrolling the store or widening a saved draft',async()=>{
+    const first=await run(tx=>readDraftRoster(tx,area))
+    const desk=first.desks.find(d=>!d.selected)!
+    expect(desk).toBeDefined()
+    const publicBefore=(await run(publicTableTickets)).map(o=>o.id)
+    await expect(run(tx=>saveDraftRoster(tx,area,first.revision,[randomUUID()]))).rejects.toMatchObject({code:'ROSTER_INVALID_SELECTION'})
+    await grantFixtureStaffPermissions(admin,scope,[employee],['community.activity.manage'])
+    const service=new ActivityOperationsService(runner,new NormalizedCommandExecutor(runner),protection)
+    const ctx={scope,employeeId:employee,businessDate:'2026-11-26'}
+    const keys=[randomUUID(),randomUUID()]
+    const writes=await Promise.allSettled(keys.map(key=>service.updateDraftRoster(ctx,area,first.revision,[desk.id],key)))
+    const winner=writes.findIndex(x=>x.status==='fulfilled')
+    expect(writes.filter(x=>x.status==='fulfilled')).toHaveLength(1)
+    expect(writes.find(x=>x.status==='rejected')).toMatchObject({reason:{original:{code:'ROSTER_CHANGED'}}})
+    expect((await service.updateDraftRoster(ctx,area,first.revision,[desk.id],keys[winner]!)).replayed).toBe(true)
+    try {
+      await run(async tx=>{
+        await tx.query('SAVEPOINT roster_preview')
+        const row=(await ticketOfferCatalog(tx,activity)).find(r=>r.areaId===area)!
+        expect(row).toMatchObject({rosterConfigured:false,ticketTables:[{id:desk.id}]})
+        const draft=await saveTicketOffer(tx,activity,employee,{...offerInput,status:'draft',expectedVersion:row.version??0,draftTableIds:[desk.id]})
+        const updated=await readDraftRoster(tx,area)
+        expect(updated.desks.find(d=>d.id===desk.id)?.selected).toBe(true)
+        await saveDraftRoster(tx,area,updated.revision,[])
+        await expect(saveTicketOffer(tx,activity,employee,{...offerInput,status:'draft',expectedVersion:draft.version})).rejects.toMatchObject({code:'TICKET_TABLE_SCOPE_STALE'})
+        await expect(saveTicketOffer(tx,activity,randomUUID(),{...offerInput,expectedVersion:draft.version})).rejects.toMatchObject({code:'TICKET_TABLE_SCOPE_DRAFT_ONLY'})
+        expect((await publicTableTickets(tx)).map(o=>o.id)).toEqual(publicBefore)
+        await tx.query('ROLLBACK TO SAVEPOINT roster_preview')
+      })
+    } finally {
+      await run(async tx=>saveDraftRoster(tx,area,(await readDraftRoster(tx,area)).revision,[]))
     }
   })
   it('offers only current roster tables and never turns scoped drafts into published stock',async()=>{

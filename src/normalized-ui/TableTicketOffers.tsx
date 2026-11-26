@@ -1,3 +1,4 @@
+import {TicketDraftRosterEditor} from './TicketDraftRosterEditor'
 import {useEffect,useRef,useState} from 'react'
 import type {NormalizedApiClient} from '../normalized-api'
 
@@ -18,13 +19,14 @@ interface Offer {
   saleFrom:string|null;saleUntil:string|null;priceMinor:number|null; giftPoints:number|null; visibleFrom:string|null; visibleUntil:string|null
   status:'draft'|'published'|'withdrawn'|null
 }
-function TicketDeskSelection({area,busy}:{area:Offer;busy:boolean}){
+function TicketDeskSelection({area,busy,editor}:{area:Offer;busy:boolean;editor:React.ReactNode}){
   const [selectedIds,setSelectedIds]=useState(area.draftTableIds??[])
   const codes=(area.ticketTables??[]).filter(table=>selectedIds.includes(table.id)).map(table=>table.code)
   return (
     <fieldset><legend>本票档可排桌号</legend>
-        {!area.rosterConfigured && <p>还没有经核对的当期桌号名单，不列出历史桌号。</p>}
+        {!area.rosterConfigured && !area.ticketTables?.length && <p>{editor?'本区还没有可选桌号，点「管理可选桌号」添加。':'本区还没有可选桌号，请联系门票管理人员。'}</p>}
         {area.rosterConfigured && !(area.ticketTables??[]).length && <p>本区尚无已核对的可选桌台。</p>}
+        {editor}
         {(area.ticketTables??[]).map(table=><label key={table.id}>
           <input type="checkbox" name="draftTables" value={table.id} disabled={busy}
             checked={selectedIds.includes(table.id)}
@@ -33,7 +35,7 @@ function TicketDeskSelection({area,busy}:{area:Offer;busy:boolean}){
         {area.draftTableIds?.some(id=>!(area.ticketTables??[]).some(table=>table.id===id)) &&
           <p role="alert">原草稿有桌台已移出当期名单，请重新选择并保存。</p>}
         {codes.length>0 && <p aria-live="polite">购票须知 · 适用区域：{area.areaName} · {codes.join('、')}</p>}
-        {(area.rosterConfigured || area.draftTableIds) && <p>具体桌号由门店安排。当前支持保存草稿。</p>}
+        {(codes.length>0 || area.rosterConfigured || area.draftTableIds) && <p>具体桌号由门店安排。当前支持保存草稿。</p>}
       </fieldset>
   )
 }
@@ -97,7 +99,7 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       setNotice('请从本区已核对的桌台中至少选择一桌。')
       return
     }
-    if(status==='published' && (area.rosterConfigured || area.draftTableIds)){
+    if(status==='published' && (draftTableIds.length || area.rosterConfigured || area.draftTableIds)){
       setNotice('指定桌台的票档暂只可保存草稿。')
       return
     }
@@ -215,7 +217,9 @@ export function TableTicketOffers({api,activityId,employeeId,activityUpdatedAt,r
       const button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement|null
       void save(e.currentTarget,button?.value==='published'?'published':button?.value==='withdrawn'?'withdrawn':'draft')
     }}>
-      <TicketDeskSelection area={area} busy={busy}/>
+      <TicketDeskSelection area={area} busy={busy} editor={canManage && <TicketDraftRosterEditor
+        key={endpoint+area.areaId} api={api} areaId={area.areaId} areaName={area.areaName} disabled={busy}
+        onSaved={()=>reloadAfterSave('本区名单已保存，请在「本票档可排桌号」勾选本档适用的桌号。')}/>} />
       <label>产品名称<textarea aria-label="产品名称" rows={2} disabled={busy} name="name" required maxLength={120} defaultValue={area.name??area.areaName+'整桌票'}/></label>
       <label>每桌售价（元）<input disabled={busy} required type="number" name="price" min=".01" step=".01" defaultValue={area.priceMinor===null?'':(area.priceMinor/100).toFixed(2)}/></label>
       <label>每张赠送积分<input disabled={busy} type="number" name="points" min="0" step="1" defaultValue={area.giftPoints??''}/></label>

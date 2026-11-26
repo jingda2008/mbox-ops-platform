@@ -19,12 +19,18 @@ const a='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',b='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbb
 let rows=[
   {...base,areaId:'indoor',areaName:'室内',ticketTables:[{id:a,code:'A01'},{id:b,code:'A02'}],tableCodes:['OLD99']},
   {...base,areaId:'vip',areaName:'贵宾区',ticketTables:[{id:c,code:'V01'}],tableCodes:['OLD98']},
+  {...base,areaId:'new',areaName:'新桌区',ticketTables:[],rosterConfigured:false},
   {...base,areaId:'empty',areaName:'空区域',ticketTables:[]},
 ]
 let requests=[]
 const api={
-  getEndpoint:async()=>({data:structuredClone(rows)}),
+  getEndpoint:async(path)=>path.endsWith('/draft-roster/new')?{data:{revision:'1',desks:[{id:a,code:'N01',fixed:false,selected:rows.find(r=>r.areaId==='new').ticketTables.length>0}]}}:{data:structuredClone(rows)},
   postEndpoint:async(_path,body)=>{
+    if(_path.endsWith('/draft-roster/new')){
+      if(!body.tableIds.includes(a))throw Error('须选择 N01')
+      rows=rows.map(row=>row.areaId==='new'?{...row,ticketTables:[{id:a,code:'N01'}]}:row)
+      return {data:{areaId:'new',tableIds:body.tableIds}}
+    }
     requests.push(body)
     if(body.status !== 'draft')throw Error('非草稿调用')
     rows=rows.map(row=>row.areaId===body.areaId?{...row,id:'draft',version:(row.version??0)+1,status:'draft',name:body.name,
@@ -92,6 +98,18 @@ test('desktop and mobile explicitly select and persist only confirmed tables; st
           ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'])
         await page.getByLabel('演出桌区').selectOption('empty')
         await page.getByText('本区尚无已核对的可选桌台。').waitFor()
+        await page.getByLabel('演出桌区').selectOption('new')
+        await page.getByLabel('每桌售价（元）').fill('500')
+        await page.getByRole('button',{name:'管理可选桌号'}).click()
+        await page.getByLabel('N01',{exact:true}).check()
+        await page.getByRole('button',{name:'保存本区名单'}).click()
+        await page.getByRole('status').filter({hasText:'本区名单已保存'}).waitFor()
+        assert.equal(await page.getByLabel('N01',{exact:true}).isChecked(),false)
+        await page.getByLabel('N01',{exact:true}).check()
+        assert.equal(await page.getByRole('button',{name:'保存并发布票档'}).count(),0)
+        await save.click()
+        await page.getByRole('status').filter({hasText:'票档草稿已保存'}).waitFor()
+        assert.deepEqual(JSON.parse(await page.locator('output').textContent()).at(-1).draftTableIds,['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'])
         assert.equal(await page.getByRole('button',{name:/发布|上架/}).count(),0)
       }finally{await page.close()}
     }

@@ -88,7 +88,8 @@ test('reservation: accepted WeChat choice with failed server recording is not re
 test('reservation: leaving during the subscription sheet cannot submit a booking later',async()=>{
   const {page,wx}=pageFixture('reservations');let consent,writes=0
   wx.requestSubscribeMessage=o=>{consent=o};page.completeReservationSubmit=async()=>{writes++}
-  Object.assign(page.data,{reservationRecoveryReady:true,customerName:'测试',contact:'13800000000',wechatSubscriptionPresentationOptions:[reminderOption]})
+  Object.assign(page.data,{reservationRecoveryReady:true,customerName:'测试',contact:'13800000000'})
+  page._presentationOptions=[reminderOption]
   page.submitReservation();hide(page);consent.success({'reservation-reminder':'reject'});await tick();assert.equal(writes,0)
 })
 test('reservation: leaving during capacity recheck cannot create a booking',async()=>{
@@ -212,4 +213,48 @@ test('activity detail: leaving after registration was sent keeps its recovered i
 test('activity detail: an old result dialog cannot navigate away after leaving',async()=>{
   const {page,state,wx}=pageFixture('community-detail');let modal;wx.showModal=o=>{modal=o}
   const pending=page.showRegistrationOutcome({status:'confirmed'});hide(page);modal.success({confirm:true});await pending;assert.equal(state.calls.filter(([kind])=>kind==='tab').length,0)
+})
+
+test('reservation: slow coupon prompt does not block form or availability on return', async () => {
+  const coupon = deferred()
+  let checks = 0, prompts = 0
+  const {page} = pageFixture('reservations', {
+    getReservations: async () => ({reservations: []}),
+    getPendingCustomerReservation: async () => null,
+    getWechatNotificationPrompt: async context => {
+      prompts++
+      return context === 'coupon_open' ? coupon.promise : {}
+    },
+    getReservationAvailability: async () => { checks++; return {acceptingReservations: true} },
+    getReservationPerformances: async () => ({schedules: []}),
+  })
+  const loading = page.loadData()
+  await tick()
+  assert.equal(page.data.loading, false)
+  assert.equal(page.data.showForm, true)
+  assert.equal(checks, 1)
+  assert.equal(page.data.availability.acceptingReservations, true)
+  const presentation = page.preloadWechatSubscriptionPresentationOptions()
+  assert.equal(prompts, 5)
+  coupon.resolve({})
+  await Promise.all([loading, presentation])
+})
+
+test('reservation: viewing bookings avoids availability reads and shares the notification read when starting a form', async () => {
+  let checks = 0, authorizations = 0
+  const {page} = pageFixture('reservations', {
+    getReservations: async () => ({reservations: [{status: 'confirmed', publicId: 'r1', arrivalAt: '2099-01-01T12:00:00Z'}]}),
+    getPendingCustomerReservation: async () => null,
+    getReservationPerformanceImpacts: async () => ({impacts: []}),
+    getReservationPerformanceNotificationAuthorizations: async () => { authorizations++; return {authorizations: []} },
+    getReservationAvailability: async () => { checks++; return {acceptingReservations: true} },
+    getReservationPerformances: async () => ({schedules: []}),
+  })
+  await page.loadData()
+  assert.equal(page.data.showForm, false)
+  assert.equal(checks, 0)
+  page.startNewReservation()
+  await tick()
+  assert.equal(checks, 1)
+  assert.equal(authorizations, 1)
 })

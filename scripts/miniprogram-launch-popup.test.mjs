@@ -20,16 +20,16 @@ test('session and foreground frequency differ, disabled/unknown configuration re
 })
 
 test('recommendation uses full API images, falls back to placeholder and keeps slide/menu controls',async()=>{
- let component, navigatedTo
+ let component, navigatedTo, reads = 0, owner = null
  const sandbox={Component:value=>component=value,require:name=>({
   '../../utils/auth':{ensureCustomerSession:async()=>{}},
-  '../../utils/request':{request:async()=>({data:{enabled:true,title:'推荐',frequency:'always',products:[{id:'a',name:'套餐',amountMinor:250,currency:'CNY',imageUrl:'/menu/a.jpg'},{id:'b',amountMinor:null,imageUrl:null},...Array.from({length:6},(_,i)=>({id:'extra-'+i,name:'推荐'+i,amountMinor:4800,currency:'CNY',imageUrl:'/menu/'+i+'.jpg'}))]}})},
+  '../../utils/request':{request:async()=>{reads++;return {data:{enabled:true,title:'推荐',frequency:'always',products:[{id:'a',name:'套餐',amountMinor:250,currency:'CNY',imageUrl:'/menu/a.jpg'},{id:'b',amountMinor:null,imageUrl:null},...Array.from({length:6},(_,i)=>({id:'extra-'+i,name:'推荐'+i,amountMinor:4800,currency:'CNY',imageUrl:'/menu/'+i+'.jpg'}))]}}}},
   '../../utils/media':{publicImageUrl:(value,variant)=>value?(variant==='menu'?'thumb:'+value:'original:'+value):''},
   '../../utils/launch-popup-policy':{popupShouldDisplay},
- })[name],getApp:()=>({globalData:{foregroundSequence:1}}),wx:{getWindowInfo:()=>({windowWidth:390}),getStorageSync:()=>null,setStorageSync:()=>{},switchTab:options=>{navigatedTo=options.url}}}
+ })[name],getApp:()=>({globalData:{foregroundSequence:1}}),wx:{getWindowInfo:()=>({windowWidth:390}),getStorageSync:key=>key==='mbox.http.cookie.reservation.v2'?owner:null,setStorageSync:()=>{},switchTab:options=>{navigatedTo=options.url}}}
  vm.runInNewContext(readFileSync(new URL('../miniprogram/components/launch-popup/index.js',import.meta.url),'utf8'),sandbox)
  const target={data:{},setData(patch){for(const [key,value]of Object.entries(patch)){const match=key.match(/^popup\.products\[(\d+)\]$/);if(match)this.data.popup.products[Number(match[1])]=value;else this.data[key]=value}},...component.methods}
- await target.loadPopup();assert.equal(target.data.popup.products[0].imageUrl,'original:/menu/a.jpg');assert.equal(target.data.popup.products[1].imageUrl,'')
+ await Promise.all([target.loadPopup(),target.loadPopup()]);assert.equal(reads,1);assert.equal(target.data.popup.products[0].imageUrl,'original:/menu/a.jpg');assert.equal(target.data.popup.products[1].imageUrl,'')
  target.imageFailed({currentTarget:{dataset:{index:0}}});assert.equal(target.data.popup.products[0].imageUrl,'original:/menu/a.jpg');assert.equal(target.data.popup.products[0].imageFailed,true)
  assert.equal(target.data.popup.products.length,8)
  assert.equal(target.data.posterWidth,322.4)
@@ -46,5 +46,6 @@ test('recommendation uses full API images, falls back to placeholder and keeps s
  target.changeSlide({detail:{current:8}});assert.equal(target.data.currentIndex,7)
  target.order();assert.equal(target.data.visible,false);assert.equal(navigatedTo,'/pages/order/index')
  await target.loadPopup();assert.equal(target.data.currentIndex,0);assert.equal(target.data.visible,true)
+ assert.equal(reads,1);owner="different-session";await target.loadPopup();assert.equal(reads,2)
  target.close();assert.equal(target.data.visible,false)
 })

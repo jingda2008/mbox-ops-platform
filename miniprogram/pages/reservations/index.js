@@ -95,20 +95,19 @@ Page({
     error: '', success: '', isDevelopment: false,
     reservations: [], showForm: true, step: 1, cancelBusyId: '',
     reservationRecoveryReady: false, pendingReservation: null,
-    performanceImpacts: [], impactsError: '', impactBusyId: '', impactNotice: '',
+    impactsError: '', impactBusyId: '', impactNotice: '',
     expandedImpactId: '', impactAttempts: {},
     notificationBusyId: '', notificationNotice: '',
     customerName: '', contact: '', partySize: 2, reservationDate: '', reservationTime: '20:00', minimumDate: '',
     seatOptions: DEFAULT_SEATS, seatIndex: 0, occasionOptions: DEFAULT_OCCASIONS, occasionIndex: 0, occasionNote: '',
     performances: [], selectedPerformanceId: '', selectedPerformance: null,
     availability: null, availabilityText: '选择时间和人数后确认容量', depositText: '', maxGuestCount: 200,
-    wechatSubscriptionPresentationOptions: [],
   },
 
   onLoad() {
     this.setData({ isDevelopment: getRuntimeConfig().isDevelopment, minimumDate: shanghaiDate(0), reservationDate: shanghaiDate(1) })
   },
-  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/reservations/index') } enablePublicShareMenu(); this.loadData() },
+  onShow() { if (typeof this.getTabBar === 'function') { const bar = this.getTabBar(); if (bar && bar.refresh) bar.refresh('/pages/reservations/index') } enablePublicShareMenu(); this.loadData(true) },
   onHide() { this.invalidateReservationReads() },
   onUnload() { this.invalidateReservationReads() },
   invalidateReservationReads() {
@@ -119,8 +118,8 @@ Page({
     this.availabilityGeneration = (this.availabilityGeneration || 0) + 1
     this.performanceGeneration = (this.performanceGeneration || 0) + 1
     this.presentationGeneration = (this.presentationGeneration || 0) + 1
-    this.setData({ reservations: [], performanceImpacts: [], pendingReservation: null, reservationRecoveryReady: false,
-      wechatSubscriptionPresentationOptions: [], availability: null, performances: [], loading: false, submitting: false, checking: false, loadingShows: false,
+    this.setData({ reservations: [], pendingReservation: null, reservationRecoveryReady: false,
+      availability: null, performances: [], loading: false, submitting: false, checking: false, loadingShows: false,
       cancelBusyId: '', impactBusyId: '', notificationBusyId: '' })
   },
 
@@ -139,40 +138,25 @@ Page({
   },
   onPullDownRefresh() { this.loadData().finally(() => wx.stopPullDownRefresh()) },
 
-  async loadData() {
+  async loadData(reusePending = false) {
     const generation = this.loadGeneration = (this.loadGeneration || 0) + 1
     this.setData({ loading: true, error: '', reservationRecoveryReady: false, pendingReservation: null })
     try {
-      const [reservationResult, impactResult, notificationResult, preloadResult, pendingResult] = await Promise.allSettled([
-        getReservations(), getReservationPerformanceImpacts(),
-        getReservationPerformanceNotificationAuthorizations(),
-        this.preloadWechatSubscriptionPresentationOptions(),
-        getPendingCustomerReservation(),
-      ])
+      this._presentationOptions = []
+      this.presentationGeneration = (this.presentationGeneration || 0) + 1
+      this.presentationRead = null
+      const [records, recovery] = await Promise.allSettled([getReservations(reusePending), getPendingCustomerReservation()])
       if (generation !== this.loadGeneration) return
-      if (preloadResult.status === 'fulfilled' && preloadResult.value.length) {
-        this.setData({ wechatSubscriptionPresentationOptions: preloadResult.value })
+      if (recovery.status === 'rejected') throw recovery.reason
+      const pendingReservation = recovery.value
+      if (records.status === 'rejected') {
+        this.setData({ pendingReservation })
+        throw records.reason
       }
-      if (pendingResult.status === 'rejected') throw pendingResult.reason
-      const pendingReservation = pendingResult.value
-      this.setData({ pendingReservation })
-      if (reservationResult.status === 'rejected') throw reservationResult.reason
-      const data = reservationResult.value
+      const data = records.value
       if (!data || !Array.isArray(data.reservations)) throw new Error('预约列表尚未完整读取，请重试核对')
-      const performanceImpacts = impactResult.status === 'fulfilled'
-        ? (impactResult.value.impacts || []).map(impactView) : []
-      const pendingByReservation = new Map()
-      performanceImpacts.filter((impact) => impact.pending).forEach((impact) => {
-        if (!pendingByReservation.has(impact.reservationPublicId)) pendingByReservation.set(impact.reservationPublicId, impact)
-      })
-      const notificationByReservation = new Map()
-      if (notificationResult.status === 'fulfilled') {
-        ;(notificationResult.value.authorizations || []).forEach((option) => {
-          notificationByReservation.set(option.reservationPublicId, option)
-        })
-      }
       const now = Date.now()
-      const reservations = (data.reservations || []).filter((item) => {
+      const reservations = Array.from(data.reservations).filter((item) => {
         if (!EXECUTABLE_RESERVATION_STATUSES.has(item.status)) return false
         const arrivalMs = parseInstant(item.arrivalAt)
         // 已过到店时间较久的预约视为不可执行，不再占用“我的预约”。
@@ -196,16 +180,39 @@ Page({
             || (Number.isFinite(parseInstant(item.customerCancelUntil))
               && parseInstant(item.customerCancelUntil) > now)
           ),
-        performanceImpact: pendingByReservation.get(item.publicId) || null,
-        performanceNotificationOption: notificationByReservation.get(item.publicId) || null,
       })).sort((left, right) => String(right.arrivalAt).localeCompare(String(left.arrivalAt)))
-      this.setData({
-        loading: false, reservationRecoveryReady: true, reservations, performanceImpacts,
-        impactsError: impactResult.status === 'rejected' ? '演出调整状态暂时无法读取，请重试' : '',
-        showForm: !pendingReservation && reservations.length === 0,
-      })
-      await Promise.all([this.checkAvailability(), this.loadPerformances()])
+      const showForm = !pendingReservation && reservations.length === 0
+      this.setData({ loading: false, reservationRecoveryReady: true, pendingReservation, reservations, impactsError: '', showForm })
+      if (reservations.length) {
+        this.notificationRead = getReservationPerformanceNotificationAuthorizations().catch(() => ({ authorizations: [] }))
+        this.notificationRead.then(result => {
+          if (generation !== this.loadGeneration) return
+          const options = new Map((result.authorizations || []).map(option => [option.reservationPublicId, option]))
+          this.setData({ reservations: this.data.reservations.map(row => ({ ...row, performanceNotificationOption: options.get(row.publicId) || null })) })
+        })
+        this.loadReservationImpacts(generation)
+      } else {
+        this.notificationRead = null
+      }
+      if (showForm) {
+        this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
+        await Promise.all([this.checkAvailability(), this.loadPerformances()])
+      }
     } catch (error) { if (generation === this.loadGeneration) this.setData({ loading: false, error: customerErrorMessage(error, '暂时无法查看预约，请稍后刷新') }) }
+  },
+
+  async loadReservationImpacts(generation) {
+    try {
+      const result = await getReservationPerformanceImpacts()
+      if (generation !== this.loadGeneration) return
+      const pending = new Map()
+      for (const impact of (result.impacts || []).map(impactView)) {
+        if (impact.pending && !pending.has(impact.reservationPublicId)) pending.set(impact.reservationPublicId, impact)
+      }
+      this.setData({ reservations: this.data.reservations.map(row => ({ ...row, performanceImpact: pending.get(row.publicId) || null })) })
+    } catch (error) {
+      if (generation === this.loadGeneration) this.setData({ impactsError: '演出调整状态暂时无法读取，请重试' })
+    }
   },
 
   retryImpacts() { this.loadData() },
@@ -259,7 +266,7 @@ Page({
       })
       const options = mergeWechatNotificationPromptOptions(
         [performanceOption],
-        this.data.wechatSubscriptionPresentationOptions,
+        this._presentationOptions,
       )
       const result = await requestWechatSubscriptionFromTap(options, RESERVATION_SUCCESS_SUBSCRIBE_TYPES)
       if (generation !== (this.pageGeneration || 0)) return
@@ -344,6 +351,8 @@ Page({
     if (!this.data.reservationRecoveryReady || this.data.pendingReservation || this.data.submitting) return
     this.setData({ showForm: true, step: 1, error: '', success: '' }, () => {
       this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
+      this.checkAvailability()
+      this.loadPerformances()
     })
   },
   closeForm() { if (this.data.reservations.length) this.setData({ showForm: false, error: '' }) },
@@ -422,7 +431,17 @@ Page({
   },
   previousStep() { this.setData({ step: Math.max(1, this.data.step - 1), error: '' }) },
 
-  async preloadWechatSubscriptionPresentationOptions() {
+  preloadWechatSubscriptionPresentationOptions() {
+    if (this.presentationRead) return this.presentationRead
+    const read = this.readWechatSubscriptionPresentationOptions()
+    this.presentationRead = read
+    read.then(options => {
+      if (!options.length && this.presentationRead === read) this.presentationRead = null
+    })
+    return read
+  },
+
+  async readWechatSubscriptionPresentationOptions() {
     const generation = this.presentationGeneration = (this.presentationGeneration || 0) + 1
     try {
       const empty = { presentation: [], authorizations: [] }
@@ -432,7 +451,7 @@ Page({
       const [loyalty, memberService, performance, reservationPrompt, activityPrompt, checkoutPrompt, memberPrompt, couponPrompt] = await Promise.all([
         getWechatNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getWechatMemberServiceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
-        getReservationPerformanceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
+        this.notificationRead || getReservationPerformanceNotificationAuthorizations().catch(() => ({ authorizations: [] })),
         getWechatNotificationPrompt('reservation_submit').catch(() => empty),
         getWechatNotificationPrompt('activity_registration').catch(() => empty),
         getWechatNotificationPrompt('order_checkout').catch(() => empty),
@@ -459,10 +478,9 @@ Page({
       rememberPresentationOptions('activity_registration', extractPromptPresentation(activityPrompt))
       rememberPresentationOptions('order_checkout', extractPromptPresentation(checkoutPrompt))
       rememberPresentationOptions('member_card', extractPromptPresentation(memberPrompt))
-      if (options.length) this.setData({ wechatSubscriptionPresentationOptions: options })
       return options
     } catch (_error) {
-      return this.data.wechatSubscriptionPresentationOptions || []
+      return this._presentationOptions || []
     }
   },
 
@@ -489,7 +507,6 @@ Page({
     const options = resolvePresentationOptions(
       'reservation_submit',
       this._presentationOptions,
-      this.data.wechatSubscriptionPresentationOptions,
     )
     const generation = this.pageGeneration || 0
     const draftSignature = this.reservationDraftSignature()
@@ -568,7 +585,6 @@ Page({
         preferredScheduleId: show ? show.id : null,
       })
       if (generation !== (this.pageGeneration || 0)) return
-      this.preloadWechatSubscriptionPresentationOptions().catch(() => {})
       this.setData({ success: '预约已提交，门店确认后会更新状态。', occasionNote: '', showForm: false, step: 1 })
       await this.loadData()
     } catch (error) { if (generation === (this.pageGeneration || 0)) this.reservationSubmissionFailed(error) }

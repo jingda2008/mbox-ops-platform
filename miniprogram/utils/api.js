@@ -407,8 +407,21 @@ async function queryActivityRegistrationPayment(registrationPublicId, idempotenc
   })).data
 }
 
-async function getReservations() {
+let pendingReservations
+async function getReservations(reusePending = false) {
   await ensureBoundCustomerSession()
+  const scope = JSON.stringify([publicIdentityScope(), wx.getStorageSync('mbox.http.cookie.reservation.v2')])
+  if (reusePending && pendingReservations && pendingReservations.scope === scope) return pendingReservations.promise
+  const entry = { scope, promise: readReservations() }
+  pendingReservations = entry
+  try {
+    return await entry.promise
+  } finally {
+    if (pendingReservations === entry) pendingReservations = null
+  }
+}
+
+async function readReservations() {
   try {
     const response = await publicRequest('/api/public/reservations/mine')
     return response.data || response

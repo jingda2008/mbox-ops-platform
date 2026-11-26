@@ -62,6 +62,11 @@
           </view>
         </view>
         <view class="summary" wx:if="{{summary}}">{{summary}}</view>
+        <radio-group wx:if="{{selected.acceptsCash}}" class="reservation" bindchange="choosePaymentMethod">
+          <view class="rule-title">付款方式</view>
+          <label><radio value="jsapi" checked="{{paymentMethod !== 'cash'}}" disabled="{{busy}}"/>微信支付</label>
+          <label><radio value="cash" checked="{{paymentMethod === 'cash'}}" disabled="{{busy}}"/>到店付现金</label>
+        </radio-group>
         <checkbox-group bindchange="agree"><label class="agreement"><checkbox color="#27513c" value="yes" checked="{{agreed}}"/>我已阅读本场购票须知及入场说明</label></checkbox-group>
       </block>
       <view wx:else class="sheet-title">已建立购票单</view>
@@ -74,10 +79,10 @@
       </view>
       <block wx:else>
         <view wx:if="{{historyLoading || catalogLoading || (member && !purchaseReady)}}" class="auth-note">正在核对购票信息…</view>
-        <button wx:elif="{{member && phone}}" class="primary-button" bindtap="buy" disabled="{{busy || !purchaseReady || catalogLoading || historyLoading || historyError || !agreed || (proposalId && (proposalLoading || proposalError))}}" loading="{{busy}}">{{!busy && (historyLoading || catalogLoading || !purchaseReady || (proposalId && proposalLoading)) ? '正在核对购票信息…' : '微信支付购票'}}</button>
+        <button wx:elif="{{member && phone}}" class="primary-button" bindtap="buy" disabled="{{busy || !purchaseReady || catalogLoading || historyLoading || historyError || !agreed || (proposalId && (proposalLoading || proposalError))}}" loading="{{busy}}">{{!busy && (historyLoading || catalogLoading || !purchaseReady || (proposalId && proposalLoading)) ? '正在核对购票信息…' : (paymentMethod === 'cash' && selected.acceptsCash ? '提交现金购票单' : '微信支付购票')}}</button>
         <block wx:elif="{{terms || member}}">
           <view class="auth-note"><block wx:if="{{!member}}">授权手机号即可入会，购票赠分将存入会员账户。<navigator url="/pages/membership-terms/index">《{{terms.title || '会员服务协议'}}》</navigator></block><block wx:else>请授权购票联系手机号，门店会用它和你联系。</block></view>
-          <button class="primary-button" open-type="getPhoneNumber" bindgetphonenumber="authorize" disabled="{{busy || (!member && !terms)}}">{{member ? (agreed ? '授权手机号并继续支付' : '授权手机号') : (agreed ? '同意并授权手机号，继续支付' : '同意并授权手机号入会')}}</button>
+          <button class="primary-button" open-type="getPhoneNumber" bindgetphonenumber="authorize" disabled="{{busy || (!member && !terms)}}">{{member ? (agreed ? (paymentMethod === 'cash' ? '授权手机号并提交现金购票单' : '授权手机号并继续支付') : '授权手机号') : (agreed ? (paymentMethod === 'cash' ? '同意并授权手机号，提交现金购票单' : '同意并授权手机号，继续支付') : '同意并授权手机号入会')}}</button>
         </block>
         <view wx:else class="purchase-recovery">
           <text>暂时无法办理购票会员，请重新加载会员协议或联系门店。</text>
@@ -111,7 +116,8 @@
       <view>{{item.time}} · {{item.name}} × {{item.quantity}}桌 · {{item.total}}</view>
       <view wx:if="{{item.purchasedAreaText}}" class="ticket-area">购票时适用区域：{{item.purchasedAreaText}}</view>
       <view wx:if="{{item.purchaseTerms.schedule}}">购票时退票约定：{{item.purchaseTerms.schedule}}</view>
-      <button wx:if="{{item.paymentStatus === 'pending'}}" data-id="{{item.registrationPublicId}}" bindtap="resume" disabled="{{busy}}">继续付款／核对原单</button>
+      <view wx:if="{{item.paymentStatus === 'pending' && item.paymentMethod === 'cash'}}" class="auth-note">请{{item.cashDueTime ? '在 ' + item.cashDueTime + ' 前' : ''}}到收银台付现金 {{item.total}}。出示购票单号 {{item.registrationPublicId}}，收款后可在这里查看门票和赠分。</view>
+      <button wx:elif="{{item.paymentStatus === 'pending'}}" data-id="{{item.registrationPublicId}}" bindtap="resume" disabled="{{busy}}">继续付款／核对原单</button>
       <view wx:if="{{item.status === 'cancelled' && !item.lateUnissued}}">{{item.cashRefundStatus==='succeeded'?'未出票款已原路退回':'原单已关闭'}}</view>
       <view wx:if="{{!item.tickets.length && item.status==='refunded'}}">未出票款已原路退回</view>
       <view wx:if="{{item.lateUnissued}}">原单超时后收到票款，未出票及赠分。{{item.cashRefundPending ? '原票款退款已申请' : ''}}</view>

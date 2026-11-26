@@ -2077,7 +2077,8 @@ export class CustomerExperienceService {
       idempotencyKey:key,requestFingerprint:fingerprint({customer:context.customerId,input}),
       resultCodec:objectCodec<Awaited<ReturnType<typeof buyTableTickets>>>(),retainReceipt:true,
     },async tx=>{
-      if (!ready || !this.activityPaymentProviderConfigured || !this.ticketContactProtection) throw new CustomerExperienceRequestError('微信支付尚未就绪','WECHAT_IDENTITY_REQUIRED',409)
+      if (!this.ticketContactProtection) throw new CustomerExperienceRequestError('会员联系方式服务暂不可用','TICKET_CONTACT_UNAVAILABLE',503)
+      if (input.paymentMethod!=='cash' && (!ready || !this.activityPaymentProviderConfigured)) throw new CustomerExperienceRequestError('微信支付尚未就绪','WECHAT_IDENTITY_REQUIRED',409)
       const result=await buyTableTickets(tx,context.customerId,input,deterministicProviderId('TT',context.scope.storeId,key),
         deterministicProviderId('AP',context.scope.storeId,key),key,this.ticketContactProtection)
       return commandOutcome(result,guestActor(context),'community.table_ticket.purchased','community_activity_registration',

@@ -137,6 +137,21 @@ describe('CashierAfterSalesWorkbenchView', () => {
     expect(html).not.toContain('已取消 · 未收款')
     expect(html).not.toContain('本单没有支付记录')
   })
+  it('shows the cash ticket order number and cash collection button at the till',()=>{
+    vi.stubGlobal('window',{location:{search:'?registrationId=activity-registration-1'}})
+    try{
+      const view=workbench([])
+      view.actions.canUseActivityCashier=true
+      view.actions.canRecordManualCash=true
+      view.activityRegistrations=[{...activityRegistration([]),serviceVersion:4,cashTicketPending:true}]
+      const html=render(view)
+      expect(html).toContain('门票待收现金')
+      expect(html).toContain('ACTIVITY-REGISTRATION-0001')
+      expect(html).toContain('登记现金')
+      expect(html).not.toContain('登记实体POS')
+    }finally{vi.unstubAllGlobals()}
+  })
+
   it.each([1, 3])('explains the actual refund entry for activity service version %s without changing staff review rules', (serviceVersion) => {
     vi.stubGlobal('window', { location: { search: '?registrationId=activity-registration-1' } })
     try {

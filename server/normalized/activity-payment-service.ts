@@ -71,6 +71,7 @@ interface ActivityPaymentRow extends Record<string, unknown> {
   refund_status: string | null
   refund_public_id: string | null
   refund_decision_reason: string | null
+  cash_ticket_pending?: boolean
   staff_handles_order: boolean
   service_version: number
   service_refund_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
@@ -345,7 +346,8 @@ async function ownedActivityPayment(
       SELECT child.id FROM mbox.customers child JOIN family parent ON child.merged_into_customer_id=parent.id
       WHERE child.tenant_id=$1::uuid AND child.store_id=$2::uuid
     )
-    SELECT registration.id AS registration_id,
+    SELECT (registration.requested_payment_method='cash' AND registration.service_version=4 AND registration.payment_status='pending') AS cash_ticket_pending,
+      registration.id AS registration_id,
       registration.public_id AS registration_public_id,
       registration.status AS registration_status,
       registration.registration_cycle,
@@ -422,7 +424,8 @@ async function staffActivityPayment(
   expectedPaymentPublicId: string | null = null,
 ) {
   const result = await transaction.query<ActivityPaymentRow>(`
-    SELECT registration.id AS registration_id, registration.public_id AS registration_public_id,
+    SELECT (registration.requested_payment_method='cash' AND registration.service_version=4 AND registration.payment_status='pending') AS cash_ticket_pending,
+      registration.id AS registration_id, registration.public_id AS registration_public_id,
       registration.status AS registration_status, registration.payment_status,
       registration.amount_due_minor, registration.paid_amount_minor, registration.currency,
       registration.seat_hold_expires_at::text, activity.starts_at::text AS activity_starts_at,
@@ -466,7 +469,7 @@ function view(row: Readonly<ActivityPaymentRow>): PublicActivityPaymentState {
   const refundRequestBlockReason = fullRefundRequestBlockReason(row)
   const cancellable = !row.staff_handles_order && Date.parse(row.activity_starts_at) > Date.now()
     && ['not_required', 'action_required', 'pending', 'failed'].includes(resolutionState)
-  const allowedActions: ActivityPaymentAllowedAction[] = resolutionState === 'action_required'
+  const allowedActions: ActivityPaymentAllowedAction[] = row.cash_ticket_pending ? [] : resolutionState === 'action_required'
     ? ['start_payment', ...(cancellable ? ['cancel_registration' as const] : [])]
     // Reopening the same ready JSAPI action is safe and does not create a new
     // provider order.  Unknown still stays query-only: a late success must
@@ -524,7 +527,7 @@ function resolution(row: Readonly<ActivityPaymentRow>): ActivityPaymentResolutio
   if (row.authoritative_payment_status === 'failed' || row.provider_action_state === 'failed') return 'failed'
   if (row.provider_action_state === 'unknown') return 'unknown'
   if (row.provider_action_state === 'creating' || row.provider_action_state === 'ready') return 'pending'
-  if (row.authoritative_payment_status === 'created' || row.authoritative_payment_status === 'pending') return 'action_required'
+  if (row.cash_ticket_pending || row.authoritative_payment_status === 'created' || row.authoritative_payment_status === 'pending') return 'action_required'
   return 'unknown'
 }
 

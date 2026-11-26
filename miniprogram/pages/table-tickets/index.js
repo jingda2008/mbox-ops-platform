@@ -10,7 +10,7 @@ const {publicImageUrl} = require('../../utils/media')
 
 function clearMemberDisplay(){
   return {member:null,phone:null,terms:null,mine:[],proposals:[],proposalId:null,reservations:[],eligibleReservations:[],
-    reservationLockId:null,originalOrder:null,agreed:false}
+    reservationLockId:null,originalOrder:null,paymentMethod:'jsapi',agreed:false}
 }
 
 function ticketAreaText(area, deskCodes){
@@ -21,7 +21,7 @@ function ticketAreaText(area, deskCodes){
 function sameTicketNotice(current,previous){
   if(!current || !previous)return false
   const fields=['id','areaText','startsAt','endsAt','priceMinor','giftPoints','validThroughIfPaidToday',
-    'eventTermsVersion','safetyVersion','safetySummary','refundVersion','refundSchedule','refundSummary','serviceContact']
+    'acceptsCash','eventTermsVersion','safetyVersion','safetySummary','refundVersion','refundSchedule','refundSummary','serviceContact']
   return fields.every(field=>current[field]===previous[field])
 }
 
@@ -39,7 +39,7 @@ function presentOrders(orders, historyFirst) {
         effectiveTime: ticket.currentShow ? dateTime(show.startsAt) + ' — ' + dateTime(show.endsAt) : '',
         validThrough: beijingDate(parseInstant(ticket.expiresAt) - 1000)}
     })
-    return {...order, purchasedAreaText: ticketAreaText(order.purchaseTerms?.area, order.purchaseTerms?.deskCodes), tickets, nextAdmission, total: money(Number(order.totalMinor)), time: dateTime(order.startsAt)}
+    return {...order, cashDueTime:order.paymentDueAt?dateTime(order.paymentDueAt):'', purchasedAreaText: ticketAreaText(order.purchaseTerms?.area, order.purchaseTerms?.deskCodes), tickets, nextAdmission, total: money(Number(order.totalMinor)), time: dateTime(order.startsAt)}
   })
   if (historyFirst) result.sort((a,b) => a.nextAdmission === b.nextAdmission ? 0 : a.nextAdmission - b.nextAdmission)
   return result.map(({nextAdmission, ...order}) => order)
@@ -53,7 +53,7 @@ function priceSummary(offer,quantity){
 }
 
 Page({
-  data:{offerMissing:false, historyFirst:false, catalogLoading:true, proposalLoading:false, historyLoading:true, historyError:'', identityError:'', proposalError:'', catalogError:'', purchaseError:'', purchaseReady:false, rulesOpen:false,offersOpen:false,failedCover:'',originalOrder:null,reservations:[],eligibleReservations:[],reservationLockId:null,proposals:[],proposalId:null,offers:[],mine:[],selected:null,quantity:'1',agreed:false,member:null,terms:null,phone:null,busy:false,error:''},
+  data:{paymentMethod:'jsapi',offerMissing:false, historyFirst:false, catalogLoading:true, proposalLoading:false, historyLoading:true, historyError:'', identityError:'', proposalError:'', catalogError:'', purchaseError:'', purchaseReady:false, rulesOpen:false,offersOpen:false,failedCover:'',originalOrder:null,reservations:[],eligibleReservations:[],reservationLockId:null,proposals:[],proposalId:null,offers:[],mine:[],selected:null,quantity:'1',agreed:false,member:null,terms:null,phone:null,busy:false,error:''},
   onLoad(query){
     this.visit=0
     this.offerId=query.id||''
@@ -193,6 +193,11 @@ Page({
     this.setData({quantity:String(next),summary:priceSummary(selected,next)})
   },
   quantity(event){this.setData({quantity:event.detail.value,summary:priceSummary(this.data.selected,event.detail.value)})},
+  choosePaymentMethod(event){
+    if(this.data.busy || this.data.originalOrder)return
+    const method=event.detail.value
+    if(method==='jsapi' || (method==='cash' && this.data.selected?.acceptsCash))this.setData({paymentMethod:method})
+  },
   agree(event){this.setData({agreed:event.detail.value.includes('yes')})},
   async authorize(event){
     const {busy,member,terms,phone,selected,quantity,agreed,reservationLockId,proposalId}=this.data
@@ -235,16 +240,24 @@ Page({
     if(!/^[1-9]\d*$/.test(quantity)||Number(quantity)>o.remaining+(this.data.reservationLockId?1:0)){this.setData({error:'请核对本场可售桌数'});return}
     this.setData({busy:true,error:''})
     const visit=this.visit
+    const cash=this.data.paymentMethod==='cash'
+    if(cash && o.acceptsCash!==true){this.setData({busy:false,agreed:false,paymentMethod:'jsapi',error:'付款方式已更新，请重新选择。'});return}
+    let cashOrderId
     try {
-      const order=await api.buyTableTickets({offerId:o.id,...(this.data.reservationLockId?{reservationLockId:this.data.reservationLockId}:{}),...(this.data.proposalId?{proposalId:this.data.proposalId}:{}),quantity:Number(quantity),refundVersion:o.refundVersion,
+      const order=await api.buyTableTickets({offerId:o.id,...(cash?{paymentMethod:'cash'}:{}),...(this.data.reservationLockId?{reservationLockId:this.data.reservationLockId}:{}),...(this.data.proposalId?{proposalId:this.data.proposalId}:{}),quantity:Number(quantity),refundVersion:o.refundVersion,
         safetyVersion:o.safetyVersion,termsAcknowledged:true},randomId('table-ticket'))
       if(!this.data.member || this.data.member.memberNo===member.memberNo){
+        if(cash)cashOrderId=order.registrationPublicId
         this.originalReceipt={memberNo:member.memberNo,id:order.registrationPublicId}
         if(this.data.member)this.setData({originalOrder:order.registrationPublicId,agreed:false})
       }
-      if(this.currentVisit(visit) && this.data.member?.memberNo===member.memberNo)await this.payOriginal(order.registrationPublicId,visit)
+      if(!cash && this.currentVisit(visit) && this.data.member?.memberNo===member.memberNo)await this.payOriginal(order.registrationPublicId,visit)
     }catch(e){if(this.currentVisit(visit))this.setData({error:customerErrorMessage(e,'请在「我的门票」查看购票记录，避免重复付款')})}
-    finally{await this.refresh();this.setData({busy:false})}
+    finally{
+      await this.refresh()
+      this.setData({busy:false})
+      if(cashOrderId && this.currentVisit(visit) && this.data.member?.memberNo===member.memberNo && this.data.originalOrder===cashOrderId)this.viewOriginalOrder()
+    }
   },
   contactStoreForTicket(event){
     const {order:orderId,ticket:ticketId}=event.currentTarget.dataset

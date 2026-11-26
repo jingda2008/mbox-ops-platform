@@ -142,6 +142,69 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     durations.sort((a,b)=>a-b)
     console.info('Concurrent table opens (ms)',{count:durations.length,p95:Math.ceil(durations[Math.ceil(durations.length*0.95)-1]!),max:Math.ceil(durations.at(-1)!)})
   })
+  it('collects a cash ticket only once before its deadline and credits each paid ticket to the buyer',async()=>{
+    const cashier=randomUUID()
+    await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'CASH_TICKET','现金购票验收')",[cashier,scope.tenantId,scope.storeId])
+    await grantFixtureStaffPermissions(admin,scope,[cashier],['payment.manual.cash.record','community.activity.cashier','refund.execute'])
+    await run(async tx=>{
+      await tx.query('SAVEPOINT cash_ticket_test')
+      await approveEventTicketTerms(tx,activity,employee,{organizer:'测试举办方',seller:'测试售票方',approvalReference:'隔离测试场次资料',
+        performers:'测试乐队',durationMinutes:90,programNote:'现场演出',serviceContact:'门店客服',refundSchedule:'开演前可按票面全额退票。',requiresNamedAttendees:false},0)
+      const offer=await saveTicketOffer(tx,activity,employee,offerInput)
+      const terms=(await publicTableTickets(tx)).find(o=>o.id===offer.id)!
+      const phone=protection.protectPhone('+8613800000000')
+      await tx.query(`INSERT INTO mbox.customer_verified_contacts(tenant_id,store_id,public_id,customer_id,contact_type,contact_hash,encrypted_value,
+        encryption_key_version,contact_encryption_key_id,masked_value,verification_source,verified_by_customer_id,provider_reference_sha256,verified_at)
+        VALUES($1,$2,$3,$4,'phone',$5,$6,1,$7,'138****0000','wechat_phone_authorization',$4,repeat('d',64),clock_timestamp())`,
+        [scope.tenantId,scope.storeId,'CVC'+randomUUID().replaceAll('-','').toUpperCase(),customer,phone.contactHash,phone.encryptedValue,phone.encryptionKeyId])
+      const order=await buyTableTickets(tx,customer,{offerId:offer.id,quantity:2,paymentMethod:'cash',safetyVersion:terms.safetyVersion,refundVersion:terms.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection)
+      const workbench=await new PostgresCashierWorkbenchQuery({run:(_scope,fn)=>fn(tx)}).get({
+        scope,employeeId:cashier,businessDate:new Date().toISOString().slice(0,10),query:order.registrationPublicId,
+        limit:10,capabilities:['payment.manual.cash.record','community.activity.cashier']})
+      expect(workbench.activityRegistrations?.find(r=>r.id===order.id)).toMatchObject({cashTicketPending:true,amountDueMinor:100000,payment:null})
+      const repo=new PaymentRepository(tx)
+      const collect=()=>repo.recordManualForActivityRegistration({registrationPublicId:order.registrationPublicId,publicId:randomUUID(),provider:'cash',method:'cash',
+        collectedByEmployeeId:employee,expectedAmountMinor:100000,evidence:{collectedByEmployeeId:employee,receiptReference:randomUUID()}})
+      expect(order.paymentPublicId).toBeNull()
+      expect((await tx.query('SELECT 1 FROM mbox.table_tickets WHERE registration_id=$1',[order.id])).rowCount).toBe(0)
+      await expect(repo.createForActivityRegistration({activityRegistrationId:order.id,publicId:randomUUID(),method:'jsapi',amountMinor:100000,currency:'CNY'})).rejects.toThrow()
+      await tx.query('SAVEPOINT before_expiry')
+      await tx.query("UPDATE mbox.community_activity_registrations SET seat_hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[order.id])
+      await expect(collect()).rejects.toThrow()
+      await tx.query('ROLLBACK TO SAVEPOINT before_expiry')
+      const service=new PaymentCommandService(new NormalizedCommandExecutor({run:(_scope,fn)=>fn(tx)}),new NormalizedPaymentCapabilityAuthorization())
+      const meta={scope,actor:{type:'employee' as const,employeeId:cashier},businessDate:new Date().toISOString().slice(0,10),
+        idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),registrationPublicId:order.registrationPublicId,
+        publicId:randomUUID(),provider:'cash' as const,method:'cash' as const,expectedAmountMinor:100000,
+        evidence:{collectedByEmployeeId:cashier,receiptReference:randomUUID()}}
+      const received=(await service.recordManualActivity(meta)).value
+      expect((await service.recordManualActivity(meta)).replayed).toBe(true)
+      const ledger=await tx.query("SELECT amount_minor::int amount FROM mbox.reconciliation_entries WHERE payment_id=$1 AND provider='cash' AND entry_type='payment'",[received.id])
+      expect(ledger.rows).toEqual([{amount:100000}])
+      expect(received).toMatchObject({provider:'cash',amountMinor:100000,status:'succeeded'})
+      await expect(collect()).rejects.toThrow()
+      const lots=await tx.query(`SELECT l.original_points,k.ordinal FROM mbox.table_tickets k JOIN mbox.loyalty_point_lots l ON l.id=k.point_lot_id
+        JOIN mbox.customer_memberships m ON m.id=l.membership_id WHERE k.registration_id=$1 AND k.payment_id=$2 AND m.customer_id=$3 ORDER BY k.ordinal`,[order.id,received.id,customer])
+      expect(lots.rows).toEqual([{original_points:550,ordinal:1},{original_points:550,ordinal:2}])
+      expect((await tx.query('SELECT 1 FROM mbox.payments WHERE activity_registration_id=$1',[order.id])).rowCount).toBe(1)
+      const first=(await tx.query('SELECT id FROM mbox.table_tickets WHERE registration_id=$1 AND ordinal=1',[order.id])).rows[0].id
+      const request=await requestTicketRefund(tx,order.id,first,customer,'现金原票退一桌')
+      const submitted=await submitTicketCashRefund(tx,request.caseId,employee,50000,null)
+      const refunds=new RefundRepository(tx)
+      await refunds.approve(submitted.refundId,cashier,'核对现金收据与原票')
+      await refunds.beginExecution(submitted.refundId)
+      const manualRefund={...meta,refundId:submitted.refundId,idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),succeeded:true,receiptReference:'',providerSnapshot:{source:'isolated_cash_test'}}
+      const back=(await service.recordManualRefundResult(manualRefund)).value
+      expect((await service.recordManualRefundResult(manualRefund)).replayed).toBe(true)
+      expect((await tx.query("SELECT amount_minor::int amount FROM mbox.reconciliation_entries WHERE refund_id=$1 AND provider='cash' AND entry_type='refund'",[back.id])).rows).toEqual([{amount:-50000}])
+      expect((await ticketFinanceDay(tx,null)).amounts).toMatchObject({ticketCash:'100000',ticketRefund:'50000'})
+      expect(back).toMatchObject({paymentId:received.id,amountMinor:50000,status:'succeeded'})
+      const tickets=await tx.query('SELECT ordinal,refunded_at IS NOT NULL AS refunded FROM mbox.table_tickets WHERE registration_id=$1 ORDER BY ordinal',[order.id])
+      expect(tickets.rows).toEqual([{ordinal:1,refunded:true},{ordinal:2,refunded:false}])
+      expect((await tx.query('SELECT available_points FROM mbox.loyalty_accounts WHERE customer_id=$1',[customer])).rows[0].available_points).toBe(550)
+      await tx.query('ROLLBACK TO SAVEPOINT cash_ticket_test')
+    })
+  })
   it('publishes an immutable offer, rejects stale edits and hides a withdrawn series',async()=>{
     await expect(run(tx=>saveTicketOffer(tx,activity,employee,offerInput))).rejects.toMatchObject({code:'TICKET_EVENT_TERMS_REQUIRED'})
     await run(tx=>approveEventTicketTerms(tx,activity,employee,{organizer:'测试举办方',seller:'测试售票方',approvalReference:'隔离测试场次资料',performers:'测试乐队',

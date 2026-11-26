@@ -541,3 +541,22 @@ test('无生效协议时重读，保留当前票档与桌数并恢复手机号�
   assert.equal(page.data.terms.version,8)
   assert.deepEqual(calls,[])
 })
+
+test('现金购票支持新会员和老会员，建待收款原单，不拉起微信支付',async()=>{
+  for(const returning of [true,false]){
+    const {page,api,calls}=fixture(undefined,undefined,{pageScrollTo(){}})
+    if(returning)api.getMiniBootstrap=async()=>({membership:{memberNo:'M002'},membershipTerms:null})
+    const catalog=api.getTableTicketOffers
+    api.getTableTicketOffers=async()=>(await catalog()).map(o=>({...o,acceptsCash:true}))
+    let submitted
+    api.buyTableTickets=async body=>{submitted=body;return {registrationPublicId:'cash-original'}}
+    await page.refresh()
+    page.choosePaymentMethod({detail:{value:'cash'}})
+    page.agree({detail:{value:['yes']}})
+    if(returning)await page.buy()
+    else await page.authorize({detail:{code:'phone-code'}})
+    assert.equal(submitted.paymentMethod,'cash')
+    assert.equal(page.data.originalOrder,'cash-original')
+    assert.deepEqual(calls.map(c=>c[0]),returning?[]:['enroll'])
+  }
+})

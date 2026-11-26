@@ -166,6 +166,8 @@ interface RecollectionAuthorizationRow extends Record<string, unknown> {
 }
 
 interface ActivityRegistrationRow extends Record<string, unknown> {
+  cash_ticket_pending: boolean
+  cash_ticket_due_at: string | null
   service_version: number
   service_refund_disposition: 'retain_fulfillment' | 'stop_unstarted' | null
   activity_refund_reserved_minor: string | number
@@ -488,7 +490,9 @@ export class PostgresCashierWorkbenchQuery {
       const totals=orderResult.rows[0]??((input.page??0)>0?(await transaction.query<OrderRow>(orderQuery,orderParams.map((value,index)=>index===4?1:index===13?0:value))).rows[0]:undefined)
       const activityResult = canUseActivityCashier
         ? await transaction.query<ActivityRegistrationRow>(`
-            SELECT registration.id,registration.public_id,registration.service_version,registration.service_refund_disposition,
+            SELECT registration.id,registration.public_id,registration.service_version,
+              (registration.requested_payment_method='cash' AND registration.service_version=4 AND registration.payment_status='pending') AS cash_ticket_pending,
+              registration.payment_due_at::text AS cash_ticket_due_at,registration.service_refund_disposition,
               (SELECT COALESCE(SUM(reserved.amount_minor),0) FROM mbox.refunds reserved
                WHERE (reserved.tenant_id,reserved.store_id,reserved.payment_id)=(registration.tenant_id,registration.store_id,registration.payment_id)
                 AND (reserved.status IN('requested','approved','processing','succeeded') OR (reserved.status='failed' AND reserved.approved_by_employee_id IS NOT NULL))) AS activity_refund_reserved_minor,
@@ -1117,7 +1121,7 @@ function mapRefund(
 
 function mapActivityRegistration(row: ActivityRegistrationRow): CashierWorkbenchActivityRegistration {
   return {
-    id: row.id, serviceVersion: row.service_version, serviceRefundDisposition: row.service_refund_disposition,
+    id: row.id, cashTicketPending: row.cash_ticket_pending===true, cashTicketDueAt: row.cash_ticket_pending ? row.cash_ticket_due_at : null, serviceVersion: row.service_version, serviceRefundDisposition: row.service_refund_disposition,
     publicId: row.public_id,
     activityPublicId: row.activity_public_id,
     activityTitle: row.activity_title,

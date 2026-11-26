@@ -206,6 +206,20 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
       draftBatch:{drafts,termsVersion:integer(body.termsVersion,'公示版本',1,2147483647)},expectedUpdatedAt})
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
+  const rosterPath = '/staff/activity-operations/draft-roster/:areaId'
+  app.get<{Params:{areaId:string}}>(rosterPath, async (request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.manage'])
+    return reply.header('cache-control','no-store').send({data:await options.service.draftRoster(ctx,uuid(request.params.areaId,'桌区'))})
+  }))
+  app.post<{Params:{areaId:string}}>(rosterPath, async (request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['community.activity.manage'])
+    const body=object(request.body,'本区桌号名单')
+    if (!Array.isArray(body.tableIds)) throw invalid('请核对所选桌号')
+    const ids=body.tableIds.map(id=>uuid(id,'桌号').toLowerCase()).sort()
+    const result=await options.service.updateDraftRoster(ctx,uuid(request.params.areaId,'桌区'),
+      text(body.revision,'名单版本',64,64),ids,idempotencyKey(request))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
   const offerPath = '/staff/activity-operations/:publicId/table-tickets'
   app.get<{Params:{publicId:string}}>(offerPath,async(request,reply)=>handle(reply,async()=>{
     const context = await authorizedAny(options,request,['community.activity.manage','community.activity.publish','community.activity.verify'])

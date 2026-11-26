@@ -1,3 +1,4 @@
+import {readDraftRoster,saveDraftRoster} from './ticket-draft-roster.js'
 import {planTicketCashRefund} from './table-ticket-auto-review.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
 import {publicTableTickets} from './table-ticket-purchase.js'
@@ -161,6 +162,22 @@ export class ActivityOperationsService {
     },async tx=>{
       const result=await approveEventTicketTerms(tx,id,context.employeeId,input,version)
       return {result,auditEvents:[audit(context,{action:'table_ticket.terms.approved',objectType:'table_ticket_event_terms',objectId:result.id,afterData:{version:result.version}})],outboxMessages:[]}
+    })
+  }
+
+  draftRoster(context: ActivityOperationsStaffContext, areaId: string) {
+    return this.transactions.run(context.scope, tx=>readDraftRoster(tx,areaId), {readOnly:true})
+  }
+
+  updateDraftRoster(context: ActivityOperationsStaffContext, areaId: string, revision: string, tableIds: string[], key: string) {
+    return staffAuthorizedCommands(this.commands,context.employeeId,'community.activity.manage').execute({
+      scope:context.scope, operationScope:'community.table_ticket.draft_roster', idempotencyKey:key,
+      requestFingerprint:fingerprint({areaId,revision,tableIds,actor:context.employeeId}),
+      resultCodec:objectCodec<{areaId:string;tableIds:string[]}>(), retainReceipt:true,
+    }, async tx=>{
+      const result=await saveDraftRoster(tx,areaId,revision,tableIds)
+      return {result,auditEvents:[audit(context,{action:'community.table_ticket.draft_roster_saved',
+        objectType:'area',objectId:areaId,afterData:{revision,tableIds}})],outboxMessages:[]}
     })
   }
 

@@ -128,3 +128,8 @@
 .ticket-offer-editor textarea { font: inherit; padding-block: 6px; resize: vertical; }
 .ticket-draft-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(8rem,1fr)); gap:.6rem; align-items:end; grid-column:1/-1; border-top:1px solid #d9d9cb; padding:.6rem 0; }
 .ticket-draft-row label { min-width:0; }
+
+.ticket-roster-editor { margin-block: 8px; }
+.ticket-roster-editor fieldset { min-width: 0; margin: 8px 0; padding: 12px; }
+.ticket-roster-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr)); gap: 4px 12px; }
+.ticket-offer-editor form:has(input[name="draftTables"]:checked) button[value="published"] { display: none; }

@@ -30,6 +30,22 @@ describe('activity operations API', () => {
     expect((await denied.inject({method:'POST',url:'/staff/activity-operations/activity-stop-test/stop-registration',payload:{reason:'停止报名'}})).statusCode).toBe(403)
     await denied.close()
   })
+  it('requires the activity manager for roster reads and writes and passes the original save key',async()=>{
+    const url='/staff/activity-operations/draft-roster/'+scope.storeId
+    const payload={revision:'a'.repeat(64),tableIds:[context.employeeId]}
+    const service=serviceMock()
+    const headers={'idempotency-key':'draft-roster-save-001'}
+    const denied=await application(service,{assertPermission:async()=>{throw new StaffAccessDeniedError('denied')}})
+    expect((await denied.inject({method:'GET',url})).statusCode).toBe(403)
+    expect((await denied.inject({method:'POST',url,payload,headers})).statusCode).toBe(403)
+    expect(service.updateDraftRoster).not.toHaveBeenCalled()
+    await denied.close()
+    const app=await application(service)
+    expect((await app.inject({method:'GET',url})).statusCode).toBe(200)
+    expect((await app.inject({method:'POST',url,payload,headers})).statusCode).toBe(200)
+    expect(service.updateDraftRoster).toHaveBeenCalledWith(context,scope.storeId,payload.revision,payload.tableIds,headers['idempotency-key'])
+    await app.close()
+  })
   it('returns a clear authentication response when the staff session expired', async () => {
     const service = serviceMock()
     const app = await application(
@@ -370,6 +386,8 @@ describe('activity operations API', () => {
 
 function serviceMock() {
   return {
+    draftRoster:vi.fn(async()=>({desks:[],revision:'a'.repeat(64)})),
+    updateDraftRoster:vi.fn(async()=>({value:{tableIds:[]},replayed:false})),
     stopRegistration:vi.fn(async()=>({value:{publicId:'activity-stop-test',registrationClosedAt:'2026-09-10T06:00:00Z'},replayed:false})),
     list: vi.fn(async () => []),
     componentCatalog: vi.fn(async () => []),

@@ -55,7 +55,7 @@ export async function ticketOfferCatalog(tx: ScopedTransaction, activityPublicId
       mbox.menu_category_visible_at(area.tenant_id,area.store_id,offer.category_code,statement_timestamp()) AS "categoryVisible",
       live.status='published' AS "isOnSale",offer.recommend_in_community AS "recommendInCommunity",
       coalesce((SELECT jsonb_agg(jsonb_build_object('id',t.id,'code',t.code) ORDER BY t.code)
-        FROM mbox.ticket_table_roster r JOIN mbox.tables t USING (tenant_id,store_id)
+        FROM mbox.ticket_draft_roster r JOIN mbox.tables t USING (tenant_id,store_id,area_id)
         WHERE t.id=r.table_id AND (t.tenant_id,t.store_id,t.area_id)=(area.tenant_id,area.store_id,area.id)
           AND t.status='available' AND area.status='active'),'[]'::jsonb) AS "ticketTables",
       EXISTS(SELECT 1 FROM mbox.ticket_table_roster r WHERE (r.tenant_id,r.store_id)=(area.tenant_id,area.store_id)) AS "rosterConfigured",
@@ -127,8 +127,8 @@ export async function saveTicketOffer(tx: ScopedTransaction, activityPublicId: s
   if (input.status==='draft' && (rosterConfigured || draftTableIds!==null)) {
     if (!draftTableIds?.length || draftTableIds.length>200 || new Set(draftTableIds).size!==draftTableIds.length)
       throw new ActivityOperationsError('请从本区已核对的桌台中选择至少一桌','TICKET_TABLE_SCOPE_INVALID',400)
-    const eligible=await tx.query(`SELECT t.id FROM mbox.ticket_table_roster r
-      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.id)=(r.tenant_id,r.store_id,r.table_id)
+    const eligible=await tx.query(`SELECT t.id FROM mbox.ticket_draft_roster r
+      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.area_id,t.id)=(r.tenant_id,r.store_id,r.area_id,r.table_id)
       WHERE (t.tenant_id,t.store_id,t.area_id)=($1,$2,$3) AND t.status='available'
         AND t.id=ANY($4::uuid[]) FOR SHARE OF t`,[...scope,input.areaId,draftTableIds])
     if(eligible.rows.length!==draftTableIds.length)

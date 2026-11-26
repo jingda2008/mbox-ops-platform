@@ -1302,9 +1302,10 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
       || (provider === 'physical_pos' && actions.canRecordManualPos)
       || (provider === 'external_manual' && actions.canRecordManualExternal))
   const needsAuthorization = isRefunded && dueMinor > 0 && recollectionAuthorization === null
-  const canCollect = dueMinor > 0 && refund === null && !onlineActionPending && !hasUnrefundedLateSuccess
+  const cashExpired = registration.cashTicketPending && registration.cashTicketDueAt && Date.parse(registration.cashTicketDueAt)<=Date.now()
+  const canCollect = !cashExpired && dueMinor > 0 && refund === null && !onlineActionPending && !hasUnrefundedLateSuccess
     && (!needsAuthorization)
-    && (actions.canRecordManualCash || actions.canRecordManualPos || actions.canRecordManualExternal)
+    && (actions.canRecordManualCash || (!registration.cashTicketPending && (actions.canRecordManualPos || actions.canRecordManualExternal)))
   const canRequestRefund = payment !== null && payment.remainingRefundableMinor > 0
     && (!refund || ['succeeded','rejected','failed'].includes(refund.status)) && actions.canRequestRefund
   const collectionKey = provider === null ? '' : `activity-manual-payment-${provider}-${registration.id}`
@@ -1333,14 +1334,15 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
   return <article className="cashier-order cashier-activity-registration" data-cashier-activity-registration-id={registration.id}>
     <button type="button" className="cashier-order-toggle" aria-expanded={expanded} onClick={onToggle}>
       <span><b>{registration.activityTitle}</b><small>{shortReference(registration.publicId)} · {registration.partySize} 人 · {formatTime(registration.startsAt)}</small></span>
-      <span><strong>¥{formatAmount(isRefunded ? registration.paidAmountMinor : dueMinor)}</strong><em>{hasUnrefundedLateSuccess ? `旧款待退款 ${lateSuccessPayments.length} 笔` : paymentStatusLabel(registration.paymentStatus)}</em></span>
+      <span><strong>¥{formatAmount(isRefunded ? registration.paidAmountMinor : dueMinor)}</strong><em>{hasUnrefundedLateSuccess ? `旧款待退款 ${lateSuccessPayments.length} 笔` : registration.cashTicketPending ? '门票待收现金' : paymentStatusLabel(registration.paymentStatus)}</em></span>
       <ChevronDown size={18} className={expanded ? 'is-open' : ''} />
     </button>
     {expanded && <div className="cashier-order-detail">
       <section>
-        <h3>活动报名记录</h3>
+        <h3>{registration.cashTicketPending ? '现金购票单' : '活动报名记录'}</h3>
+        {registration.cashTicketPending && <p>购票单号 {registration.publicId}{registration.cashTicketDueAt && ' · 付款截止 '+formatTime(registration.cashTicketDueAt)}{cashExpired && ' · 已超时，请顾客重新选票。'}</p>}
         <div className="cashier-line"><span><b>活动编号</b><small>{shortReference(registration.activityPublicId)} · 报名状态：{businessStatus(registration.status,'registration')}</small></span><strong>{registration.partySize} 人</strong></div>
-        <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。{serviceV3 ? '顾客可在小程序申请符合条件的整份退订，申请统一进入本页审核。员工代办的退款须由另一名有权限的员工复核。' : '旧版报名如需退款，请联系门店办理。员工代办的退款须由另一名有权限的员工复核。'}</p>
+        <p className="cashier-workbench-boundary">本页不显示或导出顾客联系方式。{registration.serviceVersion===4 ? '门票退票由门店按原票办理。' : serviceV3 ? '顾客可在小程序申请符合条件的整份退订，申请统一进入本页审核。员工代办的退款须由另一名有权限的员工复核。' : '旧版报名如需退款，请联系门店办理。员工代办的退款须由另一名有权限的员工复核。'}</p>
       </section>
       <section>
         <h3>收款、退款与再次收款</h3>
@@ -1386,14 +1388,14 @@ function ActivityCashierRegistrationCard({ registration, auth, actions, busyKey,
           <div><strong>登记活动现场收款</strong><small>应收 ¥{formatAmount(dueMinor)}；仅在实际收到款项后登记，凭证会和当前员工、时间一起进入审计与日结。</small></div>
           {provider === null ? <div className="cashier-action-row">
             {actions.canRecordManualCash && <button type="button" className="cashier-primary-action" disabled={busyKey !== null} onClick={() => setProvider('cash')}>登记现金</button>}
-            {actions.canRecordManualPos && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('physical_pos')}>登记实体POS</button>}
-            {actions.canRecordManualExternal && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('external_manual')}>登记其他方式</button>}
+            {!registration.cashTicketPending && actions.canRecordManualPos && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('physical_pos')}>登记实体POS</button>}
+            {!registration.cashTicketPending && actions.canRecordManualExternal && <button type="button" className="cashier-secondary-action" disabled={busyKey !== null} onClick={() => setProvider('external_manual')}>登记其他方式</button>}
           </div> : <div className="cashier-manual-result">
             {provider === 'external_manual' && <label className="cashier-field"><span>实际收款方式</span><select value={externalMethodCode} onChange={(event) => { setExternalMethodCode(event.target.value as typeof externalMethodCode); setCollectionConfirmed(false) }}><option value="bank_transfer">银行转账</option><option value="mobile_wallet">其他扫码或数字钱包</option><option value="stored_value_voucher">储值卡或代金凭证</option><option value="corporate_account">公司账户结算</option><option value="other">其他经批准方式</option></select></label>}
             {provider === 'cash' ? <p className="cashier-guidance">现金记账编号由系统自动生成，无需填写。</p> : <label className="cashier-field"><span>{provider === 'physical_pos' ? 'POS小票/交易号' : '外部交易号或凭证号'}</span><input value={receiptReference} maxLength={256} onChange={(event) => { setReceiptReference(event.target.value); setCollectionConfirmed(false) }} /></label>}
             {provider === 'physical_pos' && <label className="cashier-field"><span>POS终端编号</span><input value={terminalId} maxLength={128} onChange={(event) => { setTerminalId(event.target.value); setCollectionConfirmed(false) }} /></label>}
             {provider === 'external_manual' && <label className="cashier-field"><span>收款说明</span><textarea value={collectionNote} maxLength={500} onChange={(event) => { setCollectionNote(event.target.value); setCollectionConfirmed(false) }} /></label>}
-            {collectionConfirmed && <p className="cashier-guidance">请确认已实际收到 ¥{formatAmount(dueMinor)}，凭证“{receiptReference.trim()}”真实可核对。提交后会计入收款与日结。</p>}
+            {collectionConfirmed && <p className="cashier-guidance">请确认已实际收到 ¥{formatAmount(dueMinor)}。{provider === 'cash' ? '系统将生成现金收款编号。' : '收款凭证：'+receiptReference.trim()+'。'}提交后会计入收款与日结。</p>}
             <div className="cashier-action-row"><button type="button" className="cashier-quiet-action" disabled={busyKey !== null} onClick={() => { setProvider(null); setCollectionConfirmed(false) }}>返回</button><button type="button" className="cashier-primary-action" disabled={busyKey !== null || (provider !== 'cash' && receiptReference.trim().length < 3) || (provider === 'physical_pos' && terminalId.trim().length < 2) || (provider === 'external_manual' && collectionNote.trim().length < 2)} onClick={() => { if (!collectionConfirmed) setCollectionConfirmed(true); else void submitCollection() }}>{collectionConfirmed ? '确认已实际收款' : '核对并继续'}</button></div>
           </div>}
         </div>}

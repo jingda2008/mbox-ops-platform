@@ -110,7 +110,7 @@ export interface ActivityOperationsRegistration {
   status: ActivityRegistrationStatus
   paymentChoice: 'none' | 'deposit' | 'full'
   requestedPaymentChoice: 'none' | 'deposit' | 'full'
-  requestedPaymentMethod: 'jsapi' | 'native_qr' | null
+  requestedPaymentMethod: 'jsapi' | 'native_qr' | 'cash' | null
   requestedAmountDueMinor: number
   paymentStatus: 'not_required' | 'pending' | 'paid' | 'expired' | 'refunded'
   totalFeeAmountMinor: number
@@ -303,7 +303,7 @@ interface RegistrationRow extends Record<string, unknown> {
   status: ActivityRegistrationStatus
   payment_choice: 'none' | 'deposit' | 'full'
   requested_payment_choice: 'none' | 'deposit' | 'full'
-  requested_payment_method: 'jsapi' | 'native_qr' | null
+  requested_payment_method: 'jsapi' | 'native_qr' | 'cash' | null
   requested_amount_due_minor: string | number
   payment_status: 'not_required' | 'pending' | 'paid' | 'expired' | 'refunded'
   fee_amount_minor: string | number

@@ -130,6 +130,8 @@ export interface CashierWorkbenchPayment {
  * They intentionally expose no attendee contact fields in the cashier view.
  */
 export interface CashierWorkbenchActivityRegistration {
+  cashTicketPending?: boolean
+  cashTicketDueAt?: string | null
   serviceVersion?: number
   serviceRefundDisposition?: 'retain_fulfillment' | 'stop_unstarted' | null
   id: string

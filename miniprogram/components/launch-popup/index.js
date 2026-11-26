@@ -2,6 +2,28 @@ const { publicImageUrl } = require('../../utils/media')
 const { ensureCustomerSession } = require('../../utils/auth')
 const { request } = require('../../utils/request')
 const { popupShouldDisplay } = require('../../utils/launch-popup-policy')
+// The WeChat package targets one store. Scope the short cache to its session
+// and foreground so returning from the background refreshes campaign changes.
+let popupRead
+function popupScope(app) {
+ return JSON.stringify([app.globalData.foregroundSequence, wx.getStorageSync('mbox.http.cookie.reservation.v2'),
+  wx.getStorageSync('mbox.wechat.identity.principal.v1'), wx.getStorageSync('mbox.membership.loggedOut.v1')])
+}
+
+function readPopup(scope) {
+ if (popupRead && popupRead.scope === scope && Date.now() < popupRead.expires) return popupRead.promise
+ const entry = { scope, expires: Infinity }
+ entry.promise = request('/api/public/mini/launch-popup', { requireTableSession: false }).then(result => {
+  entry.expires = Date.now() + 15000
+  return result
+ }).catch(error => {
+  if (popupRead === entry) popupRead = null
+  throw error
+ })
+ popupRead = entry
+ return entry.promise
+}
+
 Component({
  data: { visible: false, popup: null, currentIndex: 0, posterWidth: 310, posterHeight: 232.5 },
  pageLifetimes: { show() { this.loadPopup() }, resize(event) { this.updatePosterSize(event.size.windowWidth) }, hide() { this.setData({ visible: false }); this.generation = (this.generation || 0) + 1 } },
@@ -26,9 +48,11 @@ Component({
     const window = typeof wx.getWindowInfo === 'function' ? wx.getWindowInfo() : wx.getSystemInfoSync()
     this.updatePosterSize(window.windowWidth)
     await ensureCustomerSession()
-    const result = await request('/api/public/mini/launch-popup', { requireTableSession: false })
     if (generation !== this.generation) return
-    const popup = result.data, app = getApp(), now = Date.now()
+    const app = getApp(), scope = popupScope(app)
+    const result = await readPopup(scope)
+    if (generation !== this.generation || scope !== popupScope(app)) return
+    const popup = result.data, now = Date.now()
     const state = app.globalData.launchPopupSeen || {}, day = new Date(now + 8 * 3600000).toISOString().slice(0,10)
     let stored = null
     try { stored = wx.getStorageSync('mbox.launch-popup.daily.v1') } catch (_) {}

@@ -5,7 +5,7 @@
    <swiper-item wx:for="{{popup.products}}" wx:key="id">
     <view class="launch-popup-poster" bindtap="order" role="button" aria-label="查看{{item.name}}的菜单">
      <view class="launch-popup-hero">
-      <image wx:if="{{item.imageUrl && !item.imageFailed}}" class="launch-popup-image" style="width:{{item.imageHeightRatio > 0 && item.imageHeightRatio < .75 ? .75 / item.imageHeightRatio * 100 : 100}}%;height:{{item.imageHeightRatio > .75 ? item.imageHeightRatio / .75 * 100 : 100}}%;opacity:{{item.imageHeightRatio > 0 ? 1 : 0}}" src="{{item.imageUrl}}" mode="aspectFit" data-index="{{index}}" bindload="imageLoaded" binderror="imageFailed"/>
+      <image wx:if="{{item.imageUrl && !item.imageFailed && index >= currentIndex - 1 && index <= currentIndex + 1}}" class="launch-popup-image" style="width:{{item.imageHeightRatio > 0 && item.imageHeightRatio < .75 ? .75 / item.imageHeightRatio * 100 : 100}}%;height:{{item.imageHeightRatio > .75 ? item.imageHeightRatio / .75 * 100 : 100}}%;opacity:{{item.imageHeightRatio > 0 ? 1 : 0}}" src="{{item.imageUrl}}" mode="aspectFit" data-index="{{index}}" bindload="imageLoaded" binderror="imageFailed"/>
       <view wx:else class="launch-popup-placeholder">图片暂不可用</view>
       <text wx:if="{{item.available === false}}" class="launch-popup-status">暂不可点</text>
       <view class="launch-popup-heading"><text class="launch-popup-title">{{popup.title}}</text></view>

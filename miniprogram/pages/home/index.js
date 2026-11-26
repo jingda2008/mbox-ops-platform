@@ -4,7 +4,6 @@ const {
   getMiniBootstrap,
   getReservations,
   getReservationPerformances,
-  getCustomerBenefits,
   enrollMembership,
 } = require('../../utils/api')
 const { getRuntimeConfig } = require('../../config/index')
@@ -155,7 +154,6 @@ Page({
     membershipInviteAgreed: false,
     membershipInviteBusy: false,
     pendingActivityId: '',
-    benefitCount: 0,
     upcomingActivity: null,
     brandStoryCard: null,
     editorialCards: [],
@@ -265,11 +263,10 @@ Page({
     this.setData({ loading: true, error: '', tableCode: session.tableCode || '', hasTableSession: Boolean(session.tableToken) })
     // Resolve a scanned table independently of optional homepage content.
     const tableState = session.tableToken ? this.loadTableState(false, request) : null
-    const [bootstrap, reservations, performances, benefits] = await Promise.all([
+    const [bootstrap, reservations, performances] = await Promise.all([
       settled(() => getMiniBootstrap(), { membership: null, activities: [] }),
-      settled(() => getReservations(), { reservations: [] }),
+      settled(() => getReservations(true), { reservations: [] }),
       settled(() => getReservationPerformances(shanghaiDate()), null),
-      settled(() => getCustomerBenefits(), []),
     ])
     if (!this.isCurrentTableRequest(request)) return
     const app = getApp()
@@ -278,7 +275,6 @@ Page({
       membership: bootstrap.membership || null,
       membershipTerms: bootstrap.membershipTerms || null,
       membershipInviteVisible: false,
-      benefitCount: (benefits || []).reduce((sum, item) => sum + Number(item.quantityAvailable || 0), 0),
       upcomingActivity: activityFeatureView(currentActivities(bootstrap.activities)[0] || null),
       brandStoryCard: homepageCards.find((item) => item.isMboxStory) || MBOX_STORY_CARD,
       editorialCards: homepageCards.filter((item) => !item.isMboxStory),

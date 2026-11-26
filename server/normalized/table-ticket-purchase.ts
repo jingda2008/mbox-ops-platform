@@ -12,7 +12,10 @@ const currentOffers = `
     WHERE tenant_id=$1 AND store_id=$2 AND status<>'draft'
     ORDER BY activity_id,area_id,version DESC
   )
-  SELECT o.id,o.activity_id AS "activityId", a.public_id AS "activityPublicId",o.area_id AS "areaId",
+  SELECT EXISTS(SELECT 1 FROM mbox.store_commerce_policies p JOIN mbox.customer_experience_features f USING(tenant_id,store_id)
+      WHERE p.tenant_id=$1 AND p.store_id=$2 AND f.feature_code='community.activity.payment'
+      AND f.rollout_state IN('pilot','enabled') AND (f.effective_from IS NULL OR f.effective_from<=statement_timestamp())
+      AND (f.effective_until IS NULL OR f.effective_until>statement_timestamp())) AS "acceptsCash",o.id,o.activity_id AS "activityId", a.public_id AS "activityPublicId",o.area_id AS "areaId",
     o.sale_from::text AS "saleFrom",o.sale_until::text AS "saleUntil",
     CASE WHEN o.sale_from>clock_timestamp() THEN 'upcoming' WHEN o.sale_until<=clock_timestamp() THEN 'ended' ELSE 'open' END AS "saleState",
     (SELECT array_agg(d.code ORDER BY d.code) FROM mbox.scoped_ticket_offer_membership frozen
@@ -47,7 +50,7 @@ const currentOffers = `
 interface Offer extends Record<string,unknown> {
   id:string;activityId:string;activityPublicId:string;areaId:string;name:string;areaName:string;deskCodes:string[]|null;startsAt:string;endsAt:string
   title:string;priceMinor:number;giftPoints:number;capacity:number;paymentMinutes:number;remaining:number
-  seatsPerTable:number|null;refundSummary:string;refundVersion:string;safetyVersion:string;safetySummary:string;serviceContact:string;eventTermsVersion:number
+  acceptsCash:boolean;seatsPerTable:number|null;refundSummary:string;refundVersion:string;safetyVersion:string;safetySummary:string;serviceContact:string;eventTermsVersion:number
 }
 export async function publicTableTickets(tx:ScopedTransaction,recommendedOnly=false) {
   return (await tx.query<Offer>(currentOffers+(recommendedOnly?' AND o.recommend_in_community':'')+' ORDER BY a.starts_at,o.price_minor,o.id',[tx.scope.tenantId,tx.scope.storeId])).rows
@@ -72,7 +75,7 @@ export async function memberTicketProposals(tx:ScopedTransaction,customer:string
       AND c.processing_status='active' AND c.contact_type='phone' AND c.revoked_at IS NULL AND
       mbox.canonical_customer_id($1,$2,c.customer_id)=mbox.canonical_customer_id($1,$2,$3)`,[tx.scope.tenantId,tx.scope.storeId,customer])).rows
 }
-export interface TablePurchaseInput {proposalId?:string;reservationLockId?:string;offerId:string;quantity:number;safetyVersion:string;refundVersion:string}
+export interface TablePurchaseInput {paymentMethod?:'jsapi'|'cash';proposalId?:string;reservationLockId?:string;offerId:string;quantity:number;safetyVersion:string;refundVersion:string}
 export async function buyTableTickets(tx:ScopedTransaction,customerId:string,input:TablePurchaseInput,registrationPublicId:string,paymentPublicId:string,key:string,protection:ActivityContactProtectionKeyring) {
   const scope=[tx.scope.tenantId,tx.scope.storeId]
   await lockReservationPolicy(tx)
@@ -97,11 +100,12 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
       [...scope,input.proposalId,input.offerId,input.quantity,buyer.contact_hash])).rows[0]
     if(!proposal)throw new CustomerExperienceRequestError('请核对代售票对应的本人手机号、桌数和有效期','TICKET_ASSISTANCE_CHANGED',409)
   }
-  const enabled=(await tx.query(`SELECT 1 FROM mbox.store_commerce_policies p JOIN mbox.customer_experience_features f
-    USING(tenant_id,store_id) WHERE p.tenant_id=$1 AND p.store_id=$2 AND p.online_payment_enabled AND f.feature_code='community.activity.payment'
-    AND f.rollout_state IN('pilot','enabled') AND (f.effective_from IS NULL OR f.effective_from<=clock_timestamp())
-    AND (f.effective_until IS NULL OR f.effective_until>clock_timestamp())`,scope)).rowCount
-  if (!enabled) throw new CustomerExperienceRequestError('本场线上收款尚未启用','ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',503)
+  const cash=input.paymentMethod==='cash'
+  if (!offer.acceptsCash) throw new CustomerExperienceRequestError('本场收款尚未启用','ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',503)
+  if (!cash) {
+    const policy=await tx.query('SELECT online_payment_enabled FROM mbox.store_commerce_policies WHERE tenant_id=$1 AND store_id=$2',scope)
+    if (!policy.rows[0]?.online_payment_enabled) throw new CustomerExperienceRequestError('本场线上收款尚未启用','ACTIVITY_PAYMENT_AUTHORITY_NOT_CONFIGURED',503)
+  }
   const original=input.reservationLockId?(await memberTicketReservations(tx,customerId)).find(r=>r.id===input.reservationLockId
     && r.areaId===offer.areaId && Date.parse(r.startsAt)<=Date.parse(offer.startsAt) && Date.parse(r.endsAt)>=Date.parse(offer.endsAt)):null
   if(input.reservationLockId && !original)throw new CustomerExperienceRequestError('原预约的会员、桌区、时段或占用情况已变化','TICKET_RESERVATION_MISMATCH',409)
@@ -120,9 +124,9 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
       service_version,reserved_seats,includes_admission)
     VALUES($1,$2,$3,$4,$5,$6,1,'payment_pending','full','pending',$7,$7,0,'CNY',$8,
       least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),least(clock_timestamp()+make_interval(mins=>$9),$10::timestamptz),
-      $11::jsonb,$12,$13,clock_timestamp(),'mini_program','full','jsapi',$7,4,$14,true) RETURNING id`,
+      $11::jsonb,$12,$13,clock_timestamp(),'mini_program','full',$15,$7,4,$14,true) RETURNING id`,
     [...scope,registrationPublicId,offer.activityId,buyer.customer_id,buyer.membership_id,total,key,offer.paymentMinutes,offer.endsAt,
-      JSON.stringify({personalRefundUntil:'first_admission',policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,...(offer.deskCodes?.length?{deskCodes:offer.deskCodes}:{}),startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats])).rows[0]!
+      JSON.stringify({personalRefundUntil:'first_admission',policyVersion:offer.refundVersion,summary:offer.refundSummary,schedule:offer.refundSchedule,serviceContact:offer.serviceContact,eventTermsVersion:offer.eventTermsVersion,priceMinor:offer.priceMinor,giftPoints:offer.giftPoints,offerId:offer.id,area:offer.areaName,...(offer.deskCodes?.length?{deskCodes:offer.deskCodes}:{}),startsAt:offer.startsAt,endsAt:offer.endsAt}),offer.safetyVersion,offer.refundVersion,seats,input.paymentMethod??'jsapi'])).rows[0]!
   await tx.query(`INSERT INTO mbox.table_ticket_purchases(tenant_id,store_id,registration_id,offer_id,quantity,membership_id,contact_id,starts_at,ends_at,original_lock_id)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[...scope,registered.id,offer.id,input.quantity,buyer.membership_id,buyer.contact_id,offer.startsAt,offer.endsAt,original?.id??null])
   if (!protection.revealPhone) throw new CustomerExperienceRequestError('会员联系方式服务暂不可用','TICKET_CONTACT_UNAVAILABLE',503)
@@ -133,8 +137,8 @@ export async function buyTableTickets(tx:ScopedTransaction,customerId:string,inp
     created_by_customer_id,idempotency_key,request_sha256) VALUES($1,$2,$3,$4,1,1,'active','phone',$5,$6,$7,$8,'mini_program',$9,$10,$11)`,
     [...scope,'ACV'+randomUUID().replaceAll('-','').toUpperCase(),registered.id,captured.hash,Buffer.from(captured.encryptedBase64,'base64'),
       captured.keyId,captured.masked,buyer.customer_id,key,createHash('sha256').update(registered.id+captured.hash).digest('hex')])
-  await new PaymentRepository(tx).createForActivityRegistration({activityRegistrationId:registered.id,publicId:paymentPublicId,
+  if(!cash)await new PaymentRepository(tx).createForActivityRegistration({activityRegistrationId:registered.id,publicId:paymentPublicId,
     method:'jsapi',amountMinor:total,currency:'CNY'})
   if(input.proposalId)await tx.query('UPDATE mbox.table_ticket_assistance SET registration_id=$4 WHERE tenant_id=$1 AND store_id=$2 AND id=$3',[...scope,input.proposalId,registered.id])
-  return {id:registered.id,registrationPublicId,paymentPublicId,amountMinor:total,quantity:input.quantity}
+  return {id:registered.id,registrationPublicId,paymentPublicId:cash?null:paymentPublicId,amountMinor:total,quantity:input.quantity}
 }

@@ -638,6 +638,8 @@ export class PaymentRepository {
     const registrationResult = await this.transaction.query<{
       id: string
       service_version: number
+      requested_payment_method: string | null
+      ticket_payment_expired: boolean
       status: string
       payment_status: string
       payment_id: string | null
@@ -649,7 +651,9 @@ export class PaymentRepository {
       party_size: number
       registration_cycle: number
     }>(`
-      SELECT id,service_version,status,payment_status,payment_id,amount_due_minor,paid_amount_minor,currency,
+      SELECT id,service_version,requested_payment_method,
+        (service_version=4 AND LEAST(payment_due_at,seat_hold_expires_at)<=clock_timestamp()) AS ticket_payment_expired,
+        status,payment_status,payment_id,amount_due_minor,paid_amount_minor,currency,
         activity_id,activity_package_id,party_size,registration_cycle
       FROM mbox.community_activity_registrations
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND public_id=$3
@@ -658,6 +662,10 @@ export class PaymentRepository {
     const registration = registrationResult.rows[0]
     if (registration === undefined) throw new OrderNotPayableError(input.registrationPublicId, 'activity registration was not found')
 
+    if (registration.ticket_payment_expired)
+      throw new OrderNotPayableError(registration.id, '购票单的付款时间已过，请勿收款，请顾客重新选票')
+    if (registration.service_version === 4 && registration.requested_payment_method === 'cash' && input.provider !== 'cash')
+      throw new OrderNotPayableError(registration.id, '该门票单选择了到店付现金，请核对原单')
     const isRefunded = registration.status === 'refunded' || registration.payment_status === 'refunded'
     if (isRefunded && [3,4].includes(registration.service_version)) throw new OrderNotPayableError(registration.id, '新版套餐退款记录不能重新收款，请新购一份；补偿退款保留原履约')
     const amountMinor = isRefunded
@@ -729,7 +737,8 @@ export class PaymentRepository {
         updated_at=clock_timestamp()
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
         AND (
-          (status='payment_pending' AND payment_status='pending')
+          (status='payment_pending' AND payment_status='pending' AND
+            (service_version<>4 OR LEAST(payment_due_at,seat_hold_expires_at)>clock_timestamp()))
           OR (status='refunded' AND payment_status='refunded')
         )
     `, [
@@ -998,7 +1007,7 @@ export class PaymentRepository {
     }>(`
       SELECT id, amount_due_minor, currency, status, payment_id, registration_cycle
       FROM mbox.community_activity_registrations
-      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid
+      WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND id=$3::uuid AND requested_payment_method IS DISTINCT FROM 'cash'
       FOR UPDATE
     `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, input.activityRegistrationId])
     const row = registration.rows[0]

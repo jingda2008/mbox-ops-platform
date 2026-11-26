@@ -136,7 +136,7 @@
         <view class="published-content-track">
           <view wx:for="{{editorialCards}}" wx:key="code" class="published-content-card {{editorialCards.length === 1 ? 'is-single' : ''}}" data-code="{{item.code}}" bindtap="openEditorial" hover-class="published-content-card--hover" role="button" aria-role="button">
             <view class="published-content-card__art">
-              <image wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
+              <image lazy-load wx:if="{{item.imageUrl}}" src="{{item.imageUrl}}" mode="aspectFill" />
               <image wx:else class="published-content-card__logo" src="/assets/brand/mbox-logo-badge.png" mode="aspectFit" />
               <view class="published-content-card__shade"></view>
               <text class="published-content-card__badge">{{item.eyebrow}}</text>

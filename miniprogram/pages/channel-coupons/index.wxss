@@ -11,3 +11,8 @@
 .page.page .code-entry button { width: auto; min-height: 44px; margin: 0; font-size: 26rpx; }
 .wallet-empty { padding: 16rpx 0 22rpx; color: #666f63; }
 .coupon-rule-copy text { display: block; margin-bottom: 10rpx; font-size: 24rpx; line-height: 1.6; color: #545e54; }
+
+.page.page.channel-page .claim-primary { width:100%; min-height:52px; height:auto; margin:12rpx 0; padding:20rpx 24rpx; border:0; border-radius:16rpx; background:#28513d; color:#fff; font-size:34rpx; font-weight:700; line-height:1.4; box-shadow:0 6rpx 16rpx rgba(40,81,61,.18); }
+.page.page.channel-page .claim-primary[disabled] { background:#d8dfda; color:#53665a; box-shadow:none; }
+.claim-primary::after { border:0; }
+.page.page.channel-page .wallet-link { min-height:44px; width:100%; margin:0; background:#edf3ee; color:#28513d; font-size:28rpx; }

@@ -15,7 +15,7 @@ function harness(name: string) {
     acceptChannelInvitation: vi.fn(async (_token: string) => ({})), getChannelPoster: vi.fn(async (_id: string) => ({ filename: 'poster.png', base64: 'PNG' })) }
   api.getChannelWalletPage.mockImplementation(async()=>({items:await api.getChannelWallet(),nextCursor:null}))
   const fs = { writeFile: vi.fn((o: any) => o.success()), unlink: vi.fn() }
-  const wx = { showModal:vi.fn((options:any)=>options.success?.({confirm:true})), scanCode: vi.fn(), env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => fs, saveImageToPhotosAlbum: vi.fn((o: any) => o.success()) }
+  const wx = { navigateTo:vi.fn(), switchTab:vi.fn(), showModal:vi.fn((options:any)=>options.success?.({confirm:true})), scanCode: vi.fn(), env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => fs, saveImageToPhotosAlbum: vi.fn((o: any) => o.success()) }
   const auth = { ensureCustomerSession: vi.fn(async () => true), isMembershipLoggedOut: () => loggedOut }
   const gate = { redirectToMembershipLogin: vi.fn() }
   const app = {globalData: {channelOfferLaunch: null as any}}
@@ -39,6 +39,49 @@ function harness(name: string) {
   }
   return { page, api, openCoupon, wx, fs, table, pending, auth, gate, app, timers, logout: () => {loggedOut=true}, changeOwner: () => { owner = 'customer-b' } }
 }
+
+describe('promotion claim visibility and wallet-to-order flow',()=>{
+  const coupon=(id:string)=>({id,status:'available',title:'推广券',offer:{kind:'credit',amountMinor:1000}})
+  it('makes claim the first prominent action before lengthy rule text',()=>{
+    const markup=readFileSync(new URL('../../miniprogram/pages/channel-coupons/index.wxml',import.meta.url),'utf8')
+    expect(markup.indexOf('bindtap="claim"')).toBeLessThan(markup.indexOf('领取：'))
+    expect(markup).toContain('class="primary-button claim-primary" bindtap="claim"')
+    expect(markup).toContain('立即领取优惠券')
+  })
+  it('shows the newly claimed coupon despite a previous expired filter and exposes My Coupons',async()=>{
+    const {page,api,wx}=harness('channel-coupons');page.onLoad({code:'ABCDEFGH2345'});page.data.filterIndex=4;await page.onShow();await page.claim()
+    expect(page.data.filterIndex).toBe(0);expect(api.getChannelWalletPage).toHaveBeenLastCalledWith({status:'all'});expect(page.data.notice).toContain('领取成功')
+    page.openWallet();expect(wx.navigateTo).toHaveBeenCalledWith({url:'/pages/profile-coupons/index'})
+  })
+  it('finds exactly the selected later-page coupon without automatically claiming or activating',async()=>{
+    const {page,api}=harness('channel-coupons');api.getChannelWalletPage.mockImplementation(async(options:any)=>options.cursor?{items:[coupon('chosen')],nextCursor:null}:{items:[coupon('first')],nextCursor:'next'})
+    page.onLoad({code:'ABCDEFGH2345',claimId:'chosen',order:'1'});await page.onShow()
+    expect(page.data.selectedCoupon.id).toBe('chosen');expect(api.activateChannelCoupon).not.toHaveBeenCalled();expect(api.claimChannelCoupon).not.toHaveBeenCalled();expect(api.getChannelWalletPage).toHaveBeenLastCalledWith({status:'all',code:'ABCDEFGH2345',cursor:'next'})
+  })
+  it('rejects a missing selection rather than substituting another coupon',async()=>{
+    const {page,api}=harness('channel-coupons');api.getChannelWallet.mockResolvedValue([coupon('other')] as never);page.onLoad({code:'ABCDEFGH2345',claimId:'missing',order:'1'});await page.onShow();expect(page.data.selectedCoupon).toBe(null);expect(page.data.error).toContain('未查到所选');expect(api.activateChannelCoupon).not.toHaveBeenCalled()
+  })
+  it('rechecks an already bound coupon against the current table before continuing an interrupted order flow',async()=>{
+    const {page,api,wx,table}=harness('channel-coupons');Object.assign(table,{tableToken:'table-a',cartScope:'visit-a',scanNonce:'scan-a'});api.getChannelWallet.mockResolvedValue([{...coupon('chosen'),status:'active'}] as never)
+    page.onLoad({code:'ABCDEFGH2345',claimId:'chosen',order:'1'});await page.onShow();await page.useCoupon({currentTarget:{dataset:{id:'chosen'}}})
+    expect(api.activateChannelCoupon).toHaveBeenCalledWith('chosen',false,expect.any(Function));expect(wx.switchTab).toHaveBeenCalledTimes(1);expect(api.claimChannelCoupon).not.toHaveBeenCalled()
+  })
+  it('does not jump into ordering when a delayed binding completes after hide and reentry',async()=>{
+    const {page,api,wx,table}=harness('channel-coupons');Object.assign(table,{tableToken:'table-a',cartScope:'visit-a',scanNonce:'scan-a'});api.getChannelWallet.mockResolvedValue([coupon('chosen')] as never)
+    page.onLoad({code:'ABCDEFGH2345',claimId:'chosen',order:'1'});await page.onShow();let finish!:()=>void
+    api.activateChannelCoupon.mockImplementation(()=>new Promise(resolve=>{finish=()=>resolve({activationId:'active-a'})}))
+    const operation=page.useCoupon({currentTarget:{dataset:{id:'chosen'}}});await vi.waitFor(()=>expect(finish).toBeDefined());page.onHide();await page.onShow();finish();await operation
+    expect(wx.switchTab).not.toHaveBeenCalled();expect(page.data.canGoToOrder).toBe(false)
+  })
+  for(const outcome of ['success','failure','account','table'])it('goes to order only after confirmed selected activation: '+outcome,async()=>{
+    const {page,api,wx,table,changeOwner}=harness('channel-coupons');Object.assign(table,{tableToken:'table-a',cartScope:'visit-a',scanNonce:'scan-a'});api.getChannelWallet.mockResolvedValue([coupon('chosen')] as never)
+    page.onLoad({code:'ABCDEFGH2345',claimId:'chosen',order:'1'});await page.onShow()
+    api.activateChannelCoupon.mockImplementation(async()=>{if(outcome==='failure')throw Error('offline');if(outcome==='account')changeOwner();if(outcome==='table')table.cartScope='visit-b';return {activationId:'active-a'}})
+    await page.useCoupon({currentTarget:{dataset:{id:'chosen'}}})
+    expect(api.activateChannelCoupon).toHaveBeenCalledTimes(1);expect(wx.switchTab).toHaveBeenCalledTimes(outcome==='success'?1:0)
+    if(outcome==='success'){expect(wx.switchTab).toHaveBeenCalledWith(expect.objectContaining({url:'/pages/order/index'}));table.cartScope='visit-b';page.goToOrder();expect(wx.switchTab).toHaveBeenCalledTimes(1)}
+  })
+})
 
 describe('channel mini program identity and action boundaries', () => {
   it('summarizes all goods in both landing and wallet while legacy selected goods retain their names',async()=>{

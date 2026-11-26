@@ -2,6 +2,19 @@
   <view class="coupons-hero"><text>M-BOX · 优惠券</text><text>我的优惠券</text><text>查看待生效、可用与历史权益。时间均为北京时间。</text></view>
   <navigator url="/pages/profile-cards/index" class="coupon-nav">我的专属卡 <text>发现同好 ›</text></navigator>
   <navigator url="/pages/channel-coupons/index" class="coupon-nav">餐后推荐优惠 <text>扫码或输入优惠号码 ›</text></navigator>
+  <view class="channel-wallet">
+    <view class="coupon-section-title"><text>推广优惠</text><button class="secondary-button" bindtap="loadChannelCoupons" disabled="{{channelLoading || channelLoadingMore}}">刷新</button></view>
+    <state-panel wx:if="{{channelLoading}}" type="loading" title="正在读取推广优惠" />
+    <view wx:for="{{channelCoupons}}" wx:key="id" class="coupon-card channel-coupon">
+      <view class="coupon-card__head"><text>推广优惠</text><text>{{item.stateText}}</text></view>
+      <text class="coupon-title">{{item.title}}</text><text class="channel-offer">{{item.offerText}}</text>
+      <text class="coupon-copy">推荐来源：{{item.sourceLabel}}</text><text class="coupon-copy">适用商品：{{item.productText}}</text>
+      <text class="coupon-copy">{{item.validText}}（北京时间）</text>
+      <button class="primary-button" bindtap="openChannelCoupon" data-id="{{item.id}}">{{item.canUse ? '去点单使用' : item.canOrder ? '继续本次点单' : '查看优惠券状态'}}</button>
+    </view>
+    <view wx:if="{{channelError}}" class="error-banner">{{channelError}}<button class="secondary-button" bindtap="loadChannelCoupons">重新读取推广优惠</button></view>
+    <button wx:if="{{channelNextCursor}}" class="secondary-button" loading="{{channelLoadingMore}}" disabled="{{channelLoading || channelLoadingMore}}" bindtap="loadMoreChannelCoupons">加载更多推广优惠</button>
+  </view>
   <state-panel wx:if="{{loading}}" type="loading" title="正在读取优惠券" />
   <block wx:else>
     <view wx:if="{{error}}" class="error-banner">{{error}}<button class="secondary-button" bindtap="load">重新读取优惠券</button></view>
@@ -22,6 +35,6 @@
       <view wx:if="{{moreError}}" class="error-banner">{{moreError}}</view>
       <button wx:if="{{nextCursor}}" class="secondary-button coupon-more" loading="{{loadingMore}}" disabled="{{loadingMore}}" bindtap="loadMore">{{moreError ? '重试加载更多' : '加载更多权益'}}</button>
     </block>
-    <state-panel wx:else type="empty" title="暂无优惠券" message="门店发放后会出现在这里；也可在会员卡查看权益。" />
+    <state-panel wx:elif="{{!channelLoading && !channelError && !channelCoupons.length}}" type="empty" title="暂无优惠券" message="门店发放后会出现在这里；也可在会员卡查看权益。" />
   </block>
 </view>

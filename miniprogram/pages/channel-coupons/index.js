@@ -20,8 +20,9 @@ function present(item) {
   })
 }
 Page({
-  data: { hasTable:false, tableRetryId:null, checkingTable:false, manualEntry:false, expandedRules:'', pendingClaim:false, filters:FILTERS, filterIndex:0, nextCursor:null, loadingMore:false, code: '', coupons: [], offer: null, loading: false, busy: false, needsLogin: false, error: '', notice: '' },
+  data: { selectedClaimId:'', selectedCoupon:null, orderAfterUse:false, canGoToOrder:false, hasTable:false, tableRetryId:null, checkingTable:false, manualEntry:false, expandedRules:'', pendingClaim:false, filters:FILTERS, filterIndex:0, nextCursor:null, loadingMore:false, code: '', coupons: [], offer: null, loading: false, busy: false, needsLogin: false, error: '', notice: '' },
   onLoad(options) {
+    this.setData({selectedClaimId: options && /^[a-zA-Z0-9-]{1,80}$/.test(options.claimId || '') ? options.claimId : '', selectedCoupon:null, orderAfterUse: !!(options && options.order === '1'), canGoToOrder:false})
     if (options && (options.scene || options.code)) {
       try { this.entryError = ''; this.setData({ expandedRules: '', code: channelCode(options.scene || options.code), offer: null, error: '', notice: '' }) }
       catch (_) { this.entryError = '推广码格式不正确，请输入图上的优惠号码'; this.setData({ manualEntry: true, code: '', offer: null, error: this.entryError }) }
@@ -29,7 +30,7 @@ Page({
   },
   onShow() {
     this.visible = true
-    this.setData({ notice: '', hasTable: Boolean(getTableSession().tableToken) })
+    this.setData({ notice: '', hasTable: Boolean(getTableSession().tableToken), canGoToOrder: Boolean(this.data.canGoToOrder && this.orderOwner === commandIdentityScope() && this.orderScope === getTableSession().cartScope && this.orderToken === getTableSession().tableToken) })
     const app = typeof getApp === 'function' ? getApp() : null
     if (app && app.globalData.channelOfferLaunch) {
       const entry = app.globalData.channelOfferLaunch
@@ -91,7 +92,7 @@ Page({
     this.clearValidityRefresh()
     const generation = this.generation = (this.generation || 0) + 1
     this.walletOwner=null
-    this.setData({ loading: true, loadingMore:false, nextCursor:null, coupons: [], offer: null, pendingClaim:false, needsLogin: false })
+    this.setData({ loading: true, loadingMore:false, nextCursor:null, coupons: [], offer: null, selectedCoupon:null, pendingClaim:false, needsLogin: false })
     let owner
     try {
       if (isMembershipLoggedOut()) { this.setData({ needsLogin: true }); return }
@@ -100,12 +101,25 @@ Page({
       if (generation !== this.generation) return
       owner = commandIdentityScope()
       const code = this.data.code ? channelCode(this.data.code) : ''
-      const [page, offer] = await Promise.all([getChannelWalletPage({status:FILTERS[this.data.filterIndex].value}), code ? getChannelOffer(code) : Promise.resolve(null)])
+      const selectedId = this.data.selectedClaimId
+      const walletQuery = selectedId ? {status:'all',code} : {status:FILTERS[this.data.filterIndex].value}
+      const [page, offer] = await Promise.all([getChannelWalletPage(walletQuery), code ? getChannelOffer(code) : Promise.resolve(null)])
       if (generation !== this.generation || owner !== commandIdentityScope()) return
+      // Locate the exact coupon selected in the combined wallet, including later pages.
+      const seen = new Set()
+      while (selectedId && !page.items.some(item => item.id === selectedId) && page.nextCursor) {
+        if (seen.has(page.nextCursor)) throw Error('券包分页未前进，请刷新核对')
+        seen.add(page.nextCursor)
+        const next = await getChannelWalletPage(Object.assign({}, walletQuery, {cursor:page.nextCursor}))
+        if (generation !== this.generation || owner !== commandIdentityScope()) return
+        const known = new Set(page.items.map(item => item.id))
+        page.items = page.items.concat(next.items.filter(item => !known.has(item.id)))
+        page.nextCursor = next.nextCursor
+      }
       this.walletOwner=owner
       const viewed=offer?present(offer):null
       if(viewed)viewed.existingCoupon=offer.existingCoupon?this.presentCoupon(offer.existingCoupon):null
-      this.setData({ coupons: page.items.map(item=>this.presentCoupon(item)), pendingClaim:Boolean(code && pendingGuestCommandMatches('channel.claim', {code:this.data.code.trim()}, {customerOnly:true})), nextCursor:page.nextCursor, offer:viewed, error: this.entryError || '' })
+      this.setData({ selectedCoupon: selectedId ? page.items.filter(item=>item.id===selectedId).map(item=>this.presentCoupon(item))[0] || null : null, coupons: page.items.map(item=>this.presentCoupon(item)), pendingClaim:Boolean(code && pendingGuestCommandMatches('channel.claim', {code:this.data.code.trim()}, {customerOnly:true})), nextCursor:page.nextCursor, offer:viewed, error: selectedId && !page.items.some(item=>item.id===selectedId) ? '未查到所选优惠券，请返回我的优惠券刷新核对' : this.entryError || '' })
     } catch (error) {
       if (generation === this.generation && (!owner || owner === commandIdentityScope())) this.setData({
         needsLogin: error.code === 'AUTH_REQUIRED', error: customerErrorMessage(error, '优惠暂时无法读取，请重试'),
@@ -118,13 +132,19 @@ Page({
     const owner=this.walletOwner,generation=this.generation,cursor=this.data.nextCursor,status=FILTERS[this.data.filterIndex].value
     this.setData({loadingMore:true,error:''})
     try {
-      const page=await getChannelWalletPage({cursor,status})
+      const page=await getChannelWalletPage(this.data.selectedClaimId ? {cursor,status:'all',code:channelCode(this.data.code)} : {cursor,status})
       if(generation!==this.generation||owner!==commandIdentityScope())return
       if(page.nextCursor===cursor)throw new Error('券包分页未前进，请刷新后重试')
       const known=new Set(this.data.coupons.map(item=>item.id))
       this.setData({coupons:this.data.coupons.concat(page.items.filter(item=>!known.has(item.id)).map(item=>this.presentCoupon(item))),nextCursor:page.nextCursor})
     } catch(error) {if(generation===this.generation&&owner===commandIdentityScope())this.setData({error:customerErrorMessage(error,'更多优惠读取失败，请重试')})}
     finally {if(generation===this.generation){this.setData({loadingMore:false});this.scheduleValidityRefresh()}}
+  },
+  openWallet() { wx.navigateTo({url:'/pages/profile-coupons/index'}) },
+  goToOrder() {
+    if (this.visible === false || this.data.busy || this.data.loading) return
+    if (!this.data.canGoToOrder || this.orderOwner !== commandIdentityScope() || this.orderScope !== getTableSession().cartScope || this.orderToken !== getTableSession().tableToken) { this.setData({canGoToOrder:false, error:'账号或桌号已变化，请重新核对本张优惠券'}); return }
+    wx.switchTab({url:'/pages/order/index', fail:()=>this.setData({error:'点单页暂未打开，优惠已绑定，请点击继续点单重试'})})
   },
   async claim() {
     if (this.data.needsLogin) { this.login(); return }
@@ -140,7 +160,7 @@ Page({
     const id = event.currentTarget.dataset.id
     const owner = commandIdentityScope()
     const available = () => this.data.coupons.concat(this.data.offer?.existingCoupon || [])
-      .some(coupon => coupon.id === id && coupon.status === 'available' && !coupon.canRecover)
+      .some(coupon => coupon.id === id && (coupon.status === 'available' || (this.data.orderAfterUse && this.data.selectedClaimId === id && coupon.status === 'active')) && !coupon.canRecover)
     if (owner !== this.walletOwner || !available()) return
     const attempt = { owner }
     this.tableScan = attempt
@@ -180,7 +200,8 @@ Page({
         return
       }
       this.setData({ tableRetryId: null })
-      await this.write('activate', id, sameVisit)
+      const confirmed = await this.write('activate', id, sameVisit)
+      if (confirmed && this.data.orderAfterUse) this.goToOrder()
     } catch (error) {
       if (current() && !/cancel/i.test(String(error?.errMsg || ''))) this.setData({
         tableRetryId: id, error: '桌号暂未确认，请重新扫描桌面上的桌码。',
@@ -204,13 +225,16 @@ Page({
     const sameView = () => generation === this.generation && owner === commandIdentityScope()
       && this.visible !== false && (isClaim || sameTable())
     this.setData({ busy: true, error: '', notice: '' })
-    let failure = ''
+    let failure = '', completed = false, mayContinue = false, refreshedCurrent = false
     try {
       if (action === 'recover-claim') await recoverChannelClaim(value)
       else if (action === 'recover-activate') await recoverChannelCoupon(value)
       else if (action === 'claim') await claimChannelCoupon(value)
       else await activateChannelCoupon(value, false, confirmVisit)
-      if (sameView()) this.setData({ notice: action.startsWith('recover-') ? '已查到上次办理结果，请查看下方优惠券状态。' : isClaim ? '已领到本人账户，可在「我的优惠券 → 推荐优惠」查看。到店扫描桌码后使用。' : '已绑定本次消费，最终优惠以订单确认结果为准。' })
+      completed = true
+      mayContinue = sameView()
+      if (sameView() && isClaim) this.setData({filterIndex:0})
+      if (sameView()) this.setData({ notice: action.startsWith('recover-') ? '已查到上次办理结果，请查看下方优惠券状态。' : isClaim ? '领取成功，已放入「我的优惠券」，到店后可去点单使用。' : '已绑定本次消费，最终优惠以订单确认结果为准。' })
     } catch (error) {
       if (sameView()) failure = customerErrorMessage(error, '结果还未确认，请先查看这张券的状态')
     } finally {
@@ -220,6 +244,7 @@ Page({
         const refresh = this.load(), refreshGeneration = this.generation
         await refresh
         if (refreshGeneration === this.generation && owner === commandIdentityScope() && this.visible !== false) {
+          refreshedCurrent = true
           if (!isClaim && !sameTable()) this.setData({ notice: '' })
           else if (failure) this.setData({ error: failure })
         }
@@ -227,5 +252,11 @@ Page({
       this.writing = false
       this.setData({ busy: false })
     }
+    const confirmed = completed && mayContinue && refreshedCurrent && owner === commandIdentityScope() && this.visible !== false && (isClaim || sameTable())
+    if (confirmed && !isClaim) {
+      this.orderOwner=owner; this.orderScope=table.cartScope; this.orderToken=table.tableToken
+      this.setData({canGoToOrder:true})
+    }
+    return confirmed
   },
 })

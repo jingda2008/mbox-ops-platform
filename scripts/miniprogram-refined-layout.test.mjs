@@ -320,3 +320,35 @@ test('scheduled menu cards keep pictures, taste tags, price and selling hours se
   }
  }finally{await browser.close()}
 })
+
+test('promotion claim and wallet ordering actions remain prominent and reachable on small screens', async () => {
+  const out=resolve(root,'artifacts/channel-wallet-20261126');await mkdir(out,{recursive:true})
+  const browser=await chromium.launch({headless:true})
+  const offer={title:'餐后再坐一会儿',offerText:'圣培露气泡水 1 份',claimedCount:0,unavailable:null,sourceLabel:'周边合作商户',minimumText:'¥0.00',productText:'全部商品参与',claimTimeText:'2026-11-26 10:00 至 2026-11-30 23:59',timeText:'2026-11-26 10:00 至 2026-11-30 23:59',perCustomerClaims:1,perVisitUses:1}
+  const item={id:'demo',title:offer.title,offerText:offer.offerText,stateText:'待使用',sourceLabel:offer.sourceLabel,productText:offer.productText,validText:offer.timeText,canUse:true}
+  const context={offer,item,channelCoupons:[item],busy:false,loading:false,pendingClaim:false,notice:'',selectedClaimId:''}
+  const evaluate=expression=>Function(...Object.keys(context),'return ('+expression+')')(...Object.values(context))
+  const render=source=>source.replace(/<template\b[^>]*\/>/g,'').replace(/<(button|text) wx:if="{{(.*?)}}"([\s\S]*?)<\/\1>/g,(all,tag,condition)=>evaluate(condition)?all:'').replace(/{{(.*?)}}/g,(_,expression)=>String(evaluate(expression)??'')).replace(/\s(?:wx:[\w-]+|disabled|loading)="[^"]*"/g,'')
+  try {
+    const page=await browser.newPage()
+    for(const route of ['channel-coupons','profile-coupons']){
+      const wxml=await readFile(resolve(root,'miniprogram/pages',route,'index.wxml'),'utf8')
+      const start=wxml.indexOf(route==='channel-coupons'?'<view wx:if="{{offer && !selectedClaimId}}"':'<view wx:for="{{channelCoupons}}"')
+      const end=route==='channel-coupons'?wxml.indexOf('</view>',start)+7:wxml.indexOf('    <view wx:if="{{channelError}}"',start)
+      assert.ok(start>=0 && end>start)
+      const styles=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages',route,'index.wxss'))
+      for(const width of [320,390,430]){
+        await page.setViewportSize({width,height:740})
+        await page.setContent(`<style>${reset}${scale(styles,width)}</style><page><view class="page ${route==='channel-coupons'?'channel-page':'coupons-page'}"><text style="display:block;font-size:12px;margin:12px 0">演示数据 · 浏览器样式验证</text>${render(wxml.slice(start,end))}</view></page>`)
+        const button=page.getByRole('button',{name:route==='channel-coupons'?'立即领取优惠券':'去点单使用',exact:true}),box=await button.boundingBox()
+        assert.ok(box.height>=48 && box.y+box.height<=740,route+' action visible without scrolling')
+        assert.ok(box.width>=width-80 && box.x>=0 && box.x+box.width<=width+1,route+' full width within screen')
+        assert.equal(await button.evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(40, 81, 61)')
+        assert.equal(await button.evaluate(el=>getComputedStyle(el).color),'rgb(255, 255, 255)')
+        assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))
+        await button.click({trial:true})
+        await page.screenshot({path:resolve(out,route+'-'+width+'.png'),fullPage:true})
+      }
+    }
+  } finally {await browser.close()}
+})

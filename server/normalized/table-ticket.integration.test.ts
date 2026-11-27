@@ -34,7 +34,7 @@ import {grantFixtureStaffPermissions} from './staff-permission.test-helper.js'
 import {seedActiveGuestTableAuthority} from './guest-table-authority.test-helper.js'
 import {CommerceCommandService} from './commerce-command-service.js'
 import {PostgresPricingAuthority} from './postgres-pricing-authority.js'
-import {NormalizedCommandExecutor} from './command-executor.js'
+import {NativeCommandNotCommittedError,NormalizedCommandExecutor} from './command-executor.js'
 import {staffPointsProposal,adoptAssistedPoints} from './assisted-points-proposal.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
 import {GuestSharedCartRepository} from './guest-shared-cart-repository.js'
@@ -145,7 +145,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
   it('collects a cash ticket only once before its deadline and credits each paid ticket to the buyer',async()=>{
     const cashier=randomUUID()
     await admin.query("INSERT INTO mbox.employees(id,tenant_id,store_id,employee_code,display_name) VALUES($1,$2,$3,'CASH_TICKET','现金购票验收')",[cashier,scope.tenantId,scope.storeId])
-    await grantFixtureStaffPermissions(admin,scope,[cashier],['payment.manual.cash.record','community.activity.cashier','refund.execute'])
+    await grantFixtureStaffPermissions(admin,scope,[cashier],['order.create','payment.manual.cash.record','community.activity.cashier','refund.execute'])
     await run(async tx=>{
       await tx.query('SAVEPOINT cash_ticket_test')
       await approveEventTicketTerms(tx,activity,employee,{organizer:'测试举办方',seller:'测试售票方',approvalReference:'隔离测试场次资料',
@@ -157,7 +157,20 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         encryption_key_version,contact_encryption_key_id,masked_value,verification_source,verified_by_customer_id,provider_reference_sha256,verified_at)
         VALUES($1,$2,$3,$4,'phone',$5,$6,1,$7,'138****0000','wechat_phone_authorization',$4,repeat('d',64),clock_timestamp())`,
         [scope.tenantId,scope.storeId,'CVC'+randomUUID().replaceAll('-','').toUpperCase(),customer,phone.contactHash,phone.encryptedValue,phone.encryptionKeyId])
-      const order=await buyTableTickets(tx,customer,{offerId:offer.id,quantity:2,paymentMethod:'cash',safetyVersion:terms.safetyVersion,refundVersion:terms.refundVersion},randomUUID(),randomUUID(),randomUUID(),protection)
+      const args=[scope.tenantId,scope.storeId]
+      const physical=(await tx.query("INSERT INTO mbox.tables(tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,'CASHDESK','现金验收桌',4) RETURNING id",[...args,offerInput.areaId])).rows[0].id
+      const session=(await tx.query("INSERT INTO mbox.table_sessions(tenant_id,store_id,table_id,public_id,business_date,guest_count,capacity_at_open,status,opened_by_employee_id,primary_service_employee_id) VALUES($1,$2,$3,$4,current_date,1,4,'open',$5,$5) RETURNING id",[...args,physical,randomUUID(),cashier])).rows[0].id
+      const operations=new ActivityOperationsService(runner,new NormalizedCommandExecutor({run:(_scope,fn)=>fn(tx)}),protection)
+      const ctx={scope,employeeId:cashier,businessDate:new Date().toISOString().slice(0,10)}
+      const input={offerId:offer.id,quantity:2,phone:'13800000000',tableSessionId:session,safetyVersion:terms.safetyVersion,refundVersion:terms.refundVersion}
+      await expect(operations.openAssistedCashTicket(ctx,input,randomUUID())).rejects.toThrow()
+      await tx.query(`INSERT INTO mbox.table_assignments(tenant_id,store_id,table_id,employee_id,role_id,assignment_type,reason)
+        SELECT $1,$2,$3,$4,role_id,'primary','现场代客购票验收' FROM mbox.employee_roles WHERE employee_id=$4 LIMIT 1`,[...args,physical,cashier])
+      await expect(operations.openAssistedCashTicket(ctx,{...input,phone:'13912345678'},randomUUID())).rejects.toThrow()
+      const orderKey=randomUUID()
+      const order=(await operations.openAssistedCashTicket(ctx,input,orderKey).catch(error=>{throw error instanceof NativeCommandNotCommittedError?error.original:error})).value
+      expect((await operations.openAssistedCashTicket(ctx,input,orderKey)).replayed).toBe(true)
+      expect((await tx.query('SELECT terms_acknowledgement_source AS source, requested_payment_method AS method FROM mbox.community_activity_registrations WHERE id=$1',[order.id])).rows[0]).toEqual({source:'staff_assisted',method:'cash'})
       const workbench=await new PostgresCashierWorkbenchQuery({run:(_scope,fn)=>fn(tx)}).get({
         scope,employeeId:cashier,businessDate:new Date().toISOString().slice(0,10),query:order.registrationPublicId,
         limit:10,capabilities:['payment.manual.cash.record','community.activity.cashier']})
@@ -165,7 +178,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const repo=new PaymentRepository(tx)
       const collect=()=>repo.recordManualForActivityRegistration({registrationPublicId:order.registrationPublicId,publicId:randomUUID(),provider:'cash',method:'cash',
         collectedByEmployeeId:employee,expectedAmountMinor:100000,evidence:{collectedByEmployeeId:employee,receiptReference:randomUUID()}})
-      expect(order.paymentPublicId).toBeNull()
+      expect((await tx.query('SELECT id FROM mbox.payments WHERE activity_registration_id=$1',[order.id])).rowCount).toBe(0)
       expect((await tx.query('SELECT 1 FROM mbox.table_tickets WHERE registration_id=$1',[order.id])).rowCount).toBe(0)
       await expect(repo.createForActivityRegistration({activityRegistrationId:order.id,publicId:randomUUID(),method:'jsapi',amountMinor:100000,currency:'CNY'})).rejects.toThrow()
       await tx.query('SAVEPOINT before_expiry')
@@ -2177,6 +2190,10 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
     await app.register(customerExperienceApiPlugin,{transactions:runner,service:{purchaseTableTickets(){throw new CustomerExperienceRequestError('该场余量不足','TICKET_CAPACITY_FULL',409)}} as never,resolveStaffContext:unavailable,resolveGuestContext:unavailable,protectContact:unavailable,
       resolvePublicContext:()=>({scope,customerId:authenticated,actorRef:'local-ticket-identity',businessDate})})
     const path='/public/mini/table-ticket-purchases'
+    const cashRequest=await app.inject({method:'POST',url:path,headers:{'idempotency-key':randomUUID()},payload:{paymentMethod:'cash',offerId:randomUUID(),termsAcknowledged:true,quantity:1}})
+    expect(cashRequest.statusCode).toBe(400)
+    expect(cashRequest.json().error.code).toBe('TICKET_TENDER_INVALID')
+
     const orders=async()=>{
       const result=await app.inject({method:'GET',url:path})
       expect(result.statusCode,result.body).toBe(200)

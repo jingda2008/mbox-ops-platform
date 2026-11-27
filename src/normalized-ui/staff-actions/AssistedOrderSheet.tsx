@@ -1,3 +1,4 @@
+import {AssistedCashTicketForm} from './AssistedCashTicketForm'
 import { STAFF_SESSION_BINDING_HEADER } from '../../shared/staff-session-binding'
 import {StaffTableCreditPanel} from './StaffTableCreditPanel'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -432,6 +433,9 @@ export function AssistedOrderSheet({ api, staffSessionId, permissions=[], mode, 
       <section className="staff-order-sheet is-shared-menu">
         <header>
           <div><small>{table.code} · 桌号已锁定</small><h2><ShoppingCart size={21} /> 协助点单</h2></div>
+        {access?.canCreateOrder && api.ticketCash && !replacementCaseId && !paymentOrder &&
+          <AssistedCashTicketForm key={table.activeSession.id} api={api.ticketCash} tableSessionId={table.activeSession.id}
+            canCollect={access.manualCollection.canRecordCash && permissions.includes('community.activity.cashier')}/>}
           <button type="button" aria-label="关闭点单" onClick={onClose}><X size={21} /></button>
         </header>
         <div className="staff-order-settlement" aria-label="结算方式">

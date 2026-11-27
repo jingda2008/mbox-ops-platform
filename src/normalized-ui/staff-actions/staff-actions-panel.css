@@ -790,3 +790,10 @@
 .staff-table-read-sheet section > button, .staff-table-read-sheet article > button { min-height: 44px; }
 
 .staff-ticket-inbox a { display: inline-flex; align-items: center; min-height: 44px; }
+
+.staff-ticket-cash { width: min(28rem, calc(100% - 2rem)); max-height: 85dvh; box-sizing: border-box; overflow-y: auto; border: 1px solid #c8cec7; border-radius: 12px; padding: 16px; color: #22342c; background: white; }
+.staff-ticket-cash::backdrop { background: rgba(18, 29, 23, .55); }
+.staff-ticket-cash-heading { display: flex; align-items: center; justify-content: space-between; }
+.staff-ticket-cash fieldset { border: 0; padding: 0; margin: 12px 0; }
+.staff-ticket-cash label { display: block; margin: 8px 0; }
+.staff-ticket-cash select, .staff-ticket-cash input:not([type=checkbox]) { display: block; width: 100%; box-sizing: border-box; padding: 8px; }

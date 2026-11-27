@@ -1,3 +1,4 @@
+import {recognizeDiningTicket} from './ticket-dining-session.js'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type {
   ScopedPostgresTransactionRunner,
@@ -764,6 +765,7 @@ export class GuestSessionService {
         if (isCustomerAtAnotherTableError(error)) throw new GuestCustomerAtAnotherTableError()
         throw error
       }
+      if (input.customerId) await recognizeDiningTicket(transaction,credential.tableSessionId,canonical)
       if (issuance.status === 'already_active') {
         return { status: 'already_active', session: issuance.session }
       }

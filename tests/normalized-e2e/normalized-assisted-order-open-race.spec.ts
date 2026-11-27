@@ -1,9 +1,10 @@
+import {test} from './dining-day-test-fixture'
 import {readFile} from 'node:fs/promises'
-import {expect,test} from '@playwright/test'
+import {expect} from '@playwright/test'
 
 // Local disposable database, no physical printing or payment. Hold the actual
 // post-open operations read so the optimistic-to-confirmed transition is deterministic.
-for (const scenario of ['delayed success','refresh recovery','delayed panels','delayed panels desktop']) test(`opening a table waits for its confirmed session before assisted ordering (${scenario})`, async ({page}, testInfo) => {
+for (const scenario of ['delayed success','refresh recovery','delayed panels','delayed panels desktop']) test(`opening a table waits for its confirmed session before assisted ordering (${scenario})`, async ({page,enableMinimum}, testInfo) => {
   const failRefresh=scenario==='refresh recovery'
   const f=JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
   await page.setViewportSize(scenario==='delayed panels desktop'?{width:1280,height:1200}:{width:390,height:844})
@@ -15,6 +16,7 @@ for (const scenario of ['delayed success','refresh recovery','delayed panels','d
   await page.getByRole('button',{name:/进入工作台/}).click()
   await expect(page.getByTestId('normalized-workspace')).toBeVisible()
   await page.goto('/staff/live')
+  if(scenario.startsWith('delayed panels')) await enableMinimum()
   await page.getByRole('group',{name:'桌台显示范围'}).getByRole('button',{name:/^全部/}).click()
   const free=page.locator('.staff-table-tile:not(.is-open)').first()
   const tableCode=(await free.locator('strong').innerText()).trim()

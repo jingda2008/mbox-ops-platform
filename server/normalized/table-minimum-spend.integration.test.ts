@@ -31,6 +31,8 @@ integration('minimum spend PostgreSQL authority',()=>{
       [tenantId, `cost-${tenantId.slice(0, 8)}`])
     await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name)
       VALUES($1,$2,$3,'Cost Authority Store')`, [storeId, tenantId, `cost-${storeId.slice(0, 8)}`])
+    await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+      SELECT $1,$2,day,true,false,1 FROM unnest(ARRAY[date '2026-08-16',date '2026-10-31']) AS day`,[tenantId,storeId])
     await pool.query(`INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type)
       VALUES($1,$2,$3,'COST','Cost Area','indoor')`, [areaId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)

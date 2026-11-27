@@ -35,18 +35,26 @@
           <button wx:if="{{!pendingBatch && item.canPay}}" disabled="{{payingBatch}}" data-id="{{item.publicId}}" bindtap="togglePaymentOrder">{{item.selected ? '☑ 已选，点击取消' : '☐ 选择本单'}}</button>
           <view class="order-card__head">
             <view>
-              <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
+              <view class="order-title-row"><text class="list-row__title">{{item.roundText}} · {{item.statusText}}</text><text wx:if="{{item.pricingLabel && !item.pointsReceipt}}" class="pricing-badge pricing-badge--{{item.pricingKind}}">{{item.pricingLabel}}</text></view>
               <text class="list-row__meta">{{item.sourceText}} · {{item.createdAtText}}</text>
             </view>
-            <view class="order-card__amount"><text wx:if="{{item.receivableReductionText || item.receivableIncreaseText}}">原成交</text><text class="amount">{{item.totalText}}</text><text>{{item.paymentText}}</text></view>
+            <view class="order-card__amount"><block wx:if="{{!item.pointsReceipt}}"><text wx:if="{{item.receivableReductionText || item.receivableIncreaseText}}">原成交</text><text class="amount">{{item.totalText}}</text></block><text>{{item.paymentText}}</text></view>
+          </view>
+          <view wx:if="{{item.pointsReceipt}}" class="points-receipt">
+            <view wx:if="{{item.pointsReceipt.original}}"><text>商品原价</text><text>{{item.pointsReceipt.original}}</text></view>
+            <view><text>{{item.pointsReceipt.state === 'released' ? '已取消抵扣' : item.pointsReceipt.state === 'held' ? '待抵积分' : '积分抵扣'}}</text><text>{{item.pointsReceipt.used}} 分 · {{item.pointsReceipt.discount}}</text></view>
+            <view wx:if="{{item.pointsReceipt.restored && item.pointsReceipt.state !== 'released'}}"><text>已退积分</text><text>{{item.pointsReceipt.restored}} 分</text></view>
+            <view wx:if="{{item.pointsReceipt.expired > 0}}"><text>其中已过期</text><text>{{item.pointsReceipt.expired}} 分</text></view>
+            <view wx:if="{{item.pointsReceipt.paid}}"><text>实际付款</text><text>{{item.pointsReceipt.paid}}</text></view>
+            <view wx:if="{{item.pointsReceipt.refunded}}"><text>已退款</text><text>{{item.pointsReceipt.refunded}}</text></view>
           </view>
           <view wx:if="{{item.receivableIncreaseText}}" class="payment-line">套餐按单点价补差 {{item.receivableIncreaseText}}</view>
           <view class="payment-line">
             <text class="payment-line__hint">{{item.paymentHint}}</text>
           </view>
-          <view class="order-detail-meta"><text>订单号：{{item.publicId}}</text><text wx:if="{{item.paidAtText}}">最近收款确认：{{item.paidAtText}}</text><text wx:if="{{item.discountText}}">本单优惠：{{item.discountText}}</text><text wx:if="{{item.receivableReductionText}}">退菜减额：{{item.receivableReductionText}}</text><text wx:if="{{!historyMode && item.paymentAccess !== 'status_review'}}">待付余额：{{item.payableText}}</text></view>
+          <view class="order-detail-meta"><text>订单号：{{item.publicId}}</text><text wx:if="{{item.paidAtText}}">最近收款确认：{{item.paidAtText}}</text><text wx:if="{{item.discountText && !item.pointsReceipt}}">本单优惠：{{item.discountText}}</text><text wx:if="{{item.receivableReductionText}}">退菜减额：{{item.receivableReductionText}}</text><text wx:if="{{!historyMode && item.paymentAccess !== 'status_review'}}">待付余额：{{item.payableText}}</text></view>
           <view wx:for="{{item.items}}" wx:for-item="product" wx:key="key" class="list-row">
-            <view class="list-row__main"><text class="list-row__title">{{product.name}}</text><text wx:if="{{product.componentsText}}" class="list-row__meta">{{product.componentsText}}</text><view class="order-item-price"><text>单价 {{product.unitPriceText}} × {{product.quantity}}</text><text>小计 {{product.totalText}}</text></view><text wx:if="{{product.note}}" class="list-row__meta">备注：{{product.note}}</text><text class="list-row__meta">{{product.statusText}}</text></view>
+            <view class="list-row__main"><text class="list-row__title">{{product.name}}</text><text wx:if="{{product.componentsText}}" class="list-row__meta">{{product.componentsText}}</text><view class="order-item-price"><text>{{product.pointsDiscount ? '原价' : '单价'}} {{product.unitPriceText}} × {{product.quantity}}</text><text wx:if="{{product.pointsDiscount}}">积分抵 {{product.pointsDiscount}}</text><text wx:else>小计 {{product.totalText}}</text></view><text wx:if="{{product.note}}" class="list-row__meta">备注：{{product.note}}</text><text class="list-row__meta">{{product.statusText}}</text></view>
           </view>
         </view>
       </view>

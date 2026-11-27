@@ -1,13 +1,15 @@
+import {test} from './dining-day-test-fixture'
 import {readFile} from 'node:fs/promises'
-import {test,expect,type Page} from '@playwright/test'
+import {expect,type Page} from '@playwright/test'
 const fixture=async()=>JSON.parse(await readFile('artifacts/normalized-browser/fixture.json','utf8'))
 async function login(page:Page,f:Awaited<ReturnType<typeof fixture>>,employeeCode:string){await page.goto(f.staffUrl);await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click();await page.getByLabel('员工账号').fill(employeeCode);await page.getByLabel('四位 PIN').fill(f.employeePin);await page.getByRole('button',{name:/进入工作台/}).click();await expect(page.getByTestId('normalized-workspace')).toBeVisible();await page.goto('/staff/live')}
-for(const mode of ['order_gate','prepaid'])test(`opens a table with ${mode}, exact amount and a preserved server result`,async({page,browser})=>{
+for(const mode of ['order_gate','prepaid'])test(`opens a table with ${mode}, exact amount and a preserved server result`,async({page,browser,enableMinimum})=>{
  test.setTimeout(90000)
  const f=await fixture();await page.setViewportSize({width:390,height:844})
  await page.goto(f.staffUrl);await page.getByLabel('门店口令').fill(f.dailyCredential);await page.getByRole('button',{name:/验证设备/}).click()
  await page.getByLabel('员工账号').fill(f.employeeCode);await page.getByLabel('四位 PIN').fill(f.employeePin);await page.getByRole('button',{name:/进入工作台/}).click()
  await expect(page.getByTestId('normalized-workspace')).toBeVisible();await page.goto('/staff/live')
+ await enableMinimum()
  await page.getByRole('group',{name:'桌台显示范围'}).getByRole('button',{name:/^全部(?:\s|$)/}).click()
  const empty=page.locator('.staff-table-tile').filter({hasText:'空台'}).first();const tableCode=await empty.locator('strong').innerText();await empty.click()
  await page.getByLabel('最低消费方式',{exact:true}).selectOption(mode)
@@ -80,4 +82,39 @@ test('guest prepaid panel validates consent and cents, resumes the original rece
  expect(calls).toBe(1);await expect(panel).toContainText('差额收费未启用')
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true)
  await page.screenshot({path:'artifacts/normalized-browser/minimum-guest-prepay-430.png',fullPage:true})
+})
+
+test('同页设置营业日消费条件，刷新后保留并防止覆盖他人修改',async({page})=>{
+ const f=await fixture()
+ await page.setViewportSize({width:390,height:844});await login(page,f,f.employeeCode)
+ const panel=page.locator('.staff-day-rules')
+ await panel.getByText('今天的消费条件',{exact:true}).click()
+ const min=panel.getByRole('checkbox',{name:'最低消费'}), ticket=panel.getByRole('checkbox',{name:'门票'})
+ await expect(min).not.toBeChecked();await expect(ticket).not.toBeChecked()
+ const route='/api/table-management/dining-day-rules'
+ const original=(await (await page.request.get(route)).json()).data
+ async function save(){
+  const saved=page.waitForResponse(r=>r.url().endsWith(route)&&r.request().method()==='POST')
+  await panel.getByRole('button',{name:'保存消费条件'}).click()
+  const response=await saved;expect(response.status(),await response.text()).toBe(200)
+ }
+ try{
+  await ticket.check();await save()
+  await page.reload();await panel.getByText('今天的消费条件',{exact:true}).click()
+  await expect(min).not.toBeChecked();await expect(ticket).toBeChecked()
+  await expect(panel).toContainText('当前生效：仅持票桌可点单，同桌都可以点单')
+  const stale=await page.request.post(route,{data:{...original,ticket:false},headers:{'idempotency-key':crypto.randomUUID()}})
+  expect(stale.status()).toBe(409)
+  await min.check();await ticket.uncheck();await save()
+  await expect(panel).toContainText('当前生效：所有桌按各自的开台金额')
+  await ticket.check();await save()
+  await expect(panel).toContainText('当前生效：持票桌免低消，同桌都可以点单')
+  await panel.screenshot({path:'artifacts/normalized-browser/dining-day-rules-390.png'})
+ } finally {
+  const current=(await (await page.request.get(route)).json()).data
+  if(current.minimum!==original.minimum || current.ticket!==original.ticket){
+   const restored=await page.request.post(route,{data:{...current,minimum:original.minimum,ticket:original.ticket},headers:{'idempotency-key':crypto.randomUUID()}})
+   expect(restored.ok()).toBe(true)
+  }
+ }
 })

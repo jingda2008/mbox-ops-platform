@@ -34,6 +34,7 @@ import { StaffSessionNotFoundError } from './staff-session-repository.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction } from './transaction-runner.js'
 import {StaffAccessRepository, StaffAccessDeniedError, StaffNotFoundError} from './staff-access-repository.js'
 import { readPrintAlerts } from './print-alert-query.js'
+import type {ReceiptPhoneKeys} from './print-receipt-member.js'
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {DeliveryBatchRepository} from './delivery-batch-repository.js'
 import {OrderStockReturnRepository} from './order-stock-return-repository.js'
@@ -44,6 +45,7 @@ type TransactionPort = Pick<ScopedPostgresTransactionRunner, 'run'>
 type CommandPort = Pick<NormalizedCommandExecutor, 'execute'>
 
 export interface HardwareApiOptions {
+  receiptPhoneKeys?:ReceiptPhoneKeys
   transactions: TransactionPort
   commands: CommandPort
   resolveContext(request: FastifyRequest): Promise<NormalizedOperationsRequestContext> | NormalizedOperationsRequestContext
@@ -91,7 +93,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
         eventType:'manual.operating-report.requested.v1',payload:{period,anchorDate,asOf:report.asOf,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOperatingReport(sourceId,operatorLabel,report)
+      const jobs=await new PrintTicketSourceRepository(tx,true,options.receiptPhoneKeys).materializeManualOperatingReport(sourceId,operatorLabel,report)
       if(!jobs.length)throw new HardwarePolicyError('收银打印路由不可用，请检查原打印设备；经营数据未改变')
       return outcome(context,'manual.operating-report.queued.v1','manual_print_request',requestId,'打印经营汇总',
         {requestId,period,anchorDate,asOf:report.asOf,jobIds:jobs.map(job=>job.id),status:'queued'})
@@ -142,7 +144,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
     let operatorLabel=''
     const result=await options.commands.execute(command(request,context,'table.bill.print',body,codec()),async tx=>{
       const id=randomUUID(),source=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:id,aggregateVersion:1,eventType:'manual.table-bill.requested.v1',payload:{sessionId,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualTableBill(source,sessionId,operatorLabel)
+      const jobs=await new PrintTicketSourceRepository(tx,true,options.receiptPhoneKeys).materializeManualTableBill(source,sessionId,operatorLabel)
       if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由，请在设备管理配置收银路由')
       return outcome(context,'manual.table-bill.queued.v1','manual_print_request',id,'订单中心整桌次账单',{requestId:id,jobCount:jobs.length,jobIds:jobs.map(job=>job.id),status:'queued'})
     },async tx=>{operatorLabel=await authorizeHardwarePrintSource(tx,context.employeeId,{kind:'table',id:sessionId})});return reply.code(result.replayed?200:201).send({data:result.value,replayed:result.replayed})
@@ -156,7 +158,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
         eventType:'manual.order-bill.requested.v1',payload:{orderId,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualOrderBill(sourceId,orderId,operatorLabel)
+      const jobs=await new PrintTicketSourceRepository(tx,true,options.receiptPhoneKeys).materializeManualOrderBill(sourceId,orderId,operatorLabel)
       if(!jobs.length)throw new HardwarePolicyError('当前没有可用的账单打印路由；订单和收款未受影响')
       return outcome(context,'manual.order-bill.queued.v1','manual_print_request',requestId,'订单中心手动打印',
         {requestId,orderId,jobIds:jobs.map(job=>job.id),status:'queued'})
@@ -190,7 +192,7 @@ export const hardwareApiPlugin: FastifyPluginAsync<HardwareApiOptions> = async (
       const requestId=randomUUID()
       const sourceId=await appendOutboxMessage(tx,{aggregateType:'manual_print_request',aggregateId:requestId,aggregateVersion:1,
         eventType:'manual.daily-report.requested.v1',payload:{businessDate:date,endDate,...reportOptions,templateVersion:2,employeeId:context.employeeId}})
-      const jobs=await new PrintTicketSourceRepository(tx,true).materializeManualDailyReport(sourceId,date,operatorLabel,endDate,reportOptions)
+      const jobs=await new PrintTicketSourceRepository(tx,true,options.receiptPhoneKeys).materializeManualDailyReport(sourceId,date,operatorLabel,endDate,reportOptions)
       if(!jobs.length)throw new HardwarePolicyError('收银打印路由不可用；请在设备管理检查路由，营业日未结束')
       return outcome(context,'manual.daily-report.queued.v1','manual_print_request',requestId,'收银打印营业日报',
         {requestId,businessDate:date,endDate,jobIds:jobs.map(job=>job.id),status:'queued'})

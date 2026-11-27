@@ -1,3 +1,4 @@
+import {recognizeDiningTicket, DiningTicketRequiredError} from './ticket-dining-session.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
 import {StaffAccessRepository} from './staff-access-repository.js'
 import type {TableMinimumSpend} from './table-minimum-spend.js'
@@ -596,16 +597,32 @@ export class OrderRepository {
   private prepaidSession=false
   private async lockOpenTableSession(tableSessionId: string,input:CreateSubmittedOrderInput): Promise<number> {
     requireUuidLike('tableSessionId', tableSessionId)
-    const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string }>(`
-      SELECT id, minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE mbox.ticket_store_minimum(tenant_id,store_id,effective_minimum_spend_minor) END AS minimum_spend_minor
+    const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string; ticket_only?:boolean; check_assignment?:boolean }>(`
+      SELECT id, mbox.session_dining_mode(tenant_id,store_id,id,minimum_spend_mode) AS minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE mbox.session_dining_minimum(tenant_id,store_id,id,effective_minimum_spend_minor) END AS minimum_spend_minor
+        , (SELECT ticket_enabled AND NOT minimum_enabled FROM mbox.session_dining_flags($1,$2,$3)) AS ticket_only
+        , ($4::uuid IS NOT NULL AND mbox.session_dining_ticket($1,$2,$3) IS NULL AND EXISTS(
+            SELECT 1 FROM mbox.reservation_table_locks l JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.reservation_lock_id)=(l.tenant_id,l.store_id,l.id)
+            WHERE (l.tenant_id,l.store_id,l.table_id)=($1,$2,mbox.table_sessions.table_id) AND l.status='confirmed' AND l.reserved_during @> statement_timestamp()
+          )) AS check_assignment
       FROM mbox.table_sessions
       WHERE tenant_id = $1::uuid
         AND store_id = $2::uuid
         AND id = $3::uuid
         AND status = 'open'
       FOR UPDATE
-    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableSessionId])
+    `, [this.transaction.scope.tenantId, this.transaction.scope.storeId, tableSessionId,input.createdByCustomerId??this.customerId])
     if (locked.rowCount !== 1) throw new TableSessionUnavailableForOrderError(tableSessionId)
+    const row=locked.rows[0]!
+    const buyer=input.createdByCustomerId??this.customerId
+    if (row.check_assignment && buyer && await recognizeDiningTicket(this.transaction, tableSessionId, buyer)) {
+      return this.lockOpenTableSession(tableSessionId,input)
+    }
+    if (row.ticket_only) {
+      const scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId,tableSessionId]
+      await this.transaction.query('SELECT id FROM mbox.table_tickets WHERE (tenant_id,store_id,id)=($1,$2,mbox.session_dining_ticket($1,$2,$3)) FOR SHARE',scope)
+      const current=await this.transaction.query<{valid:boolean}>('SELECT mbox.dining_ticket_owner($1,$2,$3) IS NOT NULL AS valid',scope)
+      if (!current.rows[0]?.valid) throw new DiningTicketRequiredError()
+    }
     this.prepaidSession=locked.rows[0]?.minimum_spend_mode==='prepaid'
     if(this.prepaidSession&&input.channel==='guest_qr'&&!input.prepaymentSettlement)throw new TablePrepaymentError('TABLE_PREPAYMENT_REQUIRED','本桌使用预收款点单，请刷新购物车后从预收款结算提交')
     return Number(locked.rows[0]?.minimum_spend_minor ?? 0)

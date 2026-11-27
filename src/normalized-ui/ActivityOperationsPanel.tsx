@@ -474,7 +474,7 @@ export function ActivityOperationsPanel({ api, auth, ticketCatalog=false }: {tic
     const submittedReason=reason.trim()
     try {
       if (!(await confirmAction({title:status==='cancelled'?'取消活动':'结束活动',
-        description:'仅在报名、套餐交付和收退款均处理后结束。不删除记录、不自动退款。',confirmLabel:'检查并结束'}))) return
+        description:status==='completed'?'结束后停止新报名。已售门票在原场次内仍可入场，已有积分和订单可以继续查询。':'取消前请处理已有报名和收退款。',confirmLabel:'检查并结束'}))) return
       setBusy('close'); setNotice('')
       const fingerprint=JSON.stringify([auth.employee.id,activity.publicId,status,submittedReason])
       if(closeAttempt.current?.fingerprint!==fingerprint)closeAttempt.current={fingerprint,key:operationKey('activity-close')}
@@ -482,7 +482,7 @@ export function ActivityOperationsPanel({ api, auth, ticketCatalog=false }: {tic
         {status,reason:submittedReason},{idempotencyKey:closeAttempt.current.key})
       closeAttempt.current=null
       await refreshSelected()
-      setNotice('活动已结束并保留原报名与资金记录。')
+      setNotice(status==='completed'?'活动已结束，已售门票仍按原场次使用。':'活动已取消。')
     } catch(error) { setNotice(message(error,'活动尚未结束，请检查剩余待办')) }
     finally { closeInFlight.current=false; setBusy('') }
   }

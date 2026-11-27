@@ -147,6 +147,8 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
   const moved=await run(tx=>new TableManagementRepository(tx).transfer({tableSessionId:id,targetTableId:target,transferredByEmployeeId:managerId,reason:'客人整桌换位置',idempotencyKey:randomUUID(),requestFingerprint:randomUUID()},{capture:async()=>({})}))
   expect(moved.tableSessionId).toBe(id);expect((await summary(id)).effectiveMinimumMinor).toBe(99999);expect((await summary(id)).history).toHaveLength(2)
   const businessDate=(await run(tx=>tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text date',[tenantId,storeId]))).rows[0]!.date
+  await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+    SELECT $1,$2,day,true,false,1 FROM unnest(ARRAY[$3::date,$3::date-1]) AS day ON CONFLICT DO NOTHING`,[tenantId,storeId,businessDate])
   await pool.query('UPDATE mbox.table_sessions SET business_date=$2 WHERE id=$1',[id,businessDate])
   await run(tx=>new PostgresTableCustomerLeftTurnoverRepository(tx).close({scope:{tenantId,storeId},tableSessionId:id,employeeId:managerId,businessDate,reasonNote:'顾客离场，保留低消和应付待办',idempotencyKey:randomUUID()}))
   const api=await app();try{const list=(await api.inject({url:'/table-management/prepayments'})).json().data;expect(list.find((r:{id:string})=>r.id===id)).toMatchObject({status:'closed',unsettled:true})}finally{await api.close()}
@@ -169,6 +171,8 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
   const id=await session();await submit(id)
   await pool.query("INSERT INTO mbox.store_automatic_table_turnover_policies(tenant_id,store_id,enabled,operating_starts_at) VALUES($1,$2,true,TIME '12:00')",[tenantId,storeId])
   const businessDate=(await run(tx=>tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text date',[tenantId,storeId]))).rows[0]!.date
+  await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+    SELECT $1,$2,day,true,false,1 FROM unnest(ARRAY[$3::date,$3::date-1]) AS day ON CONFLICT DO NOTHING`,[tenantId,storeId,businessDate])
   await pool.query('UPDATE mbox.table_sessions SET business_date=$2::date-1 WHERE id=$1',[id,businessDate])
   await run(tx=>new PostgresAutomaticTableTurnoverRepository(tx).close({scope:{tenantId,storeId},tableSessionId:id,businessDate,reasonNote:'营业日截止，低消与原应付留待核对',idempotencyKey:randomUUID()}))
   expect((await pool.query('SELECT employee_id FROM mbox.table_prepayment_turnovers WHERE table_session_id=$1',[id])).rows[0]).toMatchObject({employee_id:null})
@@ -188,6 +192,8 @@ integration('minimum spend staff exceptions and manager adjustments',()=>{
       [tenantId, `cost-${tenantId.slice(0, 8)}`])
     await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name)
       VALUES($1,$2,$3,'Cost Authority Store')`, [storeId, tenantId, `cost-${storeId.slice(0, 8)}`])
+    await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+      SELECT $1,$2,day,true,false,1 FROM unnest(ARRAY[date '2026-08-16',date '2026-10-31']) AS day`,[tenantId,storeId])
     await pool.query(`INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type)
       VALUES($1,$2,$3,'COST','Cost Area','indoor')`, [areaId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)

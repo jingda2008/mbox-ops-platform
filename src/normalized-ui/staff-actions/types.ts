@@ -52,6 +52,9 @@ export interface StaffActionTableSession {
   cashPaymentCount?: number
   cashAmountMinor?: number
   netCollectedAmountMinor?: number
+  diningOriginalMinor?:number
+  diningPoints?:number
+  diningTicket?:boolean
   orderAmountMinor?: number
 }
 
@@ -275,6 +278,7 @@ export type StaffTableOrderItemFulfillmentStatus =
   | 'attention'
 
 export interface StaffTableOrderDetail {
+  originalMinor?:number
   receipts?: import('../../shared/cashier-workbench-contracts.js').OriginalReceiptSummary[]
   collectionSettled?: boolean
   outstandingAmountMinor?: number
@@ -288,6 +292,7 @@ export interface StaffTableOrderDetail {
     id: string
     productName: string
     quantity: number
+    pointsMinor?:number
     unitPriceMinor?: number
     totalAmountMinor?: number
     includedInBundle?: boolean

@@ -153,6 +153,8 @@ integration('table prepayment PostgreSQL authority',()=>{
      const second=await app.inject(request);expect(second.statusCode,second.body).toBe(200);expect(second.json().data.order.publicId).toBe(first.json().data.order.publicId)
      expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(tableSessionId))).toMatchObject({availableMinor:1200,qualifyingGoodsMinor:26400})
      expect((await pool.query('SELECT awarded_points FROM mbox.loyalty_order_awards WHERE tenant_id=$1',[tenantId])).rows).toEqual([{awarded_points:88}])
+     const beneficiary=await pool.query('SELECT mbox.receipt_order_customer(tenant_id,store_id,order_id) AS customer FROM mbox.loyalty_order_awards WHERE tenant_id=$1',[tenantId])
+     expect(beneficiary.rows).toEqual([{customer:customerId}])
    }finally{await app.close()}
  })
  it('splits an item return over two original prepayment sources without restoring spent wallet credit',async()=>{
@@ -198,6 +200,8 @@ integration('table prepayment PostgreSQL authority',()=>{
  it('physically turns over a table with unresolved prepayment, preserves late capture on the old session and starts clean',async()=>{
    const table=randomUUID(),session=randomUUID()
    const businessDate=(await run(tx=>tx.query<{date:string}>('SELECT mbox.current_operating_business_date($1,$2)::text date',[tenantId,storeId]))).rows[0]!.date
+   await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+     VALUES($1,$2,$3,true,false,1) ON CONFLICT DO NOTHING`,[tenantId,storeId,businessDate])
    await pool.query("INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity) VALUES($1,$2,$3,$4,$5,'待核对桌',4)",[table,tenantId,storeId,areaId,'T'+table.slice(0,8)])
    await pool.query("INSERT INTO mbox.table_sessions(id,tenant_id,store_id,table_id,public_id,business_date,guest_count,minimum_spend_mode,minimum_spend_minor) VALUES($1,$2,$3,$4,$5,$6,2,'prepaid',5000)",[session,tenantId,storeId,table,randomUUID(),businessDate])
    const payment=await run(tx=>new PaymentRepository(tx).createForTablePrepayment({tableSessionId:session,customerId,publicId:randomUUID(),amountMinor:5000,provider:'postar',method:'jsapi'}))
@@ -479,6 +483,8 @@ integration('table prepayment PostgreSQL authority',()=>{
     await pool.query(`INSERT INTO mbox.stores(id,tenant_id,code,name)
       VALUES($1,$2,$3,'Cost Authority Store')`, [storeId, tenantId, `cost-${storeId.slice(0, 8)}`])
     await pool.query(`INSERT INTO mbox.customers(id,tenant_id,store_id,public_id) VALUES($1,$2,$3,$4)`,[customerId,tenantId,storeId,randomUUID()])
+    await pool.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
+      SELECT $1,$2,day,true,false,1 FROM unnest(ARRAY[date '2026-08-16',date '2026-10-31']) AS day`,[tenantId,storeId])
     await pool.query(`INSERT INTO mbox.areas(id,tenant_id,store_id,code,name,area_type)
       VALUES($1,$2,$3,'COST','Cost Area','indoor')`, [areaId, tenantId, storeId])
     await pool.query(`INSERT INTO mbox.tables(id,tenant_id,store_id,area_id,code,display_name,capacity)

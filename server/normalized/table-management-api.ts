@@ -3,7 +3,7 @@ import {readRefundApprovalLimits} from './refund-approval-limits.js'
 import {TableMinimumExceptionsRepository} from './table-minimum-exceptions.js'
 import {participantMovementHistory} from './participant-movement-history.js'
 import {TablePrepaymentRepository,TablePrepaymentError} from './table-prepayment-repository.js'
-import { reauthorizingCommands } from './staff-authorized-command.js'
+import { staffAuthorizedCommands, reauthorizingCommands } from './staff-authorized-command.js'
 import { registerTableService } from './table-service-api.js'
 import { registerNativeTableConfiguration } from './native-table-configuration.js'
 import { registerNativeAssignmentSchedule } from './native-assignment-schedule.js'
@@ -73,6 +73,38 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
   registerTableService(app, options)
   await registerNativeAssignmentSchedule(app, options)
   registerNativeTableConfiguration(app, options)
+  const dayRulesPath='/table-management/dining-day-rules'
+  app.get(dayRulesPath,async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedContext(options,request)
+    const data=await options.transactions.run(ctx.scope,async tx=>{
+      const access=await new StaffAccessRepository(tx).resolve(ctx.employeeId)
+      if(!access.permissions.some(p=>['table.open','table.manage','table.view_all'].includes(p))) throw new StaffAccessDeniedError('需要桌台查看权限')
+      return (await tx.query(`SELECT $3::date::text AS "businessDate",coalesce(d.minimum_enabled,false) AS minimum,
+        coalesce(d.ticket_enabled,false) AS ticket,coalesce(d.revision,0) AS revision FROM (SELECT 1) seed
+        LEFT JOIN mbox.dining_day_rules d ON (d.tenant_id,d.store_id,d.business_date)=($1,$2,$3::date)`,
+        [ctx.scope.tenantId,ctx.scope.storeId,ctx.businessDate])).rows[0]
+    },{readOnly:true})
+    reply.header('cache-control','no-store');return reply.send({data})
+  }))
+  app.post(dayRulesPath,async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedContext(options,request),body=readObject(request.body)
+    if(!options.nativeCommands) throw new TableManagementRequestError('营业日设置暂时不可用')
+    if(body.businessDate!==ctx.businessDate) throw new TableManagementConflictError('营业日已切换，请重新读取今天的设置')
+    if(typeof body.minimum!=='boolean'||typeof body.ticket!=='boolean') throw new TableManagementRequestError('请确认最低消费和门票选项')
+    const {minimum,ticket}=body
+    const revision=readInteger(body.revision,'设置版本',0,2147483646)
+    const command=commandBase(request,ctx,body,'设置当日消费条件',{})
+    const execution=await staffAuthorizedCommands(options.nativeCommands,ctx.employeeId,'table.manage',true).execute<JsonObject>({...command,operationScope:'table.day_rules.save',resultCodec:{encode:v=>v,decode:v=>v as JsonObject}},async tx=>{
+      const args=[ctx.scope.tenantId,ctx.scope.storeId,ctx.businessDate,minimum,ticket]
+      const result=revision===0
+        ? await tx.query('INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision) VALUES($1,$2,$3,$4,$5,1) ON CONFLICT DO NOTHING RETURNING revision',args)
+        : await tx.query('UPDATE mbox.dining_day_rules SET minimum_enabled=$4,ticket_enabled=$5,revision=revision+1 WHERE (tenant_id,store_id,business_date,revision)=($1,$2,$3,$6) RETURNING revision',[...args,revision])
+      if(!result.rowCount) throw new TableManagementConflictError('其他员工已修改消费条件，请重新读取后再保存')
+      const data={businessDate:ctx.businessDate,minimum,ticket,revision:revision+1}
+      return {result:data,auditEvents:[{actor:command.actor,action:'table.day_rules.saved',objectType:'store',objectId:ctx.scope.storeId,businessDate:ctx.businessDate,afterData:data,reason:command.reason}],outboxMessages:[]}
+    })
+    return reply.send({data:execution.value})
+  }))
   app.get('/table-management/sessions/:tableSessionId/minimum-spend',async(request,reply)=>handle(reply,async()=>{
     const context=await authorizedContext(options,request),id=readUuid(readParams(request).tableSessionId,'tableSessionId')
     const data=await options.transactions.run(context.scope,async tx=>{

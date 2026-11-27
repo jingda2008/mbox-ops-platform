@@ -1,0 +1,5 @@
+.ticket-desk-slip { display: none; }
+@media print {
+  body:has(> .ticket-desk-slip) > :not(.ticket-desk-slip) { display: none !important; }
+  .ticket-desk-slip { display: block; color: black; max-width: 72mm; overflow-wrap: anywhere; }
+}

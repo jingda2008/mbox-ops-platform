@@ -1,3 +1,4 @@
+import {DiningDayRules} from './DiningDayRules'
 import {SessionMoneySummary} from '../SessionMoneySummary'
 import {beijingDisplayTime} from '../beijing-display-time'
 import { TableGuestCountEditor } from './TableGuestCountEditor'
@@ -210,6 +211,7 @@ export function StaffActionsPanel({
   const [guestCount, setGuestCount] = useState('')
   const [minimumSpendMode,setMinimumSpendMode]=useState<'order_gate'|'prepaid'>('order_gate')
   const [minimumSpendYuan,setMinimumSpendYuan]=useState('')
+  const [dailyMinimum,setDailyMinimum]=useState(false)
   const [primaryServiceEmployeeId, setPrimaryServiceEmployeeId] = useState('')
   const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
   const [capacityReason, setCapacityReason] = useState('')
@@ -669,7 +671,7 @@ export function StaffActionsPanel({
   const openTable = async () => {
     if (operations === null || selectedTable === null) return
     if (!hasPermission(permissions, 'table.open')) return revealPermissionGuidance('table.open')
-    const minimumText=minimumSpendYuan.trim()||'0'
+    const minimumText=!dailyMinimum ? '0' : minimumSpendYuan.trim()||'0'
     const minimumSpendMinor=Math.round(Number(minimumText)*100)
     if(!/^\d+(\.\d{1,2})?$/.test(minimumText)||!Number.isSafeInteger(minimumSpendMinor)) return showNotice({kind:'error',message:'最低消费请填写非负金额，最多两位小数'})
     const validated = validateOpenTableInput(selectedTable, guestCount, capacityReason)
@@ -696,7 +698,7 @@ export function StaffActionsPanel({
     try {
       await api.openTable({
         tableId: selectedTable.id,
-        minimumSpendMinor,minimumSpendMode,
+        minimumSpendMinor,minimumSpendMode:dailyMinimum?minimumSpendMode:'order_gate',
         primaryServiceEmployeeId,
         ...validated,
         guestProfileSnapshot: recommendationSceneSnapshot(openTableRecommendationScene),
@@ -1221,6 +1223,7 @@ export function StaffActionsPanel({
 
       {tab === 'tables' && operations !== null && (
         <div className="staff-table-workspace">
+          {permissions.some(p=>['table.open','table.manage','table.view_all'].includes(p)) && <DiningDayRules key={operations.actor.id} staffSessionId={staffSessionId} canEdit={permissions.includes('table.manage')} onMinimum={setDailyMinimum}/>}
           {permissions.includes('table.participation.manage')&&<ParticipantMovementHistoryPanel api={api} ownerKey={operations.actor.id}/>}
           {permissions.includes('table.assignment.manage') && (
             <ResponsibilityAssignmentPanel api={api} tables={operations.tables} />
@@ -1281,14 +1284,14 @@ export function StaffActionsPanel({
                       onClick={() => selectTable(table)}
                       disabled={pendingAction === `table:${table.id}`}
                     >
-                      <strong>{table.code}</strong>
+                      <span className="staff-table-name"><strong>{table.code}</strong>{session?.diningTicket && <small aria-label="持票桌">票</small>}</span>
                       <span>{table.activeSession ? <>
                         {table.activeSession.guestCount}人 · {table.activeSession.status === 'closing' && '结台中 · '}<span className="staff-table-state">{tableFinancialLabel(table.activeSession.financialState)}</span>
                       </> : `${table.capacity}人 · 空台`}</span>
                       {session?.outstandingAmountMinor !== undefined && session.outstandingAmountMinor > 0 && (
                         <em className="staff-table-spend staff-table-due">待收 ¥{(session.outstandingAmountMinor / 100).toFixed(2)}</em>
                       )}
-                      {table.activeSession !== null && <em className="staff-table-spend">已点 ¥{((table.activeSession.orderAmountMinor??0)/100).toFixed(2)}</em>}
+                      {session && <em className="staff-table-spend">{session.diningOriginalMinor == null ? '餐饮待更新' : `餐饮 ¥${(session.diningOriginalMinor / 100).toFixed(2)}`}</em>}
                       {table.activeSession?.grossCollectedAmountMinor === undefined && table.activeSession !== null && (table.activeSession.refundedAmountMinor ?? 0) > 0 && <em className="staff-table-financial-detail">已退 ¥{((table.activeSession.refundedAmountMinor ?? 0)/100).toFixed(2)} · 净收 ¥{((table.activeSession.netCollectedAmountMinor ?? 0)/100).toFixed(2)}</em>}
                       {notices.length > 0 && <em className="staff-table-financial-detail staff-table-notices">
                         {notices.map(notice => <span key={notice}>{notice}</span>)}
@@ -1333,6 +1336,7 @@ export function StaffActionsPanel({
               allTables={operations.tables}
               permissions={permissions}
               guestCount={guestCount}
+              dailyMinimum={dailyMinimum}
               minimumSpendMode={minimumSpendMode}
               onMinimumSpendMode={setMinimumSpendMode}
               minimumSpendYuan={minimumSpendYuan}
@@ -1944,6 +1948,7 @@ interface TableActionSheetProps {
   allTables: StaffActionTable[]
   permissions: readonly string[]
   guestCount: string
+  dailyMinimum:boolean
   minimumSpendMode:'order_gate'|'prepaid'
   onMinimumSpendMode(value:'order_gate'|'prepaid'):void
   minimumSpendYuan: string
@@ -2051,6 +2056,11 @@ function TableActionSheet(props: TableActionSheetProps) {
         <button ref={closeButtonRef} className="staff-table-sheet-close" type="button" aria-label="关闭桌台操作" onClick={onDismiss}><X size={20} /></button>
       </header>
 
+      {table.activeSession && !sessionSyncing && <div className="staff-dining-detail">
+        {table.activeSession.diningTicket && <strong>持票桌</strong>}
+        {table.activeSession.diningOriginalMinor != null && <span>餐饮原价 ¥{(table.activeSession.diningOriginalMinor / 100).toFixed(2)}</span>}
+        {table.activeSession.diningPoints != null && <span>积分抵扣 ¥{table.activeSession.diningPoints.toFixed(2)}</span>}
+      </div>}
       {table.activeSession && !sessionSyncing && (table.activeSession.orderCount>0 || !!table.activeSession.prepaidReceivedMinor) && <SessionMoneySummary money={table.activeSession}/>}
       {table.activeSession&&!sessionSyncing&&(
           <div className="staff-session-actions staff-session-primary" role="group" aria-label="本桌常用操作">
@@ -2139,7 +2149,7 @@ function TableActionSheet(props: TableActionSheetProps) {
                 ))}
               </div>
               {availableTargets.length === 0 && <p>当前没有可转入的空闲桌台。</p>}
-              {transferTarget&&<p>转至 {transferTarget.code} 后采用目标桌配置的低消；原款随桌次保留，不足部分提示顾客补足，余额不自动退款。</p>}
+              {transferTarget&&<p>转至 {transferTarget.code} 后，已有收款及本桌的持票记录随桌次转移。</p>}
               {transferNeedsReason && (
                 <label>加座说明<input value={props.transferReason} maxLength={1000} placeholder="说明加座及现场安全确认" onChange={(event) => props.onTransferReason(event.target.value)} /></label>
               )}
@@ -2155,9 +2165,9 @@ function TableActionSheet(props: TableActionSheetProps) {
       {table.activeSession === null ? (
         <div className="staff-open-table">
           {hasPermission(props.permissions, 'table.open')&&<PrimaryServiceSelect tableId={table.id} staffSessionId={props.staffSessionId} value={props.primaryServiceEmployeeId} onChange={props.onPrimaryServiceEmployeeId}/>}
-          <label>最低消费方式<select aria-label="最低消费方式" value={props.minimumSpendMode} onChange={e=>props.onMinimumSpendMode(e.target.value as 'order_gate'|'prepaid')}><option value="order_gate">提交时达标</option><option value="prepaid">先预收款，分次点单</option></select></label>
+          {props.dailyMinimum && <><label>最低消费方式<select aria-label="最低消费方式" value={props.minimumSpendMode} onChange={e=>props.onMinimumSpendMode(e.target.value as 'order_gate'|'prepaid')}><option value="order_gate">提交时达标</option><option value="prepaid">先预收款，分次点单</option></select></label>
           <label>本次开台最低消费（元）<input aria-label="本次开台最低消费（元）" inputMode="decimal" placeholder="不填或0表示不限制" value={props.minimumSpendYuan} onChange={event=>props.onMinimumSpendYuan(event.target.value)} /></label>
-          <small>按本桌本次开台累计优惠前商品金额计算，优惠券和积分抵扣不影响达标。</small>
+          <small>按本桌本次开台累计优惠前商品金额计算，优惠券和积分抵扣不影响达标。</small></>}
           <label><Users size={17} /> 实际到店人数</label>
           <div className="staff-count-picks">
             {Array.from({ length: Math.min(8, Math.max(4, table.capacity + 2)) }, (_, index) => index + 1).map((count) => (

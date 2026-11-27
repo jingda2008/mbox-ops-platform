@@ -117,8 +117,9 @@ export async function admitTicketBatch(tx:ScopedTransaction,ticketId:string,code
     LEFT JOIN mbox.ticket_reschedule_offers move ON move.id=k.reschedule_id
     JOIN mbox.community_activities a ON (a.tenant_id,a.store_id,a.id)=(r.tenant_id,r.store_id,coalesce(move.activity_id,r.activity_id))
     JOIN mbox.reservation_table_locks l ON (l.tenant_id,l.store_id,l.id)=(k.tenant_id,k.store_id,k.reservation_lock_id)
-    WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3 AND k.door_code=$4 AND k.refunded_at IS NULL AND a.status='published'
-      AND coalesce(move.starts_at,p.starts_at)<=clock_timestamp() AND coalesce(move.ends_at,p.ends_at)>clock_timestamp() AND (l.status='confirmed' OR (l.status='released' AND mbox.ticket_lock_active(l.tenant_id,l.store_id,l.id)))
+    WHERE k.tenant_id=$1 AND k.store_id=$2 AND k.id=$3 AND k.door_code=$4 AND k.refunded_at IS NULL AND a.status IN ('published','completed')
+      AND coalesce(move.starts_at,p.starts_at)<=clock_timestamp() AND coalesce(move.ends_at,p.ends_at)>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM mbox.ticket_seating(k.tenant_id,k.store_id,k.reservation_lock_id) WHERE NOT active)
+      AND (l.status='confirmed' OR (l.status='released' AND mbox.ticket_lock_active(l.tenant_id,l.store_id,l.id)))
       AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f WHERE(f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('cancelled','rejected'))
     FOR UPDATE OF a,k`,[...args,code])).rows[0]
   if(!k)throw new ActivityOperationsError('请核对客人出示的本场票码、已排桌号及售后状态','TICKET_DOOR_INVALID',409)

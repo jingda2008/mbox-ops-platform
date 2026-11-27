@@ -558,3 +558,29 @@ test('顾客自购仅走微信，即使缓存的票档曾允许现金',async()=>
   assert.doesNotMatch(template,/到店付现金|提交现金购票单/)
   assert.match(template,/item.paymentMethod === 'cash'/)
 })
+
+test('按票展开菜品原价及本票抵扣，收起后忽略上一张票的回包',async()=>{
+  const {page,api}=fixture()
+  page.data.member={memberNo:'M001'}
+  const select=id=>page.toggleConsumption({currentTarget:{dataset:{id}}})
+  let finish
+  api.getTicketConsumption=()=>new Promise(resolve=>{finish=resolve})
+  const previous=select('first')
+  api.getTicketConsumption=async()=>[{orderNo:'O2',used:150,restored:2,items:[{id:'dish',originalMinor:26000,discountMinor:5050}]}]
+  await select('second')
+  finish([])
+  await previous
+  assert.equal(page.data.receiptId,'second')
+  assert.equal(page.data.receipts[0].discount,'¥150.00')
+  assert.equal(page.data.receipts[0].items[0].original,'¥260.00')
+  assert.equal(page.data.receipts[0].items[0].discount,'¥50.50')
+  await select('second')
+  assert.equal(page.data.receiptId,null)
+  api.getTicketConsumption=async()=>{throw Error('offline')}
+  await select('first')
+  assert.equal(page.data.receiptStatus,'error')
+  api.getTicketConsumption=async()=>[]
+  await select('first')
+  assert.equal(page.data.receiptStatus,'ready')
+  assert.equal(page.data.receipts.length,0)
+})

@@ -1,3 +1,4 @@
+import {DiningTicketRequiredError} from './ticket-dining-session.js'
 import {offerTabPoints} from './existing-tab-points.js'
 import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import {staffPointsProposal} from './assisted-points-proposal.js'
@@ -264,6 +265,7 @@ export type StaffTableOrderItemFulfillmentStatus =
   | 'attention'
 
 export interface StaffTableOrderDetailView {
+  originalMinor?:number
   receipts?: OriginalReceiptSummary[]
   productionMessage?: string
   collectionSettled?: boolean
@@ -278,6 +280,7 @@ export interface StaffTableOrderDetailView {
     id: string
     productName: string
     quantity: number
+    pointsMinor?:number
     unitPriceMinor?: number
     totalAmountMinor?: number
     includedInBundle?: boolean
@@ -297,6 +300,7 @@ interface StaffTableOrderDetailRow extends Record<string, unknown> {
   order_id: string
   order_public_id: string
   replacement_source?:{orderPublicId:string;orderItemId:string}|null
+  original_minor?:string; points_minor?:string
   order_status: string
   order_fulfillment_state: string
   order_payment_status: string
@@ -371,7 +375,10 @@ export async function listTableOrderDetailsForSession(
         'stopped',count(*) FILTER(WHERE unit.operationally_stopped),'ready',count(*) FILTER(WHERE unit.production_state='ready' AND unit.held_by_case_id IS NULL AND NOT unit.operationally_stopped),
         'delivered',count(*) FILTER(WHERE unit.production_state='delivered'),'pending',count(*) FILTER(WHERE unit.production_state<>'delivered' AND NOT unit.operationally_stopped)) END FROM mbox.order_item_quantity_units unit
         WHERE unit.tenant_id=item.tenant_id AND unit.store_id=item.store_id AND unit.order_item_id=item.id) AS quantity_facts,
-      item.id AS item_id,
+      item.id AS item_id,order_header.subtotal_amount_minor AS original_minor,
+      (SELECT q.discount_minor FROM mbox.checkout_portion_order_items m JOIN mbox.checkout_coupon_quote_lines q
+        USING(tenant_id,store_id,quote_id,portion_id) JOIN mbox.checkout_point_holds h USING(tenant_id,store_id,quote_id)
+        WHERE (m.tenant_id,m.store_id,m.order_item_id)=(item.tenant_id,item.store_id,item.id) AND h.status='consumed') AS points_minor,
       COALESCE(NULLIF(item.product_snapshot->>'name',''),product.name,'商品') AS product_name,
       item.quantity,item.unit_price_minor,item.total_amount_minor,item.parent_order_item_id,item.fulfillment_station,item.status AS item_status,kds.status AS kds_status
     FROM originals order_header
@@ -406,6 +413,7 @@ export async function listTableOrderDetailsForSession(
   for (const row of result.rows) {
     const order = orders.get(row.order_id) ?? {
       publicId: row.order_public_id,
+      originalMinor:row.original_minor==null?undefined:Number(row.original_minor),
       ...(row.replacement_source?{replacementSource:row.replacement_source}:{}),
       ...(typeof row.collection_settled === 'boolean' ? {collectionSettled:row.collection_settled,outstandingAmountMinor:Number(row.outstanding_amount_minor)} : {}),
       ...(row.receipts ? {receipts:row.receipts} : {}),
@@ -419,6 +427,7 @@ export async function listTableOrderDetailsForSession(
       id: row.item_id,
       productName: row.product_name,
       quantity: Number(row.quantity),
+      pointsMinor:row.points_minor==null?undefined:Number(row.points_minor),
       unitPriceMinor: row.unit_price_minor == null ? undefined : Number(row.unit_price_minor),
       totalAmountMinor: row.total_amount_minor == null ? undefined : Number(row.total_amount_minor),
       includedInBundle: row.parent_order_item_id != null,
@@ -2101,6 +2110,7 @@ function mapError(error: unknown): { statusCode: number; body: ApiErrorBody } {
   if (error instanceof TypeError) return apiError(400, 'REQUEST_INVALID', error.message)
   if (error instanceof KdsTaskNotFoundError) return apiError(404, 'KDS_TASK_NOT_FOUND', error.message)
   if(error instanceof TablePrepaymentError)return apiError(409,error.code,error.message)
+  if (error instanceof DiningTicketRequiredError) return apiError(409,'DINING_TICKET_REQUIRED',error.message)
   if (error instanceof TableMinimumSpendNotMetError) return apiError(409, 'TABLE_MINIMUM_SPEND_NOT_MET', error.message)
   if (error instanceof OrderProductUnavailableError) {
     return apiError(409, 'ORDER_PRODUCT_UNAVAILABLE', error.message)

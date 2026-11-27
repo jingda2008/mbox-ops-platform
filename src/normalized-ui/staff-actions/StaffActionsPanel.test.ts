@@ -86,7 +86,7 @@ describe('StaffActionsPanel', () => {
     expect(css).toContain('.staff-table-tile.is-financial-unpaid')
     expect(css).toContain('.staff-table-tile.is-financial-payment_exception')
     expect(source).toContain('staff-table-spend')
-    expect(source).toContain('activeSession.orderAmountMinor')
+    expect(source).toContain('session.diningOriginalMinor')
   })
 
   it('announces newly arriving service or fulfillment facts on the desktop workbench', () => {

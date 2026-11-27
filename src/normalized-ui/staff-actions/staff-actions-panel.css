@@ -797,3 +797,13 @@
 .staff-ticket-cash fieldset { border: 0; padding: 0; margin: 12px 0; }
 .staff-ticket-cash label { display: block; margin: 8px 0; }
 .staff-ticket-cash select, .staff-ticket-cash input:not([type=checkbox]) { display: block; width: 100%; box-sizing: border-box; padding: 8px; }
+
+.staff-table-name { display: inline-flex; align-items: center; gap: 4px; }
+.staff-table-name small { background: #fff; padding: 0 3px; border-radius: 3px; }
+.staff-dining-detail { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.staff-dining-detail:empty { display: none; }
+
+.staff-day-rules { padding: 8px 12px; background: #fff; border: 1px solid #d4dbd5; border-radius: 8px; }
+.staff-day-rules summary { cursor: pointer; font-weight: 700; }
+.staff-day-rules fieldset { margin: 8px 0; padding: 0; border: 0; display: flex; gap: 16px; }
+.staff-day-rules label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }

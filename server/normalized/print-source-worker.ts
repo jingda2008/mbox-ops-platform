@@ -1,4 +1,5 @@
 import { PrintDiagnosticsRepository } from './print-diagnostics.js'
+import type {ReceiptPhoneKeys} from './print-receipt-member.js'
 import { PrintTicketSourceRepository,ActivityPrintHeldError } from './print-ticket-source.js'
 import type { ScopedPostgresTransactionRunner, ScopedTransaction, StoreScope } from './transaction-runner.js'
 
@@ -11,7 +12,7 @@ interface SourceRow extends Record<string, unknown> {
 /** No device I/O. A rendering/routing failure is retained after rolling back
  * only the print work, never a payment, inventory movement or KDS task. */
 export class PrintSourceWorker {
-  constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>) {}
+  constructor(private readonly transactions: Pick<ScopedPostgresTransactionRunner, 'run'>,private readonly phoneKeys?:ReceiptPhoneKeys) {}
 
   async runBatch(scope: Readonly<StoreScope>, _workerId: string, limit = 10): Promise<PrintSourceBatch> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new TypeError('Invalid print source batch')
@@ -21,7 +22,7 @@ export class PrintSourceWorker {
         AND status IN ('pending','retry') AND next_attempt_at<=clock_timestamp()
       ORDER BY next_attempt_at,id LIMIT $3`, [scope.tenantId, scope.storeId, limit])).rows, { readOnly: true })
     for (const row of rows) {
-      const outcome = await this.transactions.run(scope, tx => materialize(tx, row.id))
+      const outcome = await this.transactions.run(scope, tx => materialize(tx, row.id,this.phoneKeys))
       if (outcome !== null) { result.examined++; result[outcome]++ }
     }
     try {
@@ -42,7 +43,7 @@ export class PrintSourceWorker {
   }
 }
 
-async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<keyof PrintSourceBatch, 'examined'> | null> {
+async function materialize(tx: ScopedTransaction, id: string,phoneKeys?:ReceiptPhoneKeys): Promise<Exclude<keyof PrintSourceBatch, 'examined'> | null> {
   await tx.query("SET LOCAL lock_timeout='100ms'")
   await tx.query("SET LOCAL statement_timeout='2s'")
   const source = (await tx.query<SourceRow>(`
@@ -52,7 +53,7 @@ async function materialize(tx: ScopedTransaction, id: string): Promise<Exclude<k
   if (!source) return null
   await tx.query('SAVEPOINT print_materialization')
   try {
-    const repository = new PrintTicketSourceRepository(tx)
+    const repository = new PrintTicketSourceRepository(tx,false,phoneKeys)
     const method = {
       activity_production:'materializeActivityProduction',production_notice: 'materializeProductionNotice',
       production: 'materializeOrderProduction', settlement: 'materializeCashierSettlement',

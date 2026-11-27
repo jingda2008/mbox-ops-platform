@@ -1,3 +1,4 @@
+import {EmployeeTableAccessDeniedError} from './employee-table-access.js'
 import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {proposeMove} from './table-ticket-reschedule.js'
 import {ticketStatement,ticketFinanceDay} from './table-ticket-reception.js'
@@ -122,6 +123,19 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
       merchantMinor:integer(body.merchantMinor,'门店承担金额',0,Number.MAX_SAFE_INTEGER),
     }
     const result=await options.service.proposeTicketDining(ctx,uuid(request.params.id,'原退票案'),text(body.reason,'菜款核定依据',2,500),idempotencyKey(request),split,body.refundAmountMinor===undefined?undefined:integer(body.refundAmountMinor,'拟退票款',1,2147483647))
+    return reply.send({data:result.value,meta:{replayed:result.replayed}})
+  }))
+  app.get('/staff/activity-operations/assisted-cash-offers',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['order.create'])
+    return reply.header('cache-control','no-store').send({data:await options.service.assistedCashOffers(ctx)})
+  }))
+  app.post('/staff/activity-operations/assisted-cash-tickets',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorized(options,request,['order.create'])
+    const body=object(request.body,'代客现金购票'),phone=text(body.phone,'购票会员手机号',11,11)
+    if(!/^1[3-9][0-9]{9}$/.test(phone) || body.termsAcknowledged!==true)throw invalid('请核对购票手机号并请顾客确认本场购票须知')
+    const result=await options.service.openAssistedCashTicket(ctx,{phone,tableSessionId:uuid(body.tableSessionId,'当前桌台'),
+      offerId:uuid(body.offerId,'票档'),quantity:integer(body.quantity,'桌数',1,2147483647),safetyVersion:text(body.safetyVersion,'入场条款',1,64),
+      refundVersion:text(body.refundVersion,'退票条款',3,64)},idempotencyKey(request))
     return reply.send({data:result.value,meta:{replayed:result.replayed}})
   }))
   app.post<{Params:{id:string}}>('/staff/activity-operations/table-ticket-offers/:id/assist',async(request,reply)=>handle(reply,async()=>{
@@ -616,7 +630,7 @@ async function handle(reply: FastifyReply, execute: () => Promise<unknown>) {
     if (error instanceof ActivityOperationsError || error instanceof CustomerExperienceRequestError || error instanceof ActivityServiceError) {
       return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } })
     }
-    if (error instanceof StaffAccessDeniedError) {
+    if (error instanceof StaffAccessDeniedError || error instanceof EmployeeTableAccessDeniedError) {
       return reply.code(403).send({ error: { code: 'STAFF_ACCESS_DENIED', message: '没有执行该活动操作的权限' } })
     }
     if (error instanceof IdempotencyConflictError || error instanceof OutboxMessageConflictError) {

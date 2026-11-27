@@ -52,6 +52,18 @@ export class StaffActionsApiError extends Error {
   }
 }
 
+export interface AssistedCashTicketOffer {
+  id:string; title:string; name:string; startsAt:string; remaining:number; priceMinor:number; giftPoints:number
+  safetyVersion:string; refundVersion:string; safetySummary:string; refundSchedule:string
+}
+export interface AssistedCashTicketInput {
+  tableSessionId:string; offerId:string; quantity:number; phone:string; termsAcknowledged:true; safetyVersion:string; refundVersion:string
+}
+export interface StaffTicketCashApi {
+  offers(signal?:AbortSignal):Promise<AssistedCashTicketOffer[]>
+  open(input:AssistedCashTicketInput):Promise<{registrationPublicId:string;amountMinor:number}>
+  collect(registrationPublicId:string,amountMinor:number):Promise<void>
+}
 export interface AssistedOrderAccess {
   employeeId?: string
   canCreateOrder: boolean
@@ -272,6 +284,7 @@ export interface GuestCountChange {
 export interface TicketInboxItem { activityId: string; title: string; waiting: number }
 
 export interface StaffActionsApiPort {
+  readonly ticketCash?:StaffTicketCashApi
   loadTicketInbox?(signal?: AbortSignal): Promise<TicketInboxItem[]>
   updateGuestCount(sessionId: string, change: GuestCountChange, key: string): Promise<number>
   loadMemberGiftWallet?(code:string,cursor?:string,signal?:AbortSignal):Promise<MemberGiftWallet>
@@ -981,6 +994,17 @@ export class StaffActionsApi implements StaffActionsApiPort {
     )
   }
 
+  readonly ticketCash:StaffTicketCashApi={
+    offers:signal=>this.getData('/api/staff/activity-operations/assisted-cash-offers',signal),
+    open:input=>executeRecoverableCommand(`staff-ticket-cash:${this.staffSessionId}:${input.tableSessionId}`,input,
+      'ticket-cash-'+this.createIdempotencyKey(),key=>this.postData('/api/staff/activity-operations/assisted-cash-tickets',input,'idempotency-key',key)),
+    collect:async(registrationPublicId,expectedAmountMinor)=>{
+      const body={provider:'cash',method:'cash',expectedAmountMinor}
+      await executeRecoverableCommand(`ticket-collection:${this.staffSessionId}:${registrationPublicId}`,body,
+        'ticket-collect-'+this.createIdempotencyKey(),key=>this.command('/api/activity-registrations/'+encodeURIComponent(registrationPublicId)+'/manual-collections',body,'idempotency-key',key))
+    },
+  }
+
   async loadAssistedOrderAccess(signal?: AbortSignal): Promise<AssistedOrderAccess> {
     const access = await this.getData<AssistedOrderAccess>('/api/commerce/assisted-order-access', signal)
     if (!signal?.aborted && access.employeeId) this.employeeId = access.employeeId
@@ -1357,10 +1381,10 @@ export class StaffActionsApi implements StaffActionsApiPort {
   }
 
   private async postData<Data>(
-    url:string,body:object,idempotencyHeader:'idempotency-key'|'x-idempotency-key',
+    url:string,body:object,idempotencyHeader:'idempotency-key'|'x-idempotency-key',key=`staff-action-${this.createIdempotencyKey()}`,
   ):Promise<Data> {
     const headers=new Headers({ accept:'application/json','content-type':'application/json' })
-    headers.set(idempotencyHeader,`staff-action-${this.createIdempotencyKey()}`)
+    headers.set(idempotencyHeader,key)
     const response=await this.request(url,{ method:'POST',body:JSON.stringify(body),headers })
     const value=await readJson(response)
     if (!isObject(value) || !('data' in value)) throw new StaffActionsApiError(

@@ -651,16 +651,16 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
       throw new CustomerExperienceRequestError('请选择门票档位，具体桌号由门店安排','TICKET_DESK_STAFF_ONLY',400)
     if (Object.keys(body).some(key=>!['offerId','proposalId','reservationLockId','paymentMethod','quantity','safetyVersion','refundVersion','termsAcknowledged'].includes(key)))
       throw new CustomerExperienceRequestError('整桌门票须按票档原价付款','TICKET_TENDER_INVALID',400)
-    const paymentMethod=body.paymentMethod===undefined?'jsapi':enumValue(body.paymentMethod,'付款方式',['jsapi','cash'] as const)
+    if(body.paymentMethod!==undefined && body.paymentMethod!=='jsapi')throw new CustomerExperienceRequestError('请使用微信支付，现场收现由服务员办理','TICKET_TENDER_INVALID',400)
     if (body.termsAcknowledged!==true) throw new CustomerExperienceRequestError('请先核对本场条款与赠分说明')
     const offerId=text(body.offerId,'票档',36,36)
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(offerId)) throw new CustomerExperienceRequestError('票档编号不正确')
     if(body.proposalId!==undefined && (typeof body.proposalId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.proposalId)))throw new CustomerExperienceRequestError('代售单号不正确')
     if(body.reservationLockId!==undefined && (typeof body.reservationLockId!=='string'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.reservationLockId)))throw new CustomerExperienceRequestError('预约编号不正确')
     try{
-      const result=await options.service.purchaseTableTickets(context,{offerId,...(paymentMethod==='cash'?{paymentMethod}:{}),...(typeof body.reservationLockId==='string'?{reservationLockId:body.reservationLockId}:{}),...(typeof body.proposalId==='string'?{proposalId:body.proposalId}:{}),quantity:integer(body.quantity,'桌数',1,2147483647),
+      const result=await options.service.purchaseTableTickets(context,{offerId,...(typeof body.reservationLockId==='string'?{reservationLockId:body.reservationLockId}:{}),...(typeof body.proposalId==='string'?{proposalId:body.proposalId}:{}),quantity:integer(body.quantity,'桌数',1,2147483647),
         safetyVersion:text(body.safetyVersion,'安全条款',1,64),refundVersion:text(body.refundVersion,'退票条款',3,64)},
-        idempotencyKey(request),paymentMethod==='cash'?false:await options.resolveActivityPaymentReady?.(context.scope,context.customerId)??false)
+        idempotencyKey(request),await options.resolveActivityPaymentReady?.(context.scope,context.customerId)??false)
       return reply.code(result.replayed?200:201).send({data:result.value,meta:{replayed:result.replayed}})
     }catch(error){
       // Only an explicit business rejection of this command proves no order was committed.

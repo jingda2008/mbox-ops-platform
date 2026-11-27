@@ -1,7 +1,7 @@
 import {readDraftRoster,saveDraftRoster} from './ticket-draft-roster.js'
 import {planTicketCashRefund} from './table-ticket-auto-review.js'
 import type {ActivityContactProtectionKeyring} from './personal-contact-protection.js'
-import {publicTableTickets} from './table-ticket-purchase.js'
+import {buyTableTickets,publicTableTickets} from './table-ticket-purchase.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
 import {proposeTicketDining,type DiningSplit} from './table-ticket-dining.js'
 import {correctTicketGift} from './table-ticket-correction.js'
@@ -22,7 +22,7 @@ import type {
   JsonValue,
 } from './command-executor.js'
 import { NormalizedCommandExecutor } from './command-executor.js'
-import { assertEmployeeEffectivePermission } from './employee-table-access.js'
+import { assertEmployeeTableSessionAccess, assertEmployeeEffectivePermission } from './employee-table-access.js'
 import {
   ActivityOperationsRepository,
   type ActivityDraftInput,
@@ -74,6 +74,37 @@ export class ActivityOperationsService {
     },async tx=>{
       const result=await assignTicketTable(tx,id,tableId,context.employeeId,reservation)
       return {result,auditEvents:[audit(context,{action:'table_ticket.assigned',objectType:'table_ticket',objectId:id,afterData:{tableId,reservation}})],outboxMessages:[]}
+    })
+  }
+
+  assistedCashOffers(context:ActivityOperationsStaffContext) {
+    return this.transactions.run(context.scope,async tx=>(await publicTableTickets(tx))
+      .filter(offer=>offer.ticketPaymentsEnabled && offer.saleState==='open' && offer.remaining>0)
+      .map(({id,title,name,startsAt,priceMinor,giftPoints,remaining,safetyVersion,refundVersion,safetySummary,refundSchedule})=>
+        ({id,title,name,startsAt,priceMinor,giftPoints,remaining,safetyVersion,refundVersion,safetySummary,refundSchedule})),{readOnly:true})
+  }
+
+  openAssistedCashTicket(context:ActivityOperationsStaffContext,input:{tableSessionId:string;offerId:string;quantity:number;phone:string;safetyVersion:string;refundVersion:string},key:string) {
+    const protection=this.ticketPhones
+    if(!protection)throw new ActivityOperationsError('会员手机号核对暂不可用','TICKET_PHONE_UNAVAILABLE',503)
+    const phone=protection.protectPhone('+86'+input.phone)
+    return staffAuthorizedCommands(this.commands,context.employeeId,'order.create').execute({
+      scope:context.scope,operationScope:'table_ticket.staff_cash',idempotencyKey:key,
+      requestFingerprint:fingerprint({...input,phone:phone.contactHash,employee:context.employeeId}),retainReceipt:true,
+      resultCodec:objectCodec<{id:string;registrationPublicId:string;amountMinor:number}>(),
+    },async tx=>{
+      await assertEmployeeTableSessionAccess(tx,{employeeId:context.employeeId,tableSessionId:input.tableSessionId})
+      const buyers=await tx.query<{id:string}>(`SELECT DISTINCT mbox.canonical_customer_id(c.tenant_id,c.store_id,c.customer_id) AS id
+        FROM mbox.customer_verified_contacts c WHERE c.tenant_id=$1 AND c.store_id=$2 AND c.contact_type='phone'
+        AND c.contact_hash=ANY($3::text[]) AND c.processing_status='active' AND c.revoked_at IS NULL`,
+        [context.scope.tenantId,context.scope.storeId,phone.matchHashes])
+      if(!buyers.rows.length)throw new ActivityOperationsError('请先协助顾客在「我的」授权手机号入会，再按原手机号开单','TICKET_MEMBER_REQUIRED',409)
+      if(buyers.rows.length!==1)throw new ActivityOperationsError('手机号关联多个账户，请先核对会员归属','TICKET_MEMBER_AMBIGUOUS',409)
+      const reference='TT'+fingerprint([context.scope.storeId,'staff_cash',key]).slice(0,28).toUpperCase()
+      const {id,registrationPublicId,amountMinor}=await buyTableTickets(tx,buyers.rows[0]!.id,
+        {offerId:input.offerId,quantity:input.quantity,safetyVersion:input.safetyVersion,refundVersion:input.refundVersion},
+        reference,'',key,protection,phone.matchHashes)
+      return {result:{id,registrationPublicId,amountMinor},auditEvents:[audit(context,{action:'table_ticket.staff_cash_ordered',objectType:'community_activity_registration',objectId:id,afterData:{offerId:input.offerId,tableSessionId:input.tableSessionId,quantity:input.quantity,amountMinor}})],outboxMessages:[]}
     })
   }
 

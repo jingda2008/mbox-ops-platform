@@ -497,7 +497,7 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const snack=randomUUID()
       await tx.query("INSERT INTO mbox.products(id,tenant_id,store_id,code,name,category_code,fulfillment_station,inventory_control_mode) VALUES($3,$1,$2,'SCAN36','36元菜品','food','none','not_managed')",[scope.tenantId,scope.storeId,snack])
       await tx.query("INSERT INTO mbox.product_prices(tenant_id,store_id,product_id,price_type,amount_minor,currency,valid_from) VALUES($1,$2,$3,'standard',3600,'CNY',now()-interval '1 hour')",[scope.tenantId,scope.storeId,snack])
-      const buySnack=(buyer=customer)=>new OrderRepository(tx).createSubmitted({tableSessionId:se.id,publicId:randomUUID(),channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:buyer,lines:[{productId:snack,quantity:1}]})
+      const buySnack=(buyer=customer,sessionId=se.id)=>new OrderRepository(tx).createSubmitted({tableSessionId:sessionId,publicId:randomUUID(),channel:'guest_qr',settlementMode:'immediate_payment',createdByCustomerId:buyer,lines:[{productId:snack,quantity:1}]})
       await tx.query('SET LOCAL ROLE mbox_runtime')
       const setDay=(minimum:boolean,ticket:boolean)=>tx.query(`INSERT INTO mbox.dining_day_rules(tenant_id,store_id,business_date,minimum_enabled,ticket_enabled,revision)
         VALUES($1,$2,$3,$4,$5,1) ON CONFLICT(tenant_id,store_id,business_date) DO UPDATE SET minimum_enabled=excluded.minimum_enabled,ticket_enabled=excluded.ticket_enabled,revision=mbox.dining_day_rules.revision+1`,
@@ -519,12 +519,15 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
         const meal=await buySnack(outsider)
         expect(meal).toMatchObject({totalAmountMinor:3600,createdByCustomerId:outsider,settlementMode:'immediate_payment',paymentStatus:'unpaid'})
         expect((await tx.query('SELECT mbox.receipt_order_customer($1,$2,$3) AS member',[scope.tenantId,scope.storeId,meal.id])).rows[0].member).toBeNull()
+        const visibleOrder=async()=>(await loadGuestTableOrders(tx,se.id,payer.customerId)).find(o=>o.publicId===meal.publicId)
+        expect(await visibleOrder()).toMatchObject({payableAmountMinor:3600,paymentAccess:'available'})
         const payments=new PaymentRepository(tx)
         const principal={type:'guest' as const,customerId:payer.customerId,tableSessionId:se.id,guestSessionId:payer.id}
         const pending=await payments.createForOrder({orderId:meal.id,publicId:randomUUID(),provider:'postar',method:'jsapi',principal})
         const paid=await payments.applySucceededCallback({paymentPublicId:pending.publicId,provider:'postar',providerTransactionId:randomUUID(),reportedAmountMinor:3600,reportedCurrency:'CNY'})
         await payments.syncOrderPaymentStatus(meal.id)
         expect(paid.payment.status).toBe('succeeded')
+        expect(await visibleOrder()).toMatchObject({payableAmountMinor:0,paymentStatus:'paid'})
         await expect(payments.createForOrder({orderId:meal.id,publicId:randomUUID(),provider:'postar',method:'jsapi',principal})).rejects.toThrow(/no outstanding balance/)
       }
       await payCompanionOrder(friendScan.session)
@@ -550,13 +553,46 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       expect((await readTables(tx,employee,true)).find(t=>t.id===table)?.activeSession?.diningTicket).toBe(true)
       expect(await minimum(se.id)).toBe(0)
       const target=(await tx.query('SELECT id FROM mbox.tables WHERE area_id=$1 AND id<>$2 ORDER BY code LIMIT 1',[area,table])).rows[0].id
+      await tx.query('RESET ROLE')
+      await tx.query('UPDATE mbox.tables SET minimum_spend_minor=80000 WHERE id=$1',[target])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
       const transfer=new TableManagementCommandService(new NormalizedCommandExecutor({run:(_scope,fn)=>fn(tx)}))
       await transfer.transfer({scope,actor:{type:'employee',employeeId:employee},businessDate:se.business_date,idempotencyKey:randomUUID(),requestFingerprint:randomUUID(),
         tableSessionId:se.id,targetTableId:target,expectedSourceTableId:table,expectedLocationVersion:Number(se.location_version),reason:'持票顾客整桌转移'})
       expect(await minimum(se.id)).toBe(0)
-      const reopened=(await tx.query("INSERT INTO mbox.table_sessions(tenant_id,store_id,table_id,public_id,business_date,guest_count,minimum_spend_minor) VALUES($1,$2,$3,$4,current_date,2,50000) RETURNING id",[scope.tenantId,scope.storeId,table,randomUUID()])).rows[0].id
-      await recognizeDiningTicket(tx,reopened,customer)
-      expect(await minimum(reopened)).toBe(50000)
+      const afterMove=await readTables(tx,employee,true)
+      expect(afterMove.find(t=>t.id===target)?.activeSession).toMatchObject({id:se.id,diningTicket:true})
+      expect(afterMove.find(t=>t.id===table)?.activeSession).toBeFalsy()
+      // A table transfer revokes the old QR sessions. Both guests scan the destination desk.
+      const newQr=randomUUID().replaceAll('-','')+'-local-moved-ticket'
+      await tx.query('RESET ROLE')
+      await tx.query('INSERT INTO mbox.table_qr_credentials(tenant_id,store_id,table_id,qr_version,credential_hash) VALUES ($1,$2,$3,1,$4)',[scope.tenantId,scope.storeId,target,hashTableQrCredential(secret,scope,newQr)])
+      await tx.query('SET LOCAL ROLE mbox_runtime')
+      const scanDestination=async(customerId:string,deviceFingerprint:string)=>{
+        const result=await scan.scanTable({scope,customerId,tableQrToken:newQr,deviceFingerprint,businessDate:se.business_date})
+        if(result.status!=='active')throw new Error('转桌后新桌码未激活')
+        expect(result.session.tableSessionId).toBe(se.id)
+        return result.session
+      }
+      const movedFriend=await scanDestination(outsider,'local-ticket-companion')
+      const movedHolder=await scanDestination(customer,'local-table-ticket-holder-scan')
+      await payCompanionOrder(movedHolder)
+      await setDay(false,true)
+      await payCompanionOrder(movedFriend)
+      await payCompanionOrder(movedHolder)
+
+      await setDay(true,true)
+      const reopened=await new TableManagementRepository(tx).open({tableId:table,publicId:randomUUID(),
+        businessDate:se.business_date,guestCount:2,openedByEmployeeId:employee,primaryServiceEmployeeId:employee,
+        minimumSpendMinor:50000,minimumSpendMode:'order_gate'})
+      expect(reopened.id).not.toBe(se.id)
+      expect(await recognizeDiningTicket(tx,reopened.id,customer)).toBe(false)
+      expect(await minimum(reopened.id)).toBe(50000)
+      await expect(buySnack(outsider,reopened.id)).rejects.toThrow(/最低消费/)
+      await setDay(false,true)
+      await expect(buySnack(customer,reopened.id)).rejects.toThrow(/仅限持票桌/)
+      await setDay(false,false)
+      expect((await buySnack(outsider,reopened.id)).totalAmountMinor).toBe(3600)
       await tx.query('ROLLBACK TO SAVEPOINT auto_dining')
     })
     const reception=Fastify()

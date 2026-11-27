@@ -167,7 +167,7 @@ export function createNormalizedWorkerRuntime(
     checkoutCouponRecovery:new CheckoutCouponRecoveryWorker(transactions),
     ...(options.officialPointsProtection ? {officialPointsNotifications:new OfficialPointsNotificationWorker(transactions,options.officialPointsProtection,undefined,options.officialPointsMiniProgramAppId)} : {}),
     marketingDelivery: new MarketingDeliveryWorker(transactions,options.marketingDelivery??null),
-    printSource: new PrintSourceWorker(transactions),
+    printSource: new PrintSourceWorker(transactions,options.officialPointsProtection),
     annualDailySnackExpiry: new AnnualDailySnackExpiryWorker(transactions),
     loyaltyTierBenefitExpiry: new LoyaltyTierBenefitExpiryWorker(transactions),
     loyaltyTierReview: new LoyaltyTierReviewWorker(transactions),

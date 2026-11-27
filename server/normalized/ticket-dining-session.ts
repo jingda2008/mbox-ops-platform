@@ -37,5 +37,5 @@ export async function recognizeDiningTicket(tx: ScopedTransaction, sessionId:str
 }
 
 export class DiningTicketRequiredError extends Error {
-  constructor() { super('本场仅限持票顾客点单，请用购票会员账号扫描已安排的桌码后点单。') }
+  constructor() { super('本场仅限持票桌点单，请购票人先扫已安排的桌码。识别后同桌都可以点单。') }
 }

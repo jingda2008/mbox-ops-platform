@@ -745,7 +745,7 @@ export class TableManagementRepository {
     if ((input.minimumSpendMinor ?? 0)>0 || input.minimumSpendMode==='prepaid') {
       const rules=await this.transaction.query('SELECT minimum_enabled FROM mbox.dining_day_rules WHERE (tenant_id,store_id,business_date)=($1,$2,$3)',
         [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.businessDate])
-      if (rules.rows[0]?.minimum_enabled===false) throw new TableManagementConflictError('今天未启用最低消费。请刷新现场桌台，再确认开台。')
+      if (rules.rows[0]?.minimum_enabled!==true) throw new TableManagementConflictError('今天未启用最低消费。请刷新现场桌台，再确认开台。')
     }
     const overCapacity = input.guestCount > table.capacity
     const overrideReason = normalizeReason(input.capacityOverrideReason ?? null)

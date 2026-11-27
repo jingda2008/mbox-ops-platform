@@ -211,7 +211,7 @@ export function StaffActionsPanel({
   const [guestCount, setGuestCount] = useState('')
   const [minimumSpendMode,setMinimumSpendMode]=useState<'order_gate'|'prepaid'>('order_gate')
   const [minimumSpendYuan,setMinimumSpendYuan]=useState('')
-  const [dailyMinimum,setDailyMinimum]=useState(true)
+  const [dailyMinimum,setDailyMinimum]=useState(false)
   const [primaryServiceEmployeeId, setPrimaryServiceEmployeeId] = useState('')
   const [openTableRecommendationScene, setOpenTableRecommendationScene] = useState<OpenTableRecommendationScene>('unsure')
   const [capacityReason, setCapacityReason] = useState('')

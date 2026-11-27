@@ -79,8 +79,8 @@ export const tableManagementApiPlugin: FastifyPluginAsync<TableManagementApiOpti
     const data=await options.transactions.run(ctx.scope,async tx=>{
       const access=await new StaffAccessRepository(tx).resolve(ctx.employeeId)
       if(!access.permissions.some(p=>['table.open','table.manage','table.view_all'].includes(p))) throw new StaffAccessDeniedError('需要桌台查看权限')
-      return (await tx.query(`SELECT $3::date::text AS "businessDate",coalesce(d.minimum_enabled,true) AS minimum,
-        coalesce(d.ticket_enabled,true) AS ticket,coalesce(d.revision,0) AS revision FROM (SELECT 1) seed
+      return (await tx.query(`SELECT $3::date::text AS "businessDate",coalesce(d.minimum_enabled,false) AS minimum,
+        coalesce(d.ticket_enabled,false) AS ticket,coalesce(d.revision,0) AS revision FROM (SELECT 1) seed
         LEFT JOIN mbox.dining_day_rules d ON (d.tenant_id,d.store_id,d.business_date)=($1,$2,$3::date)`,
         [ctx.scope.tenantId,ctx.scope.storeId,ctx.businessDate])).rows[0]
     },{readOnly:true})

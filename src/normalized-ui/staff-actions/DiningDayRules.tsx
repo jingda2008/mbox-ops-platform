@@ -5,15 +5,15 @@ import {executeRecoverableCommand} from '../recoverable-command'
 type Rule={businessDate:string;minimum:boolean;ticket:boolean;revision:number}
 const path='/api/table-management/dining-day-rules'
 function description(minimum:boolean,ticket:boolean){
-  if(minimum && ticket) return '持票人入座后整桌免低消，同桌可点单。普通桌按开台金额。'
+  if(minimum && ticket) return '持票桌免低消，同桌都可以点单。普通桌按开台金额。'
   if(minimum) return '所有桌按各自的开台金额。'
-  if(ticket) return '仅持本场有效票的顾客可点单。'
+  if(ticket) return '仅持票桌可点单，同桌都可以点单。'
   return '顾客可正常点单，无低消。'
 }
 
 export function DiningDayRules({staffSessionId,canEdit,onMinimum}:{staffSessionId?:string;canEdit:boolean;onMinimum:(enabled:boolean)=>void}){
   const [saved,setSaved]=useState<Rule|null>(null)
-  const [minimum,setMinimum]=useState(true),[ticket,setTicket]=useState(true)
+  const [minimum,setMinimum]=useState(false),[ticket,setTicket]=useState(false)
   const [error,setError]=useState(''),[busy,setBusy]=useState(false)
   const request=useCallback(async(signal:AbortSignal,body?:Rule,key?:string):Promise<Rule>=>{
     const headers=new Headers({accept:'application/json'})

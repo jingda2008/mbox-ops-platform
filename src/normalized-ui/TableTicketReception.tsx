@@ -29,7 +29,7 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
   const [open,setOpen]=useState(initiallyOpen),[refresh,setRefresh]=useState(0),[working,setWorking]=useState(false)
   const [message,setMessage]=useState(''),[queue,setQueue]=useState<Queue>({orders:[],tables:[]})
   const [statement,setStatement]=useState<{id:string;data:Statement}|null>(null)
-  type DeskSlip={title:string;offer:string;desk:string;ordinal:number;orderNo:string;ticketId:string}
+  type DeskSlip={title:string;offer:string;desk:string;ordinal:number;orderNo:string;ticketId:string;member?:{memberNo:string;level:string;phone:string|null}}
   const [slip,setSlip]=useState<DeskSlip|null>(null)
   async function printDesk(id:string) {
     setWorking(true)
@@ -158,7 +158,7 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
         <p>补款关联餐饮积分 · 发放 {daily.amounts.diningRewardEarn??0} 分 · 冲回 {daily.amounts.diningRewardReverse??0} 分</p>
         <p>赠分 {daily.amounts.points_grant??0} · 抵扣占用 {daily.amounts.points_redeem??0} · 原批次退回 {daily.amounts.points_restore??0} · 冲回 {daily.amounts.points_reverse??0} · 到期 {daily.amounts.points_expire??0}</p></div>}
     </details>}
-    {slip && createPortal(<section className="ticket-desk-slip"><h2>门票桌位确认单</h2><h1>桌号 {slip.desk}</h1><p>{slip.title} · {slip.offer}</p><p>第 {slip.ordinal} 张</p><p>购票单号 {slip.orderNo}</p><p>票号 {slip.ticketId}</p></section>,document.body)}
+    {slip && createPortal(<section className="ticket-desk-slip"><h2>门票桌位确认单</h2><h1>桌号 {slip.desk}</h1><p>{slip.title} · {slip.offer}</p><p>第 {slip.ordinal} 张</p><p>购票单号 {slip.orderNo}</p><p>票号 {slip.ticketId}</p>{slip.member && <><p>购票会员 {slip.member.memberNo} · {slip.member.level}</p><p>手机号 {slip.member.phone??'未留可打印号码'}</p></>}</section>,document.body)}
     {queue.orders.map(ticket=><article key={ticket.id}><strong>{ticket.name} · 第{ticket.ordinal}桌</strong>
       <p>购票单 {ticket.orderId} · {queue.orders.find(row=>row.orderId===ticket.orderId)?.id===ticket.id?renderContact(ticket):ticket.maskedPhone} · {ticket.deskClosed?'本桌已清台':ticket.showEnded?(ticket.arrived?'场次已结束 · 已登记 '+ticket.arrived+' 人':'场次已结束 · 无到场登记'):ticket.tableName??(ticket.awaitingDuringShow?'演出已开始，请尽快排桌':'待排桌')}</p>
       {canManage && ticket.tableName && !ticket.deskClosed && !ticket.refundedAt && <button type="button" disabled={working} onClick={()=>void printDesk(ticket.id)}>打印桌位单</button>}

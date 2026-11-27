@@ -1930,7 +1930,7 @@ Page({
       cart,
       prepayment: sharedCart && sharedCart.prepayment || null,
       prepaymentAmount: this.data.prepaymentAmount || (sharedCart && sharedCart.prepayment && sharedCart.prepayment.initialFundingRequiredMinor > 0 ? (sharedCart.prepayment.initialFundingRequiredMinor / 100).toFixed(2) : ''),
-      minimumSpendMessage: [sharedCart && sharedCart.ticketRequired ? '本场仅限持票顾客点单，请使用购票会员账号。' : '',
+      minimumSpendMessage: [sharedCart && sharedCart.ticketRequired ? '本场仅限持票桌点单。同桌都可以点单。' : '',
         sharedCart && sharedCart.prepayment ? sharedCart.prepayment.message : sharedCart && sharedCart.minimumSpend ? sharedCart.minimumSpend.message : ''].filter(Boolean).join(' '),
       cartTotal: money(total),
       cartTotalCompact: compactMoney(total),

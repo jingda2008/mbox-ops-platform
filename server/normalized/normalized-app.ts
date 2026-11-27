@@ -257,7 +257,7 @@ export const NORMALIZED_LOG_REDACTION_PATHS = Object.freeze([
   'payment.publicKey',
 ])
 
-export const NORMALIZED_MIN_SCHEMA_VERSION = '376'
+export const NORMALIZED_MIN_SCHEMA_VERSION = '377'
 export const NORMALIZED_INJECTABLE_PLUGIN_PORTS = Object.freeze([
   'customer-table-side',
 ] as const)
@@ -982,6 +982,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
     instance.register(paymentFinanceApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext})
     instance.register(itemAfterSalesApiPlugin,{prefix:'/api',transactions,commands:commandExecutor,resolveContext:operationsContext,resolveKdsContext:commerceContext,enabled:(options.quantityAfterSalesEnabled ?? options.config.quantityAfterSalesEnabled)===true})
     instance.register(hardwareApiPlugin, {
+        receiptPhoneKeys:activityContactProtection,
       prefix: '/api',
       transactions,
       commands: commandExecutor,
@@ -1173,6 +1174,7 @@ export async function createNormalizedApp(options: Readonly<NormalizedAppOptions
         resolveStaffContext: staffReservationContext,
       })
       await reservationApp.register(activityOperationsApiPlugin, {
+        receiptPhoneKeys:activityContactProtection,
         transactions,
         service: new ActivityOperationsService(transactions, commandExecutor,activityContactProtection),
         activityPublisher: customerExperience,

@@ -86,7 +86,7 @@ export function createPrintTicketSnapshot(input: Readonly<Omit<PrintTicketSnapsh
     throw new TypeError('guestCount无效')
   }
   if (input.operatorLabel !== null) assertShortText(input.operatorLabel, 'operatorLabel', 1, 80)
-  if (input.note !== null) assertShortText(input.note, 'note', 1, 300)
+  if (input.note !== null) assertShortText(input.note, 'note', 1, 512)
   if (input.payment !== null) validatePayment(input.payment)
   if (!Array.isArray(input.lines) || input.lines.length === 0 || input.lines.length > 60) {
     throw new TypeError('lines必须包含1至60项')
@@ -227,7 +227,7 @@ export function renderPrintTicketHtml(
     .meta { display: grid; gap: 1.4mm; padding: 3mm 0; border-top: .35mm solid #d9e6df; border-bottom: .35mm solid #d9e6df; color: #3f584b; font-size: 8pt; }
     .meta-line { display:flex; justify-content:space-between; gap: 3mm; } ul { margin: 3mm 0; padding: 0; list-style: none; } li { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap: 2mm; align-items:start; padding: 2.2mm 0; border-bottom: .2mm solid #edf1ee; font-size: 10pt; } li b { display:block; } li small { display:block; margin-top: .8mm; color:#6a7b71; font-size:7.5pt; line-height:1.4; } li strong { color:#176a4a; } li em { min-width:15mm; color:#304438; font-style:normal; text-align:right; }
     .payment { display:flex; align-items:center; justify-content:space-between; margin:3mm 0 0; padding:2.5mm 3mm; border:.3mm solid #bfdbcf; border-radius:1.8mm; background:var(--brand-soft); color:#3e5e4d; font-size:8pt; } .payment strong { color:var(--brand); font-size:11pt; }
-    .note { margin-top: 3mm; padding: 2.5mm 3mm; border-left: 1.2mm solid #d8a846; background:#fffaf0; color:#66512a; font-size:8pt; line-height:1.5; } .note b { display:block; margin-bottom:.5mm; }
+    .note, li small { white-space:pre-line; overflow-wrap:anywhere; } .note { margin-top: 3mm; padding: 2.5mm 3mm; border-left: 1.2mm solid #d8a846; background:#fffaf0; color:#66512a; font-size:8pt; line-height:1.5; } .note b { display:block; margin-bottom:.5mm; }
     .total { display:flex; align-items:end; justify-content:space-between; margin-top:4mm; padding-top:3mm; border-top:.6mm solid var(--brand); color:#244936; } .total strong { color:var(--brand); font-size:18pt; line-height:1; }
     footer { margin-top:5mm; color:#829287; font-size:7pt; line-height:1.5; text-align:center; } .dash { margin:4mm 0 0; border-top:.35mm dashed #8da99a; }
     main.production .table-hero { margin-top:0; border-width:.65mm; background:#eaf5ef; } main.production .table-hero strong { font-size:30pt; } main.production ul { margin-top:4mm; } main.production li { padding:3.5mm 0; font-size:12pt; } main.production li b { font-size:16pt; line-height:1.25; } main.production li small { font-size:9pt; } main.production li strong { font-size:14pt; }

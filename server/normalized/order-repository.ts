@@ -597,10 +597,9 @@ export class OrderRepository {
   private prepaidSession=false
   private async lockOpenTableSession(tableSessionId: string,input:CreateSubmittedOrderInput): Promise<number> {
     requireUuidLike('tableSessionId', tableSessionId)
-    const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string; ticket_only?:boolean; eligible_buyer?:boolean; check_assignment?:boolean }>(`
+    const locked = await this.transaction.query<{ id: string; minimum_spend_mode?:string; minimum_spend_minor?: string; ticket_only?:boolean; check_assignment?:boolean }>(`
       SELECT id, mbox.session_dining_mode(tenant_id,store_id,id,minimum_spend_mode) AS minimum_spend_mode, CASE WHEN minimum_spend_mode='prepaid' THEN 0 ELSE mbox.session_dining_minimum(tenant_id,store_id,id,effective_minimum_spend_minor) END AS minimum_spend_minor
         , (SELECT ticket_enabled AND NOT minimum_enabled FROM mbox.session_dining_flags($1,$2,$3)) AS ticket_only
-        , mbox.valid_dining_buyer($1,$2,$3,$4::uuid) AS eligible_buyer
         , ($4::uuid IS NOT NULL AND mbox.session_dining_ticket($1,$2,$3) IS NULL AND EXISTS(
             SELECT 1 FROM mbox.reservation_table_locks l JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.reservation_lock_id)=(l.tenant_id,l.store_id,l.id)
             WHERE (l.tenant_id,l.store_id,l.table_id)=($1,$2,mbox.table_sessions.table_id) AND l.status='confirmed' AND l.reserved_during @> statement_timestamp()
@@ -619,10 +618,9 @@ export class OrderRepository {
       return this.lockOpenTableSession(tableSessionId,input)
     }
     if (row.ticket_only) {
-      if (!row.eligible_buyer) throw new DiningTicketRequiredError()
       const scope=[this.transaction.scope.tenantId,this.transaction.scope.storeId,tableSessionId]
       await this.transaction.query('SELECT id FROM mbox.table_tickets WHERE (tenant_id,store_id,id)=($1,$2,mbox.session_dining_ticket($1,$2,$3)) FOR SHARE',scope)
-      const current=await this.transaction.query<{valid:boolean}>('SELECT mbox.valid_dining_buyer($1,$2,$3,$4) AS valid',[...scope,buyer])
+      const current=await this.transaction.query<{valid:boolean}>('SELECT mbox.dining_ticket_owner($1,$2,$3) IS NOT NULL AS valid',scope)
       if (!current.rows[0]?.valid) throw new DiningTicketRequiredError()
     }
     this.prepaidSession=locked.rows[0]?.minimum_spend_mode==='prepaid'

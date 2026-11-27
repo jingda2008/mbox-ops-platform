@@ -130,6 +130,7 @@ describe('PrintTicketSourceRepository', () => {
     expect(sql).toContain("payment.payable_kind='activity_registration'")
     expect(sql).toContain('activity.title AS activity_title')
     expect(sql).not.toContain('contact_snapshot')
-    expect(sql).not.toContain('customer_id')
+    expect(sql).not.toContain('mbox.customer_verified_contacts')
+    expect(sql).not.toContain('mbox.customer_memberships')
   })
 })

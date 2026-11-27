@@ -3,6 +3,7 @@ import {orderReceivableSql} from './order-collection-sql.js'
 import type { ScopedTransaction } from './transaction-runner.js'
 
 export interface GuestTableOrderItemView {
+  pointsDiscountMinor?:number
   progressText?:string
   note?: string | null
   id: string
@@ -210,6 +211,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       item.product_id, COALESCE(NULLIF(item.product_snapshot ->> 'name', ''), product.name) AS product_name,
       item.id AS item_id, item.quantity, item.status AS item_status, item.note AS item_note,
       item.unit_price_minor::text, item.total_amount_minor::text AS item_total_amount_minor,
+      point_line.discount_minor::text AS points_discount_minor,
       ${guestQuantityFactsSql('item')} AS quantity_facts,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('name',child.product_snapshot->>'name','quantity',child.quantity,'quantity_facts',${guestQuantityFactsSql('child')})
         ORDER BY child.created_at,child.id) FROM mbox.order_items child
@@ -221,6 +223,11 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
      AND item.store_id = $2::uuid
      AND item.order_id = ordering.id
      AND item.parent_order_item_id IS NULL
+    LEFT JOIN mbox.checkout_portion_order_items mapped
+      ON (mapped.tenant_id,mapped.store_id,mapped.order_item_id)=(item.tenant_id,item.store_id,item.id)
+    LEFT JOIN mbox.checkout_coupon_quote_lines point_line
+      ON (point_line.tenant_id,point_line.store_id,point_line.quote_id,point_line.portion_id)
+        =(mapped.tenant_id,mapped.store_id,mapped.quote_id,mapped.portion_id)
     JOIN mbox.products AS product
       ON product.tenant_id = item.tenant_id
      AND product.store_id = item.store_id
@@ -268,6 +275,7 @@ async function loadOrderDetails(transaction: ScopedTransaction, tableSessionId: 
       name: row.product_name,
       quantity: Number(row.quantity),
       unitPriceMinor: safeMinor(row.unit_price_minor),
+      ...(row.points_discount_minor == null ? {} : {pointsDiscountMinor:safeMinor(String(row.points_discount_minor))}),
       totalAmountMinor: safeMinor(row.item_total_amount_minor),
       components: row.components.map(component=>({name:component.name,quantity:component.quantity,...quantityProgress((component as typeof component&{quantity_facts?:GuestQuantityFacts|null}).quantity_facts)})),
       ...quantityProgress(row.quantity_facts),

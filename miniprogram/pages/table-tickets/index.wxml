@@ -124,6 +124,18 @@
           <button size="mini" data-id="{{ticket.move.id}}" data-action="decline" bindtap="changeShow" disabled="{{busy}}">保留原安排</button></view>
         <text wx:if="{{ticket.doorCode && !ticket.refundStatus}}">现场入场码 {{ticket.doorCode}}</text>
         <text wx:if="{{item.giftPoints && !ticket.refundStatus}}">{{ticket.pointsPosted ? "赠分已到账" : "赠分待入账"}} · 每张赠 {{item.giftPoints}} 分<text wx:if="{{ticket.pointsPosted}}">，本票赠分剩余 {{ticket.remainingPoints}} 分</text> · 有效至 {{ticket.validThrough}}</text>
+        <button wx:if="{{ticket.pointsPosted}}" size="mini" data-id="{{ticket.id}}" bindtap="toggleConsumption">{{receiptId !== ticket.id ? '查看消费明细' : receiptStatus === 'error' ? '重新查看消费明细' : '收起消费明细'}}</button>
+        <view wx:if="{{receiptId === ticket.id}}" class="ticket-consumption">
+          <text wx:if="{{receiptStatus === 'loading'}}">正在查看…</text>
+          <text wx:elif="{{receiptStatus === 'error'}}">暂时没能查到，请再试一次。</text>
+          <text wx:elif="{{!receipts.length}}">这张票还没有积分消费记录。</text>
+          <view wx:for="{{receipts}}" wx:for-item="receipt" wx:key="orderNo" class="ticket-receipt">
+            <view>{{receipt.time}} · 本票用 {{receipt.used}} 分，抵 {{receipt.discount}}</view>
+            <view wx:for="{{receipt.items}}" wx:for-item="line" wx:key="id" class="ticket-receipt-line"><text>{{line.name}}</text><text><block wx:if="{{line.original}}">原价 {{line.original}} · </block>本票抵 {{line.discount}}</text></view>
+            <view wx:if="{{receipt.restored}}">已撤销抵扣 {{receipt.restored}} 分</view>
+            <text class="ticket-receipt-number">餐单号 {{receipt.orderNo}}</text>
+          </view>
+        </view>
         <text wx:if="{{ticket.refundStatus}}">{{ticket.cashZero ? '退票已办结，本次应退现金为零' : ticket.refundStatus === 'refunded' ? '已退款' : ticket.refundStatus === 'review' ? '退票待核算' : '退票办理中'}}</text>
         <view wx:if="{{ticket.refundDetail}}">申请原因：{{ticket.refundDetail.reason}}<text wx:if="{{ticket.refundDetail.decision}}"> · 处理依据：{{ticket.refundDetail.decision}}</text><text wx:if="{{ticket.refundDetail.cashMinor}}"> · {{ticket.refundDetail.cashStatus==='succeeded' ? '已退票款' : '申请退回票款'}} ¥{{ticket.refundDetail.cashMinor / 100}}</text></view>
         <view wx:if="{{ticket.buyerUse}}">

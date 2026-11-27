@@ -9,7 +9,7 @@ const {isPresentableWechatJsapiAction} = require('../../utils/wechat-payment')
 const {publicImageUrl} = require('../../utils/media')
 
 function clearMemberDisplay(){
-  return {member:null,phone:null,terms:null,mine:[],proposals:[],proposalId:null,reservations:[],eligibleReservations:[],
+  return {receiptId:null,receipts:[],receiptStatus:null,member:null,phone:null,terms:null,mine:[],proposals:[],proposalId:null,reservations:[],eligibleReservations:[],
     reservationLockId:null,originalOrder:null,agreed:false}
 }
 
@@ -74,6 +74,27 @@ Page({
   },
   currentVisit(visit){return this.visible!==false && visit===this.visit},
   onUnload(){this.onHide()},
+  async toggleConsumption(event){
+    const id=event.currentTarget.dataset.id
+    const version=this.receiptVersion=(this.receiptVersion||0)+1
+    if(this.data.receiptId===id && this.data.receiptStatus!=='error'){
+      this.setData({receiptId:null,receipts:[],receiptStatus:null})
+      return
+    }
+    const generation=this.readGeneration
+    const memberNo=this.data.member?.memberNo
+    const current=()=>version===this.receiptVersion && generation===this.readGeneration && memberNo===this.data.member?.memberNo
+    this.setData({receiptId:id,receipts:[],receiptStatus:'loading'})
+    try {
+      const rows=await api.getTicketConsumption(id)
+      if(!current())return
+      const receipts=rows.map(row=>({...row,time:dateTime(row.createdAt),discount:money(row.used*100),
+        items:row.items.map(line=>({...line,original:line.originalMinor==null?'':money(line.originalMinor),discount:money(line.discountMinor)}))}))
+      this.setData({receipts,receiptStatus:'ready'})
+    } catch {
+      if(current())this.setData({receiptStatus:'error'})
+    }
+  },
   chooseAnother(){
     if(this.data.busy || this.data.historyLoading || this.data.historyError)return
     this.originalReceipt=null
@@ -85,7 +106,7 @@ Page({
     if(this.visible===false)return
     const generation=this.readGeneration=(this.readGeneration||0)+1
     const current=()=>generation===this.readGeneration
-    this.setData({mine:[],proposals:[],historyLoading:true, loginRequired:false, proposalLoading:true, catalogLoading:true, purchaseReady:false, historyError:'', identityError:'', proposalError:'', catalogError:'', purchaseError:''})
+    this.setData({receiptId:null,receipts:[],receiptStatus:null,mine:[],proposals:[],historyLoading:true, loginRequired:false, proposalLoading:true, catalogLoading:true, purchaseReady:false, historyError:'', identityError:'', proposalError:'', catalogError:'', purchaseError:''})
     await Promise.all([this.readCatalog(current), this.readMember(current)])
   },
   async readCatalog(current){

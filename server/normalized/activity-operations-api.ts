@@ -1,3 +1,4 @@
+import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {EmployeeTableAccessDeniedError} from './employee-table-access.js'
 import {ticketDiningHandoffs,ticketRefundPreview,ticketRefundReviewQueue} from './table-ticket-refund-preview.js'
 import {proposeMove} from './table-ticket-reschedule.js'
@@ -53,6 +54,13 @@ export const activityOperationsApiPlugin: FastifyPluginAsync<ActivityOperationsA
     const day=request.query.day??null
     if(day!==null && (typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!Number.isFinite(Date.parse(day))||new Date(day).toISOString().slice(0,10)!==day))throw invalid('请选择有效营业日')
     return reply.header('cache-control','no-store').send({data:await options.transactions.run(ctx.scope,tx=>ticketFinanceDay(tx,day),{readOnly:true})})
+  }))
+  app.get<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/desk-slip',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await authorizedAny(options,request,['community.activity.manage','community.activity.verify'])
+    const id=uuid(request.params.id,'票号')
+    const data=await options.transactions.run(ctx.scope,tx=>new PrintTicketSourceRepository(tx).readTicketDeskSlip(id),{readOnly:true})
+    if(!data)throw invalid('本票当前没有可打印的桌号，请刷新桌位安排')
+    return reply.header('cache-control','no-store').send({data})
   }))
   app.get<{Params:{id:string}}>('/staff/activity-operations/table-tickets/:id/statement',async(request,reply)=>handle(reply,async()=>{
     const ctx=await authorizedAny(options,request,['refund.request','refund.approve'])

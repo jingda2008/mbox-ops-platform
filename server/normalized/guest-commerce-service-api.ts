@@ -1,3 +1,4 @@
+import {DiningTicketRequiredError} from './ticket-dining-session.js'
 import {adoptAssistedPoints,readAssistedPoints} from './assisted-points-proposal.js'
 import { NativeCommandNotCommittedError } from './command-executor.js'
 import { ChannelPricingRepository } from './channel-pricing-repository.js'
@@ -1978,6 +1979,7 @@ function publicSharedCart(cart: GuestSharedCart) {
   return {
     ...(cart.issuedCouponPortionId?{issuedCouponPortionId:cart.issuedCouponPortionId}:{}),
     ...(cart.prepayment?{prepayment:{...cart.prepayment}}:{}),
+    ...(cart.ticketRequired ? {ticketRequired:true} : {}),
     ...(cart.minimumSpend ? {minimumSpend: {...cart.minimumSpend}} : {}),
     cartPublicId: cart.publicId,
     generation: cart.generation,
@@ -2726,6 +2728,7 @@ async function handleRoute(reply: FastifyReply, operation: () => Promise<unknown
     }
     if (error instanceof ProductSaleQuantityUnavailableError) return reply.code(409).send({error:{code:'PRODUCT_SALE_QUANTITY_UNAVAILABLE',message:error.reason}})
     if(error instanceof TablePrepaymentError)return reply.code(409).send({error:{code:error.code,message:error.message}})
+    if (error instanceof DiningTicketRequiredError) return reply.code(409).send({error:{code:'DINING_TICKET_REQUIRED',message:error.message}})
     if (error instanceof TableMinimumSpendNotMetError) return reply.code(409).send({error:{code:'TABLE_MINIMUM_SPEND_NOT_MET',message:error.message,details:error.details}})
     if (error instanceof OrderProductUnavailableError) {
       return reply.code(409).send({ error: { code: 'PRODUCT_UNAVAILABLE', message: '有商品暂时无法供应，请返回购物车调整后再试' } })

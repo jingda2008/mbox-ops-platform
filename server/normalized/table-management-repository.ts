@@ -742,6 +742,11 @@ export class TableManagementRepository {
     if (table.table_status !== 'available' || freshArea.rows[0]?.status !== 'active') {
       throw new TableManagementConflictError('当前桌台或所在区域已停用，不能开台')
     }
+    if ((input.minimumSpendMinor ?? 0)>0 || input.minimumSpendMode==='prepaid') {
+      const rules=await this.transaction.query('SELECT minimum_enabled FROM mbox.dining_day_rules WHERE (tenant_id,store_id,business_date)=($1,$2,$3)',
+        [this.transaction.scope.tenantId,this.transaction.scope.storeId,input.businessDate])
+      if (rules.rows[0]?.minimum_enabled===false) throw new TableManagementConflictError('今天未启用最低消费。请刷新现场桌台，再确认开台。')
+    }
     const overCapacity = input.guestCount > table.capacity
     const overrideReason = normalizeReason(input.capacityOverrideReason ?? null)
     if (overCapacity && overrideReason === null) {
@@ -805,7 +810,7 @@ export class TableManagementRepository {
         session.business_date::text, session.guest_count, session.capacity_at_open,
         session.capacity_override_reason, session.capacity_overridden_by_employee_id,
         session.guest_profile_snapshot, session.status, session.opened_by_employee_id,
-        session.opened_at::text,mbox.ticket_store_minimum(session.tenant_id,session.store_id,session.effective_minimum_spend_minor) AS minimum_spend_minor,session.minimum_spend_mode
+        session.opened_at::text,mbox.session_dining_minimum(session.tenant_id,session.store_id,session.id,session.effective_minimum_spend_minor) AS minimum_spend_minor,mbox.session_dining_mode(session.tenant_id,session.store_id,session.id,session.minimum_spend_mode) AS minimum_spend_mode
       FROM mbox.table_sessions AS session
       JOIN mbox.tables AS source ON source.tenant_id = session.tenant_id
         AND source.store_id = session.store_id AND source.id = session.table_id

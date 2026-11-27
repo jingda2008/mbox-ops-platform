@@ -81,3 +81,38 @@ test('guest prepaid panel validates consent and cents, resumes the original rece
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true)
  await page.screenshot({path:'artifacts/normalized-browser/minimum-guest-prepay-430.png',fullPage:true})
 })
+
+test('同页设置营业日消费条件，刷新后保留并防止覆盖他人修改',async({page})=>{
+ const f=await fixture()
+ await page.setViewportSize({width:390,height:844});await login(page,f,f.employeeCode)
+ const panel=page.locator('.staff-day-rules')
+ await panel.getByText('今天的消费条件',{exact:true}).click()
+ const min=panel.getByRole('checkbox',{name:'最低消费'}), ticket=panel.getByRole('checkbox',{name:'门票'})
+ await expect(min).toBeChecked();await expect(ticket).toBeChecked()
+ const route='/api/table-management/dining-day-rules'
+ const original=(await (await page.request.get(route)).json()).data
+ async function save(){
+  const saved=page.waitForResponse(r=>r.url().endsWith(route)&&r.request().method()==='POST')
+  await panel.getByRole('button',{name:'保存消费条件'}).click()
+  const response=await saved;expect(response.status(),await response.text()).toBe(200)
+ }
+ try{
+  await min.uncheck();await save()
+  await page.reload();await panel.getByText('今天的消费条件',{exact:true}).click()
+  await expect(min).not.toBeChecked();await expect(ticket).toBeChecked()
+  await expect(panel).toContainText('当前生效：仅持本场有效票的顾客可点单')
+  const stale=await page.request.post(route,{data:{...original,ticket:false},headers:{'idempotency-key':crypto.randomUUID()}})
+  expect(stale.status()).toBe(409)
+  await min.check();await ticket.uncheck();await save()
+  await expect(panel).toContainText('当前生效：所有桌按各自的开台金额')
+  await ticket.check();await save()
+  await expect(panel).toContainText('当前生效：持票人入座后整桌免低消')
+  await panel.screenshot({path:'artifacts/normalized-browser/dining-day-rules-390.png'})
+ } finally {
+  const current=(await (await page.request.get(route)).json()).data
+  if(current.minimum!==original.minimum || current.ticket!==original.ticket){
+   const restored=await page.request.post(route,{data:{...current,minimum:original.minimum,ticket:original.ticket},headers:{'idempotency-key':crypto.randomUUID()}})
+   expect(restored.ok()).toBe(true)
+  }
+ }
+})

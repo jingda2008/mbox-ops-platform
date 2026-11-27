@@ -1,3 +1,4 @@
+import {customerTicketDining} from './customer-ticket-dining.js'
 import type { DuplicateMembershipReviews } from './duplicate-membership-review.js'
 import {CheckoutCartPricingError} from './checkout-cart-pricing.js'
 import {ActivityOperationsError} from './activity-operations-repository.js'
@@ -603,6 +604,13 @@ export const customerExperienceApiPlugin: FastifyPluginAsync<CustomerExperienceA
   app.get<{Querystring:{channel?:string}}>('/public/mini/table-ticket-offers',async(request,reply)=>handle(reply,async()=>{
     const scope=options.publishedContentScope??(await options.resolvePublicContext(request)).scope
     return reply.header('cache-control','no-store').send({data:await options.service.tableTicketOffers(scope,request.query.channel==='community')})
+  }))
+  app.get<{Params:{id:string}}>('/public/mini/table-tickets/:id/consumption',async(request,reply)=>handle(reply,async()=>{
+    const ctx=await options.resolvePublicContext(request)
+    if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(request.params.id))
+      throw new CustomerExperienceRequestError('请选择要查看的票')
+    const data=await options.transactions.run(ctx.scope,tx=>customerTicketDining(tx,ctx.customerId,request.params.id),{readOnly:true})
+    return reply.header('cache-control','no-store').send({data})
   }))
   app.get('/public/mini/table-ticket-purchases',async(request,reply)=>handle(reply,async()=>{
     const ctx=await options.resolvePublicContext(request)

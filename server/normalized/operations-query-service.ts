@@ -62,6 +62,9 @@ export interface OperationsTableView {
     prepaidAvailableMinor?: number
     cashPaymentCount?: number
     netCollectedAmountMinor: number
+    diningOriginalMinor?:number
+    diningPoints?:number
+    diningTicket?:boolean
     orderAmountMinor: number
     status: 'open' | 'closing'
     openedAt: string
@@ -147,6 +150,7 @@ interface TableRow extends Record<string, unknown> {
   prepaid_received: string | number | null
   prepaid_available: string | number | null
   cash_count: number | null
+  original_minor?:string; points_used?:string; dining_ticket?:boolean
   order_amount_minor: string | number | null
   session_status: 'open' | 'closing' | null
   opened_at: string | null
@@ -312,7 +316,7 @@ export async function readTables(
       END AS financial_state,
       finance.order_count,money.unpaid_order_count,money.pending_payment_count,
       finance.refund_attention_count,finance.refund_action_count,finance.refund_processing_count,
-      money.prepaid_received,money.prepaid_available,money.due_minor,money.cash_minor,money.cash_count,finance.order_amount_minor, money.refunded_amount_minor, money.gross_collected_minor,
+      money.prepaid_received,money.prepaid_available,money.due_minor,money.cash_minor,money.cash_count,finance.order_amount_minor, sale.original_minor,sale.points_used,mbox.session_dining_ticket(session.tenant_id,session.store_id,session.id) IS NOT NULL AS dining_ticket, money.refunded_amount_minor, money.gross_collected_minor,
       session.status AS session_status, session.opened_at::text
     FROM mbox.tables venue_table
     JOIN mbox.areas area
@@ -324,6 +328,12 @@ export async function readTables(
       AND session.store_id = venue_table.store_id
       AND session.table_id = venue_table.id
       AND session.status IN ('open', 'closing')
+    LEFT JOIN LATERAL (
+      SELECT sum(o.subtotal_amount_minor) AS original_minor, sum(h.points-h.restored_points) AS points_used
+      FROM mbox.orders o LEFT JOIN mbox.checkout_coupon_order_links l ON (l.tenant_id,l.store_id,l.order_id)=(o.tenant_id,o.store_id,o.id)
+      LEFT JOIN mbox.checkout_point_holds h ON (h.tenant_id,h.store_id,h.quote_id)=(l.tenant_id,l.store_id,l.quote_id) AND h.status='consumed'
+      WHERE (o.tenant_id,o.store_id,o.table_session_id)=(session.tenant_id,session.store_id,session.id) AND o.status NOT IN ('draft','cancelled')
+    ) sale ON session.id IS NOT NULL
     LEFT JOIN LATERAL (
       SELECT behavior.behavior_code AS mood_code,
         behavior.occurred_at::text AS mood_occurred_at
@@ -549,6 +559,9 @@ function mapTable(row: TableRow): OperationsTableView {
       refundedAmountMinor: safeMinor(row.refunded_amount_minor),
       ...(row.due_minor != null ? {grossCollectedAmountMinor:safeMinor(row.gross_collected_minor), outstandingAmountMinor:safeMinor(row.due_minor), prepaidReceivedMinor:safeMinor(row.prepaid_received),prepaidAvailableMinor:safeMinor(row.prepaid_available),cashAmountMinor:safeMinor(row.cash_minor), cashPaymentCount:row.cash_count ?? 0} : {}),
       netCollectedAmountMinor: safeMinor(row.gross_collected_minor) - safeMinor(row.refunded_amount_minor),
+      diningTicket:row.dining_ticket===true,
+      diningOriginalMinor:safeMinor(row.original_minor??0),
+      diningPoints:safeMinor(row.points_used??0),
       orderAmountMinor: safeMinor(row.order_amount_minor),
       status: row.session_status!,
       openedAt: row.opened_at!,

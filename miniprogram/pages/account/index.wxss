@@ -25,3 +25,6 @@
 .order-item-price { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8rpx 16rpx; font-size: 24rpx; line-height: 1.5; padding-top: 6rpx; }
 .order-card__head > view:first-child, .list-row__main { min-width: 0; }
 .order-card__amount { flex-shrink: 0; max-width: 45%; overflow-wrap: anywhere; }
+
+.points-receipt { padding: 14rpx 0; border-top: 1rpx solid #e5dfd5; }
+.points-receipt view { display: flex; justify-content: space-between; margin: 5rpx 0; font-size: 26rpx; }

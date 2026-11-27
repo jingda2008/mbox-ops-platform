@@ -256,6 +256,7 @@ async function confirmTicketDining(id){return publicRequest('/api/public/mini/ta
 async function refundTableTicket(orderId,ticketId,reason) {
   return recoverableMemberWrite('ticket-refund:'+(ticketId||orderId),'/api/public/mini/activity-registrations/'+encodeURIComponent(orderId)+'/refund-request','POST',{ticketId,reason},[])
 }
+async function getTicketConsumption(id) { return (await publicRequest('/api/public/mini/table-tickets/' + encodeURIComponent(id) + '/consumption')).data }
 async function getMyTableTickets() { return (await publicRequest('/api/public/mini/table-ticket-purchases')).data }
 async function buyTableTickets(input, initialKey) {
   return recoverableMemberWrite('table-ticket-purchase:'+input.offerId,'/api/public/mini/table-ticket-purchases','POST',input,[],{initialKey,clearOnNotCommitted:true})
@@ -945,7 +946,7 @@ async function logoutWechatIdentity() {
 }
 
 module.exports = {
-  getAssistedPointsProposal, adoptAssistedPointsProposal, getTableTicketOffers, getMyTableTickets, getTicketReservations, getTicketProposals, buyTableTickets, refundTableTicket, withdrawTicketRefund, confirmTicketDining, getTabPoints, confirmTabPoints, confirmTicketUse, decideTicketMove,
+  getAssistedPointsProposal, adoptAssistedPointsProposal, getTableTicketOffers, getMyTableTickets, getTicketConsumption, getTicketReservations, getTicketProposals, buyTableTickets, refundTableTicket, withdrawTicketRefund, confirmTicketDining, getTabPoints, confirmTabPoints, confirmTicketUse, decideTicketMove,
   getCustomerBottles, getCustomerBottle, getCustomerBottlePhoto,
   getCustomerOrderHistory,
   getMemberCards, submitMemberCardAction, getMemberGiftJobs, getMarketingPreferences, updateMarketingPreferences,

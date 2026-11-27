@@ -1,3 +1,5 @@
+import {createPortal,flushSync} from 'react-dom'
+import './ticket-desk-slip.css'
 import {TicketRefundDesk} from './TicketRefundDesk'
 import {useEffect,useState,type FormEvent,type ReactNode} from 'react'
 import type {NormalizedApiClient} from '../normalized-api'
@@ -27,6 +29,22 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
   const [open,setOpen]=useState(initiallyOpen),[refresh,setRefresh]=useState(0),[working,setWorking]=useState(false)
   const [message,setMessage]=useState(''),[queue,setQueue]=useState<Queue>({orders:[],tables:[]})
   const [statement,setStatement]=useState<{id:string;data:Statement}|null>(null)
+  type DeskSlip={title:string;offer:string;desk:string;ordinal:number;orderNo:string;ticketId:string}
+  const [slip,setSlip]=useState<DeskSlip|null>(null)
+  async function printDesk(id:string) {
+    setWorking(true)
+    try {
+      const result=await api.getEndpoint<{data:DeskSlip}>('/api/staff/activity-operations/table-tickets/'+encodeURIComponent(id)+'/desk-slip')
+      flushSync(()=>setSlip(result.data))
+      window.print()
+    } catch(error) {setMessage(error instanceof Error?error.message:'请刷新桌位安排后再打印')}
+    finally {setWorking(false)}
+  }
+  useEffect(()=>{
+    const done=()=>setSlip(null)
+    window.addEventListener('afterprint',done)
+    return ()=>window.removeEventListener('afterprint',done)
+  },[])
   const [handling,setHandling]=useState('')
   const [day,setDay]=useState('')
   const [daily,setDaily]=useState<{day:string;amounts:Record<string,string>}|null>(null)
@@ -140,8 +158,10 @@ export function TableTicketReception({api,activityId,initiallyOpen=false,canRefu
         <p>补款关联餐饮积分 · 发放 {daily.amounts.diningRewardEarn??0} 分 · 冲回 {daily.amounts.diningRewardReverse??0} 分</p>
         <p>赠分 {daily.amounts.points_grant??0} · 抵扣占用 {daily.amounts.points_redeem??0} · 原批次退回 {daily.amounts.points_restore??0} · 冲回 {daily.amounts.points_reverse??0} · 到期 {daily.amounts.points_expire??0}</p></div>}
     </details>}
+    {slip && createPortal(<section className="ticket-desk-slip"><h2>门票桌位确认单</h2><h1>桌号 {slip.desk}</h1><p>{slip.title} · {slip.offer}</p><p>第 {slip.ordinal} 张</p><p>购票单号 {slip.orderNo}</p><p>票号 {slip.ticketId}</p></section>,document.body)}
     {queue.orders.map(ticket=><article key={ticket.id}><strong>{ticket.name} · 第{ticket.ordinal}桌</strong>
       <p>购票单 {ticket.orderId} · {queue.orders.find(row=>row.orderId===ticket.orderId)?.id===ticket.id?renderContact(ticket):ticket.maskedPhone} · {ticket.deskClosed?'本桌已清台':ticket.showEnded?(ticket.arrived?'场次已结束 · 已登记 '+ticket.arrived+' 人':'场次已结束 · 无到场登记'):ticket.tableName??(ticket.awaitingDuringShow?'演出已开始，请尽快排桌':'待排桌')}</p>
+      {canManage && ticket.tableName && !ticket.deskClosed && !ticket.refundedAt && <button type="button" disabled={working} onClick={()=>void printDesk(ticket.id)}>打印桌位单</button>}
       {(canRefund || canApproveRefund) && <button type="button" onClick={()=>setHandling(handling===ticket.id?'':ticket.id)}>办理退票</button>}
       {handling===ticket.id && <TicketRefundDesk key={ticket.id} api={api} auth={{permissions:[...(canRefund?['refund.request']:[]),...(canApproveRefund?['refund.approve']:[]),...(canManage?['community.activity.manage']:[])]}} reference={ticket.id}/>}
       {(canRefund||canApproveRefund) && <button type="button" onClick={()=>void inspect(ticket.id)}>核对原票、积分和菜款</button>}

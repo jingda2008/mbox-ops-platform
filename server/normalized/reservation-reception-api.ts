@@ -160,6 +160,14 @@ export const reservationReceptionApiPlugin:FastifyPluginAsync<ReservationRecepti
         await assertEmployeeTableSessionAccess(tx,{employeeId:ctx.employeeId,tableSessionId:row.id,requiredPermissionCodes:['table.open','reservation.manage']})
       }
       if((await tx.query('SELECT id FROM mbox.reservation_seating_sessions WHERE tenant_id=$1 AND store_id=$2 AND table_session_id=ANY($3::uuid[])',[ctx.scope.tenantId,ctx.scope.storeId,sessions.map(row=>row.tableSessionId)])).rowCount)fail('所选桌次已归属另一预约，不能重复关联')
+      const claimed=await tx.query(`SELECT 1 FROM mbox.ticket_dining_sessions claim
+        JOIN mbox.table_tickets k ON (k.tenant_id,k.store_id,k.id)=(claim.tenant_id,claim.store_id,claim.ticket_id)
+        JOIN mbox.reservation_table_locks l ON (l.tenant_id,l.store_id,l.id)=(k.tenant_id,k.store_id,k.reservation_lock_id)
+        WHERE claim.tenant_id=$1 AND claim.store_id=$2 AND
+          ((l.reservation_id=$3 AND NOT claim.session_id=ANY($4::uuid[]))
+            OR (claim.session_id=ANY($4::uuid[]) AND l.reservation_id<>$3)) LIMIT 1`,
+        [ctx.scope.tenantId,ctx.scope.storeId,id,sessions.map(row=>row.tableSessionId)])
+      if(claimed.rowCount)fail('这张票已随原桌账入座，请核对当前桌号','TICKET_SEATING_TABLE_CHANGED')
       let customerId=reservation.customer_id
       if(!customerId){
         const customer=await new CustomerRepository(tx).createAnonymous({publicId:`reception-customer-${id}`})
@@ -210,7 +218,7 @@ async function ticketSeatingRule(tx:ScopedTransaction,reservationId:string,lock=
     )`
   if(lock)await tx.query(linked+' SELECT k.id FROM mbox.table_tickets k JOIN related ON related.id=k.id ORDER BY k.id FOR UPDATE OF k',args)
   const result=await tx.query<{table_id:string|null;valid:boolean;admitted:boolean;awaiting_payment:boolean}>(linked+`
-    SELECT l.table_id, a.status='published' AND k.refunded_at IS NULL AND coalesce(m.starts_at,p.starts_at)<=statement_timestamp()
+    SELECT l.table_id, a.status IN ('published','completed') AND k.refunded_at IS NULL AND coalesce(m.starts_at,p.starts_at)<=statement_timestamp()
       AND coalesce(m.ends_at,p.ends_at)>statement_timestamp() AND NOT EXISTS(SELECT 1 FROM mbox.table_ticket_refund_requests f
         WHERE (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id) AND f.status NOT IN('cancelled','rejected')) AS valid,
       EXISTS(SELECT 1 FROM mbox.ticket_admission_batches b WHERE (b.tenant_id,b.store_id,b.ticket_id)=(k.tenant_id,k.store_id,k.id)) AS admitted,false AS awaiting_payment

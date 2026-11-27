@@ -91,6 +91,7 @@ interface ActivityPaymentContextRow extends Record<string, unknown> {
   succeeded_at: string | null
   business_date: string
   activity_public_id: string
+  ticket_desks?: {ordinal:number; desk:string|null; area:string; name:string; price:number}[] | null
   activity_title: string
   registration_public_id: string
   party_size: number
@@ -555,29 +556,57 @@ export class PrintTicketSourceRepository {
     sourceOutboxMessageId: string,
     paymentId: string,
   ): Promise<readonly PrintJob[]> {
-    const payment = await this.loadActivityPaymentContext(paymentId)
-    if (!['succeeded', 'partially_refunded', 'refunded'].includes(payment.payment_status_value)) {this.explicitSkipReason='print_payment_not_confirmed';return []}
-    const snapshot = createPrintTicketSnapshot({
+    const snapshot=await this.activityPaymentReceipt(paymentId)
+    if(!snapshot){this.explicitSkipReason='print_payment_not_confirmed';return []}
+    if(snapshot.lines.length>60){
+      if(!await this.hasActiveRoute('cashier'))return []
+      return this.materializeDocument(sourceOutboxMessageId,snapshot.ticketReference,snapshot)
+    }
+    return this.materializeActivityCashier(sourceOutboxMessageId,snapshot.ticketReference,createPrintTicketSnapshot(snapshot))
+  }
+
+  async readTicketDeskSlip(ticketId:string) {
+    const result=await this.transaction.query<{title:string;offer:string;desk:string;ordinal:number;orderNo:string;ticketId:string}>(`
+      SELECT a.title,offer.name AS offer,t.code AS desk,k.ordinal,r.public_id AS "orderNo",k.id AS "ticketId"
+      FROM mbox.table_tickets k JOIN mbox.table_ticket_purchases p USING(tenant_id,store_id,registration_id)
+      JOIN mbox.community_activity_registrations r ON (r.tenant_id,r.store_id,r.id)=(p.tenant_id,p.store_id,p.registration_id)
+      LEFT JOIN mbox.ticket_reschedule_offers moved ON moved.id=k.reschedule_id
+      JOIN mbox.table_ticket_offers offer ON offer.id=coalesce(moved.offer_id,p.offer_id)
+      JOIN mbox.community_activities a ON a.id=coalesce(moved.activity_id,r.activity_id)
+      JOIN mbox.tables t ON (t.tenant_id,t.store_id,t.id)=(k.tenant_id,k.store_id,mbox.ticket_current_table(k.tenant_id,k.store_id,k.reservation_lock_id))
+      WHERE (k.tenant_id,k.store_id,k.id)=($1,$2,$3) AND k.refunded_at IS NULL
+    `,[this.transaction.scope.tenantId,this.transaction.scope.storeId,ticketId])
+    return result.rows[0]??null
+  }
+
+  async activityPaymentReceipt(paymentId:string):Promise<Omit<PrintTicketSnapshot,'schemaVersion'|'title'>|null> {
+    const payment=await this.loadActivityPaymentContext(paymentId)
+    if(!['succeeded','partially_refunded','refunded'].includes(payment.payment_status_value))return null
+    const desks = payment.ticket_desks ?? []
+    return {
       kind: 'cashier_payment',
-      subtitle: 'M-BOX · 活动现场收款凭条',
+      subtitle: desks.length ? '整桌门票 · 收款凭条' : 'M-BOX · 活动现场收款凭条',
       test: false,
       issuedAt: requiredTime(payment.succeeded_at, 'activity payment succeeded_at'),
       businessDate: payment.business_date,
       ticketReference: payment.payment_public_id,
-      tableCode: null,
-      guestCount: payment.party_size,
+      tableCode: desks.length===1 ? desks[0]!.desk : null,
+      guestCount: desks.length ? null : payment.party_size,
       operatorLabel: null,
-      note: null,
+      note: desks.length ? payment.activity_title : null,
       payment: paymentFromRow(payment),
-      lines: [{
+      lines: desks.length ? desks.map(ticket=>({
+        name:ticket.name,
+        note: `第${ticket.ordinal}张 · ${ticket.desk ? '桌号 '+ticket.desk : ticket.area+' · 桌号待安排'}`,
+        quantity:1,totalAmountMinor:ticket.price
+      })) : [{
         name: `活动报名 · ${payment.activity_title}`,
         quantity: payment.party_size,
         totalAmountMinor: numeric(payment.payment_amount_minor, 'activity payment amount'),
       }],
       totalAmountMinor: numeric(payment.payment_amount_minor, 'activity payment amount'),
       currency: currency(payment.currency),
-    })
-    return this.materializeActivityCashier(sourceOutboxMessageId, payment.payment_public_id, snapshot)
+    }
   }
 
   async materializeCashierRefund(
@@ -809,6 +838,14 @@ export class PrintTicketSourceRepository {
         COALESCE(reconciliation.business_date::text,(payment.succeeded_at AT TIME ZONE 'Asia/Shanghai')::date::text) AS business_date,
         activity.public_id AS activity_public_id,activity.title AS activity_title,
         registration.public_id AS registration_public_id,registration.party_size,registration.currency
+        ,(SELECT jsonb_agg(jsonb_build_object('ordinal',k.ordinal,'desk',tab.code,'area',ar.name,'name',offer.name,'price',offer.price_minor) ORDER BY k.ordinal)
+          FROM mbox.table_ticket_purchases p JOIN mbox.table_tickets k USING(tenant_id,store_id,registration_id)
+          JOIN mbox.table_ticket_offers offer ON offer.id=p.offer_id
+          LEFT JOIN mbox.ticket_reschedule_offers moved ON moved.id=k.reschedule_id
+          LEFT JOIN mbox.table_ticket_offers new_offer ON new_offer.id=moved.offer_id
+          JOIN mbox.areas ar ON ar.id=coalesce(new_offer.area_id,offer.area_id)
+          LEFT JOIN mbox.tables tab ON tab.id=mbox.ticket_current_table(k.tenant_id,k.store_id,k.reservation_lock_id)
+          WHERE (p.tenant_id,p.store_id,p.registration_id)=(payment.tenant_id,payment.store_id,registration.id)) AS ticket_desks
       FROM mbox.payments payment
       JOIN mbox.community_activity_registrations registration
         ON registration.tenant_id=payment.tenant_id AND registration.store_id=payment.store_id

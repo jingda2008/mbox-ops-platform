@@ -402,7 +402,7 @@ test('320px live table and cashier show the three VIP8 money snapshots without r
   await expect(cashier).toContainText('待收 ¥0.00')
 
   async function pageCheck(region:ReturnType<Page['getByLabel']>) {
-    await expect(region).toContainText('累计已收 ¥'+state.gross.toFixed(2))
+    await expect(region).toContainText('餐饮实付 ¥'+state.gross.toFixed(2))
     await expect(region).toContainText('已退 ¥'+state.refund.toFixed(2))
     await expect(region).toContainText('净收 ¥'+(state.gross-state.refund).toFixed(2))
     await expect(region).toContainText('待收 ¥'+state.due.toFixed(2)+'（'+state.count+' 单）')
@@ -424,7 +424,7 @@ test('mobile floor keeps paid tables compact and pending amounts actionable', as
   const settled = {
     ...source.activeSession!, financialState: 'paid' as const, guestCount: 2, latestMood: null,
     orderCount: 1, unpaidOrderCount: 0, pendingPaymentCount: 0, refundAttentionCount: 0,
-    orderAmountMinor: 21600, grossCollectedAmountMinor: 21600, outstandingAmountMinor: 0,
+    diningOriginalMinor:41600,diningPoints:200,diningTicket:true,orderAmountMinor: 21600, grossCollectedAmountMinor: 21600, outstandingAmountMinor: 0,
     refundedAmountMinor: 0, prepaidReceivedMinor: 0, cashPaymentCount: 0,
   }
   const neighbours = operations.tables.filter(table => table.id !== source.id).slice(0, 7)
@@ -461,7 +461,8 @@ test('mobile floor keeps paid tables compact and pending amounts actionable', as
     await testInfo.attach('paid-table-height-' + width, { body: String(height), contentType: 'text/plain' })
     expect(height).toBeLessThanOrEqual(96)
     expect((await tile('A7').boundingBox())!.height).toBeLessThanOrEqual(96)
-    await expect(tile('A6').getByText('已点 ¥216.00')).toBeVisible()
+    await expect(tile('A6').getByText('餐饮 ¥416.00')).toBeVisible()
+    await expect(tile('A6').getByLabel('持票桌')).toBeVisible()
     await expect(tile('A6').getByLabel('本桌次收退款')).toBeHidden()
     await expect(tile('A9').getByText('待收 ¥156.00', { exact: true })).toBeVisible()
     await expect(tile('A9')).toContainText('1笔确认中')
@@ -470,6 +471,8 @@ test('mobile floor keeps paid tables compact and pending amounts actionable', as
   }
   await tile('A6').click()
   const dialog = page.getByRole('dialog', { name: 'A6桌台操作' })
+  await expect(dialog.getByText('餐饮原价 ¥416.00')).toBeVisible()
+  await expect(dialog.getByText('积分抵扣 ¥200.00')).toBeVisible()
   await expect(dialog.getByLabel('本桌次收退款')).toContainText('净收 ¥216.00 · 待收 ¥0.00')
   await dialog.getByRole('button', { name: '关闭桌台操作' }).click()
   await page.getByRole('button', {name:'A6查看账单'}).click()

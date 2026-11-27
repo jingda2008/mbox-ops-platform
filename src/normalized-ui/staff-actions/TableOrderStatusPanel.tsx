@@ -80,8 +80,8 @@ function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderSta
   }
 
   const items = useMemo(() => orders.flatMap((order) => order.items), [orders])
-  const orderTotal = orders.every(order => Number.isSafeInteger(order.totalAmountMinor))
-    ? orders.reduce((sum, order) => sum + order.totalAmountMinor!, 0) : null
+  const orderTotal = orders.every(order => Number.isSafeInteger(order.originalMinor))
+    ? orders.reduce((sum, order) => sum + order.originalMinor!, 0) : null
   const refundedTotal = items.every(item => Number.isSafeInteger(item.refundedAmountMinor))
     ? items.reduce((sum, item) => sum + item.refundedAmountMinor!, 0) : null
   const increasedAmount=orders.reduce((sum,order)=>sum+(order.receivableIncreaseMinor??0),0)
@@ -102,11 +102,11 @@ function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderSta
       : error !== null && items.length === 0 ? <OrderDetailsErrorNotice error={error} copied={referenceCopied} onCopy={copyReference} />
         : items.length === 0 ? <p className="staff-table-order-status-empty">本桌暂时没有已提交的商品。</p>
           : <>
-            <p aria-label="本桌消费金额">消费原金额 {orderTotal===null?'待更新':`¥${(orderTotal/100).toFixed(2)}`}
+            <p aria-label="本桌消费金额">餐饮原价 {orderTotal===null?'待更新':`¥${(orderTotal/100).toFixed(2)}`}
               {refundedTotal!==null&&refundedTotal>0&&` · 已退款 ¥${(refundedTotal/100).toFixed(2)}`}
               {increasedAmount>0&&` · 套餐按单点价补差 ¥${(increasedAmount/100).toFixed(2)}`}
               {stoppedAmount>0&&` · 退菜减额 ¥${(stoppedAmount/100).toFixed(2)}`}
-              <small> · 原成交金额含优惠，实收及待收请查看收款明细</small></p>
+</p>
             <div className="staff-table-order-status-summary" aria-label="出品汇总">
               <span className="is-delivered"><Check size={16} />已上 {deliveredQuantity} 份</span>
               <span><Clock3 size={16} />未上 {pendingQuantity} 份</span>
@@ -116,6 +116,7 @@ function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderSta
             <div className="staff-table-order-status-list">
               {orders.map((order) => <article key={order.publicId}>
                 <header><strong title={order.publicId}>{shortOrderLabel(order.publicId)}</strong><small>{order.paymentStatus === 'refunded' ? '已退款 · ' : order.paymentStatus === 'partially_refunded' ? '含退款 · ' : ''}{order.items.length} 个商品</small></header>
+                {order.receipts && <p>实际付款 ¥{(order.receipts.reduce((sum,r)=>sum+r.amountMinor,0)/100).toFixed(2)}</p>}
                 {order.receipts?.map(r=><p key={r.publicId}>{({cash:'现金（收银登记）',physical_pos:'实体POS登记',external_manual:'其他线下登记',wechat:'微信支付',postar:'星驿支付',simulation:'模拟支付'})[r.provider]}
                   {' · '}{shortOrderLabel(r.publicId)} · {r.shared?'本单分摊':'已收'} ¥{(r.amountMinor/100).toFixed(2)} · 已退 ¥{(r.refundMinor/100).toFixed(2)} · 净收 ¥{((r.amountMinor-r.refundMinor)/100).toFixed(2)}</p>)}
                 {order.productionMessage && <p>{order.productionMessage}</p>}
@@ -124,7 +125,7 @@ function TableOrderStatusContent({ api, table, onOpenAfterSales }: TableOrderSta
                 {order.items.map((item) => {
                   const status = STATUS_PRESENTATION[item.fulfillmentStatus]
                   return <div className="staff-table-order-status-item" key={item.id}>
-                    <span><strong>{item.productName}</strong><small>{stationLabel(item.fulfillmentStation)} · {status.detail}</small><small>{item.includedInBundle ? '已含套餐，不另收费' : item.unitPriceMinor !== undefined && item.totalAmountMinor !== undefined ? `单价 ¥${(item.unitPriceMinor/100).toFixed(2)} · 小计 ¥${(item.totalAmountMinor/100).toFixed(2)}` : '成交金额暂未读取'}</small>{(item.refundedAmountMinor ?? 0)>0 && <small>已退 ¥{((item.refundedAmountMinor ?? 0)/100).toFixed(2)}</small>}</span>
+                    <span><strong>{item.productName}</strong><small>{stationLabel(item.fulfillmentStation)} · {status.detail}</small><small>{item.includedInBundle ? '已含套餐，不另收费' : item.unitPriceMinor !== undefined && item.totalAmountMinor !== undefined ? `原价 ¥${(item.unitPriceMinor/100).toFixed(2)}${item.pointsMinor ? ` · 积分抵 ¥${(item.pointsMinor/100).toFixed(2)}` : ` · 小计 ¥${(item.totalAmountMinor/100).toFixed(2)}`}` : '成交金额暂未读取'}</small>{(item.refundedAmountMinor ?? 0)>0 && <small>已退 ¥{((item.refundedAmountMinor ?? 0)/100).toFixed(2)}</small>}</span>
                     {item.quantities&&<small>暂停 {item.quantities.held} · 停止 {item.quantities.stopped} · 已备齐 {item.quantities.ready} · 已送达 {item.quantities.delivered}</small>}
                     <b>×{item.quantity}</b>
                     <em className={status.className}>{status.label}</em>

@@ -62,3 +62,8 @@
 .ticket-unavailable .secondary-button, .ticket-unavailable .browse-link, .purchase-recovery button { margin: 16rpx 0 0; }
 .purchase-recovery text { display: block; color: #634d35; }
 .original-receipt text { display: block; overflow-wrap: anywhere; }
+
+.ticket-consumption { margin: 12rpx 0; font-size: 26rpx; }
+.ticket-receipt + .ticket-receipt { border-top: 1rpx solid #e5dfd5; padding-top: 12rpx; }
+.ticket .ticket-receipt-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4rpx 12rpx; }
+.ticket-receipt-number { color: #66645f; font-size: 23rpx; overflow-wrap: anywhere; }

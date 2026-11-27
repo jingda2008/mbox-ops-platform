@@ -687,8 +687,18 @@ export class ActivityOperationsRepository {
       SELECT count(*)::text AS count FROM mbox.community_activity_registrations registration
       WHERE registration.tenant_id=$1::uuid AND registration.store_id=$2::uuid AND registration.activity_id=$3::uuid
         AND (registration.status IN ('reserved','payment_pending','waitlisted')
-          OR (registration.status='confirmed' AND NOT ($4='completed' AND $5::boolean
-            AND COALESCE((to_jsonb(registration)->>'service_version')::int,1)=3))
+          OR (registration.status='confirmed' AND NOT ($4='completed' AND (
+            ($5::boolean AND COALESCE((to_jsonb(registration)->>'service_version')::int,1)=3)
+            OR (registration.payment_status='paid' AND EXISTS(
+              SELECT 1 FROM mbox.table_ticket_purchases p WHERE (p.tenant_id,p.store_id,p.registration_id)=($1,$2,registration.id)
+                AND p.quantity=(SELECT count(*) FROM mbox.table_tickets k WHERE (k.tenant_id,k.store_id,k.registration_id)=($1,$2,p.registration_id)))
+              AND NOT EXISTS(SELECT 1 FROM (SELECT DISTINCT ON(area_id) status FROM mbox.table_ticket_offers
+                WHERE (tenant_id,store_id,activity_id)=($1,$2,$3) AND status<>'draft' ORDER BY area_id,version DESC) latest WHERE latest.status='published'))
+          )))
+          OR EXISTS(SELECT 1 FROM mbox.table_tickets k JOIN mbox.table_ticket_refund_requests f
+            ON (f.tenant_id,f.store_id,f.ticket_id)=(k.tenant_id,k.store_id,k.id)
+            WHERE (k.tenant_id,k.store_id,k.registration_id)=($1,$2,registration.id)
+              AND f.status NOT IN ('rejected','cancelled','refunded'))
           OR EXISTS (SELECT 1 FROM mbox.community_activity_package_fulfillment_intents intent
             WHERE intent.tenant_id=registration.tenant_id AND intent.store_id=registration.store_id
               AND intent.registration_id=registration.id AND intent.status='pending')

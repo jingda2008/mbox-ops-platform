@@ -1650,6 +1650,7 @@ function tableOrderDetail(value: unknown): StaffTableOrderDetail {
       totalAmountMinor: typeof item.totalAmountMinor === 'number' ? item.totalAmountMinor : undefined,
       refundedAmountMinor: typeof item.refundedAmountMinor === 'number' ? item.refundedAmountMinor : undefined,
       ...(isObject(quantityFacts)&&['total','held','stopped','ready','delivered','pending'].every(key=>Number.isSafeInteger(quantityFacts[key])&&Number(quantityFacts[key])>=0)?{quantities:quantityFacts as unknown as NonNullable<StaffTableOrderDetail['items'][number]['quantities']>}:{}),
+      pointsMinor:typeof item.pointsMinor==='number'?item.pointsMinor:undefined,
       includedInBundle: item.includedInBundle === true,
       fulfillmentStation: item.fulfillmentStation as StaffTableOrderDetail['items'][number]['fulfillmentStation'],
       fulfillmentStatus: item.fulfillmentStatus as StaffTableOrderDetail['items'][number]['fulfillmentStatus'],
@@ -1660,6 +1661,7 @@ function tableOrderDetail(value: unknown): StaffTableOrderDetail {
       && Number.isSafeInteger(r.amountMinor) && Number.isSafeInteger(r.refundMinor) && typeof r.shared==='boolean')
       ? {receipts:value.receipts as StaffTableOrderDetail['receipts']} : {}),
     ...(isObject(value.replacementSource)&&typeof value.replacementSource.orderPublicId==='string'&&typeof value.replacementSource.orderItemId==='string'?{replacementSource:{orderPublicId:value.replacementSource.orderPublicId,orderItemId:value.replacementSource.orderItemId}}:{}),
+    originalMinor:typeof value.originalMinor==='number'?value.originalMinor:undefined,
     collectionSettled: typeof value.collectionSettled === 'boolean' ? value.collectionSettled : undefined,
     outstandingAmountMinor: typeof value.outstandingAmountMinor === 'number' ? value.outstandingAmountMinor : undefined,
     productionMessage: typeof value.productionMessage === 'string' ? value.productionMessage : undefined,

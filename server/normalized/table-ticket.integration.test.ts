@@ -2,7 +2,7 @@ import {GuestSessionService,hashTableQrCredential} from './guest-session-reposit
 import {PrintTicketSourceRepository} from './print-ticket-source.js'
 import {readTables} from './operations-query-service.js'
 import {listTableOrderDetailsForSession} from './commerce-kds-api.js'
-import {recognizeDiningTicket} from './ticket-dining-session.js'
+import {hasCheckoutTicket,recognizeDiningTicket} from './ticket-dining-session.js'
 import {ActivityOperationsRepository} from './activity-operations-repository.js'
 import {customerTicketDining} from './customer-ticket-dining.js'
 import {loadGuestTableOrders} from './guest-table-orders-query.js'
@@ -207,6 +207,16 @@ describe.skipIf(!url)('member table tickets on PostgreSQL',()=>{
       const lots=await tx.query(`SELECT l.original_points,k.ordinal FROM mbox.table_tickets k JOIN mbox.loyalty_point_lots l ON l.id=k.point_lot_id
         JOIN mbox.customer_memberships m ON m.id=l.membership_id WHERE k.registration_id=$1 AND k.payment_id=$2 AND m.customer_id=$3 ORDER BY k.ordinal`,[order.id,received.id,customer])
       expect(lots.rows).toEqual([{original_points:550,ordinal:1},{original_points:550,ordinal:2}])
+      expect(await hasCheckoutTicket(tx,customer)).toBe(true)
+      expect(await hasCheckoutTicket(tx,randomUUID())).toBe(false)
+      await tx.query('SAVEPOINT checkout_audience')
+      await tx.query("UPDATE mbox.community_activities SET status='completed' WHERE id=$1",[activity])
+      expect(await hasCheckoutTicket(tx,customer)).toBe(true)
+      await tx.query("UPDATE mbox.loyalty_point_lots SET remaining_points=0,status='consumed' WHERE id IN (SELECT point_lot_id FROM mbox.table_tickets WHERE registration_id=$1)",[order.id])
+      expect(await hasCheckoutTicket(tx,customer)).toBe(false)
+      await tx.query("UPDATE mbox.community_activities SET status='published' WHERE id=$1",[activity])
+      expect(await hasCheckoutTicket(tx,customer)).toBe(true)
+      await tx.query('ROLLBACK TO SAVEPOINT checkout_audience')
       expect((await tx.query('SELECT 1 FROM mbox.payments WHERE activity_registration_id=$1',[order.id])).rowCount).toBe(1)
       const first=(await tx.query('SELECT id FROM mbox.table_tickets WHERE registration_id=$1 AND ordinal=1',[order.id])).rows[0].id
       const request=await requestTicketRefund(tx,order.id,first,customer,'现金原票退一桌')

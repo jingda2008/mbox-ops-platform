@@ -744,7 +744,7 @@ async function clearSharedCart(expectedGeneration, expectedVersion, idempotencyK
   })).data
 }
 async function getCheckoutPoints(cart) {
-  const query = cart ? '?generation=' + encodeURIComponent(cart.generation) + '&version=' + encodeURIComponent(cart.version) : ''
+  const query = cart ? '?generation=' + encodeURIComponent(cart.generation) + '&version=' + encodeURIComponent(cart.version) + (cart.checkoutView ? '&view=checkout' : '') : ''
   return (await request('/api/guest/shared-cart/points' + query)).data
 }
 async function quoteSharedCartPoints(input, idempotencyKey) { return (await request('/api/guest/shared-cart/points-quote', { method: 'POST', headers: { 'idempotency-key': idempotencyKey }, data: input })).data }

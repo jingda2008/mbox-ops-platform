@@ -7,7 +7,7 @@ import {loadMiniModule} from './load-miniprogram-test-module.mjs'
 const markup=readFileSync(new URL('../miniprogram/pages/order/index.wxml',import.meta.url),'utf8')
 const amountExpression=markup.match(/class="checkout-confirm__total-price">{{([^}]+)}}/)[1]
 const buttonExpression=markup.match(/bindtap="confirmCheckout"[^>]+>{{([^}]+)}}/)[1]
-function display(patch={}){const data={couponQuote:null,couponQuoteTotal:'',couponReviewRequired:false,couponNeedsReview:false,couponSelections:[],pointsInput:'',cartTotal:'¥100.00',checkoutLocked:false,prepayment:null,...patch};return{amount:vm.runInNewContext(amountExpression,data),button:vm.runInNewContext(buttonExpression,data)}}
+function display(patch={}){const data={couponQuote:null,couponQuoteTotal:'',couponReviewRequired:false,couponNeedsReview:false,couponSelections:[],pointsInput:'',cartTotal:'¥100.00',checkoutLocked:false,prepayment:null,ticketPreview:null,ticketChoice:'',...patch};return{amount:vm.runInNewContext(amountExpression,data),button:vm.runInNewContext(buttonExpression,data)}}
 test('Mini checkout displays quoted payable, including zero and decimal amounts',()=>{
  for(const n of [9000,8000,1234,0])assert.equal(display({couponQuote:{payableMinor:n},couponQuoteTotal:'¥'+(n/100).toFixed(2)}).amount,'¥'+(n/100).toFixed(2))
 })
@@ -39,5 +39,10 @@ test('hiding channel checkout retains review intent instead of silently restorin
 test('Alipay and WeChat share pending-quote and zero-due display expressions',()=>{
  const ali=readFileSync(new URL('../alipay-miniprogram/pages/order/index.axml',import.meta.url),'utf8')
  assert.equal(ali.match(/class="checkout-confirm__total-price">{{([^}]+)}}/)[1],amountExpression)
- assert.equal(ali.match(/onTap="confirmCheckout"[^>]+>{{([^}]+)}}/)[1],buttonExpression)
+ const aliButton=ali.match(/onTap="confirmCheckout"[^>]+>{{([^}]+)}}/)[1]
+ for(const amount of [0,100]) {
+   const data={checkoutLocked:false,couponQuote:{payableMinor:amount},prepayment:null}
+   assert.equal(vm.runInNewContext(aliButton,data),display(data).button)
+ }
+ assert.equal(display({ticketPreview:{},ticketChoice:'points',couponQuote:{payableMinor:6000},couponQuoteTotal:'¥60.00'}).button,'确认支付 ¥60.00')
 })

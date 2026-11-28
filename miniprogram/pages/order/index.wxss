@@ -1836,7 +1836,7 @@
   min-height: 44px;
 }
 
-.checkout-points-picker__input { color: #b42318; }
+.checkout-points-picker__input { color: #292c26; }
 
 .ticket-date-strip {white-space:nowrap;margin:12rpx 0}
 .ticket-date-strip button {display:inline-block;margin-right:12rpx}
@@ -1870,3 +1870,40 @@
   border-radius: 16rpx;
 }
 .ticket-menu-status .ticket-menu-retry { flex-shrink: 0; margin: 0; color: #27513c; }
+
+.ticket-pay-options { display: grid; gap: 6rpx; }
+.ticket-pay-option { display: grid; grid-template-columns: 1fr auto; align-items: center; width: 100%; min-height: 44px; padding: 10rpx 20rpx; text-align: left; font-size: 28rpx; line-height: 1.4; background: #fffdf9; border: 2rpx solid #deded2; border-radius: 14rpx; }
+.ticket-pay-option.selected { background: #edf4ee; border-color: #285841; }
+.ticket-pay-saving { grid-column: 1 / -1; font-size: 23rpx; color: #62665d; }
+@media (orientation: landscape) and (max-height: 450px) {
+  .ticket-pay-options { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 3px 8px; }
+  .ticket-pay-option { min-height: 44px; min-width: 0; margin: 0; padding: 3px 8px; font-size: 15px; }
+  .ticket-pay-saving { font-size: 12px; }
+  .ticket-pay-options .compact-text-action, .ticket-pay-options .coupon-quote-error { grid-column: 1 / -1; margin: 0; font-size: 14px; }
+}
+
+/* The folded phone uses one narrow viewport. Keep both amounts in view. */
+@media (orientation: portrait) and (max-width: 440px) {
+  .ticket-pay-options { flex-shrink: 0; gap: 4px; }
+  .ticket-pay-option {
+    box-sizing: border-box;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 8px;
+    margin: 0;
+    padding: 5px 12px;
+    color: #373b34;
+    font-size: 15px;
+    white-space: normal;
+  }
+  .ticket-pay-option > text:nth-child(2) { text-align: right; font-weight: 600; }
+  .ticket-pay-option.selected { color: #214f3e; }
+  .ticket-pay-saving { line-height: 1.35; font-size: 12px; }
+  .ticket-pay-options .compact-text-action {
+    justify-self: end;
+    min-height: 44px;
+    margin: 0;
+    padding: 0 10px;
+    font-size: 14px;
+    line-height: 44px;
+  }
+}

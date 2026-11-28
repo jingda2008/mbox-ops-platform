@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {readFile} from 'node:fs/promises'
 import vm from 'node:vm'
+import {fixture as checkoutPage} from './miniprogram-state-fixture.cjs'
 import {loadMiniModule} from './load-miniprogram-test-module.mjs'
 for(const platform of ['miniprogram','alipay-miniprogram']){
   function fixture(){
@@ -26,6 +27,26 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
     assert.equal(page.data.pointsInput,'260')
     page.onCheckoutPointsInput({detail:{value:'200'}})
     assert.equal(page.data.pointsInput,'200')
+  })
+  if(platform==='miniprogram')test('购票会员预览只读，切换还原用券，普通会员保留原入口',async()=>{
+    const {page,api,choose,calls}=fixture()
+    api.points=async()=>({ticketCheckout:false})
+    await page.readTicketCheckout()
+    assert.equal(page.data.ticketPreview,null)
+    await page.openCheckoutCoupons();choose();await page.quoteCheckoutCoupons()
+    api.points=async()=>({ticketCheckout:true,availablePoints:200,maximumPoints:200,standardMinor:26000,minorPerPoint:100,allowCoupons:false})
+    api.quotePoints=async input=>({id:'with-points',current:true,generation:1,version:2,currency:'CNY',pointsUsed:input.points,
+      subtotalMinor:26000,discountMinor:input.points*100,payableMinor:26000-input.points*100,expiresAt:new Date(Date.now()+60000).toISOString()})
+    await page.readTicketCheckout()
+    assert.equal(page.data.ticketChoice,'');assert.equal(page.data.ticketPreview.remainder,'微信补 ¥60.00')
+    await page.useTicketPoints()
+    assert.equal(page.data.couponQuote.payableMinor,6000);assert.equal(page.data.couponSelections.length,0)
+    page.useDirectCheckout()
+    assert.equal(page.data.pointsInput,'');assert.equal(page.data.couponQuote.id,'server-quote');assert.equal(page.data.couponSelections.length,1)
+    api.points=async()=>({ticketCheckout:true,availablePoints:550,maximumPoints:260,standardMinor:26000,minorPerPoint:100,allowCoupons:false})
+    await page.readTicketCheckout();await page.useTicketPoints()
+    assert.equal(page.data.couponQuote.payableMinor,0);assert.equal(page.data.couponQuote.pointsUsed,260)
+    assert.equal(calls.length,1)
   })
   test(`${platform}: two identical products have independent coupon choices, not one quantity-wide discount`,async()=>{
     const {page,choose}=fixture();await page.openCheckoutCoupons();choose()
@@ -285,4 +306,21 @@ for(const outcome of ['success','failure'])test(`late channel ${outcome} cannot 
   const pending=page.quoteCheckoutChannel();setScope('table-b');page.setData({couponLoading:true,couponError:'新桌状态'})
   finish();await pending
   assert.equal(page.data.couponQuote,null);assert.equal(page.data.couponError,'新桌状态');assert.equal(page.data.couponLoading,true)
+})
+
+test('普通会员点本单最多积分自动算价，手动修改另行确认',async()=>{
+  const {page}=checkoutPage('order',{
+    getCheckoutPoints:async cart=>cart.checkoutView ? {ticketCheckout:false} : {maximumPoints:200,availablePoints:200,minorPerPoint:100,allowCoupons:false},
+    quoteSharedCartPoints:async input=>({id:'quote-'+input.points,current:true,currency:'CNY',pointsUsed:input.points,subtotalMinor:26000,
+      generation:input.expectedGeneration,version:input.expectedVersion,discountMinor:input.points*100,payableMinor:26000-input.points*100,
+      expiresAt:new Date(Date.now()+60000).toISOString()})
+  })
+  page.setData({checkoutConfirmVisible:true,cartGeneration:1,cartVersion:1})
+  await page.readTicketCheckout();assert.equal(page.data.ticketPreview,null)
+  await page.openCheckoutPoints();await page.fillMaximumCheckoutPoints()
+  assert.equal(page.data.pointsPickerOpen,false);assert.equal(page.data.couponQuote.payableMinor,6000)
+  await page.openCheckoutPoints();page.onCheckoutPointsInput({detail:{value:'50'}})
+  assert.equal(page.couponCheckoutReady(),false)
+  await page.quoteCheckoutPoints();assert.equal(page.data.couponQuote.payableMinor,21000)
+  assert.equal(page.data.pointsPickerOpen,false)
 })

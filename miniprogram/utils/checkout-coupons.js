@@ -1,5 +1,6 @@
 const { parseInstant } = require('./format')
 const initialCheckoutCoupons = {
+  ticketPreview: null, ticketChoice: '', ticketPreviewLoading:false, ticketPreviewError:false, savedDirect:null,
   pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, maximumPoints: null, pointsInput: '',
   couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
@@ -24,6 +25,65 @@ function couponPortions(cart, coupons, selections, money) {
 }
 function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quoteChannel, money, randomId, scope, errorMessage }) {
   return {
+    async readTicketCheckout() {
+      const request = this.ticketPreviewRequest = {}
+      if (this.data.prepayment || this.data.membershipStatus === 'nonmember' || this.data.couponReviewRequired || this.data.issuedCouponPending) {
+        this.setData({ticketPreview:null,ticketChoice:'',savedDirect:null,ticketPreviewError:false,ticketPreviewLoading:false})
+        return
+      }
+      const generation = this.data.cartGeneration, version = this.data.cartVersion, identity = scope()
+      const current = () => request === this.ticketPreviewRequest && this.data.checkoutConfirmVisible && scope() === identity
+        && this.data.cartVersion === version && this.data.cartGeneration === generation
+      this.setData({ticketPreviewLoading:true,ticketPreviewError:false})
+      try {
+        const result = await getPoints({generation,version,checkoutView:true})
+        if (!current()) return
+        if (!result.ticketCheckout) {
+          if (this.data.ticketChoice === 'points') this.invalidateCheckoutCoupons(false,true)
+          this.setData({ticketPreview:null,ticketChoice:'',savedDirect:null})
+          return
+        }
+        const {availablePoints,maximumPoints,standardMinor} = result
+        if (!Number.isSafeInteger(availablePoints) || !Number.isSafeInteger(standardMinor) || standardMinor < 0 ||
+            result.minorPerPoint !== 100 || result.allowCoupons !== false || !Number.isSafeInteger(maximumPoints) ||
+            maximumPoints < 0 || maximumPoints !== Math.min(availablePoints,Math.floor(standardMinor/100))) throw Error('积分暂未读到')
+        const remaining = standardMinor-maximumPoints*100
+        if (this.data.pointsInput && Number(this.data.pointsInput) > maximumPoints) {
+          this.invalidateCheckoutCoupons(false,true)
+          this.setData({couponError:'可用积分变了，请重新选择结账方式。'})
+        }
+        this.setData({ticketPreview:{availablePoints,maximumPoints,remainder:remaining ? '微信补 '+money(remaining) : '全额抵扣'},
+          ticketChoice:this.data.pointsInput ? 'points' : this.data.ticketChoice || (maximumPoints === 0 ? 'direct' : '')})
+      } catch (_) {
+        if (current()) this.setData({ticketPreview:null,ticketChoice:'',savedDirect:null,ticketPreviewError:true})
+      } finally {
+        if (current()) this.setData({ticketPreviewLoading:false})
+      }
+    },
+    async useTicketPoints() {
+      const preview = this.data.ticketPreview
+      if (!preview || !preview.maximumPoints || this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
+      if (this.data.ticketChoice === 'points' && this.data.couponQuote?.pointsUsed && parseInstant(this.data.couponQuote.expiresAt) > Date.now()) return
+      if (this.data.ticketChoice !== 'points') this.setData({savedDirect:{quote:this.data.couponQuote, total:this.data.couponQuoteTotal,
+        selections:this.data.couponSelections, review:this.data.couponNeedsReview}})
+      this.setData({ticketChoice:'points',pointsPickerOpen:false,couponPickerOpen:false,pointsBalance:preview.availablePoints,maximumPoints:preview.maximumPoints})
+      this.onCheckoutPointsInput({detail:{value:String(preview.maximumPoints)}})
+      return this.quoteCheckoutPoints()
+    },
+    useDirectCheckout() {
+      if (this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
+      const saved = this.data.savedDirect
+      if (this.data.ticketChoice === 'points') {
+        const expired = saved && saved.quote && !(parseInstant(saved.quote.expiresAt) > Date.now())
+        this.setData({couponQuote:saved && !expired ? saved.quote : null,couponQuoteTotal:saved && !expired ? saved.total : '',
+          couponSelections:saved ? saved.selections : [],couponNeedsReview:!!(saved && (saved.review || expired)),
+          couponError:expired ? '优惠已变化，请重新选择。' : '',pointsPickerOpen:false,pointsInput:'',pointsError:''})
+      }
+      if (!saved && !this.data.couponSelections.length && !this.data.couponReviewRequired && !this.data.issuedCouponPending && !this.data.couponQuote) {
+        this.setData({couponNeedsReview:false,couponError:''})
+      }
+      this.setData({ticketChoice:'direct',savedDirect:null})
+    },
     async quoteCheckoutChannel() {
       if (this.data.busy || this.data.couponLoading || !quoteChannel) return
       this.invalidateCheckoutCoupons(false, false)
@@ -68,8 +128,9 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
     },
     async quoteCheckoutPoints() {
       if (this.data.busy || this.data.pointsLoading) return
-      if (!/^[1-9][0-9]*$/.test(this.data.pointsInput) || !Number.isSafeInteger(Number(this.data.pointsInput)) || Number(this.data.pointsInput) > this.data.pointsBalance) {
-        this.setData({ pointsError: '请输入不超过可用余额的整数积分。' }); return
+      if (!/^[1-9][0-9]*$/.test(this.data.pointsInput) || !Number.isSafeInteger(Number(this.data.pointsInput)) || Number(this.data.pointsInput) > (this.data.maximumPoints ?? this.data.pointsBalance)) {
+        const limit = this.data.maximumPoints ?? this.data.pointsBalance
+        this.setData({ pointsError: limit > 0 ? '请输入 1 到 ' + limit + ' 之间的整数。' : '本单暂无可用积分。' }); return
       }
       const epoch = this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1, identity = scope()
       const input = { expectedGeneration: this.data.cartGeneration, expectedVersion: this.data.cartVersion, points: Number(this.data.pointsInput) }
@@ -79,11 +140,16 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy || input.expectedGeneration !== this.data.cartGeneration || input.expectedVersion !== this.data.cartVersion) return
         if (!result.current || result.generation !== input.expectedGeneration || result.version !== input.expectedVersion || result.currency !== 'CNY' || result.pointsUsed !== input.points || result.discountMinor !== input.points * 100 || !Number.isSafeInteger(result.subtotalMinor) || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('积分报价已失效，请重新核对')
         this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
+        return result
       } catch (error) {
-        if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '积分金额核对失败，请减少积分或重新核对。') })
+        if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '暂时算不出抵扣金额，请再试一次。') })
       } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ pointsLoading: false }) }
     },
     invalidateCheckoutCoupons(clearWallet, needsReview) {
+      if (clearWallet) {
+        this.ticketPreviewRequest=null
+        this.setData({ticketPreview:null,ticketChoice:'',savedDirect:null,ticketPreviewLoading:false,ticketPreviewError:false})
+      } else this.setData({ticketChoice:'',savedDirect:null})
       if (this.invalidateCheckoutUpgrade) this.invalidateCheckoutUpgrade()
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
       this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, maximumPoints: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],

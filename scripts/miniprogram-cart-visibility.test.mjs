@@ -44,9 +44,9 @@ test('empty carts hide the shortcut and cannot submit an empty order',async()=>{
  const h=setup();try{await h.page.preparePage();await h.page.openCheckout();assert.equal(h.state.calls.includes('submit'),false);assert.equal(h.page.data.checkoutConfirmVisible,false)}finally{h.dispose()}
 })
 
-test('unconfirmed points keep checkout open and point directly to the red numeric input',async()=>{
+test('unconfirmed points keep checkout open and point directly to the numeric input',async()=>{
  const h=setup()
  try {await h.page.preparePage();await add(h);h.page.setData({checkoutConfirmVisible:true,pointsInput:'5',pointsPickerOpen:false});assert.equal(h.page.couponCheckoutReady(),false);assert.equal(h.page.data.pointsPickerOpen,true);assert.equal(h.page.data.checkoutScrollTarget,'checkout-points');assert.match(h.page.data.pointsError,/核对积分/);assert.equal(h.state.calls.includes('submit'),false)}finally{h.dispose()}
  const markup=await readFile('miniprogram/pages/order/index.wxml','utf8')
- assert.match(markup,/type="number"[^>]+placeholder="请输入抵扣积分数字" placeholder-style="color: #b42318"/)
+ assert.match(markup,/type="number"[^>]+placeholder="输入积分数"/)
 })

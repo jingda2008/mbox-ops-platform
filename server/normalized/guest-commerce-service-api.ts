@@ -18,6 +18,7 @@ import { GuestServiceReceiptUnattributedError, readGuestServiceReceipt, saveGues
 import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
 import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
+import {hasCheckoutTicket} from './ticket-dining-session.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
@@ -461,8 +462,10 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const context=await requireTableContext(options,request,'guest.order.create')
     const data=await options.transactions.run(context.scope,async tx=>{
       if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      const query = readStrictObject(request.query, '积分额度', ['generation', 'version','view'])
+      const preview = query.view === 'checkout'
+      if (preview && !await hasCheckoutTicket(tx,context.customerId)) return {ticketCheckout:false}
       const policy = await new CheckoutPointsRepository(tx).available(context.customerId)
-      const query = readStrictObject(request.query, '积分额度', ['generation', 'version'])
       if (query.generation === undefined && query.version === undefined) return policy
       const expectedGeneration = readInteger(Number(query.generation), 'generation', 1, 2_147_483_647)
       const expectedVersion = readInteger(Number(query.version), 'version', 0, 2_147_483_647)
@@ -472,7 +475,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         policy: { ...DEFAULT_STACKING_POLICY, allowPoints: true, allowBundlePrice: true, allowCheckoutUpgrade: true },
         effects: [],
       })
-      return { ...policy, maximumPoints: Math.min(policy.availablePoints, Math.floor(standard.price.subtotalMinor / policy.minorPerPoint)) }
+      return { ...policy, ...(preview ? {ticketCheckout:true,standardMinor:standard.price.subtotalMinor} : {}),
+        maximumPoints: Math.min(policy.availablePoints, Math.floor(standard.price.subtotalMinor / policy.minorPerPoint)) }
     })
     reply.header('cache-control','no-store');return{data}
   }))

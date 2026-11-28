@@ -24,6 +24,26 @@ function readPopup(scope) {
  return entry.promise
 }
 
+const trialPosters = {
+ 'https://mbox.shmbox.com/api/public/media-assets/MA7D639F89CBF64BB5A334FBE4428FF8BB': '/assets/trial-posters/poster-1.webp',
+ 'https://mbox.shmbox.com/api/public/media-assets/MA6DE47AD30CF542C6AF784E013C9ED328': '/assets/trial-posters/poster-2.webp',
+ 'https://mbox.shmbox.com/api/public/media-assets/MAE092F5F243AE4809972E39FA01938204': '/assets/trial-posters/poster-3.webp',
+ 'https://mbox.shmbox.com/api/public/media-assets/MABDD855F1337344E7B2AF770E9D284754': '/assets/trial-posters/poster-4.webp',
+ 'https://mbox.shmbox.com/api/public/media-assets/MA3AC52B5E5BA54FAC8EDF16674BFA787F': '/assets/trial-posters/poster-5.webp',
+}
+
+function popupProducts(products) {
+ const info = typeof wx.getAccountInfoSync === 'function' && wx.getAccountInfoSync()
+ const version = info && info.miniProgram && info.miniProgram.envVersion
+ const useTrialPosters = version === 'trial' || version === 'develop'
+ return (products || []).map(item => {
+  const originalImageUrl = publicImageUrl(item.imageUrl)
+  const imageUrl = useTrialPosters && Object.prototype.hasOwnProperty.call(trialPosters, originalImageUrl)
+   ? trialPosters[originalImageUrl] : originalImageUrl
+  return Object.assign({}, item, { imageUrl, originalImageUrl, imageFailed: false, imageHeightRatio: 0 })
+ })
+}
+
 Component({
  data: { visible: false, popup: null, currentIndex: 0, posterWidth: 310, posterHeight: 232.5 },
  pageLifetimes: { show() { this.loadPopup() }, resize(event) { this.updatePosterSize(event.size.windowWidth) }, hide() { this.setData({ visible: false }); this.generation = (this.generation || 0) + 1 } },
@@ -59,7 +79,7 @@ Component({
     if (!popupShouldDisplay(popup, { day, storedDay: stored && stored.day, sessionSeen: Boolean(state.session), foregroundSeen: state.foreground === app.globalData.foregroundSequence })) return
     app.globalData.launchPopupSeen = { session: true, foreground: app.globalData.foregroundSequence }
     try { wx.setStorageSync('mbox.launch-popup.daily.v1', { day }) } catch (_) {}
-    this.setData({ visible: true, currentIndex: 0, posterHeight: (this.data.posterWidth || 310) * .75, popup: Object.assign({},popup,{products:(popup.products||[]).map(item=>Object.assign({},item,{imageUrl:publicImageUrl(item.imageUrl),originalImageUrl:publicImageUrl(item.imageUrl),imageFailed:false,imageHeightRatio:0}))}) })
+    this.setData({ visible: true, currentIndex: 0, posterHeight: (this.data.posterWidth || 310) * .75, popup: Object.assign({},popup,{products:popupProducts(popup.products)}) })
    } catch (_) { /* Optional promotion must not block the customer's primary task. */ }
   },
   imageFailed(event) { const index=Number(event.currentTarget.dataset.index), product=this.data.popup&&this.data.popup.products[index];if(!product)return;const patch={};patch[`popup.products[${index}]`]=Object.assign({},product,product.originalImageUrl&&product.imageUrl!==product.originalImageUrl?{imageUrl:product.originalImageUrl}:{imageFailed:true});this.setData(patch) },

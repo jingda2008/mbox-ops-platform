@@ -159,7 +159,7 @@ async function issuedEntryFixture(platform, storage = new Map()) {
       if (path.endsWith('/checkout-coupons')) return loadMiniModule(new URL(`../${platform}/utils/checkout-coupons.js`, import.meta.url))
       if (path.endsWith('/checkout-upgrade')) return loadMiniModule(new URL(`../${platform}/utils/checkout-upgrade.js`, import.meta.url))
       if (path.endsWith('/api')) return { addIssuedCouponProduct: (...args) => api.add(...args), getCustomerBenefitWallet: (...args) => api.wallet(...args) }
-      return { tableSessionCacheScope: () => identity, randomId: () => 'test-key', money: n => '¥' + n / 100, customerErrorMessage: (_error, fallback) => fallback }
+      return { commandIdentityScope: () => principal, tableSessionCacheScope: () => identity, randomId: () => 'test-key', money: n => '¥' + n / 100, customerErrorMessage: (_error, fallback) => fallback }
     },
   })
   page.data = { ...structuredClone(page.data), orderReady: true, connectionState: 'active', cartGeneration: 1, cartVersion: 1 }

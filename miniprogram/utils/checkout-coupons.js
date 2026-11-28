@@ -69,12 +69,12 @@ function checkoutCouponMethods({ getWallet, checkAvailability, quote, getPoints,
           if (cursor && seen.has(cursor)) throw Error()
           seen.add(cursor)
         } while (cursor)
+        this.setData({couponAvailability:'none'})
         if (!checkedTable) {
           const result = await checkAvailability({expectedGeneration:cartGeneration,expectedVersion:cartVersion,candidates:[]})
           if (!current()) return
           this.setData({hasTableOffer:result.tableOffer === true})
         }
-        this.setData({couponAvailability:'none'})
       } catch {
         if (current()) this.setData({couponAvailability:'error'})
       }

@@ -1,0 +1,8 @@
+.guest-stepper { display: inline-flex; align-items: center; flex: none; }
+.guest-stepper > button { box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 44px; min-width: 44px; height: 44px; min-height: 44px; margin: 0; padding: 0; border: 0; background: transparent; line-height: 1; }
+.guest-stepper > button::after { border: 0; }
+.guest-stepper > button text { display: flex; align-items: center; justify-content: center; width: 25px; height: 25px; border-radius: 50%; color: #45483e; background: #edeae3; font-size: 18px; }
+.guest-stepper > button:last-child text { color: #234d39; background: #e5ede5; }
+.guest-stepper > button[disabled] text { color: #9b9e93; background: #f0efe9; }
+.guest-stepper > text, .guest-stepper > input { min-width: 1.4em; text-align: center; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.guest-stepper > input { width: 3em; height: 44px; }

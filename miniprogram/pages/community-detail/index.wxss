@@ -1,3 +1,4 @@
+@import "../../styles/guest-stepper.wxss";
 .detail-page {
   padding-top: 0;
   padding-bottom: 0;
@@ -107,10 +108,6 @@
 .party-row > view:first-child text { display: block; }
 .party-row > view:first-child text:first-child { font-size: 25rpx; font-weight: 700; }
 .party-row > view:first-child text:last-child { margin-top: 5rpx; color: #8b837b; font-size: 19rpx; }
-.stepper { display: flex; flex: 0 0 auto; align-items: center; overflow: hidden; border: 1rpx solid #d4cdc4; border-radius: 999rpx; }
-.stepper button { width: 44px; min-width: 44px; height: 44px; margin: 0; padding: 0; border: 0; background: #fff; font-size: 28rpx; line-height: 44px; }
-.stepper button::after { border: 0; }
-.stepper text { width: 54rpx; text-align: center; font-size: 24rpx; }
 .preview-party-size { display: grid; flex: 0 0 auto; color: #315d46; text-align: right; gap: 4rpx; }
 .preview-party-size text:first-child { font-size: 24rpx; font-weight: 700; }
 .preview-party-size text:last-child { color: #8a8178; font-size: 18rpx; }

@@ -2,14 +2,18 @@ const { parseInstant } = require('./format')
 const initialCheckoutCoupons = {
   ticketPreview: null, ticketChoice: '', ticketPreviewLoading:false, ticketPreviewError:false, savedDirect:null,
   pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, earnMinorPerPoint: null, maximumPoints: null, pointsInput: '',
-  couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
+  couponAvailability: 'checking', hasTableOffer:false, couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
   couponQuoteTotal: '', couponNeedsReview: false, couponEntryOpen: false, couponProducts: [], issuedCouponPending: null,
 }
+function matchesCheckoutLine(coupon, line) {
+  return coupon.state === 'available' && coupon.quantityAvailable > 0
+    && (line.available !== false || line.couponReviewAvailable)
+    && coupon.pricePromise?.products.some(product => product.id === line.productId)
+}
 function couponPortions(cart, coupons, selections, money) {
   return cart.flatMap(line => (line.portionIds || []).map((portionId, index) => {
-    const usable = coupons.filter(coupon => coupon.state === 'available' && coupon.quantityAvailable > 0
-      && coupon.pricePromise && coupon.pricePromise.products.some(product => product.id === line.productId))
+    const usable = coupons.filter(coupon => matchesCheckoutLine(coupon, line))
     const options = [{ benefitId: null, label: '不用券' }].concat(usable.map(coupon => ({
       benefitId: coupon.id, label: (coupon.display && (coupon.display.title || coupon.display.name) || '低价兑换券')
         + ' · ' + money(coupon.pricePromise.fixedPriceMinor) + '/份',
@@ -23,8 +27,58 @@ function couponPortions(cart, coupons, selections, money) {
       optionLabels: options.map(option => option.label), selectedIndex, selectedLabel: options[selectedIndex].label }
   }))
 }
-function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quoteChannel, money, randomId, scope, errorMessage }) {
+function checkoutCouponMethods({ getWallet, checkAvailability, quote, getPoints, quotePoints, quoteChannel, money, randomId, scope, errorMessage }) {
   return {
+    async readCheckoutCouponAvailability() {
+      const request = this.couponAvailabilityRequest = {}
+      this.eligibleWalletPage = null
+      const {cart, cartVersion, cartGeneration} = this.data
+      const identity = scope()
+      const current = () => this.couponAvailabilityRequest === request && this.data.checkoutConfirmVisible
+        && scope() === identity && this.data.cartVersion === cartVersion && this.data.cartGeneration === cartGeneration
+      this.setData({couponAvailability:'checking',hasTableOffer:false})
+      if (!cart.length) { this.setData({couponAvailability:'none'}); return }
+      try {
+        const seen = new Set()
+        let cursor, checkedTable = false
+        do {
+          const page = await getWallet(cursor)
+          if (!current()) return
+          if (!Array.isArray(page?.items) || !(page.nextCursor === null || typeof page.nextCursor === 'string')) throw Error()
+          const candidates = []
+          for (const coupon of page.items) {
+            for (const line of cart) {
+              if (matchesCheckoutLine(coupon,line)) {
+                for (const portionId of line.portionIds || []) candidates.push({benefitId:coupon.id,portionId})
+              }
+            }
+          }
+          for (let i=0; i<candidates.length; i+=8) {
+            const eligibility = await checkAvailability({expectedGeneration:cartGeneration,expectedVersion:cartVersion,candidates:candidates.slice(i,i+8)})
+            if (!current()) return
+            if (typeof eligibility?.available !== 'boolean') throw Error()
+            checkedTable = true
+            this.setData({hasTableOffer:eligibility.tableOffer === true})
+            if (eligibility.available) {
+              this.eligibleWalletPage = {page, identity, cartVersion, cartGeneration}
+              this.setData({couponAvailability:'available'})
+              return
+            }
+          }
+          cursor = page.nextCursor
+          if (cursor && seen.has(cursor)) throw Error()
+          seen.add(cursor)
+        } while (cursor)
+        if (!checkedTable) {
+          const result = await checkAvailability({expectedGeneration:cartGeneration,expectedVersion:cartVersion,candidates:[]})
+          if (!current()) return
+          this.setData({hasTableOffer:result.tableOffer === true})
+        }
+        this.setData({couponAvailability:'none'})
+      } catch {
+        if (current()) this.setData({couponAvailability:'error'})
+      }
+    },
     async readTicketCheckout() {
       const request = this.ticketPreviewRequest = {}
       if (this.data.prepayment || this.data.membershipStatus === 'nonmember' || this.data.couponReviewRequired || this.data.issuedCouponPending) {
@@ -166,7 +220,13 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       }
       if (this.data.pointsPickerOpen && this.data.pointsInput) this.invalidateCheckoutCoupons(false, false)
       else if (this.data.pointsPickerOpen) this.closeCheckoutPoints()
+      const cached = this.eligibleWalletPage
       this.setData({ couponPickerOpen: true })
+      if (!this.data.couponEntryOpen && cached && cached.identity === scope() && cached.cartVersion === this.data.cartVersion && cached.cartGeneration === this.data.cartGeneration) {
+        this.setData({couponItems:cached.page.items, couponNextCursor:cached.page.nextCursor,
+          couponPortions:couponPortions(this.data.cart,cached.page.items,this.data.couponSelections,money)})
+        return
+      }
       await this.loadCheckoutCoupons(false)
     },
     async loadCheckoutCoupons(more) {

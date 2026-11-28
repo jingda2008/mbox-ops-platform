@@ -36,6 +36,7 @@ import { FulfillmentCapacityUnavailableError } from './fulfillment-capacity-repo
 import { ServiceTaskRepository } from './service-task-repository.js'
 import { lockBoundGuestTablePosition, lockBoundGuestCheckoutPosition } from './guest-table-authority.js'
 import { seedActiveGuestTableAuthority } from './guest-table-authority.test-helper.js'
+import {CheckoutCouponRepository} from './checkout-coupon-repository.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
@@ -197,6 +198,23 @@ describe('guest commerce/service API trust boundaries', () => {
       expect(response.json().error.code).toBe('CHECKOUT_UPGRADE_RECONFIRM_REQUIRED')
       expect(accept).toHaveBeenCalledWith(productId,{customerId,tableSessionId,actorSessionRef:context.actorRef})
     }finally{accept.mockRestore()}
+  })
+  it('checks coupon applicability without persisting a quote, using the authenticated cart and owner', async () => {
+    const cart = vi.spyOn(GuestSharedCartRepository.prototype,'findCurrentOpen').mockResolvedValue({generation:1,version:2,guestWritesFrozen:false} as never)
+    const quote = vi.spyOn(CheckoutCouponRepository.prototype,'quote').mockRejectedValueOnce(new CheckoutCartPricingError('本单不适用')).mockResolvedValue({} as never)
+    const persist = vi.spyOn(CheckoutCouponQuoteRepository.prototype,'prepare')
+    try {
+      const value=fixture()
+      const input={expectedGeneration:1,expectedVersion:2,candidates:[{benefitId:productId,portionId:orderItemId}]}
+      for(const available of [false,true]){
+        const response=await value.app.inject({method:'POST',url:'/api/guest/shared-cart/coupon-availability',payload:input})
+        expect(response.statusCode,response.body).toBe(200)
+        expect(response.json().data.available).toBe(available)
+      }
+      expect(cart).toHaveBeenCalledWith(tableSessionId)
+      expect(quote).toHaveBeenCalledWith(expect.objectContaining({customerId,selections:input.candidates,channel:'guest_qr'}))
+      expect(persist).not.toHaveBeenCalled()
+    } finally {cart.mockRestore();quote.mockRestore();persist.mockRestore()}
   })
   it.each([{customerId},{payableMinor:1},{discountMinor:6800},{policy:{allowOtherCoupons:true}},{selections:[{benefitId:productId,portionId:productId,amountMinor:1}]}])('rejects client coupon ownership or price overrides %j',async override=>{
     const value=fixture()

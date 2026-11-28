@@ -7,7 +7,7 @@ const {
   getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart, prepayTable, queryPrepayment, revokeTablePrepayment,
-  quoteSharedCartCoupons, quoteSharedCartChannel, getCheckoutPoints, quoteSharedCartPoints,
+  checkCheckoutCouponAvailability, quoteSharedCartCoupons, quoteSharedCartChannel, getCheckoutPoints, quoteSharedCartPoints,
   prepareSharedCartUpgrade,
   decideSharedCartUpgrade,
   getCustomerBenefitWallet,
@@ -544,13 +544,14 @@ function applyBundleUnitSelection(product,unit){
 const { initialCheckoutCoupons, checkoutCouponMethods, couponPortions } = require('../../utils/checkout-coupons')
 const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
 const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
-const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, quoteChannel: quoteSharedCartChannel, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
+const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, checkAvailability:checkCheckoutCouponAvailability, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, quoteChannel: quoteSharedCartChannel, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
 Page({
   ...checkoutUpgradeActions,
   acceptCheckoutUpgrade() { return checkoutUpgradeActions.acceptCheckoutUpgrade.call(this) },
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
+  readCheckoutCouponAvailability() { return checkoutCouponActions.readCheckoutCouponAvailability.call(this) },
   useTicketPoints() { return checkoutCouponActions.useTicketPoints.call(this) },
   useDirectCheckout() { return checkoutCouponActions.useDirectCheckout.call(this) },
   leavePointsCheckout() {
@@ -1962,7 +1963,10 @@ Page({
         ? attribution
         : null,
     })
-    if (checkoutCartChanged && this.data.checkoutConfirmVisible && cart.length) void this.readTicketCheckout()
+    if (checkoutCartChanged && this.data.checkoutConfirmVisible && cart.length) {
+      void this.readCheckoutCouponAvailability()
+      void this.readTicketCheckout()
+    }
     return true
   },
 
@@ -2127,6 +2131,7 @@ Page({
   openCartDetails() {
     if (!this.data.cart.length) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    void this.readCheckoutCouponAvailability()
     void this.readTicketCheckout()
     this.loadCheckoutUpgrade()
   },
@@ -2259,6 +2264,7 @@ Page({
     }
     if (this.maybeInviteCheckoutMember(tableRequest)) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    void this.readCheckoutCouponAvailability()
     void this.readTicketCheckout()
     this.loadCheckoutUpgrade()
   },

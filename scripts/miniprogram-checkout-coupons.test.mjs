@@ -324,3 +324,25 @@ test('普通会员点本单最多积分自动算价，手动修改另行确认',
   await page.quoteCheckoutPoints();assert.equal(page.data.couponQuote.payableMinor,21000)
   assert.equal(page.data.pointsPickerOpen,false)
 })
+
+test('coupon entry checks this cart across wallet pages without making a quote', async () => {
+  const utils=loadMiniModule(new URL('../miniprogram/utils/checkout-coupons.js',import.meta.url))
+  const makeCoupon=(id,product,state='available')=>({id,state,quantityAvailable:1,pricePromise:{products:[{id:product}]}})
+  let later=true, allowed=true, fail=false
+  const checks=[]
+  const page={data:{...utils.initialCheckoutCoupons,checkoutConfirmVisible:true,cartGeneration:1,cartVersion:2,cart:[{productId:'tea',portionIds:['p1']}]},
+    setData(update){Object.assign(this.data,update)},
+    ...utils.checkoutCouponMethods({scope:()=> 'member-table',
+      getWallet:async cursor=>{
+        if(fail)throw Error('network')
+        return cursor ? {items:[makeCoupon('valid','tea')],nextCursor:null} : {items:[makeCoupon('other','soda'),makeCoupon('old','tea','expired')],nextCursor:later?'next':null}
+      },
+      checkAvailability:async input=>{checks.push(input);return {available:allowed}},
+    })}
+  await page.readCheckoutCouponAvailability()
+  assert.equal(page.data.couponAvailability,'available')
+  assert.equal(checks[0].candidates[0].benefitId,'valid')
+  allowed=false;await page.readCheckoutCouponAvailability();assert.equal(page.data.couponAvailability,'none')
+  later=false;await page.readCheckoutCouponAvailability();assert.equal(page.data.couponAvailability,'none');assert.equal(checks.length,3);assert.equal(checks[2].candidates.length,0)
+  fail=true;await page.readCheckoutCouponAvailability();assert.equal(page.data.couponAvailability,'error')
+})

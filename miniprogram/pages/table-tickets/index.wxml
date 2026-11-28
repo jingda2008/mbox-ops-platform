@@ -55,10 +55,10 @@
       <block wx:if="{{!originalOrder}}">
         <radio-group wx:if="{{eligibleReservations.length}}" class="reservation" bindchange="chooseReservation"><view class="rule-title">是否沿用本人已订的桌</view><label><radio disabled="{{busy}}" value="" checked="{{!reservationLockId}}"/>另购一桌</label><label wx:for="{{eligibleReservations}}" wx:key="id"><radio disabled="{{busy}}" value="{{item.id}}" checked="{{reservationLockId === item.id}}"/>{{item.tableName}} · {{item.reference}}</label></radio-group>
         <view class="quantity-row"><text class="sheet-title">购买桌数</text>
-          <view class="stepper">
-            <button aria-label="减少一桌" data-delta="-1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity <= 1}}">−</button>
+          <view class="stepper guest-stepper">
+            <button aria-label="减少一桌" data-delta="-1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity <= 1}}"><text>−</text></button>
             <input aria-label="购买桌数" type="number" value="{{quantity}}" bindinput="quantity" disabled="{{busy || proposalId}}"/>
-            <button aria-label="增加一桌" data-delta="1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity >= selected.remaining + (reservationLockId ? 1 : 0)}}">＋</button>
+            <button aria-label="增加一桌" data-delta="1" bindtap="stepQuantity" disabled="{{busy || proposalId || quantity >= selected.remaining + (reservationLockId ? 1 : 0)}}"><text>＋</text></button>
           </view>
         </view>
         <view class="summary" wx:if="{{summary}}">{{summary}}</view>

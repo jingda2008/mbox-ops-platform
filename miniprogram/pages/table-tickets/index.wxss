@@ -1,3 +1,4 @@
+@import "../../styles/guest-stepper.wxss";
 .page { padding: 24rpx 24rpx calc(48rpx + env(safe-area-inset-bottom)); color: #282c26; font-size: 27rpx; line-height: 1.55; word-break: break-word; }
 .pass, .sheet { margin-bottom: 18rpx; border-radius: 24rpx; overflow: hidden; }
 .pass { background: linear-gradient(115deg, #142c23, #28513d); color: #fffdf5; }
@@ -34,11 +35,6 @@
 .rules .rule-title { color: #30392f; }
 .quantity-row, .stepper { display: flex; align-items: center; }
 .quantity-row { justify-content: space-between; gap: 10rpx; }
-.stepper { border: 1rpx solid #d6dcce; border-radius: 14rpx; overflow: hidden; }
-.stepper button, .stepper input { height: 72rpx; margin: 0; padding: 0; text-align: center; }
-.stepper button { width: 72rpx !important; color: #244935; background: #eff3ec; font-size: 32rpx; line-height: 72rpx; border-radius: 0; }
-.stepper button[disabled] { color: #858a81; background: #f4f3ee; }
-.stepper input { width: 80rpx; font-size: 29rpx; }
 .summary { margin-top: 14rpx; font-weight: 600; color: #3f5845; }
 .agreement, .reservation label { display: flex; align-items: center; min-height: 80rpx; }
 .agreement { margin: 14rpx 0 4rpx; border-top: 1rpx solid #e5e2d8; color: #52594f; font-size: 25rpx; }

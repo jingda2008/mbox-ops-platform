@@ -1872,10 +1872,10 @@
 .ticket-menu-status .ticket-menu-retry { flex-shrink: 0; margin: 0; color: #27513c; }
 
 .ticket-pay-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6rpx; }
-.ticket-pay-options > .ticket-points-edit { justify-self: end; width: auto; max-width: 100%; min-height: 44px; margin: 0; padding: 0 10px; border: 0; background: transparent; color: #315d46; font-size: 14px; line-height: 44px; white-space: nowrap; }
+.ticket-pay-options > .ticket-points-edit { justify-self: start; width: auto; max-width: 100%; min-height: 44px; margin: 0; padding: 0 10px; border: 0; background: transparent; color: #315d46; font-size: 14px; line-height: 44px; white-space: nowrap; }
 .ticket-points-edit::after { border: 0; }
-.ticket-pay-options > button.ticket-pay-option { box-sizing: border-box; margin: 0; display: grid; grid-template-columns: 1fr auto; align-items: center; width: 100%; min-height: 44px; padding: 10rpx 20rpx; text-align: left; font-size: 28rpx; line-height: 1.4; background: #fffdf9; border: 2rpx solid #deded2; border-radius: 14rpx; }
-.ticket-pay-options > .ticket-pay-option.selected { background: #edf4ee; border-color: #285841; }
+.ticket-pay-options > button.ticket-pay-option { box-sizing: border-box; margin: 0; display: grid; grid-template-columns: 1fr auto; align-items: center; width: 100%; min-height: 44px; padding: 10rpx 20rpx; text-align: left; font-size: 28rpx; line-height: 1.4; background: #f7faf6; border: 2rpx solid #b5cbbc; border-radius: 14rpx; }
+.ticket-pay-options > button.ticket-pay-option.selected { background: #e1efe5; border-color: #285841; }
 .ticket-pay-saving { grid-column: 1 / -1; font-size: 23rpx; color: #62665d; }
 @media (orientation: landscape) and (max-height: 450px) {
   .ticket-pay-options { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 3px 8px; }
@@ -1901,7 +1901,7 @@
   .ticket-pay-options > .ticket-pay-option.selected { color: #214f3e; }
   .ticket-pay-saving { line-height: 1.35; font-size: 12px; }
   .ticket-pay-options .ticket-points-edit {
-    justify-self: end;
+    justify-self: start;
     min-height: 44px;
     margin: 0;
     padding: 0 10px;
@@ -1954,3 +1954,11 @@
 .checkout-stepper > button:last-child text { color: #234d39; background: #e5ede5; }
 .checkout-stepper > button[disabled] text { color: #a3a59b; background: #f0efe9; }
 .checkout-item-quantity { min-width: 1.4em; color: #322f2a; text-align: center; font-size: 15px; font-weight: 600; line-height: 1.35; font-variant-numeric: tabular-nums; }
+
+.pay-option-label { display: flex; align-items: center; gap: 7px; text-align: left; }
+.pay-indicator { flex: none; box-sizing: border-box; width: 16px; height: 16px; border: 1px solid #81a38e; border-radius: 50%; color: white; font-size: 12px; text-align: center; line-height: 14px; }
+.selected .pay-indicator { background: #285841; border-color: #285841; }
+.ticket-pay-options button.ticket-pay-option--pressed { background: #d4e7db; }
+.coupon-picker-head { display: flex; align-items: center; justify-content: space-between; }
+.coupon-picker-head > text { font-weight: 600; }
+.checkout-confirm__lines button.line-note-toggle { display: inline-flex; align-items: center; min-height: 32px; line-height: 1.4; font-size: 13px; padding: 0; }

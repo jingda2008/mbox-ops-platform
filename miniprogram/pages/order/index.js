@@ -551,8 +551,38 @@ Page({
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
-  readCheckoutCouponAvailability() { return checkoutCouponActions.readCheckoutCouponAvailability.call(this) },
-  useTicketPoints() { return checkoutCouponActions.useTicketPoints.call(this) },
+  readCheckoutCouponAvailability() {
+    const key = [commandIdentityScope(), tableSessionCacheScope(), this.data.cartGeneration, this.data.cartVersion].join(':')
+    if (this.walletCheck?.key === key) return this.walletCheck.promise
+    const promise = checkoutCouponActions.readCheckoutCouponAvailability.call(this).finally(() => {
+      if (this.walletCheck?.promise === promise) this.walletCheck = null
+    })
+    this.walletCheck = {key, promise}
+    return promise
+  },
+  useTicketPoints() {
+    const quote = checkoutCouponActions.useTicketPoints.call(this)
+    if (this.data.ticketChoice === 'points') this.scrollCheckoutTo('checkout-edit-points')
+    return quote
+  },
+  scrollCheckoutTo(target) {
+    this.setData({checkoutScrollTarget: ''}, () => {
+      if (this.data.checkoutConfirmVisible) this.setData({checkoutScrollTarget: target})
+    })
+  },
+  toggleLineNotes(event) {
+    const id = event.currentTarget.dataset.id
+    this.setData({editingNoteProduct: this.data.editingNoteProduct === id ? '' : id})
+  },
+  returnFromCouponPicker() {
+    if (this.data.busy || this.data.issuedCouponPending) return
+    this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
+    const before = this.couponPickerBefore
+    const restore = before && before.generation === this.data.cartGeneration && before.version === this.data.cartVersion && before.scope === tableSessionCacheScope()
+    this.setData({...(restore ? before.payment : {}), couponPickerOpen:false, couponEntryOpen:false, couponLoading:false})
+    this.couponPickerBefore = null
+    if (this.data.ticketPreview) this.scrollCheckoutTo('checkout-methods')
+  },
   useDirectCheckout() { return checkoutCouponActions.useDirectCheckout.call(this) },
   leavePointsCheckout() {
     if (!this.data.ticketPreview) return this.skipCheckoutCoupons()
@@ -586,7 +616,13 @@ Page({
     }
     return ready
   },
-  openCheckoutCoupons() { return checkoutCouponActions.openCheckoutCoupons.call(this) },
+  openCheckoutCoupons() {
+    if (!this.data.couponPickerOpen) {
+      const {cartGeneration:generation,cartVersion:version,couponQuote,couponSelections,couponQuoteTotal,couponNeedsReview,couponError} = this.data
+      this.couponPickerBefore = {generation,version,scope:tableSessionCacheScope(),payment:{couponQuote,couponSelections,couponQuoteTotal,couponNeedsReview,couponError}}
+    }
+    return checkoutCouponActions.openCheckoutCoupons.call(this)
+  },
   loadMoreCheckoutCoupons() { return checkoutCouponActions.loadMoreCheckoutCoupons.call(this) },
   chooseCheckoutCoupon(event) { return checkoutCouponActions.chooseCheckoutCoupon.call(this, event) },
   quoteCheckoutCoupons() { return checkoutCouponActions.quoteCheckoutCoupons.call(this) },
@@ -1910,7 +1946,7 @@ Page({
     if (noteScope !== this.checkoutNoteScope || !cart.length) {
       this.checkoutNoteScope = noteScope
       this.checkoutLineNotes = {}
-      this.setData({ checkoutNote: '' })
+      this.setData({ checkoutNote: '', editingNoteProduct: '' })
     }
     const retainedNotes = {}
     cart = cart.map(line => Object.assign({}, line, { noteUnits: (line.portionIds || []).map((portionId, index) => {
@@ -2274,6 +2310,9 @@ Page({
     this.invalidateCheckoutUpgrade()
     this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
     this.ticketPreviewRequest = null
+    this.walletCheck = null
+    this.couponAvailabilityRequest = null
+    this.couponPickerBefore = null
     this.setData({ checkoutConfirmVisible: false, couponEntryOpen: false, couponLoading: false, pointsLoading: false, ticketPreviewLoading: false })
   },
 

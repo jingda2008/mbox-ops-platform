@@ -156,7 +156,7 @@ describe('mini-program mobile business flow contract', () => {
     expect(points).toContain('item.sourceReference')
     expect(pointsView).toContain('earningPolicy.pointsDenominatorMinor / 100')
     expect(pointsView).toContain('earningPolicy.cashRedemptionEnabled')
-    expect(pointsView).toContain('每积分抵 1 元')
+    expect(pointsView).toContain('已有 1 分可抵 1 元餐费')
     expect(pointsView).toContain('如对积分有疑问，请联系门店协助核对')
     expect(pointsView).toContain('积分与成长值进展')
     expect(pointsView).toContain('仅显示你的记录')

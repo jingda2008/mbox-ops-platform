@@ -1,7 +1,7 @@
 const { parseInstant } = require('./format')
 const initialCheckoutCoupons = {
   ticketPreview: null, ticketChoice: '', ticketPreviewLoading:false, ticketPreviewError:false, savedDirect:null,
-  pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, maximumPoints: null, pointsInput: '',
+  pointsPickerOpen: false, pointsLoading: false, pointsError: '', pointsBalance: null, earnMinorPerPoint: null, maximumPoints: null, pointsInput: '',
   couponPickerOpen: false, couponLoading: false, couponError: '', couponItems: [],
   couponNextCursor: null, couponPortions: [], couponSelections: [], couponQuote: null,
   couponQuoteTotal: '', couponNeedsReview: false, couponEntryOpen: false, couponProducts: [], issuedCouponPending: null,
@@ -103,12 +103,12 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       if (this.data.busy || this.data.couponLoading) return
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
       const epoch = this.checkoutCouponEpoch, identity = scope()
-      this.setData({ pointsPickerOpen: true, couponPickerOpen: false, pointsLoading: true, pointsError: '', pointsBalance: null, maximumPoints: null })
+      this.setData({ pointsPickerOpen: true, couponPickerOpen: false, pointsLoading: true, pointsError: '', pointsBalance: null, earnMinorPerPoint: null, maximumPoints: null })
       try {
         const response = await getPoints({ generation: this.data.cartGeneration, version: this.data.cartVersion }), result = response.data || response
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
         if (!Number.isSafeInteger(result.availablePoints) || result.availablePoints < 0 || result.minorPerPoint !== 100 || result.allowCoupons !== false) throw new Error('积分规则暂不可用')
-        this.setData({ pointsBalance: result.availablePoints, maximumPoints: Number.isSafeInteger(result.maximumPoints) && result.maximumPoints >= 0 && result.maximumPoints <= result.availablePoints ? result.maximumPoints : null })
+        this.setData({ pointsBalance: result.availablePoints, earnMinorPerPoint: Number.isSafeInteger(result.earnMinorPerPoint) && result.earnMinorPerPoint > 0 ? result.earnMinorPerPoint : null, maximumPoints: Number.isSafeInteger(result.maximumPoints) && result.maximumPoints >= 0 && result.maximumPoints <= result.availablePoints ? result.maximumPoints : null })
       } catch (error) {
         if (epoch === this.checkoutCouponEpoch) this.setData({ pointsError: errorMessage(error, '积分读取失败，请重试或不使用积分。') })
       } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ pointsLoading: false }) }

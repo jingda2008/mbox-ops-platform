@@ -37,6 +37,13 @@ test('expanded checkout keeps payment visible and every form control scrollable 
         }
       }
       await assertFooter()
+      const title = await page.locator('.checkout-item-name').boundingBox()
+      const quantity = await page.locator('.checkout-item-quantity').boundingBox()
+      assert.ok(Math.abs(title.y + title.height / 2 - quantity.y - quantity.height / 2) < 2, 'quantity aligns with item name')
+      for (const step of await page.locator('.checkout-stepper > button').all()) {
+        const box = await step.boundingBox()
+        assert.ok(box.width >= 44 && box.height >= 44, 'quantity buttons retain finger-sized targets')
+      }
       assert.equal(await page.locator('.checkout-points-picker__input').evaluate(el => getComputedStyle(el).color), 'rgb(41, 44, 38)')
       assert.equal(await page.locator('.checkout-points-entry [bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), true, 'points entry scrolls with the order')
       for (const selector of ['[bindtap="fillMaximumCheckoutPoints"]','[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {

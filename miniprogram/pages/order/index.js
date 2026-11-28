@@ -1,6 +1,6 @@
 const { commandIdentityScope } = require('../../utils/recoverable-command')
 const {
-  getGuestSession,
+  getGuestSession, getMiniLoyaltyLedger,
   getMenu,
   getPublicMenu,
   recommendExperience,
@@ -2136,10 +2136,20 @@ Page({
       || !this.data.membershipTerms || !this.data.cart.length || this.data.checkoutLocked
       || this.checkoutMemberInvitedScope === request.scope) return false
     this.checkoutMemberInvitedScope = request.scope
-    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, cartExpanded: false })
+    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, cartExpanded: false, inviteEarningPolicy: null })
+    void this.loadInviteEarningPolicy(request)
     return true
   },
 
+  async loadInviteEarningPolicy(request) {
+    try {
+      const {earningPolicy} = await getMiniLoyaltyLedger()
+      if (this.data.checkoutMemberInviteVisible && this.isCurrentTableRequest(request)
+        && earningPolicy?.pointsRoundingScope === 'order' && earningPolicy.pointsDenominatorMinor > 0 && earningPolicy.pointsNumerator > 0) {
+        this.setData({inviteEarningPolicy: earningPolicy})
+      }
+    } catch { /* Joining and checkout also work when the points rules are unavailable. */ }
+  },
   keepCheckoutMemberInviteOpen() {},
 
   async skipCheckoutMembership() {
@@ -2472,7 +2482,7 @@ Page({
           wx.removeStorageSync(PENDING_PAYMENT_KEY)
           this.updateCart([], data.sharedCart || null)
           this.invalidateCheckoutCoupons(false, false)
-          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : data.channelSettlement ? '订单已送出，本单无需付款。' : '已使用 ' + data.pointsUsed + ' 积分，订单已送出。', canRetry: false } })
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '余额支付成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '余额支付成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', copy: data.prepaymentSettlement ? '已从本桌余额扣款，订单已送出。' : data.channelSettlement ? '订单已送出，本单无需付款。' : '已使用 ' + data.pointsUsed + ' 积分，订单已送出。', canRetry: false } })
           return
         }
         const pendingPayment = {

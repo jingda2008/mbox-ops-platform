@@ -244,7 +244,7 @@ test('customer pages avoid duplicate status labels and backstage implementation 
   assert.doesNotMatch(homeView, /状态实时同步/)
   assert.match(homeView, /<text class="performance-compact__state">/)
   assert.doesNotMatch(orderView, /自动更新|后端/)
-  assert.match(accountView, /勾选本桌订单合并付款，原订单分别保留。/)
+  assert.match(accountView, /可一起支付多笔订单。/)
   assert.doesNotMatch(communityView, /报名与安排以活动详情为准/)
   assert.doesNotMatch(detailView, /安全规则版本|由店长发起|收银复核|请求编号/)
   assert.doesNotMatch(detailLogic, /安全规则版本|可核验版本|由店长发起|收银复核|请求编号/)

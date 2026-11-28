@@ -2306,8 +2306,11 @@ Page({
   },
 
   async confirmCheckout() {
-    if (this.data.ticketPreviewLoading || this.data.pointsLoading || this.data.couponLoading ||
-        (this.data.ticketPreview && this.data.ticketPreview.maximumPoints && !this.data.ticketChoice)) return
+    if (this.data.ticketPreviewLoading || this.data.pointsLoading || this.data.couponLoading) return
+    if (this.data.ticketPreview?.maximumPoints && !this.data.ticketChoice) {
+      this.setData({checkoutScrollTarget:''}, () => this.setData({checkoutScrollTarget:'checkout-methods'}))
+      return
+    }
     if (this.data.ticketChoice === 'points' && !this.data.couponQuote?.pointsUsed) {
       this.setData({pointsPickerOpen:true,pointsError:'请确认本次使用的积分'})
       return
@@ -2469,7 +2472,7 @@ Page({
           wx.removeStorageSync(PENDING_PAYMENT_KEY)
           this.updateCart([], data.sharedCart || null)
           this.invalidateCheckoutCoupons(false, false)
-          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : data.channelSettlement ? '优惠已按本次消费核销，订单进入出品，无需另付款。' : '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : data.channelSettlement ? '订单已送出，本单无需付款。' : '已使用 ' + data.pointsUsed + ' 积分，订单已送出。', canRetry: false } })
           return
         }
         const pendingPayment = {

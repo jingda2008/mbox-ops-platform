@@ -190,7 +190,7 @@ for (const platform of ['miniprogram', 'alipay-miniprogram']) {
     page.data.couponItems = []
     const utils = loadMiniModule(new URL(`../${platform}/utils/checkout-coupons.js`, import.meta.url))
     const restoredLabels = utils.couponPortions(page.data.cart, [], page.data.couponSelections, String)
-    assert.match(restoredLabels[0].selectedLabel, /已选原券.*待核对/)
+    assert.match(restoredLabels[0].selectedLabel, platform === 'miniprogram' ? /已选优惠券.*重新确认/ : /已选原券.*待核对/)
     assert.equal(page.data.cart[0].couponReviewAvailable, true)
     assert.equal(page.couponCheckoutReady(), false, 'added original product is not permission to pay without the coupon quote')
   })

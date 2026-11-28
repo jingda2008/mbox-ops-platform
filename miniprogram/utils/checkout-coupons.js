@@ -16,7 +16,7 @@ function couponPortions(cart, coupons, selections, money) {
     })))
     const selected = selections.find(selection => selection.portionId === portionId)
     if (selected && selected.benefitId && !options.some(option => option.benefitId === selected.benefitId)) {
-      options.push({ benefitId: selected.benefitId, label: '已选原券（待核对有效报价）' })
+      options.push({ benefitId: selected.benefitId, label: '已选优惠券（请重新确认）' })
     }
     const selectedIndex = Math.max(0, options.findIndex(option => option.benefitId === (selected && selected.benefitId)))
     return { portionId, label: line.name + ' · 第' + (index + 1) + '份', options,
@@ -94,9 +94,9 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       try {
         const result = await quoteChannel(input)
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy) return
-        if (!result.current || result.sourceType !== 'channel_quote' || result.generation !== this.data.cartGeneration || result.version !== this.data.cartVersion || result.currency !== 'CNY' || !Number.isSafeInteger(result.subtotalMinor) || result.subtotalMinor < 0 || !Number.isSafeInteger(result.discountMinor) || result.discountMinor < 0 || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('渠道报价已失效')
-        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
-      } catch (error) { if (epoch === this.checkoutCouponEpoch && identity === scope()) this.setData({ couponError: errorMessage(error, '请先绑定本桌渠道券并核对使用门槛，也可选择不用券。') }) }
+        if (!result.current || result.sourceType !== 'channel_quote' || result.generation !== this.data.cartGeneration || result.version !== this.data.cartVersion || result.currency !== 'CNY' || !Number.isSafeInteger(result.subtotalMinor) || result.subtotalMinor < 0 || !Number.isSafeInteger(result.discountMinor) || result.discountMinor < 0 || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('本桌优惠已变化，请重新选择。')
+        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false, couponPickerOpen: false })
+      } catch (error) { if (epoch === this.checkoutCouponEpoch && identity === scope()) this.setData({ couponError: /渠道|报价/.test(error?.message || '') ? '这单暂时用不了本桌优惠，可以选择其他优惠券。' : errorMessage(error, '暂时查不到本桌优惠，请稍后再试。') }) }
       finally { if (epoch === this.checkoutCouponEpoch && identity === scope()) this.setData({ couponLoading: false }) }
     },
     async openCheckoutPoints() {
@@ -138,7 +138,7 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       try {
         const response = await quotePoints(input, randomId('points-quote')), result = response.data || response
         if (epoch !== this.checkoutCouponEpoch || identity !== scope() || !this.data.checkoutConfirmVisible || this.data.busy || input.expectedGeneration !== this.data.cartGeneration || input.expectedVersion !== this.data.cartVersion) return
-        if (!result.current || result.generation !== input.expectedGeneration || result.version !== input.expectedVersion || result.currency !== 'CNY' || result.pointsUsed !== input.points || result.discountMinor !== input.points * 100 || !Number.isSafeInteger(result.subtotalMinor) || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('积分报价已失效，请重新核对')
+        if (!result.current || result.generation !== input.expectedGeneration || result.version !== input.expectedVersion || result.currency !== 'CNY' || result.pointsUsed !== input.points || result.discountMinor !== input.points * 100 || !Number.isSafeInteger(result.subtotalMinor) || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('积分已变化，请重新选择。')
         this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
         return result
       } catch (error) {
@@ -153,7 +153,7 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       if (this.invalidateCheckoutUpgrade) this.invalidateCheckoutUpgrade()
       this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
       this.setData({ pointsPickerOpen: false, pointsLoading: false, pointsInput: '', pointsError: '', pointsBalance: null, maximumPoints: null, couponQuote: null, couponQuoteTotal: '', couponSelections: [], couponPortions: [],
-        couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '购物车或会话已变化，请重新核对优惠，或明确选择不使用优惠。' : '',
+        couponLoading: false, couponNeedsReview: !!needsReview, couponError: needsReview ? '订单有变化，请重新选择优惠。' : '',
         ...(clearWallet ? { couponItems: [], couponProducts: [], couponNextCursor: null, couponPickerOpen: false, couponEntryOpen: false } : {}) })
     },
     async openCheckoutCoupons() {
@@ -215,8 +215,8 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
           || result.currency !== 'CNY' || !Number.isSafeInteger(result.subtotalMinor) || !Number.isSafeInteger(result.discountMinor)
           || result.discountMinor < 0 || result.subtotalMinor - result.discountMinor !== result.payableMinor
           || !Number.isSafeInteger(result.payableMinor) || result.payableMinor < 0
-          || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('优惠报价已失效，请重新确认')
-        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false })
+          || !(parseInstant(result.expiresAt) > Date.now())) throw new Error('优惠已变化，请重新选择。')
+        this.setData({ couponQuote: result, couponQuoteTotal: money(result.payableMinor), couponNeedsReview: false, couponPickerOpen: false })
       } catch (error) {
         if (epoch === this.checkoutCouponEpoch) this.setData({ couponError: errorMessage(error, '优惠不适用于本次组合，请重新选择或不用券。') })
       } finally { if (epoch === this.checkoutCouponEpoch) this.setData({ couponLoading: false }) }
@@ -231,7 +231,7 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
       const quote = this.data.couponQuote
       if (quote && (!quote.current || quote.generation !== this.data.cartGeneration || quote.version !== this.data.cartVersion || !(parseInstant(quote.expiresAt) > Date.now()))) {
         this.setData({ couponQuote: null, couponQuoteTotal: '', couponNeedsReview: true,
-          couponError: '优惠报价已失效，请重新核对，或明确选择不使用优惠。' })
+          couponError: '优惠已变化，请重新选择。' })
         return false
       }
       const unavailable = this.data.cart.filter(line => line.available === false)
@@ -241,12 +241,12 @@ function checkoutCouponMethods({ getWallet, quote, getPoints, quotePoints, quote
           || (line.portionIds || []).length !== line.quantity || line.portionIds.some(portionId => !(quote.lines || []).some(part =>
             part.portionId === portionId && part.productId === line.productId && part.benefitId
             && this.data.couponSelections.some(selection => selection.portionId === portionId && selection.benefitId === part.benefitId))))))) {
-        this.setData({ couponError: this.data.issuedCouponPending ? '原加入结果未确认，请先核对原加入。' : '暂不可售商品须逐份使用有效原券并核对报价；不用券时请先移除这些商品。' })
+        this.setData({ couponError: this.data.issuedCouponPending ? '请先查看商品添加结果。' : '部分商品仅限用券兑换，请选券或移除商品。' })
         return false
       }
       if (this.data.couponNeedsReview || ((this.data.couponSelections.length || this.data.pointsInput || quote && quote.sourceType === 'channel_quote') && (!quote || quote.generation !== this.data.cartGeneration
         || quote.version !== this.data.cartVersion || !(parseInstant(quote.expiresAt) > Date.now())))) {
-        this.setData({ couponError: '请先确认有效优惠报价，或选择不使用优惠按原价提交。' })
+        this.setData({ couponError: '请重新选券，或选择不用优惠券。' })
         return false
       }
       return true

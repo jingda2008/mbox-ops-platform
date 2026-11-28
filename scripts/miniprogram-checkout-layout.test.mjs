@@ -29,7 +29,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
         document.querySelectorAll('.checkout-upgrade,.checkout-upgrade__message,.cart-line__selection,.cart-line__unavailable,.coupon-portion').forEach(el => el.remove())
       })
       const assertFooter = async () => {
-        for (const name of ['继续加购', '确认支付', '选择抵扣积分 ›']) {
+        for (const name of ['关闭订单明细', '确认支付']) {
           const button = page.getByRole('button', { name, exact: true })
           const box = await button.boundingBox()
           assert.ok(box.height >= 44 && box.x >= 0 && box.x + box.width <= width + 1 && box.y >= 0 && box.y + box.height <= height - 85 + 1, `${name} visible above navigation at ${width}x${height}: ${JSON.stringify(box)}`)
@@ -38,7 +38,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
       }
       await assertFooter()
       assert.equal(await page.locator('.checkout-points-picker__input').evaluate(el => getComputedStyle(el).color), 'rgb(41, 44, 38)')
-      assert.equal(await page.locator('.checkout-points-entry [bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), false, 'points entry remains fixed beside total')
+      assert.equal(await page.locator('.checkout-points-entry [bindtap="openCheckoutPoints"]').evaluate(el => Boolean(el.closest('scroll-view'))), true, 'points entry scrolls with the order')
       for (const selector of ['[bindtap="fillMaximumCheckoutPoints"]','[bindtap="quoteCheckoutCoupons"]','[bindtap="quoteCheckoutPoints"]','[bindinput="onCheckoutNoteInput"]']) {
         const control = page.locator(selector)
         assert.ok(await control.evaluate(el => Boolean(el.closest('scroll-view'))), `${selector} must share the scrolling form`)
@@ -57,6 +57,7 @@ test('expanded checkout keeps payment visible and every form control scrollable 
       })
       for (const handler of ['useDirectCheckout','useTicketPoints','confirmCheckout']) {
         const button=page.locator('[bindtap="'+handler+'"]')
+        await button.scrollIntoViewIfNeeded()
         const box=await button.boundingBox()
         assert.ok(box && box.height>=44 && box.x>=0 && box.x+box.width<=width+1 && box.y>=0 && box.y+box.height<=height-85+1,handler+' reachable at '+width+'x'+height)
         await button.click({trial:true,timeout:1000})

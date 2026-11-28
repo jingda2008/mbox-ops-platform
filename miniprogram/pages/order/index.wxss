@@ -1909,3 +1909,22 @@
     line-height: 44px;
   }
 }
+
+/* Only the amount and final action stay anchored above the WeChat tab bar. */
+.checkout-confirm__sheet .checkout-confirm__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0 0;
+}
+.checkout-confirm__footer .checkout-summary { display: flex; align-items: baseline; gap: 7px; color: #67665e; font-size: 13px; }
+.checkout-confirm__footer .checkout-confirm__total-price { color: #292c26; font-size: 20px; font-weight: 650; }
+.checkout-confirm__footer button.checkout-confirm__footer-button { width: auto; min-width: 100px; max-width: 52%; min-height: 44px; margin: 0; padding: 5px 16px; font-size: 15px; }
+.checkout-confirm__sheet .checkout-confirm__lines { border-bottom: 1px solid #e8e3da; }
+.checkout-confirm__lines .ticket-pay-options { margin: 8px 0 4px; }
+.checkout-confirm__lines .checkout-coupons { padding: 0; }
+.checkout-confirm__lines button.checkout-link { width: auto; min-width: 44px; min-height: 44px; margin: 0; padding: 0 6px; border: 0; background: transparent; color: #315d46; font-size: 14px; line-height: 44px; }
+.checkout-link::after { border: 0; }
+.checkout-confirm__sheet .checkout-confirm__close-slot { top: 0; right: 8px; width: 44px; height: 44px; }
+.checkout-confirm__close-slot button.checkout-confirm__close { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }

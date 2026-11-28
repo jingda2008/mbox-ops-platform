@@ -23,6 +23,9 @@ interface Summary{domain:Domain;configurationId:string;status:string;revision:nu
 interface Draft{publicId:string;domain:Domain;status:string;revision:number;makerEmployeeIds:string[];content:ConfigurationContent;updatedAt:string}
 interface Preview{generatedAt?:string;fulfillment?:Array<{referenceCode:string;expectedDemand:number;availableAfterReservations:number;shortage:number;openFulfillmentTasks:number}>;publicId:string;draftRevision:number;expiresAt:string;historicalMembership:{activeMembers:number;availablePointsLiability:number};estimatedPointsIssued:number;estimatedPointsCostAmountMinor:number;estimatedBenefitCostAmountMinor:number;estimatedRedemptionCostAmountMinor:number;affectedExistingMembers:number;warnings:string[]}
 
+// Approval recalculates the same impact as preview before recording the decision.
+const impactRequestTimeoutMs = 45_000
+
 const domainLabels:Record<Domain,string>={base_points:'基础积分',tier_policy:'会员等级',tier_benefits:'等级权益',redemption_catalog:'积分兑换',promotion_points:'促销积分',membership_terms:'入会条款',wechat_notifications:'微信服务通知'}
 const statusLabels:Record<string,string>={draft:'待编辑/审批',approved:'已审批待发布',published:'已发布（按生效时间执行）',paused:'已暂停',retired:'已退役'}
 const warningLabels:Record<string,string>={inventory_shortage:'库存可能不足',fulfillment_capacity_review:'需要复核人工履约能力',points_cost_review:'需要复核积分成本',benefit_cost_review:'需要复核权益成本',redemption_cost_review:'需要复核兑换成本',terms_reacceptance_not_forced:'不强迫既有会员重新同意'}
@@ -83,8 +86,8 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
     try{const result=await api.putEndpoint<Draft>(`${path(selected)}/draft`,{expectedRevision:selected.revision,reason:reason.trim(),content:editing});setSelected(result);setEditing(clone(result.content));setNotice('草稿已保存；此前影响预览已失效，请重新生成。');await load()}
     catch(error){setNotice(message(error,'草稿没有保存，请刷新后重试'))}finally{setBusy('')}
   }
-  async function generatePreview(){if(!selected||busy)return;setBusy('preview');setNotice('')
-    try{const result=await api.postEndpoint<Preview>(`${path(selected)}/impact-preview`,{});setPreview(result);setNotice('已按当前会员、成本、库存与待交付事项计算，预览15分钟内有效。')}
+  async function generatePreview(){if(!selected||busy)return;setBusy('preview');setNotice('');setPreview(null)
+    try{const result=await api.postEndpoint<Preview>(`${path(selected)}/impact-preview`,{},{timeoutMs:impactRequestTimeoutMs});setPreview(result);setNotice('已按当前会员、成本、库存与待交付事项计算，预览15分钟内有效。')}
     catch(error){setNotice(message(error,'影响预览生成失败'))}finally{setBusy('')}
   }
   async function createNotification(notificationType:WechatLoyaltyNotificationType,createReason:string){
@@ -101,7 +104,7 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
     if(!(await confirmAction({title:'确认独立审批',description:'将依据当前修改影响审批。审批后内容不可直接修改，仍需第三人发布。',confirmLabel:'确认审批'})))return
     if(generation!==selectionGeneration.current)return
     setBusy('approve');setNotice('')
-    try{const result=await api.postEndpoint<Draft>(`${path(selected)}/approve`,{expectedRevision:selected.revision,impactPreviewPublicId:preview.publicId,reason:reason.trim()});setSelected(result);setEditing(clone(result.content));setPreview(null);setNotice('独立审批已记录；配置尚未生效，等待第三位授权人员发布。');await load()}
+    try{const result=await api.postEndpoint<Draft>(`${path(selected)}/approve`,{expectedRevision:selected.revision,impactPreviewPublicId:preview.publicId,reason:reason.trim()},{timeoutMs:impactRequestTimeoutMs});setSelected(result);setEditing(clone(result.content));setPreview(null);setNotice('独立审批已记录；配置尚未生效，等待第三位授权人员发布。');await load()}
     catch(error){setNotice(message(error,'审批未完成，请重新生成影响预览'))}finally{setBusy('')}
   }
 
@@ -128,8 +131,8 @@ export function MembershipConfigurationCenterPanel({api,auth,mode='all'}:{api:No
             {selected.status==='draft'&&(canEdit||canApprove)&&<label className="membership-configuration-reason">本次修改或审批说明<textarea minLength={2} maxLength={500} value={reason} onChange={(event)=>setReason(event.target.value)} placeholder="说明改什么、为什么，以及核对了哪些经营影响"/></label>}
             <div className="membership-configuration-actions">
               {selected.status==='draft'&&canEdit&&<button type="submit" form="membership-rule-editor" disabled={busy!==''||references===null}><Save size={15}/>保存草稿</button>}
-              {mode!=='publish'&&selected.status==='draft'&&canPreview&&<button type="button" disabled={busy!==''} onClick={()=>void generatePreview()}><FileCheck2 size={15}/>查看修改影响</button>}
-              {selected.status==='draft'&&canApprove&&preview&&<button className="primary" type="button" disabled={busy!==''} onClick={()=>void approve()}><ShieldCheck size={15}/>独立审批</button>}
+              {mode!=='publish'&&selected.status==='draft'&&canPreview&&<button type="button" disabled={busy!==''} onClick={()=>void generatePreview()}><FileCheck2 size={15}/>{busy==='preview'?'正在计算影响…':'查看修改影响'}</button>}
+              {selected.status==='draft'&&canApprove&&<button className="primary" type="button" disabled={!preview||busy!==''} onClick={()=>void approve()}><ShieldCheck size={15}/>独立审批</button>}
             </div>
             {(mode==='all'||mode==='publish')&&selectedSummary&&<MembershipPublicationForm key={`${auth.employee.id}:${selected.domain}:${selected.publicId}`} api={api} auth={auth} draft={selected} summary={selectedSummary} onBusy={value=>setBusy(value?'publish':'')} onPublished={async()=>{const response=await api.getEndpoint<{data:Draft}>(path(selected));setSelected(response.data);setEditing(clone(response.data.content));await load()}}/>}
             {preview&&<article className="membership-impact-preview"><header><strong>影响预览</strong><small>{new Date(preview.expiresAt).toLocaleTimeString('zh-CN')} 前有效</small></header><dl>

@@ -39,3 +39,48 @@ test('switching rule drafts clears unsaved amount text and its validity without 
   await expect(panel.getByRole('group', { name: '消费积分', exact: true })).toContainText('每消费 10.01 元')
   expect(writes).toBe(0)
 })
+
+test('reviewer can preview and approve when each calculation takes longer than eight seconds', async ({ page }) => {
+  const fixture = JSON.parse(await readFile(process.env.NORMALIZED_E2E_FIXTURE_FILE ?? 'artifacts/normalized-browser/fixture.json', 'utf8'))
+  await page.goto(fixture.staffUrl)
+  await page.getByLabel('门店口令').fill(fixture.dailyCredential)
+  await page.getByRole('button', { name: /验证设备/ }).click()
+  await page.getByLabel('员工账号').fill('hugu')
+  await page.getByLabel('四位 PIN').fill(fixture.employeePin)
+  await page.getByRole('button', { name: /进入工作台/ }).click()
+  await expect(page.getByTestId('normalized-workspace')).toBeVisible()
+
+  const prefix = '/api/staff/loyalty/configuration-center'
+  const id = 'slow-preview-rule'
+  const path = prefix + '/base_points/' + id
+  const summary = { domain: 'base_points', configurationId: id, version: 2, revision: 1, title: 'BASE', status: 'draft' }
+  const draft = { ...summary, publicId: id, makerEmployeeIds: [], content: {
+    domain: 'base_points', pointsNumerator: 1, pointsDenominatorMinor: 2000,
+    growthNumerator: 1, growthDenominatorMinor: 100, pointsValidityMonths: 12, roundingMode: 'floor',
+  } }
+  await page.route('**' + prefix, route => route.fulfill({ json: { data: [summary] } }))
+  await page.route('**' + path, route => route.fulfill({ json: { data: draft } }))
+  await page.route('**' + path + '/impact-preview', async route => {
+    await new Promise(resolve => setTimeout(resolve, 9_000))
+    await route.fulfill({ json: { data: { publicId: 'local-preview', expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      historicalMembership: { activeMembers: 1 }, affectedExistingMembers: 1, estimatedPointsIssued: 1,
+      estimatedPointsCostAmountMinor: 100, estimatedBenefitCostAmountMinor: 0, estimatedRedemptionCostAmountMinor: 0, warnings: [],
+    } } })
+  })
+  await page.route('**' + path + '/approve', async route => {
+    expect(route.request().postDataJSON().impactPreviewPublicId).toBe('local-preview')
+    await new Promise(resolve => setTimeout(resolve, 9_000))
+    summary.status = 'approved'
+    await route.fulfill({ json: { data: { ...draft, status: 'approved' } } })
+  })
+  await page.goto('/staff/member-rule-approvals?domain=base_points&configuration=' + id)
+  const approve = page.getByRole('button', { name: '独立审批', exact: true })
+  await expect(approve).toBeDisabled()
+  await page.getByRole('button', { name: '查看修改影响' }).click()
+  await expect(page.getByRole('button', { name: '正在计算影响…' })).toBeDisabled()
+  await expect(approve).toBeEnabled({ timeout: 15_000 })
+  await page.getByLabel('本次修改或审批说明').fill('本地验证基础积分规则')
+  await approve.click()
+  await page.getByRole('button', { name: '确认审批', exact: true }).click()
+  await expect(page.getByText(/独立审批已记录/)).toBeVisible({ timeout: 15_000 })
+})

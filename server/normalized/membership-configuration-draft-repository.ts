@@ -146,7 +146,7 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
         COALESCE((SELECT sum(payment.amount_minor) FROM mbox.payments payment
           WHERE payment.tenant_id=$1::uuid AND payment.store_id=$2::uuid
             AND payment.status IN ('succeeded','partially_refunded','refunded')
-            AND payment.succeeded_at>=clock_timestamp()-interval '30 days'),0)::bigint AS eligible_paid_minor,
+            AND payment.succeeded_at>=statement_timestamp()-interval '30 days'),0)::bigint AS eligible_paid_minor,
         COALESCE((SELECT max((item.cost_amount_minor*1000000)/item.points_required)::bigint
           FROM mbox.redemption_catalog_items item JOIN mbox.redemption_catalog_versions catalog
             ON catalog.tenant_id=item.tenant_id AND catalog.store_id=item.store_id
@@ -172,34 +172,34 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       LEFT JOIN LATERAL (
         SELECT COALESCE(sum(ledger.points_delta) FILTER (WHERE ledger.points_delta>0),0)::bigint AS eligible_base_points
         FROM mbox.loyalty_point_ledger ledger
-        WHERE ledger.tenant_id=account.tenant_id AND ledger.store_id=account.store_id
+        WHERE $3::boolean AND ledger.tenant_id=account.tenant_id AND ledger.store_id=account.store_id
           AND ledger.membership_id=account.membership_id
-          AND ledger.occurred_at>=clock_timestamp()-interval '30 days'
+          AND ledger.occurred_at>=statement_timestamp()-interval '30 days'
       ) points ON true
       WHERE account.tenant_id=$1::uuid AND account.store_id=$2::uuid
       GROUP BY account.current_tier,account.growth_value
       ORDER BY account.current_tier,account.growth_value
-    `, scope)
-    const events = await this.transaction.query<TierEventRow>(`
+    `, [...scope, content.domain === 'tier_policy'])
+    const events = content.domain === 'tier_benefits' ? (await this.transaction.query<TierEventRow>(`
       SELECT to_tier,
         count(*) FILTER (WHERE event_type='upgraded')::integer AS entries,
         count(*) FILTER (WHERE event_type='retained')::integer AS retentions
       FROM mbox.membership_tier_events
       WHERE tenant_id=$1::uuid AND store_id=$2::uuid
-        AND occurred_at>=clock_timestamp()-interval '90 days'
+        AND occurred_at>=statement_timestamp()-interval '90 days'
       GROUP BY to_tier
-    `, scope)
+    `, scope)).rows : []
     const benefitFacts = content.domain === 'tier_benefits'
       ? await this.benefitFacts(content) : []
     const redemptionDemand = content.domain === 'redemption_catalog'
       ? await this.redemptionDemand(content) : []
     const promotionTriggerParticipants = content.domain === 'promotion_points'
       ? await this.promotionFacts(content) : []
-    const notificationFacts = await this.notificationFacts()
+    const notificationFacts = content.domain === 'wechat_notifications' ? await this.notificationFacts() : []
     const orderAmounts=content.domain==='base_points'&&content.pointsRoundingScope==='order'?(await this.transaction.query<{amount:string}>(`
       SELECT GREATEST(0,COALESCE((SELECT sum(b.amount_minor) FROM mbox.loyalty_order_item_basis b WHERE (b.tenant_id,b.store_id,b.order_id)=(o.tenant_id,o.store_id,o.id) AND b.loyalty_eligible),0)
         -COALESCE((SELECT sum(ri.amount_minor) FROM mbox.refund_items ri JOIN mbox.refunds r ON (r.tenant_id,r.store_id,r.id)=(ri.tenant_id,ri.store_id,ri.refund_id) JOIN mbox.order_items i ON (i.tenant_id,i.store_id,i.id)=(ri.tenant_id,ri.store_id,ri.order_item_id) WHERE (i.tenant_id,i.store_id,i.order_id)=(o.tenant_id,o.store_id,o.id) AND i.parent_order_item_id IS NULL AND i.loyalty_eligible_at_submission AND r.status='succeeded' AND r.purpose IS DISTINCT FROM 'service_compensation'),0))::text AS amount
-      FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.created_at>=clock_timestamp()-interval '30 days' AND mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id)
+      FROM mbox.orders o WHERE o.tenant_id=$1 AND o.store_id=$2 AND o.status NOT IN ('draft','cancelled') AND o.created_at>=statement_timestamp()-interval '30 days' AND mbox.order_consumption_settled(o.tenant_id,o.store_id,o.id)
       ORDER BY o.id`,scope)).rows.map(row=>number(row.amount)):undefined
     const sourceVersion = `impact-v1:${common.measured_at}`
     return {
@@ -211,8 +211,8 @@ class PostgresMembershipConfigurationDraftSession implements MembershipConfigura
       availablePointsLiability: number(common.points_liability),
       eligiblePaidAmountMinor: number(common.eligible_paid_minor),
       ...(orderAmounts?{eligibleOrderAmountsMinor:orderAmounts}:{}),
-      expectedTierEntries: tierCounts(events.rows, 'entries'),
-      expectedTierRetentions: tierCounts(events.rows, 'retentions'),
+      expectedTierEntries: tierCounts(events, 'entries'),
+      expectedTierRetentions: tierCounts(events, 'retentions'),
       growthBucketsByTier: growthBuckets(growth.rows),
       pointCostMicrosPerPoint: number(common.point_cost_micros),
       benefitFacts, redemptionDemand, promotionTriggerParticipants, notificationFacts,

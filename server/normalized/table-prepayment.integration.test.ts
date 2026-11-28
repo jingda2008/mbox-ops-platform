@@ -292,7 +292,7 @@ integration('table prepayment PostgreSQL authority',()=>{
      await h.page.refreshSharedCart()
      // Retry the kept first cart: no second item is required to reach minimum.
      await confirm();expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)
-     expect(h.page.data.paymentResult.title).toBe('预收款抵扣成功');expect(nativeActions).toHaveLength(0)
+     expect(h.page.data.paymentResult.title).toBe('余额支付成功');expect(nativeActions).toHaveLength(0)
      expect(await run(tx=>new TablePrepaymentRepository(tx).snapshot(miniSession))).toMatchObject({qualifyingGoodsMinor:8800,availableMinor:11200,shortfallMinor:1200,differenceChargingEnabled:false})
      await add();await confirm()
      expect(replies.at(-1)?.status,JSON.stringify(replies.at(-1))).toBe(201)

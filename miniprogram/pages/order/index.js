@@ -1,13 +1,13 @@
 const { commandIdentityScope } = require('../../utils/recoverable-command')
 const {
-  getGuestSession,
+  getGuestSession, getMiniLoyaltyLedger,
   getMenu,
   getPublicMenu,
   recommendExperience,
   getRecommendationConfiguration,
   recordRecommendationEvent,
   checkoutSharedCart, prepayTable, queryPrepayment, revokeTablePrepayment,
-  quoteSharedCartCoupons, quoteSharedCartChannel, getCheckoutPoints, quoteSharedCartPoints,
+  checkCheckoutCouponAvailability, quoteSharedCartCoupons, quoteSharedCartChannel, getCheckoutPoints, quoteSharedCartPoints,
   prepareSharedCartUpgrade,
   decideSharedCartUpgrade,
   getCustomerBenefitWallet,
@@ -544,13 +544,20 @@ function applyBundleUnitSelection(product,unit){
 const { initialCheckoutCoupons, checkoutCouponMethods, couponPortions } = require('../../utils/checkout-coupons')
 const { initialCheckoutUpgrade, checkoutUpgradeMethods } = require('../../utils/checkout-upgrade')
 const checkoutUpgradeActions = checkoutUpgradeMethods({ prepare: prepareSharedCartUpgrade, decide: decideSharedCartUpgrade, randomId, scope: tableSessionCacheScope, money })
-const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, quoteChannel: quoteSharedCartChannel, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
+const checkoutCouponActions = checkoutCouponMethods({ getWallet: getCustomerBenefitWallet, checkAvailability:checkCheckoutCouponAvailability, quote: quoteSharedCartCoupons, getPoints: getCheckoutPoints, quotePoints: quoteSharedCartPoints, quoteChannel: quoteSharedCartChannel, money, randomId, scope: tableSessionCacheScope, errorMessage: customerErrorMessage })
 Page({
   ...checkoutUpgradeActions,
   acceptCheckoutUpgrade() { return checkoutUpgradeActions.acceptCheckoutUpgrade.call(this) },
   declineCheckoutUpgrade() { return checkoutUpgradeActions.declineCheckoutUpgrade.call(this) },
   chooseCheckoutUpgradeVariant(event) { return checkoutUpgradeActions.chooseCheckoutUpgradeVariant.call(this, event) },
   ...checkoutCouponActions,
+  readCheckoutCouponAvailability() { return checkoutCouponActions.readCheckoutCouponAvailability.call(this) },
+  useTicketPoints() { return checkoutCouponActions.useTicketPoints.call(this) },
+  useDirectCheckout() { return checkoutCouponActions.useDirectCheckout.call(this) },
+  leavePointsCheckout() {
+    if (!this.data.ticketPreview) return this.skipCheckoutCoupons()
+    return this.useDirectCheckout()
+  },
   openCheckoutPoints() {
     if (this.data.busy || this.data.pointsLoading || this.data.couponLoading) return
     const result = this.data.pointsPickerOpen && this.data.pointsBalance !== null ? undefined : checkoutCouponActions.openCheckoutPoints.call(this)
@@ -559,10 +566,17 @@ Page({
     })
     return result
   },
-  fillMaximumCheckoutPoints() { return checkoutCouponActions.fillMaximumCheckoutPoints.call(this) },
+  fillMaximumCheckoutPoints() {
+    if (!this.data.maximumPoints || this.data.busy || this.data.pointsLoading) return
+    checkoutCouponActions.fillMaximumCheckoutPoints.call(this)
+    return this.quoteCheckoutPoints()
+  },
   closeCheckoutPoints() { return checkoutCouponActions.closeCheckoutPoints.call(this) },
   onCheckoutPointsInput(event) { return checkoutCouponActions.onCheckoutPointsInput.call(this, event) },
-  quoteCheckoutPoints() { return checkoutCouponActions.quoteCheckoutPoints.call(this) },
+  async quoteCheckoutPoints() {
+    const confirmed = await checkoutCouponActions.quoteCheckoutPoints.call(this)
+    if (confirmed && this.data.couponQuote?.id === confirmed.id) this.setData({pointsPickerOpen:false})
+  },
   couponCheckoutReady() {
     const ready = checkoutCouponActions.couponCheckoutReady.call(this)
     if (!ready && this.data.pointsInput) {
@@ -1905,7 +1919,10 @@ Page({
       return { portionId, label: line.quantity > 1 ? '第' + (index + 1) + '份备注' : '菜品备注', note }
     }) }))
     this.checkoutLineNotes = retainedNotes
-    if (this.checkoutCouponScope !== couponScope || (sharedCart && (Number(sharedCart.version) !== this.data.cartVersion || Number(sharedCart.generation) !== this.data.cartGeneration))) {
+    const checkoutCartChanged = this.checkoutCouponScope !== couponScope || (sharedCart && (Number(sharedCart.version) !== this.data.cartVersion || Number(sharedCart.generation) !== this.data.cartGeneration))
+    if (checkoutCartChanged) {
+      this.ticketPreviewRequest = null
+      this.setData({ ticketPreview: null, ticketPreviewLoading: false, ticketPreviewError: false })
       this.invalidateCheckoutCoupons(this.checkoutCouponScope !== couponScope, this.data.couponSelections.length > 0 || !!this.data.pointsInput || this.data.couponNeedsReview || this.data.couponQuote && this.data.couponQuote.sourceType === 'channel_quote')
       this.checkoutCouponScope = couponScope
     }
@@ -1946,6 +1963,10 @@ Page({
         ? attribution
         : null,
     })
+    if (checkoutCartChanged && this.data.checkoutConfirmVisible && cart.length) {
+      void this.readCheckoutCouponAvailability()
+      void this.readTicketCheckout()
+    }
     return true
   },
 
@@ -2110,6 +2131,8 @@ Page({
   openCartDetails() {
     if (!this.data.cart.length) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    void this.readCheckoutCouponAvailability()
+    void this.readTicketCheckout()
     this.loadCheckoutUpgrade()
   },
 
@@ -2118,10 +2141,20 @@ Page({
       || !this.data.membershipTerms || !this.data.cart.length || this.data.checkoutLocked
       || this.checkoutMemberInvitedScope === request.scope) return false
     this.checkoutMemberInvitedScope = request.scope
-    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, cartExpanded: false })
+    this.setData({ checkoutMemberInviteVisible: true, checkoutConfirmVisible: false, cartExpanded: false, inviteEarningPolicy: null })
+    void this.loadInviteEarningPolicy(request)
     return true
   },
 
+  async loadInviteEarningPolicy(request) {
+    try {
+      const {earningPolicy} = await getMiniLoyaltyLedger()
+      if (this.data.checkoutMemberInviteVisible && this.isCurrentTableRequest(request)
+        && earningPolicy?.pointsRoundingScope === 'order' && earningPolicy.pointsDenominatorMinor > 0 && earningPolicy.pointsNumerator > 0) {
+        this.setData({inviteEarningPolicy: earningPolicy})
+      }
+    } catch { /* Joining and checkout also work when the points rules are unavailable. */ }
+  },
   keepCheckoutMemberInviteOpen() {},
 
   async skipCheckoutMembership() {
@@ -2231,6 +2264,8 @@ Page({
     }
     if (this.maybeInviteCheckoutMember(tableRequest)) return
     this.setData({ checkoutConfirmVisible: true, cartExpanded: false, error: '' })
+    void this.readCheckoutCouponAvailability()
+    void this.readTicketCheckout()
     this.loadCheckoutUpgrade()
   },
 
@@ -2238,7 +2273,8 @@ Page({
     if (this.data.busy) return
     this.invalidateCheckoutUpgrade()
     this.checkoutCouponEpoch = (this.checkoutCouponEpoch || 0) + 1
-    this.setData({ checkoutConfirmVisible: false, couponEntryOpen: false, couponLoading: false, pointsLoading: false })
+    this.ticketPreviewRequest = null
+    this.setData({ checkoutConfirmVisible: false, couponEntryOpen: false, couponLoading: false, pointsLoading: false, ticketPreviewLoading: false })
   },
 
   checkoutDraft(offerPublicId) {
@@ -2286,6 +2322,15 @@ Page({
   },
 
   async confirmCheckout() {
+    if (this.data.ticketPreviewLoading || this.data.pointsLoading || this.data.couponLoading) return
+    if (this.data.ticketPreview?.maximumPoints && !this.data.ticketChoice) {
+      this.setData({checkoutScrollTarget:''}, () => this.setData({checkoutScrollTarget:'checkout-methods'}))
+      return
+    }
+    if (this.data.ticketChoice === 'points' && !this.data.couponQuote?.pointsUsed) {
+      this.setData({pointsPickerOpen:true,pointsError:'请确认本次使用的积分'})
+      return
+    }
     if (this.data.orderReady === false || this.data.cartSyncing || this.data.checkoutLocked) return
     if (!this.data.checkoutConfirmVisible || !this.data.cart.length || this.data.busy) return
     const tableRequest = Object.assign({}, this.currentTableRequest())
@@ -2443,7 +2488,7 @@ Page({
           wx.removeStorageSync(PENDING_PAYMENT_KEY)
           this.updateCart([], data.sharedCart || null)
           this.invalidateCheckoutCoupons(false, false)
-          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '预收款抵扣成功' : data.channelSettlement ? '渠道优惠结清' : '积分结账成功', copy: data.prepaymentSettlement ? '本单已从预收款抵扣，订单已进入出品，无需再付款。' : data.channelSettlement ? '优惠已按本次消费核销，订单进入出品，无需另付款。' : '已使用' + data.pointsUsed + '积分，订单已进入出品流程，无需另付款。', canRetry: false } })
+          this.setData({ pendingPayment: null, checkoutLocked: false, success: data.prepaymentSettlement ? '余额支付成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', paymentResult: { kind: 'success', mark: '✓', title: data.prepaymentSettlement ? '余额支付成功' : data.channelSettlement ? '优惠已抵扣' : '积分结账成功', copy: data.prepaymentSettlement ? '已从本桌余额扣款，订单已送出。' : data.channelSettlement ? '订单已送出，本单无需付款。' : '已使用 ' + data.pointsUsed + ' 积分，订单已送出。', canRetry: false } })
           return
         }
         const pendingPayment = {

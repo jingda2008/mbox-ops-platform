@@ -31,7 +31,7 @@
       </view>
       <view wx:if="{{selected.giftPoints}}" class="rule-group">
         <text class="rule-title">每张票赠 {{selected.giftPoints}} 积分</text>
-        <view>付款成功后，积分逐张记入购票会员账户。1 分抵 1 元，可抵菜品、酒水和餐饮套餐，不能抵门票或兑换现金。</view>
+        <view>付款成功后，积分逐张记入购票会员账户。赠分每 1 分可抵 1 元餐费，适用于菜品、酒水和餐饮套餐，不能抵门票或兑换现金。</view>
         <view class="auth-note">积分自付款之日起有效一年<text wx:if="{{selected.validThroughIfPaidToday}}">。今天付款，可用至 {{selected.validThroughIfPaidToday}}（含当天）</text>。</view>
       </view>
       <view wx:elif="{{selected.giftPoints === 0}}" class="rule-group">本票不赠积分。</view>

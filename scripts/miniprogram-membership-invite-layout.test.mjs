@@ -24,7 +24,8 @@ test('checkout membership invitation has reachable choices above the custom tab 
   const template=source.slice(start,source.indexOf('  <view wx:if="{{paymentResult}}"',start))
   assert.ok(template.includes('bottom: {{(customTabBarHeight || 50) + 1}}px'))
   const markup=template.replace('{{(customTabBarHeight || 50) + 1}}', '85')
-  assert.ok(markup.includes('消费攒积分，下次点单直接抵。'))
+  assert.ok(markup.includes('inviteEarningPolicy.pointsDenominatorMinor / 100'))
+  assert.doesNotMatch(markup, /1积分＝1元/)
   const style=await css(resolve(root,'miniprogram/app.wxss'))+await css(resolve(root,'miniprogram/pages/order/index.wxss'))
   const browser=await chromium.launch({headless:true})
   try {

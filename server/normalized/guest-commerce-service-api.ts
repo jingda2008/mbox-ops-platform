@@ -18,10 +18,12 @@ import { GuestServiceReceiptUnattributedError, readGuestServiceReceipt, saveGues
 import { publicProductTasteProfile } from '../../src/shared/product-taste-profile.js'
 import { checkoutLinesWithNotes, type CheckoutLineNote } from './checkout-line-notes.js'
 import {CheckoutPointsRepository} from './checkout-points-repository.js'
+import {hasCheckoutTicket} from './ticket-dining-session.js'
 import {CheckoutCouponQuoteRepository} from './checkout-coupon-quote-repository.js'
 import {CheckoutUpgradeCandidateRepository} from './checkout-upgrade-candidate-repository.js'
 import {CheckoutUpgradeOpportunityRepository} from './checkout-upgrade-opportunity-repository.js'
 import {CheckoutCartPricingError, quoteCheckoutCart} from './checkout-cart-pricing.js'
+import {CheckoutCouponRepository} from './checkout-coupon-repository.js'
 import {CouponCalendarError} from './coupon-calendar.js'
 import {StackingPricingError, DEFAULT_STACKING_POLICY} from './stacking-pricing.js'
 import {PricingAuthorizationDeniedError} from './pricing-authorization-policy.js'
@@ -461,8 +463,10 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     const context=await requireTableContext(options,request,'guest.order.create')
     const data=await options.transactions.run(context.scope,async tx=>{
       if(!await lockBoundGuestTablePosition(tx,context))throw new GuestAuthenticationRequiredError()
+      const query = readStrictObject(request.query, '积分额度', ['generation', 'version','view'])
+      const preview = query.view === 'checkout'
+      if (preview && !await hasCheckoutTicket(tx,context.customerId)) return {ticketCheckout:false}
       const policy = await new CheckoutPointsRepository(tx).available(context.customerId)
-      const query = readStrictObject(request.query, '积分额度', ['generation', 'version'])
       if (query.generation === undefined && query.version === undefined) return policy
       const expectedGeneration = readInteger(Number(query.generation), 'generation', 1, 2_147_483_647)
       const expectedVersion = readInteger(Number(query.version), 'version', 0, 2_147_483_647)
@@ -472,7 +476,8 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
         policy: { ...DEFAULT_STACKING_POLICY, allowPoints: true, allowBundlePrice: true, allowCheckoutUpgrade: true },
         effects: [],
       })
-      return { ...policy, maximumPoints: Math.min(policy.availablePoints, Math.floor(standard.price.subtotalMinor / policy.minorPerPoint)) }
+      return { ...policy, ...(preview ? {ticketCheckout:true,standardMinor:standard.price.subtotalMinor} : {}),
+        maximumPoints: Math.min(policy.availablePoints, Math.floor(standard.price.subtotalMinor / policy.minorPerPoint)) }
     })
     reply.header('cache-control','no-store');return{data}
   }))
@@ -662,6 +667,43 @@ export const guestCommerceServiceApiPlugin: FastifyPluginAsync<GuestCommerceServ
     reply.header('cache-control','no-store');return{data}
   }))
 
+  app.post('/guest/shared-cart/coupon-availability', async (request, reply) => handleRoute(reply, async () => {
+    const context = await requireTableContext(options, request, 'guest.order.create')
+    const body = readStrictObject(request.body, '本单优惠券', ['expectedGeneration', 'expectedVersion', 'candidates'])
+    const expectedGeneration = readInteger(body.expectedGeneration, 'expectedGeneration', 1, 2_147_483_647)
+    const expectedVersion = readInteger(body.expectedVersion, 'expectedVersion', 0, 2_147_483_647)
+    if (!Array.isArray(body.candidates) || body.candidates.length > 8) throw new GuestApiRequestError('COUPON_SELECTION_INVALID', '请重新查看优惠券')
+    const candidates = body.candidates.map(value => {
+      const pair = readStrictObject(value, '优惠券', ['benefitId','portionId'])
+      return {benefitId:readUuid(pair.benefitId,'benefitId'),portionId:readUuid(pair.portionId,'portionId')}
+    })
+    const data = await options.transactions.run(context.scope, async tx => {
+      if (!await lockBoundGuestTablePosition(tx, context)) throw new GuestAuthenticationRequiredError()
+      const cart = await new GuestSharedCartRepository(tx, context.customerId).findCurrentOpen(context.tableSessionId)
+      if (!cart || cart.guestWritesFrozen || cart.generation !== expectedGeneration || cart.version !== expectedVersion) throw new CheckoutCartPricingError('订单已变化，请重新查看优惠券')
+      const bound = await tx.query<{present:boolean}>(`SELECT EXISTS(
+        SELECT 1 FROM mbox.channel_visit_tables t
+        JOIN mbox.channel_visits v ON (v.tenant_id,v.store_id,v.id)=(t.tenant_id,t.store_id,t.visit_id)
+        JOIN mbox.channel_activations a ON (a.tenant_id,a.store_id,a.visit_id)=(v.tenant_id,v.store_id,v.id)
+        JOIN mbox.channel_claims c ON (c.tenant_id,c.store_id,c.id)=(a.tenant_id,a.store_id,a.claim_id)
+        WHERE t.tenant_id=$1 AND t.store_id=$2 AND t.table_session_id=$3 AND t.detached_at IS NULL
+          AND v.closed_at IS NULL AND a.status IN ('active','fulfilled') AND NOT c.voided
+      ) AS present`, [context.scope.tenantId,context.scope.storeId,context.tableSessionId])
+      const tableOffer = bound.rows[0]?.present === true
+      const coupons = new CheckoutCouponRepository(tx)
+      for (const candidate of candidates) {
+        try {
+          await coupons.quote({customerId:context.customerId,cart,expectedGeneration,expectedVersion,selections:[candidate],channel:'guest_qr'})
+          return {available:true,tableOffer}
+        } catch (error) {
+          if (!(error instanceof CheckoutCartPricingError || error instanceof CouponCalendarError || error instanceof StackingPricingError || error instanceof BenefitUnavailableError || error instanceof BenefitOwnershipError || error instanceof PricingAuthorizationDeniedError)) throw error
+        }
+      }
+      return {available:false,tableOffer}
+    })
+    reply.header('cache-control','no-store')
+    return {data}
+  }))
   app.post('/guest/shared-cart/coupon-quote',async(request,reply)=>handleRoute(reply,async()=>{
     const context=await requireTableContext(options,request,'guest.order.create')
     const body=readStrictObject(request.body,'券报价请求',['expectedGeneration','expectedVersion','selections'])

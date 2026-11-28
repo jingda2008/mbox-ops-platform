@@ -24,7 +24,7 @@ for(const platform of ['miniprogram','alipay-miniprogram']){
   await h.page.confirmCheckout()
   assert.equal(submitted.prepayment,true);assert.equal(h.page.data.checkoutLocked,false)
   assert.equal(h.page.data.cart.length,0);assert.equal(h.state.payment,undefined)
-  assert.equal(h.page.data.paymentResult.title,'预收款抵扣成功')
+  assert.equal(h.page.data.paymentResult.title,platform==='miniprogram'?'余额支付成功':'预收款抵扣成功')
  })
  test(platform+': insufficient balance preserves cart, notes and an editable checkout',async()=>{
   const h=fixture('order',{checkoutSharedCart:async()=>{throw Object.assign(new Error('预收款还差 ¥1.00，购物车已保留'),{code:'TABLE_PREPAYMENT_INSUFFICIENT'})}},platform)
